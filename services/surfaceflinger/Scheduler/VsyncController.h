@@ -17,14 +17,18 @@
 #pragma once
 
 #include <cstddef>
-#include <memory>
 
-#include <ui/FenceTime.h>
 #include <utils/Mutex.h>
 #include <utils/RefBase.h>
 #include <utils/Timers.h>
 
+#include <ui/FenceTime.h>
+
+#include <memory>
+
 namespace android::scheduler {
+
+class FenceTime;
 
 class VsyncController {
 public:
@@ -39,7 +43,7 @@ public:
      *                      an accurate prediction,
      *                      False otherwise
      */
-    virtual bool addPresentFence(std::shared_ptr<FenceTime>) = 0;
+    virtual bool addPresentFence(const std::shared_ptr<android::FenceTime>&) = 0;
 
     /*
      * Adds a hw sync timestamp to the model. The controller will use the timestamp
