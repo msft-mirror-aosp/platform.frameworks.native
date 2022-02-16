@@ -169,9 +169,6 @@ enum {
 
     /** Drag event */
     AINPUT_EVENT_TYPE_DRAG = 5,
-
-    /** TouchMode event */
-    AINPUT_EVENT_TYPE_TOUCH_MODE = 6,
 };
 
 /**
@@ -877,7 +874,6 @@ enum {
  * Keyboard types.
  *
  * Refer to the documentation on android.view.InputDevice for more details.
- * Note: When adding a new keyboard type here InputDeviceInfo::setKeyboardType needs to be updated.
  */
 enum {
     /** none */
@@ -951,10 +947,9 @@ int32_t AInputEvent_getSource(const AInputEvent* event);
  * and {@link AMotionEvent_fromJava()}.
  * After returning, the specified AInputEvent* object becomes invalid and should no longer be used.
  * The underlying Java object remains valid and does not change its state.
- *
- * Available since API level 31.
  */
-void AInputEvent_release(const AInputEvent* event) __INTRODUCED_IN(31);
+
+void AInputEvent_release(const AInputEvent* event);
 
 /*** Accessors for key events only. ***/
 
@@ -1006,10 +1001,8 @@ int64_t AKeyEvent_getEventTime(const AInputEvent* key_event);
  * Creates a native AInputEvent* object that is a copy of the specified Java android.view.KeyEvent.
  * The result may be used with generic and KeyEvent-specific AInputEvent_* functions. The object
  * returned by this function must be disposed using {@link AInputEvent_release()}.
- *
- * Available since API level 31.
  */
-const AInputEvent* AKeyEvent_fromJava(JNIEnv* env, jobject keyEvent) __INTRODUCED_IN(31);
+const AInputEvent* AKeyEvent_fromJava(JNIEnv* env, jobject keyEvent);
 
 /*** Accessors for motion events only. ***/
 
@@ -1331,10 +1324,8 @@ float AMotionEvent_getHistoricalAxisValue(const AInputEvent* motion_event,
  * android.view.MotionEvent. The result may be used with generic and MotionEvent-specific
  * AInputEvent_* functions. The object returned by this function must be disposed using
  * {@link AInputEvent_release()}.
- *
- * Available since API level 31.
  */
-const AInputEvent* AMotionEvent_fromJava(JNIEnv* env, jobject motionEvent) __INTRODUCED_IN(31);
+const AInputEvent* AMotionEvent_fromJava(JNIEnv* env, jobject motionEvent);
 
 struct AInputQueue;
 /**
@@ -1385,17 +1376,6 @@ int32_t AInputQueue_preDispatchEvent(AInputQueue* queue, AInputEvent* event);
  * This must be called after receiving an event with AInputQueue_get_event().
  */
 void AInputQueue_finishEvent(AInputQueue* queue, AInputEvent* event, int handled);
-
-/**
- * Returns the AInputQueue* object associated with the supplied Java InputQueue
- * object. The returned native object holds a weak reference to the Java object,
- * and is only valid as long as the Java object has not yet been disposed. You
- * should ensure that there is a strong reference to the Java object and that it
- * has not been disposed before using the returned object.
- *
- * Available since API level 33.
- */
-AInputQueue* AInputQueue_fromJava(JNIEnv* env, jobject inputQueue) __INTRODUCED_IN(33);
 
 #ifdef __cplusplus
 }

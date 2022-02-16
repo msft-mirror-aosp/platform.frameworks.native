@@ -16,17 +16,10 @@
 
 #pragma once
 
-#include <atomic>
-#include <chrono>
-#include <deque>
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <string>
-
+#include <../Fps.h>
+#include <../TimeStats/TimeStats.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/JankInfo.h>
-#include <gui/LayerMetadata.h>
 #include <perfetto/trace/android/frame_timeline_event.pbzero.h>
 #include <perfetto/tracing.h>
 #include <ui/FenceTime.h>
@@ -35,9 +28,8 @@
 #include <utils/Timers.h>
 #include <utils/Vector.h>
 
-#include <scheduler/Fps.h>
-
-#include "../TimeStats/TimeStats.h"
+#include <deque>
+#include <mutex>
 
 namespace android::frametimeline {
 
@@ -162,7 +154,7 @@ public:
                  int32_t layerId, std::string layerName, std::string debugName,
                  PredictionState predictionState, TimelineItem&& predictions,
                  std::shared_ptr<TimeStats> timeStats, JankClassificationThresholds thresholds,
-                 TraceCookieCounter* traceCookieCounter, bool isBuffer, GameMode);
+                 TraceCookieCounter* traceCookieCounter, bool isBuffer, int32_t gameMode);
     ~SurfaceFrame() = default;
 
     // Returns std::nullopt if the frame hasn't been classified yet.
@@ -268,7 +260,7 @@ private:
     // buffer(animations)
     bool mIsBuffer;
     // GameMode from the layer. Used in metrics.
-    GameMode mGameMode = GameMode::Unsupported;
+    int32_t mGameMode = 0;
 };
 
 /*
@@ -289,7 +281,7 @@ public:
     virtual std::shared_ptr<SurfaceFrame> createSurfaceFrameForToken(
             const FrameTimelineInfo& frameTimelineInfo, pid_t ownerPid, uid_t ownerUid,
             int32_t layerId, std::string layerName, std::string debugName, bool isBuffer,
-            GameMode) = 0;
+            int32_t gameMode) = 0;
 
     // Adds a new SurfaceFrame to the current DisplayFrame. Frames from multiple layers can be
     // composited into one display frame.
@@ -449,7 +441,7 @@ public:
     std::shared_ptr<SurfaceFrame> createSurfaceFrameForToken(
             const FrameTimelineInfo& frameTimelineInfo, pid_t ownerPid, uid_t ownerUid,
             int32_t layerId, std::string layerName, std::string debugName, bool isBuffer,
-            GameMode) override;
+            int32_t gameMode) override;
     void addSurfaceFrame(std::shared_ptr<frametimeline::SurfaceFrame> surfaceFrame) override;
     void setSfWakeUp(int64_t token, nsecs_t wakeupTime, Fps refreshRate) override;
     void setSfPresent(nsecs_t sfPresentTime, const std::shared_ptr<FenceTime>& presentFence,

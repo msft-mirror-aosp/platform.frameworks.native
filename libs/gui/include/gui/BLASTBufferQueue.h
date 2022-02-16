@@ -38,11 +38,11 @@ class BufferItemConsumer;
 class BLASTBufferItemConsumer : public BufferItemConsumer {
 public:
     BLASTBufferItemConsumer(const sp<IGraphicBufferConsumer>& consumer, uint64_t consumerUsage,
-                            int bufferCount, bool controlledByApp, wp<BLASTBufferQueue> bbq)
+                            int bufferCount, bool controlledByApp)
           : BufferItemConsumer(consumer, consumerUsage, bufferCount, controlledByApp),
-            mBLASTBufferQueue(std::move(bbq)),
             mCurrentlyConnected(false),
-            mPreviouslyConnected(false) {}
+            mPreviouslyConnected(false),
+            mBLASTBufferQueue(nullptr) {}
 
     void onDisconnect() override;
     void addAndGetFrameTimestamps(const NewFrameEventsEntry* newTimestamps,
@@ -53,13 +53,12 @@ public:
                                CompositorTiming compositorTiming, nsecs_t latchTime,
                                nsecs_t dequeueReadyTime) REQUIRES(mMutex);
     void getConnectionEvents(uint64_t frameNumber, bool* needsDisconnect);
+    void setBlastBufferQueue(BLASTBufferQueue* blastbufferqueue) REQUIRES(mMutex);
 
 protected:
     void onSidebandStreamChanged() override REQUIRES(mMutex);
 
 private:
-    const wp<BLASTBufferQueue> mBLASTBufferQueue;
-
     uint64_t mCurrentFrameNumber = 0;
 
     Mutex mMutex;
@@ -67,13 +66,13 @@ private:
     std::queue<uint64_t> mDisconnectEvents GUARDED_BY(mMutex);
     bool mCurrentlyConnected GUARDED_BY(mMutex);
     bool mPreviouslyConnected GUARDED_BY(mMutex);
+    BLASTBufferQueue* mBLASTBufferQueue GUARDED_BY(mMutex);
 };
 
 class BLASTBufferQueue
     : public ConsumerBase::FrameAvailableListener, public BufferItemConsumer::BufferFreedListener
 {
 public:
-    BLASTBufferQueue(const std::string& name);
     BLASTBufferQueue(const std::string& name, const sp<SurfaceControl>& surface, int width,
                      int height, int32_t format);
 
@@ -81,7 +80,6 @@ public:
         return mProducer;
     }
     sp<Surface> getSurface(bool includeSurfaceControlHandle);
-    bool isSameSurfaceControl(const sp<SurfaceControl>& surfaceControl) const;
 
     void onBufferFreed(const wp<GraphicBuffer>&/* graphicBuffer*/) override { /* TODO */ }
     void onFrameReplaced(const BufferItem& item) override;
@@ -89,19 +87,18 @@ public:
     void onFrameDequeued(const uint64_t) override;
     void onFrameCancelled(const uint64_t) override;
 
-    void transactionCommittedCallback(nsecs_t latchTime, const sp<Fence>& presentFence,
-                                      const std::vector<SurfaceControlStats>& stats);
-    virtual void transactionCallback(nsecs_t latchTime, const sp<Fence>& presentFence,
-                                     const std::vector<SurfaceControlStats>& stats);
+    void transactionCallback(nsecs_t latchTime, const sp<Fence>& presentFence,
+            const std::vector<SurfaceControlStats>& stats);
     void releaseBufferCallback(const ReleaseCallbackId& id, const sp<Fence>& releaseFence,
-                               std::optional<uint32_t> currentMaxAcquiredBufferCount);
-    void setSyncTransaction(SurfaceComposerClient::Transaction* t, bool acquireSingleBuffer = true);
+                               uint32_t transformHint, uint32_t currentMaxAcquiredBufferCount);
+    void setNextTransaction(SurfaceComposerClient::Transaction *t);
     void mergeWithNextTransaction(SurfaceComposerClient::Transaction* t, uint64_t frameNumber);
-    void applyPendingTransactions(uint64_t frameNumber);
-    SurfaceComposerClient::Transaction* gatherPendingTransactions(uint64_t frameNumber);
+    void setTransactionCompleteCallback(uint64_t frameNumber,
+                                        std::function<void(int64_t)>&& transactionCompleteCallback);
 
     void update(const sp<SurfaceControl>& surface, uint32_t width, uint32_t height, int32_t format,
                 SurfaceComposerClient::Transaction* outTransaction = nullptr);
+    void flushShadowQueue() {}
 
     status_t setFrameRate(float frameRate, int8_t compatibility, bool shouldBeSeamless);
     status_t setFrameTimelineInfo(const FrameTimelineInfo& info);
@@ -109,8 +106,6 @@ public:
     void setSidebandStream(const sp<NativeHandle>& stream);
 
     uint32_t getLastTransformHint() const;
-    uint64_t getLastAcquiredFrameNum();
-    void abandon();
 
     virtual ~BLASTBufferQueue();
 
@@ -123,21 +118,12 @@ private:
     void createBufferQueue(sp<IGraphicBufferProducer>* outProducer,
                            sp<IGraphicBufferConsumer>* outConsumer);
 
-    void acquireNextBufferLocked(
-            const std::optional<SurfaceComposerClient::Transaction*> transaction) REQUIRES(mMutex);
+    void processNextBufferLocked(bool useNextTransaction) REQUIRES(mMutex);
     Rect computeCrop(const BufferItem& item) REQUIRES(mMutex);
     // Return true if we need to reject the buffer based on the scaling mode and the buffer size.
     bool rejectBuffer(const BufferItem& item) REQUIRES(mMutex);
     bool maxBuffersAcquired(bool includeExtraAcquire) const REQUIRES(mMutex);
     static PixelFormat convertBufferFormat(PixelFormat& format);
-    void mergePendingTransactions(SurfaceComposerClient::Transaction* t, uint64_t frameNumber)
-            REQUIRES(mMutex);
-
-    void flushShadowQueue() REQUIRES(mMutex);
-    void acquireAndReleaseBuffer() REQUIRES(mMutex);
-    void releaseBuffer(const ReleaseCallbackId& callbackId, const sp<Fence>& releaseFence)
-            REQUIRES(mMutex);
-    void flushAndWaitForFreeBuffer(std::unique_lock<std::mutex>& lock);
 
     std::string mName;
     // Represents the queued buffer count from buffer queue,
@@ -147,15 +133,15 @@ private:
     std::string mQueuedBufferTrace;
     sp<SurfaceControl> mSurfaceControl;
 
-    mutable std::mutex mMutex;
+    std::mutex mMutex;
     std::condition_variable mCallbackCV;
 
     // BufferQueue internally allows 1 more than
     // the max to be acquired
     int32_t mMaxAcquiredBuffers = 1;
 
-    int32_t mNumFrameAvailable GUARDED_BY(mMutex) = 0;
-    int32_t mNumAcquired GUARDED_BY(mMutex) = 0;
+    int32_t mNumFrameAvailable GUARDED_BY(mMutex);
+    int32_t mNumAcquired GUARDED_BY(mMutex);
 
     // Keep a reference to the submitted buffers so we can release when surfaceflinger drops the
     // buffer or the buffer has been presented and a new buffer is ready to be presented.
@@ -214,7 +200,7 @@ private:
     sp<IGraphicBufferProducer> mProducer;
     sp<BLASTBufferItemConsumer> mBufferItemConsumer;
 
-    SurfaceComposerClient::Transaction* mSyncTransaction GUARDED_BY(mMutex);
+    SurfaceComposerClient::Transaction* mNextTransaction GUARDED_BY(mMutex);
     std::vector<std::tuple<uint64_t /* framenumber */, SurfaceComposerClient::Transaction>>
             mPendingTransactions GUARDED_BY(mMutex);
 
@@ -227,6 +213,9 @@ private:
 
     // Tracks the last acquired frame number
     uint64_t mLastAcquiredFrameNumber GUARDED_BY(mMutex) = 0;
+
+    std::function<void(int64_t)> mTransactionCompleteCallback GUARDED_BY(mMutex) = nullptr;
+    uint64_t mTransactionCompleteFrameNumber GUARDED_BY(mMutex){0};
 
     // Queues up transactions using this token in SurfaceFlinger. This prevents queued up
     // transactions from other parts of the client from blocking this transaction.
@@ -243,13 +232,6 @@ private:
     // Keep track of SurfaceControls that have submitted a transaction and BBQ is waiting on a
     // callback for them.
     std::queue<sp<SurfaceControl>> mSurfaceControlsWithPendingCallback GUARDED_BY(mMutex);
-
-    uint32_t mCurrentMaxAcquiredBufferCount;
-    bool mWaitForTransactionCallback GUARDED_BY(mMutex) = false;
-
-    // Flag to determine if syncTransaction should only acquire a single buffer and then clear or
-    // continue to acquire buffers until explicitly cleared
-    bool mAcquireSingleBuffer GUARDED_BY(mMutex) = true;
 };
 
 } // namespace android

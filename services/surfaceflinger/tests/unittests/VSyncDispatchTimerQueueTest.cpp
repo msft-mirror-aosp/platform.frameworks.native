@@ -23,19 +23,16 @@
 #define LOG_TAG "LibSurfaceFlingerUnittests"
 #define LOG_NDEBUG 0
 
-#include <thread>
-
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
-#include <scheduler/TimeKeeper.h>
-
+#include "Scheduler/TimeKeeper.h"
 #include "Scheduler/VSyncDispatchTimerQueue.h"
 #include "Scheduler/VSyncTracker.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include <thread>
+
 using namespace testing;
 using namespace std::literals;
-
 namespace android::scheduler {
 
 class MockVSyncTracker : public VSyncTracker {
@@ -74,10 +71,10 @@ public:
         ON_CALL(*this, now()).WillByDefault(Invoke(this, &ControllableClock::fakeTime));
     }
 
-    MOCK_METHOD(nsecs_t, now, (), (const));
-    MOCK_METHOD(void, alarmAt, (std::function<void()>, nsecs_t), (override));
-    MOCK_METHOD(void, alarmCancel, (), (override));
-    MOCK_METHOD(void, dump, (std::string&), (const, override));
+    MOCK_CONST_METHOD0(now, nsecs_t());
+    MOCK_METHOD2(alarmAt, void(std::function<void()> const&, nsecs_t time));
+    MOCK_METHOD0(alarmCancel, void());
+    MOCK_CONST_METHOD1(dump, void(std::string&));
 
     void alarmAtDefaultBehavior(std::function<void()> const& callback, nsecs_t time) {
         mCallback = callback;
@@ -199,14 +196,11 @@ protected:
         class TimeKeeperWrapper : public TimeKeeper {
         public:
             TimeKeeperWrapper(TimeKeeper& control) : mControllableClock(control) {}
-
-            nsecs_t now() const final { return mControllableClock.now(); }
-
-            void alarmAt(std::function<void()> callback, nsecs_t time) final {
-                mControllableClock.alarmAt(std::move(callback), time);
+            void alarmAt(std::function<void()> const& callback, nsecs_t time) final {
+                mControllableClock.alarmAt(callback, time);
             }
-
             void alarmCancel() final { mControllableClock.alarmCancel(); }
+            nsecs_t now() const final { return mControllableClock.now(); }
             void dump(std::string&) const final {}
 
         private:
