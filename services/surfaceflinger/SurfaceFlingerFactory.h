@@ -16,38 +16,41 @@
 
 #pragma once
 
-#include <cinttypes>
-#include <functional>
-#include <memory>
-#include <string>
+#include "Fps.h"
 
 #include <cutils/compiler.h>
 #include <utils/StrongPointer.h>
 
-#include <scheduler/Fps.h>
+#include <cinttypes>
+#include <functional>
+#include <memory>
+#include <string>
 
 namespace android {
 
 typedef int32_t PixelFormat;
 
 class BufferQueueLayer;
-class BufferLayerConsumer;
 class BufferStateLayer;
+class BufferLayerConsumer;
+class EffectLayer;
 class ContainerLayer;
 class DisplayDevice;
-class EffectLayer;
 class FrameTracer;
 class GraphicBuffer;
 class HWComposer;
 class IGraphicBufferConsumer;
 class IGraphicBufferProducer;
 class Layer;
+class MessageQueue;
+class Scheduler;
 class StartPropertySetThread;
 class SurfaceFlinger;
 class SurfaceInterceptor;
 class TimeStats;
 
 struct DisplayDeviceCreationArgs;
+struct ISchedulerCallback;
 struct LayerCreationArgs;
 
 namespace compositionengine {
@@ -73,8 +76,11 @@ class NativeWindowSurface;
 class Factory {
 public:
     virtual std::unique_ptr<HWComposer> createHWComposer(const std::string& serviceName) = 0;
+    virtual std::unique_ptr<MessageQueue> createMessageQueue() = 0;
     virtual std::unique_ptr<scheduler::VsyncConfiguration> createVsyncConfiguration(
             Fps currentRefreshRate) = 0;
+    virtual std::unique_ptr<Scheduler> createScheduler(const scheduler::RefreshRateConfigs&,
+                                                       ISchedulerCallback&) = 0;
     virtual sp<SurfaceInterceptor> createSurfaceInterceptor() = 0;
 
     virtual sp<StartPropertySetThread> createStartPropertySetThread(

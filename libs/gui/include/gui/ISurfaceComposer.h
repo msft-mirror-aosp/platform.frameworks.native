@@ -17,20 +17,16 @@
 #pragma once
 
 #include <android/gui/DisplayBrightness.h>
-#include <android/gui/IDisplayEventConnection.h>
 #include <android/gui/IFpsListener.h>
 #include <android/gui/IHdrLayerInfoListener.h>
-#include <android/gui/IRegionSamplingListener.h>
 #include <android/gui/IScreenCaptureListener.h>
 #include <android/gui/ITransactionTraceListener.h>
 #include <android/gui/ITunnelModeEnabledListener.h>
-#include <android/gui/IWindowInfosListener.h>
 #include <binder/IBinder.h>
 #include <binder/IInterface.h>
-#include <ftl/Flags.h>
 #include <gui/FrameTimelineInfo.h>
 #include <gui/ITransactionCompletedListener.h>
-#include <gui/SpHash.h>
+#include <input/Flags.h>
 #include <math/vec4.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -52,8 +48,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
-
 namespace android {
 
 struct client_cache_t;
@@ -65,15 +59,14 @@ struct InputWindowCommands;
 struct LayerCaptureArgs;
 class LayerDebugInfo;
 class HdrCapabilities;
+class IDisplayEventConnection;
 class IGraphicBufferProducer;
 class ISurfaceComposerClient;
+class IRegionSamplingListener;
 class Rect;
 enum class FrameEvent;
 
-using gui::IDisplayEventConnection;
-using gui::IRegionSamplingListener;
 using gui::IScreenCaptureListener;
-using gui::SpHash;
 
 namespace ui {
 
@@ -146,8 +139,6 @@ public:
     /* get stable IDs for connected physical displays.
      */
     virtual std::vector<PhysicalDisplayId> getPhysicalDisplayIds() const = 0;
-
-    virtual status_t getPrimaryPhysicalDisplayId(PhysicalDisplayId*) const = 0;
 
     // TODO(b/74619554): Remove this stopgap once the framework is display-agnostic.
     std::optional<PhysicalDisplayId> getInternalDisplayId() const {
@@ -223,29 +214,6 @@ public:
             ui::ColorMode colorMode) = 0;
 
     /**
-     * Sets the user-preferred display mode that a device should boot in.
-     */
-    virtual status_t setBootDisplayMode(const sp<IBinder>& display, ui::DisplayModeId) = 0;
-
-    /**
-     * Clears the user-preferred display mode. The device should now boot in system preferred
-     * display mode.
-     */
-    virtual status_t clearBootDisplayMode(const sp<IBinder>& display) = 0;
-
-    /**
-     * Gets whether boot time display mode operations are supported on the device.
-     *
-     * outSupport
-     *      An output parameter for whether boot time display mode operations are supported.
-     *
-     * Returns NO_ERROR upon success. Otherwise,
-     *      NAME_NOT_FOUND if the display is invalid, or
-     *      BAD_VALUE      if the output parameter is invalid.
-     */
-    virtual status_t getBootDisplayModeSupport(bool* outSupport) const = 0;
-
-    /**
      * Switches Auto Low Latency Mode on/off on the connected display, if it is
      * available. This should only be called if the display supports Auto Low
      * Latency Mode as reported in #getDynamicDisplayInfo.
@@ -270,17 +238,24 @@ public:
      * The subregion can be optionally rotated.  It will also be scaled to
      * match the size of the output buffer.
      */
-    virtual status_t captureDisplay(const DisplayCaptureArgs&,
-                                    const sp<IScreenCaptureListener>&) = 0;
+    virtual status_t captureDisplay(const DisplayCaptureArgs& args,
+                                    const sp<IScreenCaptureListener>& captureListener) = 0;
 
-    virtual status_t captureDisplay(DisplayId, const sp<IScreenCaptureListener>&) = 0;
+    virtual status_t captureDisplay(uint64_t displayOrLayerStack,
+                                    const sp<IScreenCaptureListener>& captureListener) = 0;
+
+    template <class AA>
+    struct SpHash {
+        size_t operator()(const sp<AA>& k) const { return std::hash<AA*>()(k.get()); }
+    };
 
     /**
      * Capture a subtree of the layer hierarchy, potentially ignoring the root node.
      * This requires READ_FRAME_BUFFER permission. This function will fail if there
      * is a secure window on screen
      */
-    virtual status_t captureLayers(const LayerCaptureArgs&, const sp<IScreenCaptureListener>&) = 0;
+    virtual status_t captureLayers(const LayerCaptureArgs& args,
+                                   const sp<IScreenCaptureListener>& captureListener) = 0;
 
     /* Clears the frame statistics for animations.
      *
@@ -530,35 +505,18 @@ public:
                                              float lightRadius) = 0;
 
     /*
-     * Gets whether a display supports DISPLAY_DECORATION layers.
-     *
-     * displayToken
-     *      The token of the display.
-     * outSupport
-     *      An output parameter for whether/how the display supports
-     *      DISPLAY_DECORATION layers.
-     *
-     * Returns NO_ERROR upon success. Otherwise,
-     *      NAME_NOT_FOUND if the display is invalid, or
-     *      BAD_VALUE      if the output parameter is invalid.
-     */
-    virtual status_t getDisplayDecorationSupport(
-            const sp<IBinder>& displayToken,
-            std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>*
-                    outSupport) const = 0;
-
-    /*
      * Sets the intended frame rate for a surface. See ANativeWindow_setFrameRate() for more info.
      */
     virtual status_t setFrameRate(const sp<IGraphicBufferProducer>& surface, float frameRate,
                                   int8_t compatibility, int8_t changeFrameRateStrategy) = 0;
 
     /*
-     * Set the override frame rate for a specified uid by GameManagerService.
-     * Passing the frame rate and uid to SurfaceFlinger to update the override mapping
-     * in the scheduler.
+     * Acquire a frame rate flexibility token from SurfaceFlinger. While this token is acquired,
+     * surface flinger will freely switch between frame rates in any way it sees fit, regardless of
+     * the current restrictions applied by DisplayManager. This is useful to get consistent behavior
+     * for tests. Release the token by releasing the returned IBinder reference.
      */
-    virtual status_t setOverrideFrameRate(uid_t uid, float frameRate) = 0;
+    virtual status_t acquireFrameRateFlexibilityToken(sp<IBinder>* outToken) = 0;
 
     /*
      * Sets the frame timeline vsync info received from choreographer that corresponds to next
@@ -594,11 +552,6 @@ public:
      * in MIN_UNDEQUEUED_BUFFERS.
      */
     virtual status_t getMaxAcquiredBufferCount(int* buffers) const = 0;
-
-    virtual status_t addWindowInfosListener(
-            const sp<gui::IWindowInfosListener>& windowInfosListener) const = 0;
-    virtual status_t removeWindowInfosListener(
-            const sp<gui::IWindowInfosListener>& windowInfosListener) const = 0;
 };
 
 // ----------------------------------------------------------------------------
@@ -657,7 +610,6 @@ public:
         GET_GAME_CONTENT_TYPE_SUPPORT, // Deprecated. Use GET_DYNAMIC_DISPLAY_INFO instead.
         SET_GAME_CONTENT_TYPE,
         SET_FRAME_RATE,
-        // Deprecated. Use DisplayManager.setShouldAlwaysRespectAppRequestedMode(true);
         ACQUIRE_FRAME_RATE_FLEXIBILITY_TOKEN,
         SET_FRAME_TIMELINE_INFO,
         ADD_TRANSACTION_TRACE_LISTENER,
@@ -672,14 +624,6 @@ public:
         ON_PULL_ATOM,
         ADD_TUNNEL_MODE_ENABLED_LISTENER,
         REMOVE_TUNNEL_MODE_ENABLED_LISTENER,
-        ADD_WINDOW_INFOS_LISTENER,
-        REMOVE_WINDOW_INFOS_LISTENER,
-        GET_PRIMARY_PHYSICAL_DISPLAY_ID,
-        GET_DISPLAY_DECORATION_SUPPORT,
-        GET_BOOT_DISPLAY_MODE_SUPPORT,
-        SET_BOOT_DISPLAY_MODE,
-        CLEAR_BOOT_DISPLAY_MODE,
-        SET_OVERRIDE_FRAME_RATE,
         // Always append new enum to the end.
     };
 
