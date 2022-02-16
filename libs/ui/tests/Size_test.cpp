@@ -93,8 +93,9 @@ TEST(SizeTest, ValidAndEmpty) {
     }
 
     {
-        EXPECT_FALSE(kInvalidSize.isValid());
-        EXPECT_FALSE(kInvalidSize.isEmpty());
+        const auto& s = Size::INVALID;
+        EXPECT_FALSE(s.isValid());
+        EXPECT_FALSE(s.isEmpty());
     }
 
     {
@@ -111,8 +112,9 @@ TEST(SizeTest, ValidAndEmpty) {
     }
 
     {
-        EXPECT_TRUE(kEmptySize.isValid());
-        EXPECT_TRUE(kEmptySize.isEmpty());
+        const auto& s = Size::EMPTY;
+        EXPECT_TRUE(s.isValid());
+        EXPECT_TRUE(s.isEmpty());
     }
 
     {
