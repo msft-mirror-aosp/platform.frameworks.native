@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <stdarg.h>
-
 #include <cutils/trace.h>
 #include <utils/Trace.h>
 
