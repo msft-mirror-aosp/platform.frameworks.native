@@ -65,7 +65,7 @@ public:
 
                 SurfaceComposerClient::Transaction t;
                 t.setDisplaySurface(vDisplay, producer);
-                t.setDisplayLayerStack(vDisplay, ui::DEFAULT_LAYER_STACK);
+                t.setDisplayLayerStack(vDisplay, 0);
                 t.setDisplayProjection(vDisplay, displayState.orientation,
                                        Rect(displayState.layerStackSpaceRect), Rect(resolution));
                 t.apply();

@@ -38,7 +38,6 @@
 #include "BatteryService.h"
 #include "CorrectedGyroSensor.h"
 #include "GravitySensor.h"
-#include "LimitedAxesImuSensor.h"
 #include "LinearAccelerationSensor.h"
 #include "OrientationSensor.h"
 #include "RotationVectorSensor.h"
@@ -102,36 +101,9 @@ static const String16 sDumpPermission("android.permission.DUMP");
 static const String16 sLocationHardwarePermission("android.permission.LOCATION_HARDWARE");
 static const String16 sManageSensorsPermission("android.permission.MANAGE_SENSORS");
 
-static bool isAutomotive() {
-    sp<IServiceManager> serviceManager = defaultServiceManager();
-    if (serviceManager.get() == nullptr) {
-        ALOGE("%s: unable to access native ServiceManager", __func__);
-        return false;
-    }
-
-    sp<content::pm::IPackageManagerNative> packageManager;
-    sp<IBinder> binder = serviceManager->waitForService(String16("package_native"));
-    packageManager = interface_cast<content::pm::IPackageManagerNative>(binder);
-    if (packageManager == nullptr) {
-        ALOGE("%s: unable to access native PackageManager", __func__);
-        return false;
-    }
-
-    bool isAutomotive = false;
-    binder::Status status =
-        packageManager->hasSystemFeature(String16("android.hardware.type.automotive"), 0,
-                                         &isAutomotive);
-    if (!status.isOk()) {
-        ALOGE("%s: hasSystemFeature failed: %s", __func__, status.exceptionMessage().c_str());
-        return false;
-    }
-
-    return isAutomotive;
-}
-
 SensorService::SensorService()
     : mInitCheck(NO_INIT), mSocketBufferSize(SOCKET_BUFFER_SIZE_NON_BATCHED),
-      mWakeLockAcquired(false), mLastReportedProxIsActive(false) {
+      mWakeLockAcquired(false), mProximityActiveCount(0) {
     mUidPolicy = new UidPolicy(this);
     mSensorPrivacyPolicy = new SensorPrivacyPolicy(this);
 }
@@ -192,9 +164,8 @@ void SensorService::onFirstRef() {
         sensor_t const* list;
         ssize_t count = dev.getSensorList(&list);
         if (count > 0) {
+            ssize_t orientationIndex = -1;
             bool hasGyro = false, hasAccel = false, hasMag = false;
-            bool hasGyroUncalibrated = false;
-            bool hasAccelUncalibrated = false;
             uint32_t virtualSensorsNeeds =
                     (1<<SENSOR_TYPE_GRAVITY) |
                     (1<<SENSOR_TYPE_LINEAR_ACCELERATION) |
@@ -209,17 +180,15 @@ void SensorService::onFirstRef() {
                     case SENSOR_TYPE_ACCELEROMETER:
                         hasAccel = true;
                         break;
-                    case SENSOR_TYPE_ACCELEROMETER_UNCALIBRATED:
-                        hasAccelUncalibrated = true;
-                        break;
                     case SENSOR_TYPE_MAGNETIC_FIELD:
                         hasMag = true;
                         break;
-                    case SENSOR_TYPE_GYROSCOPE:
-                        hasGyro = true;
+                    case SENSOR_TYPE_ORIENTATION:
+                        orientationIndex = i;
                         break;
+                    case SENSOR_TYPE_GYROSCOPE:
                     case SENSOR_TYPE_GYROSCOPE_UNCALIBRATED:
-                        hasGyroUncalibrated = true;
+                        hasGyro = true;
                         break;
                     case SENSOR_TYPE_GRAVITY:
                     case SENSOR_TYPE_LINEAR_ACCELERATION:
@@ -232,16 +201,12 @@ void SensorService::onFirstRef() {
                             virtualSensorsNeeds &= ~(1<<list[i].type);
                         }
                         break;
-                    default:
-                        break;
                 }
                 if (useThisSensor) {
                     if (list[i].type == SENSOR_TYPE_PROXIMITY) {
-                        SensorInterface* s = new ProximitySensor(list[i], *this);
-                        registerSensor(s);
-                        mProxSensorHandles.push_back(s->getSensor().getHandle());
+                        registerSensor(new ProximitySensor(list[i], *this));
                     } else {
-                        registerSensor(new HardwareSensor(list[i]));
+                        registerSensor( new HardwareSensor(list[i]) );
                     }
                 }
             }
@@ -251,7 +216,7 @@ void SensorService::onFirstRef() {
             // registered)
             SensorFusion::getInstance();
 
-            if ((hasGyro || hasGyroUncalibrated) && hasAccel && hasMag) {
+            if (hasGyro && hasAccel && hasMag) {
                 // Add Android virtual sensors if they're not already
                 // available in the HAL
                 bool needRotationVector =
@@ -265,7 +230,7 @@ void SensorService::onFirstRef() {
                 registerSensor( new GyroDriftSensor(), true, true);
             }
 
-            if (hasAccel && (hasGyro || hasGyroUncalibrated)) {
+            if (hasAccel && hasGyro) {
                 bool needGravitySensor = (virtualSensorsNeeds & (1<<SENSOR_TYPE_GRAVITY)) != 0;
                 registerSensor(new GravitySensor(list, count), !needGravitySensor, true);
 
@@ -283,30 +248,6 @@ void SensorService::onFirstRef() {
                 bool needGeoMagRotationVector =
                         (virtualSensorsNeeds & (1<<SENSOR_TYPE_GEOMAGNETIC_ROTATION_VECTOR)) != 0;
                 registerSensor(new GeoMagRotationVectorSensor(), !needGeoMagRotationVector, true);
-            }
-
-            if (isAutomotive()) {
-                if (hasAccel) {
-                   registerSensor(new LimitedAxesImuSensor(list, count, SENSOR_TYPE_ACCELEROMETER),
-                                  /*isDebug=*/false, /*isVirtual=*/true);
-               }
-
-               if (hasGyro) {
-                   registerSensor(new LimitedAxesImuSensor(list, count, SENSOR_TYPE_GYROSCOPE),
-                                  /*isDebug=*/false, /*isVirtual=*/true);
-               }
-
-               if (hasAccelUncalibrated) {
-                   registerSensor(new LimitedAxesImuSensor(list, count,
-                                                           SENSOR_TYPE_ACCELEROMETER_UNCALIBRATED),
-                                  /*isDebug=*/false, /*isVirtual=*/true);
-               }
-
-               if (hasGyroUncalibrated) {
-                   registerSensor(new LimitedAxesImuSensor(list, count,
-                                                           SENSOR_TYPE_GYROSCOPE_UNCALIBRATED),
-                                  /*isDebug=*/false, /*isVirtual=*/true);
-               }
             }
 
             // Check if the device really supports batching by looking at the FIFO event
@@ -390,7 +331,6 @@ void SensorService::onUidStateChanged(uid_t uid, UidState state) {
             conn->onSensorAccessChanged(hasAccess);
         }
     }
-    checkAndReportProxStateChangeLocked();
 }
 
 bool SensorService::hasSensorAccess(uid_t uid, const String16& opPackageName) {
@@ -740,8 +680,11 @@ void SensorService::disableAllSensorsLocked(ConnectionSafeAutolock* connLock) {
         bool hasAccess = hasSensorAccessLocked(conn->getUid(), conn->getOpPackageName());
         conn->onSensorAccessChanged(hasAccess);
     }
+    mSensors.forEachEntry([](const SensorServiceUtil::SensorList::Entry& e) {
+        e.si->willDisableAllSensors();
+        return true;
+    });
     dev.disableAllSensors();
-    checkAndReportProxStateChangeLocked();
     // Clear all pending flush connections for all active sensors. If one of the active
     // connections has called flush() and the underlying sensor has been disabled before a
     // flush complete event is returned, we need to remove the connection from this queue.
@@ -766,11 +709,14 @@ void SensorService::enableAllSensorsLocked(ConnectionSafeAutolock* connLock) {
     }
     SensorDevice& dev(SensorDevice::getInstance());
     dev.enableAllSensors();
+    mSensors.forEachEntry([](const SensorServiceUtil::SensorList::Entry& e) {
+        e.si->didEnableAllSensors();
+        return true;
+    });
     for (const sp<SensorDirectConnection>& conn : connLock->getDirectConnections()) {
         bool hasAccess = hasSensorAccessLocked(conn->getUid(), conn->getOpPackageName());
         conn->onSensorAccessChanged(hasAccess);
     }
-    checkAndReportProxStateChangeLocked();
 }
 
 void SensorService::capRates(userid_t userId) {
@@ -1251,7 +1197,7 @@ int32_t SensorService::getIdFromUuid(const Sensor::uuid_t &uuid) const {
     // We have a dynamic sensor.
 
     if (!sHmacGlobalKeyIsValid) {
-        // Rather than risk exposing UUIDs, we slow down dynamic sensors.
+        // Rather than risk exposing UUIDs, we cripple dynamic sensors.
         ALOGW("HMAC key failure; dynamic sensor getId() will be wrong.");
         return 0;
     }
@@ -1277,7 +1223,7 @@ int32_t SensorService::getIdFromUuid(const Sensor::uuid_t &uuid) const {
              sHmacGlobalKey, sizeof(sHmacGlobalKey),
              uuidAndApp, sizeof(uuidAndApp),
              hash, &hashLen) == nullptr) {
-        // Rather than risk exposing UUIDs, we slow down dynamic sensors.
+        // Rather than risk exposing UUIDs, we cripple dynamic sensors.
         ALOGW("HMAC failure; dynamic sensor getId() will be wrong.");
         return 0;
     }
@@ -1313,11 +1259,6 @@ void SensorService::makeUuidsIntoIdsForSensorList(Vector<Sensor> &sensorList) co
     for (auto &sensor : sensorList) {
         int32_t id = getIdFromUuid(sensor.getUuid());
         sensor.setId(id);
-        // The sensor UUID must always be anonymized here for non privileged clients.
-        // There is no other checks after this point before returning to client process.
-        if (!isAudioServerOrSystemServerUid(IPCThreadState::self()->getCallingUid())) {
-            sensor.anonymizeUuid();
-        }
     }
 }
 
@@ -1597,7 +1538,10 @@ status_t SensorService::resetToNormalModeLocked() {
     if (err == NO_ERROR) {
         mCurrentOperatingMode = NORMAL;
         dev.enableAllSensors();
-        checkAndReportProxStateChangeLocked();
+        mSensors.forEachEntry([](const SensorServiceUtil::SensorList::Entry& e) {
+            e.si->didEnableAllSensors();
+            return true;
+        });
     }
     return err;
 }
@@ -1662,26 +1606,28 @@ void SensorService::cleanupConnection(SensorDirectConnection* c) {
     mConnectionHolder.removeDirectConnection(c);
 }
 
-void SensorService::checkAndReportProxStateChangeLocked() {
-    if (mProxSensorHandles.empty()) return;
-
-    SensorDevice& dev(SensorDevice::getInstance());
-    bool isActive = false;
-    for (auto& sensor : mProxSensorHandles) {
-        if (dev.isSensorActive(sensor)) {
-            isActive = true;
-            break;
+void SensorService::onProximityActiveLocked(bool isActive) {
+    int prevCount = mProximityActiveCount;
+    bool activeStateChanged = false;
+    if (isActive) {
+        mProximityActiveCount++;
+        activeStateChanged = prevCount == 0;
+    } else {
+        mProximityActiveCount--;
+        if (mProximityActiveCount < 0) {
+            ALOGE("Proximity active count is negative (%d)!", mProximityActiveCount);
         }
+        activeStateChanged = prevCount > 0 && mProximityActiveCount <= 0;
     }
-    if (isActive != mLastReportedProxIsActive) {
-        notifyProximityStateLocked(isActive, mProximityActiveListeners);
-        mLastReportedProxIsActive = isActive;
+
+    if (activeStateChanged) {
+        notifyProximityStateLocked(mProximityActiveListeners);
     }
 }
 
 void SensorService::notifyProximityStateLocked(
-        const bool isActive,
         const std::vector<sp<ProximityActiveListener>>& listeners) {
+    const bool isActive = mProximityActiveCount > 0;
     const uint64_t mySeq = ++curProxCallbackSeq;
     std::thread t([isActive, mySeq, listenersCopy = listeners]() {
         while (completedCallbackSeq.load() != mySeq - 1)
@@ -1709,7 +1655,7 @@ status_t SensorService::addProximityActiveListener(const sp<ProximityActiveListe
 
     mProximityActiveListeners.push_back(callback);
     std::vector<sp<ProximityActiveListener>> listener(1, callback);
-    notifyProximityStateLocked(mLastReportedProxIsActive, listener);
+    notifyProximityStateLocked(listener);
     return OK;
 }
 
@@ -2244,10 +2190,10 @@ bool SensorService::isSensorInCappedSet(int sensorType) {
 status_t SensorService::adjustSamplingPeriodBasedOnMicAndPermission(nsecs_t* requestedPeriodNs,
         const String16& opPackageName) {
     uid_t uid = IPCThreadState::self()->getCallingUid();
+    bool shouldCapBasedOnPermission = isRateCappedBasedOnPermission(opPackageName);
     if (*requestedPeriodNs >= SENSOR_SERVICE_CAPPED_SAMPLING_PERIOD_NS) {
         return OK;
     }
-    bool shouldCapBasedOnPermission = isRateCappedBasedOnPermission(opPackageName);
     if (shouldCapBasedOnPermission) {
         *requestedPeriodNs = SENSOR_SERVICE_CAPPED_SAMPLING_PERIOD_NS;
         if (isPackageDebuggable(opPackageName)) {
@@ -2265,10 +2211,11 @@ status_t SensorService::adjustSamplingPeriodBasedOnMicAndPermission(nsecs_t* req
 status_t SensorService::adjustRateLevelBasedOnMicAndPermission(int* requestedRateLevel,
         const String16& opPackageName) {
     uid_t uid = IPCThreadState::self()->getCallingUid();
+    bool shouldCapBasedOnPermission = isRateCappedBasedOnPermission(opPackageName);
+
     if (*requestedRateLevel <= SENSOR_SERVICE_CAPPED_SAMPLING_RATE_LEVEL) {
         return OK;
     }
-    bool shouldCapBasedOnPermission = isRateCappedBasedOnPermission(opPackageName);
     if (shouldCapBasedOnPermission) {
         *requestedRateLevel = SENSOR_SERVICE_CAPPED_SAMPLING_RATE_LEVEL;
         if (isPackageDebuggable(opPackageName)) {
