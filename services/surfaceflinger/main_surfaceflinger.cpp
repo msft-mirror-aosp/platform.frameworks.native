@@ -63,17 +63,18 @@ static status_t startGraphicsAllocatorService() {
     return OK;
 }
 
-static void startDisplayService() {
+static status_t startDisplayService() {
     using android::frameworks::displayservice::V1_0::implementation::DisplayService;
     using android::frameworks::displayservice::V1_0::IDisplayService;
 
     sp<IDisplayService> displayservice = new DisplayService();
     status_t err = displayservice->registerAsService();
 
-    // b/141930622
     if (err != OK) {
-        ALOGE("Did not register (deprecated) IDisplayService service.");
+        ALOGE("Could not register IDisplayService service.");
     }
+
+    return err;
 }
 
 int main(int, char**) {
