@@ -72,8 +72,7 @@ TEST_F(OneShotTimerTest, startStopTest) {
     mIdleTimer->stop();
 }
 
-// TODO(b/186417847) This test is flaky. Reenable once fixed.
-TEST_F(OneShotTimerTest, DISABLED_resetTest) {
+TEST_F(OneShotTimerTest, resetTest) {
     fake::FakeClock* clock = new fake::FakeClock();
     mIdleTimer = std::make_unique<scheduler::OneShotTimer>("TestTimer", 1ms,
                                                            mResetTimerCallback.getInvocable(),
@@ -95,8 +94,7 @@ TEST_F(OneShotTimerTest, DISABLED_resetTest) {
     EXPECT_FALSE(mResetTimerCallback.waitForUnexpectedCall().has_value());
 }
 
-// TODO(b/186417847) This test is flaky. Reenable once fixed.
-TEST_F(OneShotTimerTest, DISABLED_resetBackToBackTest) {
+TEST_F(OneShotTimerTest, resetBackToBackTest) {
     fake::FakeClock* clock = new fake::FakeClock();
     mIdleTimer = std::make_unique<scheduler::OneShotTimer>("TestTimer", 1ms,
                                                            mResetTimerCallback.getInvocable(),
@@ -146,8 +144,7 @@ TEST_F(OneShotTimerTest, startNotCalledTest) {
     EXPECT_FALSE(mResetTimerCallback.waitForUnexpectedCall().has_value());
 }
 
-// TODO(b/186417847) This test is flaky. Reenable once fixed.
-TEST_F(OneShotTimerTest, DISABLED_idleTimerIdlesTest) {
+TEST_F(OneShotTimerTest, idleTimerIdlesTest) {
     fake::FakeClock* clock = new fake::FakeClock();
     mIdleTimer = std::make_unique<scheduler::OneShotTimer>("TestTimer", 1ms,
                                                            mResetTimerCallback.getInvocable(),
@@ -172,8 +169,7 @@ TEST_F(OneShotTimerTest, DISABLED_idleTimerIdlesTest) {
     EXPECT_FALSE(mResetTimerCallback.waitForUnexpectedCall().has_value());
 }
 
-// TODO(b/186417847) This test is flaky. Reenable once fixed.
-TEST_F(OneShotTimerTest, DISABLED_timeoutCallbackExecutionTest) {
+TEST_F(OneShotTimerTest, timeoutCallbackExecutionTest) {
     fake::FakeClock* clock = new fake::FakeClock();
     mIdleTimer = std::make_unique<scheduler::OneShotTimer>("TestTimer", 1ms,
                                                            mResetTimerCallback.getInvocable(),

@@ -239,12 +239,11 @@ static const TracingCategory k_categories[] = {
     } },
     { "memory",  "Memory", 0, {
         { OPT,      "events/mm_event/mm_event_record/enable" },
-        { OPT,      "events/synthetic/rss_stat_throttled/enable" },
+        { OPT,      "events/kmem/rss_stat/enable" },
         { OPT,      "events/kmem/ion_heap_grow/enable" },
         { OPT,      "events/kmem/ion_heap_shrink/enable" },
         { OPT,      "events/ion/ion_stat/enable" },
         { OPT,      "events/gpu_mem/gpu_mem_total/enable" },
-        { OPT,      "events/fastrpc/fastrpc_dma_stat/enable" },
     } },
     { "thermal",  "Thermal event", 0, {
         { REQ,      "events/thermal/thermal_temperature/enable" },

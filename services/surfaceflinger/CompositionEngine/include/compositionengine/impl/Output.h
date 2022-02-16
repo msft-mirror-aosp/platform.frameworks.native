@@ -23,7 +23,6 @@
 #include <compositionengine/impl/planner/Planner.h>
 #include <renderengine/DisplaySettings.h>
 #include <renderengine/LayerSettings.h>
-
 #include <memory>
 #include <utility>
 #include <vector>
@@ -42,12 +41,10 @@ public:
     std::optional<DisplayId> getDisplayId() const override;
     void setCompositionEnabled(bool) override;
     void setLayerCachingEnabled(bool) override;
-    void setLayerCachingTexturePoolEnabled(bool) override;
     void setProjection(ui::Rotation orientation, const Rect& layerStackSpaceRect,
                        const Rect& orientedDisplaySpaceRect) override;
-    void setNextBrightness(float brightness) override;
     void setDisplaySize(const ui::Size&) override;
-    void setLayerFilter(ui::LayerFilter) override;
+    void setLayerStackFilter(uint32_t layerStackId, bool isInternal) override;
     ui::Transform::RotationFlags getTransformHint() const override;
 
     void setColorTransform(const compositionengine::CompositionRefreshArgs&) override;
@@ -66,10 +63,9 @@ public:
     compositionengine::RenderSurface* getRenderSurface() const override;
     void setRenderSurface(std::unique_ptr<compositionengine::RenderSurface>) override;
 
-    Region getDirtyRegion() const override;
-
-    bool includesLayer(ui::LayerFilter) const override;
-    bool includesLayer(const sp<LayerFE>&) const override;
+    Region getDirtyRegion(bool repaintEverything) const override;
+    bool belongsInOutput(std::optional<uint32_t>, bool) const override;
+    bool belongsInOutput(const sp<LayerFE>&) const override;
 
     compositionengine::OutputLayer* getOutputLayerForLayer(const sp<LayerFE>&) const override;
 
@@ -114,8 +110,8 @@ protected:
     bool getSkipColorTransform() const override;
     compositionengine::Output::FrameFences presentAndGetFrameFences() override;
     std::vector<LayerFE::LayerSettings> generateClientCompositionRequests(
-          bool supportsProtectedContent, ui::Dataspace outputDataspace,
-          std::vector<LayerFE*> &outLayerFEs) override;
+            bool supportsProtectedContent, Region& clearRegion,
+            ui::Dataspace outputDataspace) override;
     void appendRegionFlashRequests(const Region&, std::vector<LayerFE::LayerSettings>&) override;
     void setExpensiveRenderingExpected(bool enabled) override;
     void dumpBase(std::string&) const;
