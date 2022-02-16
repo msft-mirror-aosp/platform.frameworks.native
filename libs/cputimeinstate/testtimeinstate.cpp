@@ -27,7 +27,6 @@
 
 #include <gtest/gtest.h>
 
-#include <android-base/properties.h>
 #include <android-base/unique_fd.h>
 #include <bpf/BpfMap.h>
 #include <cputimeinstate.h>
@@ -41,31 +40,24 @@ static constexpr uint64_t NSEC_PER_YEAR = NSEC_PER_SEC * 60 * 60 * 24 * 365;
 
 using std::vector;
 
-class TimeInStateTest : public testing::Test {
-  protected:
-    TimeInStateTest() {};
+TEST(TimeInStateTest, IsTrackingSupported) {
+    isTrackingUidTimesSupported();
+    SUCCEED();
+}
 
-    void SetUp() {
-        if (!isTrackingUidTimesSupported() ||
-            !android::base::GetBoolProperty("sys.init.perf_lsm_hooks", false)) {
-            GTEST_SKIP();
-        }
-    }
-};
-
-TEST_F(TimeInStateTest, TotalTimeInState) {
+TEST(TimeInStateTest, TotalTimeInState) {
     auto times = getTotalCpuFreqTimes();
     ASSERT_TRUE(times.has_value());
     EXPECT_FALSE(times->empty());
 }
 
-TEST_F(TimeInStateTest, SingleUidTimeInState) {
+TEST(TimeInStateTest, SingleUidTimeInState) {
     auto times = getUidCpuFreqTimes(0);
     ASSERT_TRUE(times.has_value());
     EXPECT_FALSE(times->empty());
 }
 
-TEST_F(TimeInStateTest, SingleUidConcurrentTimes) {
+TEST(TimeInStateTest, SingleUidConcurrentTimes) {
     auto concurrentTimes = getUidConcurrentTimes(0);
     ASSERT_TRUE(concurrentTimes.has_value());
     ASSERT_FALSE(concurrentTimes->active.empty());
@@ -125,7 +117,7 @@ static void TestUidTimesConsistent(const std::vector<std::vector<uint64_t>> &tim
     EXPECT_EQ(activeSum, policySum);
 }
 
-TEST_F(TimeInStateTest, SingleUidTimesConsistent) {
+TEST(TimeInStateTest, SingleUidTimesConsistent) {
     auto times = getUidCpuFreqTimes(0);
     ASSERT_TRUE(times.has_value());
 
@@ -135,7 +127,7 @@ TEST_F(TimeInStateTest, SingleUidTimesConsistent) {
     ASSERT_NO_FATAL_FAILURE(TestUidTimesConsistent(*times, *concurrentTimes));
 }
 
-TEST_F(TimeInStateTest, AllUidTimeInState) {
+TEST(TimeInStateTest, AllUidTimeInState) {
     uint64_t zero = 0;
     auto maps = {getUidsCpuFreqTimes(), getUidsUpdatedCpuFreqTimes(&zero)};
     for (const auto &map : maps) {
@@ -171,7 +163,7 @@ void TestCheckUpdate(const std::vector<std::vector<uint64_t>> &before,
     ASSERT_LE(sumAfter - sumBefore, NSEC_PER_SEC);
 }
 
-TEST_F(TimeInStateTest, AllUidUpdatedTimeInState) {
+TEST(TimeInStateTest, AllUidUpdatedTimeInState) {
     uint64_t lastUpdate = 0;
     auto map1 = getUidsUpdatedCpuFreqTimes(&lastUpdate);
     ASSERT_TRUE(map1.has_value());
@@ -205,7 +197,7 @@ TEST_F(TimeInStateTest, AllUidUpdatedTimeInState) {
     }
 }
 
-TEST_F(TimeInStateTest, TotalAndAllUidTimeInStateConsistent) {
+TEST(TimeInStateTest, TotalAndAllUidTimeInStateConsistent) {
     auto allUid = getUidsCpuFreqTimes();
     auto total = getTotalCpuFreqTimes();
 
@@ -230,7 +222,7 @@ TEST_F(TimeInStateTest, TotalAndAllUidTimeInStateConsistent) {
     }
 }
 
-TEST_F(TimeInStateTest, SingleAndAllUidTimeInStateConsistent) {
+TEST(TimeInStateTest, SingleAndAllUidTimeInStateConsistent) {
     uint64_t zero = 0;
     auto maps = {getUidsCpuFreqTimes(), getUidsUpdatedCpuFreqTimes(&zero)};
     for (const auto &map : maps) {
@@ -254,7 +246,7 @@ TEST_F(TimeInStateTest, SingleAndAllUidTimeInStateConsistent) {
     }
 }
 
-TEST_F(TimeInStateTest, AllUidConcurrentTimes) {
+TEST(TimeInStateTest, AllUidConcurrentTimes) {
     uint64_t zero = 0;
     auto maps = {getUidsConcurrentTimes(), getUidsUpdatedConcurrentTimes(&zero)};
     for (const auto &map : maps) {
@@ -272,7 +264,7 @@ TEST_F(TimeInStateTest, AllUidConcurrentTimes) {
     }
 }
 
-TEST_F(TimeInStateTest, AllUidUpdatedConcurrentTimes) {
+TEST(TimeInStateTest, AllUidUpdatedConcurrentTimes) {
     uint64_t lastUpdate = 0;
     auto map1 = getUidsUpdatedConcurrentTimes(&lastUpdate);
     ASSERT_TRUE(map1.has_value());
@@ -307,7 +299,7 @@ TEST_F(TimeInStateTest, AllUidUpdatedConcurrentTimes) {
     }
 }
 
-TEST_F(TimeInStateTest, SingleAndAllUidConcurrentTimesConsistent) {
+TEST(TimeInStateTest, SingleAndAllUidConcurrentTimesConsistent) {
     uint64_t zero = 0;
     auto maps = {getUidsConcurrentTimes(), getUidsUpdatedConcurrentTimes(&zero)};
     for (const auto &map : maps) {
@@ -336,7 +328,7 @@ void TestCheckDelta(uint64_t before, uint64_t after) {
     ASSERT_LE(after - before, NSEC_PER_SEC * 2 * get_nprocs_conf());
 }
 
-TEST_F(TimeInStateTest, TotalTimeInStateMonotonic) {
+TEST(TimeInStateTest, TotalTimeInStateMonotonic) {
     auto before = getTotalCpuFreqTimes();
     ASSERT_TRUE(before.has_value());
     sleep(1);
@@ -352,7 +344,7 @@ TEST_F(TimeInStateTest, TotalTimeInStateMonotonic) {
     }
 }
 
-TEST_F(TimeInStateTest, AllUidTimeInStateMonotonic) {
+TEST(TimeInStateTest, AllUidTimeInStateMonotonic) {
     auto map1 = getUidsCpuFreqTimes();
     ASSERT_TRUE(map1.has_value());
     sleep(1);
@@ -373,7 +365,7 @@ TEST_F(TimeInStateTest, AllUidTimeInStateMonotonic) {
     }
 }
 
-TEST_F(TimeInStateTest, AllUidConcurrentTimesMonotonic) {
+TEST(TimeInStateTest, AllUidConcurrentTimesMonotonic) {
     auto map1 = getUidsConcurrentTimes();
     ASSERT_TRUE(map1.has_value());
     ASSERT_FALSE(map1->empty());
@@ -401,7 +393,7 @@ TEST_F(TimeInStateTest, AllUidConcurrentTimesMonotonic) {
     }
 }
 
-TEST_F(TimeInStateTest, AllUidTimeInStateSanityCheck) {
+TEST(TimeInStateTest, AllUidTimeInStateSanityCheck) {
     uint64_t zero = 0;
     auto maps = {getUidsCpuFreqTimes(), getUidsUpdatedCpuFreqTimes(&zero)};
     for (const auto &map : maps) {
@@ -422,7 +414,7 @@ TEST_F(TimeInStateTest, AllUidTimeInStateSanityCheck) {
     }
 }
 
-TEST_F(TimeInStateTest, AllUidConcurrentTimesSanityCheck) {
+TEST(TimeInStateTest, AllUidConcurrentTimesSanityCheck) {
     uint64_t zero = 0;
     auto maps = {getUidsConcurrentTimes(), getUidsUpdatedConcurrentTimes(&zero)};
     for (const auto &concurrentMap : maps) {
@@ -449,7 +441,7 @@ TEST_F(TimeInStateTest, AllUidConcurrentTimesSanityCheck) {
     }
 }
 
-TEST_F(TimeInStateTest, AllUidConcurrentTimesFailsOnInvalidBucket) {
+TEST(TimeInStateTest, AllUidConcurrentTimesFailsOnInvalidBucket) {
     uint32_t uid = 0;
     {
         // Find an unused UID
@@ -471,7 +463,7 @@ TEST_F(TimeInStateTest, AllUidConcurrentTimesFailsOnInvalidBucket) {
     ASSERT_FALSE(deleteMapEntry(fd, &key));
 }
 
-TEST_F(TimeInStateTest, AllUidTimesConsistent) {
+TEST(TimeInStateTest, AllUidTimesConsistent) {
     auto tisMap = getUidsCpuFreqTimes();
     ASSERT_TRUE(tisMap.has_value());
 
@@ -489,7 +481,7 @@ TEST_F(TimeInStateTest, AllUidTimesConsistent) {
     }
 }
 
-TEST_F(TimeInStateTest, RemoveUid) {
+TEST(TimeInStateTest, RemoveUid) {
     uint32_t uid = 0;
     {
         // Find an unused UID
@@ -555,7 +547,7 @@ TEST_F(TimeInStateTest, RemoveUid) {
     ASSERT_EQ(allConcurrentTimes->find(uid), allConcurrentTimes->end());
 }
 
-TEST_F(TimeInStateTest, GetCpuFreqs) {
+TEST(TimeInStateTest, GetCpuFreqs) {
     auto freqs = getCpuFreqs();
     ASSERT_TRUE(freqs.has_value());
 
@@ -591,7 +583,7 @@ void *testThread(void *) {
     return nullptr;
 }
 
-TEST_F(TimeInStateTest, GetAggregatedTaskCpuFreqTimes) {
+TEST(TimeInStateTest, GetAggregatedTaskCpuFreqTimes) {
     uint64_t startTimeNs = timeNanos();
 
     sem_init(&pingsem, 0, 1);

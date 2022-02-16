@@ -101,10 +101,6 @@ message LayerStackChange {
     required uint32 layer_stack = 1;
 }
 
-message DisplayFlagsChange {
-    required uint32 flags = 1;
-}
-
 message HiddenFlagChange {
     required bool hidden_flag = 1;
 }
@@ -125,7 +121,6 @@ message DisplayChange {
         LayerStackChange  layer_stack = 3;
         SizeChange        size        = 4;
         ProjectionChange  projection  = 5;
-        DisplayFlagsChange flags      = 6;
     }
 }
 

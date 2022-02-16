@@ -28,7 +28,7 @@ public:
     explicit SensorInputMapper(InputDeviceContext& deviceContext);
     ~SensorInputMapper() override;
 
-    uint32_t getSources() const override;
+    uint32_t getSources() override;
     void populateDeviceInfo(InputDeviceInfo* deviceInfo) override;
     void dump(std::string& dump) override;
     void configure(nsecs_t when, const InputReaderConfiguration* config, uint32_t changes) override;

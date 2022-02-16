@@ -26,8 +26,7 @@
 #include <ui/PixelFormat.h>
 #include <ui/Size.h>
 
-#include <ui/DisplayIdentification.h>
-
+#include "DisplayHardware/DisplayIdentification.h"
 #include "DisplayHardware/HWComposer.h"
 #include "DisplayHardware/PowerAdvisor.h"
 
@@ -62,7 +61,6 @@ public:
     bool isSecure() const override;
     bool isVirtual() const override;
     void disconnect() override;
-    int32_t getPreferredBootModeId() const override;
     void createDisplayColorProfile(
             const compositionengine::DisplayColorProfileCreationArgs&) override;
     void createRenderSurface(const compositionengine::RenderSurfaceCreationArgs&) override;
@@ -78,17 +76,17 @@ public:
     virtual void applyChangedTypesToLayers(const ChangedTypes&);
     virtual void applyDisplayRequests(const DisplayRequests&);
     virtual void applyLayerRequestsToLayers(const LayerRequests&);
-    virtual void applyClientTargetRequests(const ClientTargetProperty&, float whitePointNits);
+    virtual void applyClientTargetRequests(const ClientTargetProperty&);
 
     // Internal
     virtual void setConfiguration(const compositionengine::DisplayCreationArgs&);
     std::unique_ptr<compositionengine::OutputLayer> createOutputLayer(const sp<LayerFE>&) const;
 
 private:
-    DisplayId mId;
+    bool mIsVirtual = false;
     bool mIsDisconnected = false;
+    DisplayId mId;
     Hwc2::PowerAdvisor* mPowerAdvisor = nullptr;
-    int32_t mPreferredBootDisplayModeId = -1;
 };
 
 // This template factory function standardizes the implementation details of the

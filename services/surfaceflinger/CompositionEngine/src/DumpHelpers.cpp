@@ -63,18 +63,6 @@ void dumpVal(std::string& out, const char* name, const std::string& valueName, i
     dumpVal(out, name, valueName.c_str(), value);
 }
 
-void dumpVal(std::string& out, const char* name, ui::LayerFilter filter) {
-    out.append(name);
-    out.append("={");
-    dumpVal(out, "layerStack", filter.layerStack.id);
-    dumpVal(out, "toInternalDisplay", filter.toInternalDisplay);
-    out.push_back('}');
-}
-
-void dumpVal(std::string& out, const char* name, ui::Size size) {
-    StringAppendF(&out, "%s=[%d %d] ", name, size.width, size.height);
-}
-
 void dumpVal(std::string& out, const char* name, const FloatRect& rect) {
     StringAppendF(&out, "%s=[%f %f %f %f] ", name, rect.left, rect.top, rect.right, rect.bottom);
 }
@@ -90,6 +78,10 @@ void dumpVal(std::string& out, const char* name, const Region& region) {
 void dumpVal(std::string& out, const char* name, const ui::Transform& transform) {
     transform.dump(out, name);
     out.append(" ");
+}
+
+void dumpVal(std::string& out, const char* name, const ui::Size& size) {
+    StringAppendF(&out, "%s=[%d %d] ", name, size.width, size.height);
 }
 
 void dumpVal(std::string& out, const char* name, const mat4& tr) {
