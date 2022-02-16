@@ -30,9 +30,8 @@
 #include <compositionengine/impl/OutputCompositionState.h>
 #include <cutils/properties.h>
 #include <ftl/future.h>
-#include <gui/SpHash.h>
+#include <gui/IRegionSamplingListener.h>
 #include <gui/SyncScreenCaptureListener.h>
-#include <renderengine/impl/ExternalTexture.h>
 #include <ui/DisplayStatInfo.h>
 #include <utils/Trace.h>
 
@@ -47,7 +46,10 @@
 namespace android {
 using namespace std::chrono_literals;
 
-using gui::SpHash;
+template <typename T>
+struct SpHash {
+    size_t operator()(const sp<T>& p) const { return std::hash<T*>()(p.get()); }
+};
 
 constexpr auto lumaSamplingStepTag = "LumaSamplingStep";
 enum class samplingStep {
@@ -148,7 +150,7 @@ void RegionSamplingThread::checkForStaleLuma() {
     if (mSampleRequestTime.has_value()) {
         ATRACE_INT(lumaSamplingStepTag, static_cast<int>(samplingStep::waitForSamplePhase));
         mSampleRequestTime.reset();
-        mFlinger.scheduleSample();
+        mFlinger.scheduleRegionSamplingThread();
     }
 }
 
@@ -350,18 +352,14 @@ void RegionSamplingThread::captureSample() {
         LOG_ALWAYS_FATAL_IF(bufferStatus != OK, "captureSample: Buffer failed to allocate: %d",
                             bufferStatus);
         buffer = std::make_shared<
-                renderengine::impl::ExternalTexture>(graphicBuffer, mFlinger.getRenderEngine(),
-                                                     renderengine::impl::ExternalTexture::Usage::
-                                                             WRITEABLE);
+                renderengine::ExternalTexture>(graphicBuffer, mFlinger.getRenderEngine(),
+                                               renderengine::ExternalTexture::Usage::WRITEABLE);
     }
 
-    auto captureScreenResultFuture =
-            mFlinger.captureScreenCommon(std::move(renderAreaFuture), traverseLayers, buffer,
-                                         true /* regionSampling */, false /* grayscale */, nullptr);
-    auto& captureScreenResult = captureScreenResultFuture.get();
-    if (captureScreenResult.drawFence.ok()) {
-        sync_wait(captureScreenResult.drawFence.get(), -1);
-    }
+    const sp<SyncScreenCaptureListener> captureListener = new SyncScreenCaptureListener();
+    mFlinger.captureScreenCommon(std::move(renderAreaFuture), traverseLayers, buffer,
+                                 true /* regionSampling */, false /* grayscale */, captureListener);
+    ScreenCaptureResults captureResults = captureListener->waitForResults();
 
     std::vector<Descriptor> activeDescriptors;
     for (const auto& descriptor : descriptors) {

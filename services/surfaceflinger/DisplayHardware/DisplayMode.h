@@ -16,21 +16,19 @@
 
 #pragma once
 
-#include <cstddef>
-#include <memory>
-#include <vector>
+#include "DisplayHardware/Hal.h"
+#include "Fps.h"
+#include "Scheduler/StrongTyping.h"
 
 #include <android-base/stringprintf.h>
 #include <android/configuration.h>
-#include <ui/DisplayId.h>
 #include <ui/DisplayMode.h>
 #include <ui/Size.h>
 #include <utils/Timers.h>
 
-#include <scheduler/Fps.h>
-
-#include "DisplayHardware/Hal.h"
-#include "Scheduler/StrongTyping.h"
+#include <cstddef>
+#include <memory>
+#include <vector>
 
 namespace android {
 
@@ -53,11 +51,6 @@ public:
 
         Builder& setId(DisplayModeId id) {
             mDisplayMode->mId = id;
-            return *this;
-        }
-
-        Builder& setPhysicalDisplayId(PhysicalDisplayId id) {
-            mDisplayMode->mPhysicalDisplayId = id;
             return *this;
         }
 
@@ -119,7 +112,6 @@ public:
 
     DisplayModeId getId() const { return mId; }
     hal::HWConfigId getHwcId() const { return mHwcId; }
-    PhysicalDisplayId getPhysicalDisplayId() const { return mPhysicalDisplayId; }
 
     int32_t getWidth() const { return mWidth; }
     int32_t getHeight() const { return mHeight; }
@@ -144,7 +136,6 @@ private:
 
     hal::HWConfigId mHwcId;
     DisplayModeId mId;
-    PhysicalDisplayId mPhysicalDisplayId;
 
     int32_t mWidth = -1;
     int32_t mHeight = -1;

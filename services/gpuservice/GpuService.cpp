@@ -25,7 +25,6 @@
 #include <binder/PermissionCache.h>
 #include <cutils/properties.h>
 #include <gpumem/GpuMem.h>
-#include <gpuwork/GpuWork.h>
 #include <gpustats/GpuStats.h>
 #include <private/android_filesystem_config.h>
 #include <tracing/GpuMemTracer.h>
@@ -51,20 +50,13 @@ const char* const GpuService::SERVICE_NAME = "gpu";
 
 GpuService::GpuService()
       : mGpuMem(std::make_shared<GpuMem>()),
-        mGpuWork(std::make_shared<gpuwork::GpuWork>()),
         mGpuStats(std::make_unique<GpuStats>()),
         mGpuMemTracer(std::make_unique<GpuMemTracer>()) {
-
-    std::thread gpuMemAsyncInitThread([this]() {
+    std::thread asyncInitThread([this]() {
         mGpuMem->initialize();
         mGpuMemTracer->initialize(mGpuMem);
     });
-    gpuMemAsyncInitThread.detach();
-
-    std::thread gpuWorkAsyncInitThread([this]() {
-        mGpuWork->initialize();
-    });
-    gpuWorkAsyncInitThread.detach();
+    asyncInitThread.detach();
 };
 
 void GpuService::setGpuStats(const std::string& driverPackageName,
@@ -132,7 +124,6 @@ status_t GpuService::doDump(int fd, const Vector<String16>& args, bool /*asProto
         bool dumpDriverInfo = false;
         bool dumpMem = false;
         bool dumpStats = false;
-        bool dumpWork = false;
         size_t numArgs = args.size();
 
         if (numArgs) {
@@ -143,11 +134,9 @@ status_t GpuService::doDump(int fd, const Vector<String16>& args, bool /*asProto
                     dumpDriverInfo = true;
                 } else if (args[index] == String16("--gpumem")) {
                     dumpMem = true;
-                } else if (args[index] == String16("--gpuwork")) {
-                    dumpWork = true;
                 }
             }
-            dumpAll = !(dumpDriverInfo || dumpMem || dumpStats || dumpWork);
+            dumpAll = !(dumpDriverInfo || dumpMem || dumpStats);
         }
 
         if (dumpAll || dumpDriverInfo) {
@@ -160,10 +149,6 @@ status_t GpuService::doDump(int fd, const Vector<String16>& args, bool /*asProto
         }
         if (dumpAll || dumpStats) {
             mGpuStats->dump(args, &result);
-            result.append("\n");
-        }
-         if (dumpAll || dumpWork) {
-            mGpuWork->dump(args, &result);
             result.append("\n");
         }
     }
