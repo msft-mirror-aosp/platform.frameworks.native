@@ -28,7 +28,6 @@ cc_defaults {
         "dexopt.cpp",
         "execv_helper.cpp",
         "globals.cpp",
-        "restorable_file.cpp",
         "run_dex2oat.cpp",
         "unique_file.cpp",
         "utils.cpp",
@@ -46,7 +45,6 @@ cc_defaults {
         "libprocessgroup",
         "libselinux",
         "libutils",
-        "libziparchive",
         "server_configurable_flags",
     ],
     static_libs: [
@@ -81,7 +79,7 @@ cc_defaults {
         "-cert-err58-cpp",
     ],
     tidy_flags: [
-        "-warnings-as-errors=clang-analyzer-security*,cert-*",
+        "-warnings-as-errors=clang-analyzer-security*,cert-*"
     ],
 }
 
@@ -133,10 +131,7 @@ cc_test_host {
         "unique_file.cpp",
         "execv_helper.cpp",
     ],
-    cflags: [
-        "-Wall",
-        "-Werror",
-    ],
+    cflags: ["-Wall", "-Werror"],
     shared_libs: [
         "libbase",
         "server_configurable_flags",
@@ -174,7 +169,7 @@ cc_binary {
 
     // Needs to be wherever installd is as it's execed by
     // installd.
-    required: ["migrate_legacy_obb_data.sh"],
+    required: [ "migrate_legacy_obb_data.sh" ],
 }
 
 // OTA chroot tool
@@ -198,7 +193,7 @@ cc_binary {
         "libutils",
     ],
     required: [
-        "apexd",
+      "apexd"
     ],
 }
 
@@ -217,7 +212,7 @@ cc_library_static {
     name: "libotapreoptparameters",
     cflags: [
         "-Wall",
-        "-Werror",
+        "-Werror"
     ],
 
     srcs: ["otapreopt_parameters.cpp"],
@@ -241,7 +236,7 @@ cc_binary {
     name: "otapreopt",
     cflags: [
         "-Wall",
-        "-Werror",
+        "-Werror"
     ],
 
     srcs: [
@@ -250,7 +245,6 @@ cc_binary {
         "globals.cpp",
         "otapreopt.cpp",
         "otapreopt_utils.cpp",
-        "restorable_file.cpp",
         "run_dex2oat.cpp",
         "unique_file.cpp",
         "utils.cpp",
@@ -273,7 +267,6 @@ cc_binary {
         "libprocessgroup",
         "libselinux",
         "libutils",
-        "libziparchive",
         "server_configurable_flags",
     ],
 }
@@ -301,5 +294,5 @@ sh_binary {
 // Script to migrate legacy obb data.
 sh_binary {
     name: "migrate_legacy_obb_data.sh",
-    src: "migrate_legacy_obb_data.sh",
+    src: "migrate_legacy_obb_data.sh"
 }

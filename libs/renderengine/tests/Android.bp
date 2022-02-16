@@ -23,10 +23,7 @@ package {
 
 cc_test {
     name: "librenderengine_test",
-    defaults: [
-        "skia_deps",
-        "surfaceflinger_defaults",
-    ],
+    defaults: ["skia_deps", "surfaceflinger_defaults"],
     test_suites: ["device-tests"],
     srcs: [
         "RenderEngineTest.cpp",
@@ -39,8 +36,6 @@ cc_test {
         "libgmock",
         "librenderengine",
         "librenderengine_mocks",
-        "libshaders",
-        "libtonemap",
     ],
 
     shared_libs: [

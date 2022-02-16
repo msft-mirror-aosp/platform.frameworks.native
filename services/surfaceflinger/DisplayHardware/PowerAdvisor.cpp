@@ -19,10 +19,7 @@
 #undef LOG_TAG
 #define LOG_TAG "PowerAdvisor"
 
-#include <unistd.h>
 #include <cinttypes>
-#include <cstdint>
-#include <optional>
 
 #include <android-base/properties.h>
 #include <utils/Log.h>
@@ -30,9 +27,6 @@
 
 #include <android/hardware/power/1.3/IPower.h>
 #include <android/hardware/power/IPower.h>
-#include <android/hardware/power/IPowerHintSession.h>
-#include <android/hardware/power/WorkDuration.h>
-
 #include <binder/IServiceManager.h>
 
 #include "../SurfaceFlingerProperties.h"
@@ -53,13 +47,9 @@ using V1_3::PowerHint;
 
 using android::hardware::power::Boost;
 using android::hardware::power::IPower;
-using android::hardware::power::IPowerHintSession;
 using android::hardware::power::Mode;
-using android::hardware::power::WorkDuration;
-
+using base::GetIntProperty;
 using scheduler::OneShotTimer;
-
-class AidlPowerHalWrapper;
 
 PowerAdvisor::~PowerAdvisor() = default;
 
@@ -146,74 +136,6 @@ void PowerAdvisor::notifyDisplayUpdateImminent() {
     }
 }
 
-// checks both if it supports and if it's enabled
-bool PowerAdvisor::usePowerHintSession() {
-    // uses cached value since the underlying support and flag are unlikely to change at runtime
-    return mPowerHintEnabled.value_or(false) && supportsPowerHintSession();
-}
-
-bool PowerAdvisor::supportsPowerHintSession() {
-    // cache to avoid needing lock every time
-    if (!mSupportsPowerHint.has_value()) {
-        std::lock_guard lock(mPowerHalMutex);
-        HalWrapper* const halWrapper = getPowerHal();
-        mSupportsPowerHint = halWrapper->supportsPowerHintSession();
-    }
-    return *mSupportsPowerHint;
-}
-
-bool PowerAdvisor::isPowerHintSessionRunning() {
-    return mPowerHintSessionRunning;
-}
-
-void PowerAdvisor::setTargetWorkDuration(int64_t targetDurationNanos) {
-    if (!usePowerHintSession()) {
-        ALOGV("Power hint session target duration cannot be set, skipping");
-        return;
-    }
-    {
-        std::lock_guard lock(mPowerHalMutex);
-        HalWrapper* const halWrapper = getPowerHal();
-        if (halWrapper != nullptr) {
-            halWrapper->setTargetWorkDuration(targetDurationNanos - kTargetSafetyMargin.count());
-        }
-    }
-}
-
-void PowerAdvisor::sendActualWorkDuration(int64_t actualDurationNanos, nsecs_t timeStampNanos) {
-    if (!mBootFinished || !usePowerHintSession()) {
-        ALOGV("Actual work duration power hint cannot be sent, skipping");
-        return;
-    }
-    {
-        std::lock_guard lock(mPowerHalMutex);
-        HalWrapper* const halWrapper = getPowerHal();
-        if (halWrapper != nullptr) {
-            halWrapper->sendActualWorkDuration(actualDurationNanos, timeStampNanos);
-        }
-    }
-}
-
-// needs to be set after the flag is known but before PowerAdvisor enters onBootFinished
-void PowerAdvisor::enablePowerHint(bool enabled) {
-    mPowerHintEnabled = enabled;
-}
-
-bool PowerAdvisor::startPowerHintSession(const std::vector<int32_t>& threadIds) {
-    if (!usePowerHintSession()) {
-        ALOGI("Power hint session cannot be started, skipping");
-    }
-    {
-        std::lock_guard lock(mPowerHalMutex);
-        HalWrapper* halWrapper = getPowerHal();
-        if (halWrapper != nullptr && usePowerHintSession()) {
-            halWrapper->setPowerHintSessionThreadIds(threadIds);
-            mPowerHintSessionRunning = halWrapper->startPowerHintSession();
-        }
-    }
-    return mPowerHintSessionRunning;
-}
-
 class HidlPowerHalWrapper : public PowerAdvisor::HalWrapper {
 public:
     HidlPowerHalWrapper(sp<V1_3::IPower> powerHal) : mPowerHal(std::move(powerHal)) {}
@@ -256,26 +178,6 @@ public:
         return true;
     }
 
-    bool supportsPowerHintSession() override { return false; }
-
-    bool isPowerHintSessionRunning() override { return false; }
-
-    void restartPowerHintSession() override {}
-
-    void setPowerHintSessionThreadIds(const std::vector<int32_t>&) override {}
-
-    bool startPowerHintSession() override { return false; }
-
-    void setTargetWorkDuration(int64_t) override {}
-
-    void sendActualWorkDuration(int64_t, nsecs_t) override {}
-
-    bool shouldReconnectHAL() override { return false; }
-
-    std::vector<int32_t> getPowerHintSessionThreadIds() override { return std::vector<int32_t>{}; }
-
-    std::optional<int64_t> getTargetWorkDuration() override { return std::nullopt; }
-
 private:
     const sp<V1_3::IPower> mPowerHal = nullptr;
 };
@@ -293,16 +195,9 @@ public:
         if (!ret.isOk()) {
             mHasDisplayUpdateImminent = false;
         }
-
-        mSupportsPowerHint = checkPowerHintSessionSupported();
     }
 
-    ~AidlPowerHalWrapper() override {
-        if (mPowerHintSession != nullptr) {
-            mPowerHintSession->close();
-            mPowerHintSession = nullptr;
-        }
-    };
+    ~AidlPowerHalWrapper() override = default;
 
     static std::unique_ptr<HalWrapper> connect() {
         // This only waits if the service is actually declared
@@ -337,204 +232,11 @@ public:
         return ret.isOk();
     }
 
-    // only version 2+ of the aidl supports power hint sessions, hidl has no support
-    bool supportsPowerHintSession() override { return mSupportsPowerHint; }
-
-    bool checkPowerHintSessionSupported() {
-        int64_t unused;
-        // Try to get preferred rate to determine if hint sessions are supported
-        // We check for isOk not EX_UNSUPPORTED_OPERATION to lump other errors
-        return mPowerHal->getHintSessionPreferredRate(&unused).isOk();
-    }
-
-    bool isPowerHintSessionRunning() override { return mPowerHintSession != nullptr; }
-
-    void closePowerHintSession() {
-        if (mPowerHintSession != nullptr) {
-            mPowerHintSession->close();
-            mPowerHintSession = nullptr;
-        }
-    }
-
-    void restartPowerHintSession() {
-        closePowerHintSession();
-        startPowerHintSession();
-    }
-
-    void setPowerHintSessionThreadIds(const std::vector<int32_t>& threadIds) override {
-        if (threadIds != mPowerHintThreadIds) {
-            mPowerHintThreadIds = threadIds;
-            if (isPowerHintSessionRunning()) {
-                restartPowerHintSession();
-            }
-        }
-    }
-
-    bool startPowerHintSession() override {
-        if (mPowerHintSession != nullptr || mPowerHintThreadIds.empty()) {
-            ALOGV("Cannot start power hint session, skipping");
-            return false;
-        }
-        auto ret = mPowerHal->createHintSession(getpid(), static_cast<int32_t>(getuid()),
-                                                mPowerHintThreadIds, mTargetDuration,
-                                                &mPowerHintSession);
-        if (!ret.isOk()) {
-            ALOGW("Failed to start power hint session with error: %s",
-                  ret.exceptionToString(ret.exceptionCode()).c_str());
-        } else {
-            mLastTargetDurationSent = mTargetDuration;
-        }
-        return isPowerHintSessionRunning();
-    }
-
-    bool shouldSetTargetDuration(int64_t targetDurationNanos) {
-        // report if the change in target from our last submission to now exceeds the threshold
-        return abs(1.0 -
-                   static_cast<double>(mLastTargetDurationSent) /
-                           static_cast<double>(targetDurationNanos)) >=
-                kAllowedTargetDeviationPercent;
-    }
-
-    void setTargetWorkDuration(int64_t targetDurationNanos) override {
-        ATRACE_CALL();
-        mTargetDuration = targetDurationNanos;
-        if (sTraceHintSessionData) ATRACE_INT64("Time target", targetDurationNanos);
-        if (!sNormalizeTarget && shouldSetTargetDuration(targetDurationNanos) &&
-            isPowerHintSessionRunning()) {
-            if (mLastActualDurationSent.has_value()) {
-                // update the error term here since we are actually sending an update to powerhal
-                if (sTraceHintSessionData)
-                    ATRACE_INT64("Target error term",
-                                 targetDurationNanos - *mLastActualDurationSent);
-            }
-            ALOGV("Sending target time: %lld ns", static_cast<long long>(targetDurationNanos));
-            mLastTargetDurationSent = targetDurationNanos;
-            auto ret = mPowerHintSession->updateTargetWorkDuration(targetDurationNanos);
-            if (!ret.isOk()) {
-                ALOGW("Failed to set power hint target work duration with error: %s",
-                      ret.exceptionMessage().c_str());
-                mShouldReconnectHal = true;
-            }
-        }
-    }
-
-    bool shouldReportActualDurationsNow() {
-        // report if we have never reported before or are approaching a stale session
-        if (!mLastActualDurationSent.has_value() ||
-            (systemTime() - mLastActualReportTimestamp) > kStaleTimeout.count()) {
-            return true;
-        }
-
-        if (!mActualDuration.has_value()) {
-            return false;
-        }
-
-        // duration of most recent timing
-        const double mostRecentActualDuration = static_cast<double>(*mActualDuration);
-        // duration of the last timing actually reported to the powerhal
-        const double lastReportedActualDuration = static_cast<double>(*mLastActualDurationSent);
-
-        // report if the change in duration from then to now exceeds the threshold
-        return abs(1.0 - mostRecentActualDuration / lastReportedActualDuration) >=
-                kAllowedActualDeviationPercent;
-    }
-
-    void sendActualWorkDuration(int64_t actualDurationNanos, nsecs_t timeStampNanos) override {
-        ATRACE_CALL();
-
-        if (actualDurationNanos < 0 || !isPowerHintSessionRunning()) {
-            ALOGV("Failed to send actual work duration, skipping");
-            return;
-        }
-
-        WorkDuration duration;
-        duration.durationNanos = actualDurationNanos;
-        mActualDuration = actualDurationNanos;
-
-        // normalize the sent values to a pre-set target
-        if (sNormalizeTarget) {
-            duration.durationNanos += mLastTargetDurationSent - mTargetDuration;
-        }
-        duration.timeStampNanos = timeStampNanos;
-        mPowerHintQueue.push_back(duration);
-
-        long long targetNsec = mTargetDuration;
-        long long durationNsec = actualDurationNanos;
-
-        if (sTraceHintSessionData) {
-            ATRACE_INT64("Measured duration", durationNsec);
-            ATRACE_INT64("Target error term", targetNsec - durationNsec);
-        }
-
-        ALOGV("Sending actual work duration of: %lld on target: %lld with error: %lld",
-              durationNsec, targetNsec, targetNsec - durationNsec);
-
-        // This rate limiter queues similar duration reports to the powerhal into
-        // batches to avoid excessive binder calls. The criteria to send a given batch
-        // are outlined in shouldReportActualDurationsNow()
-        if (shouldReportActualDurationsNow()) {
-            ALOGV("Sending hint update batch");
-            mLastActualReportTimestamp = systemTime();
-            auto ret = mPowerHintSession->reportActualWorkDuration(mPowerHintQueue);
-            if (!ret.isOk()) {
-                ALOGW("Failed to report actual work durations with error: %s",
-                      ret.exceptionMessage().c_str());
-                mShouldReconnectHal = true;
-            }
-            mPowerHintQueue.clear();
-            // we save the non-normalized value here to detect % changes
-            mLastActualDurationSent = actualDurationNanos;
-        }
-    }
-
-    bool shouldReconnectHAL() override { return mShouldReconnectHal; }
-
-    std::vector<int32_t> getPowerHintSessionThreadIds() override { return mPowerHintThreadIds; }
-
-    std::optional<int64_t> getTargetWorkDuration() override { return mTargetDuration; }
-
 private:
     const sp<IPower> mPowerHal = nullptr;
     bool mHasExpensiveRendering = false;
     bool mHasDisplayUpdateImminent = false;
-    // Used to indicate an error state and need for reconstruction
-    bool mShouldReconnectHal = false;
-    // This is not thread safe, but is currently protected by mPowerHalMutex so it needs no lock
-    sp<IPowerHintSession> mPowerHintSession = nullptr;
-    // Queue of actual durations saved to report
-    std::vector<WorkDuration> mPowerHintQueue;
-    // The latest un-normalized values we have received for target and actual
-    int64_t mTargetDuration = kDefaultTarget.count();
-    std::optional<int64_t> mActualDuration;
-    // The list of thread ids, stored so we can restart the session from this class if needed
-    std::vector<int32_t> mPowerHintThreadIds;
-    bool mSupportsPowerHint;
-    // Keep track of the last messages sent for rate limiter change detection
-    std::optional<int64_t> mLastActualDurationSent;
-    // timestamp of the last report we sent, used to avoid stale sessions
-    int64_t mLastActualReportTimestamp = 0;
-    int64_t mLastTargetDurationSent = kDefaultTarget.count();
-    // Whether to normalize all the actual values as error terms relative to a constant target
-    // This saves a binder call by not setting the target, and should not affect the pid values
-    static const bool sNormalizeTarget;
-    // Whether we should emit ATRACE_INT data for hint sessions
-    static const bool sTraceHintSessionData;
-    // Max percent the actual duration can vary without causing a report (eg: 0.1 = 10%)
-    static constexpr double kAllowedActualDeviationPercent = 0.1;
-    // Max percent the target duration can vary without causing a report (eg: 0.05 = 5%)
-    static constexpr double kAllowedTargetDeviationPercent = 0.05;
-    // Target used for init and normalization, the actual value does not really matter
-    static constexpr const std::chrono::nanoseconds kDefaultTarget = 50ms;
-    // amount of time after the last message was sent before the session goes stale
-    // actually 100ms but we use 80 here to ideally avoid going stale
-    static constexpr const std::chrono::nanoseconds kStaleTimeout = 80ms;
 };
-
-const bool AidlPowerHalWrapper::sTraceHintSessionData =
-        base::GetBoolProperty(std::string("debug.sf.trace_hint_sessions"), false);
-
-const bool AidlPowerHalWrapper::sNormalizeTarget =
-        base::GetBoolProperty(std::string("debug.sf.normalize_hint_session_durations"), true);
 
 PowerAdvisor::HalWrapper* PowerAdvisor::getPowerHal() {
     static std::unique_ptr<HalWrapper> sHalWrapper = nullptr;
@@ -544,15 +246,6 @@ PowerAdvisor::HalWrapper* PowerAdvisor::getPowerHal() {
         return nullptr;
     }
 
-    // grab old hint session values before we destroy any existing wrapper
-    std::vector<int32_t> oldPowerHintSessionThreadIds;
-    std::optional<int64_t> oldTargetWorkDuration;
-
-    if (sHalWrapper != nullptr) {
-        oldPowerHintSessionThreadIds = sHalWrapper->getPowerHintSessionThreadIds();
-        oldTargetWorkDuration = sHalWrapper->getTargetWorkDuration();
-    }
-
     // If we used to have a HAL, but it stopped responding, attempt to reconnect
     if (mReconnectPowerHal) {
         sHalWrapper = nullptr;
@@ -560,16 +253,8 @@ PowerAdvisor::HalWrapper* PowerAdvisor::getPowerHal() {
     }
 
     if (sHalWrapper != nullptr) {
-        auto wrapper = sHalWrapper.get();
-        // if the wrapper is fine, return it, but if it indicates a reconnect, remake it
-        if (!wrapper->shouldReconnectHAL()) {
-            return wrapper;
-        }
-        sHalWrapper = nullptr;
+        return sHalWrapper.get();
     }
-
-    // at this point, we know for sure there is no running session
-    mPowerHintSessionRunning = false;
 
     // First attempt to connect to the AIDL Power HAL
     sHalWrapper = AidlPowerHalWrapper::connect();
@@ -577,17 +262,6 @@ PowerAdvisor::HalWrapper* PowerAdvisor::getPowerHal() {
     // If that didn't succeed, attempt to connect to the HIDL Power HAL
     if (sHalWrapper == nullptr) {
         sHalWrapper = HidlPowerHalWrapper::connect();
-    } else { // if AIDL, pass on any existing hint session values
-        // thread ids always safe to set
-        sHalWrapper->setPowerHintSessionThreadIds(oldPowerHintSessionThreadIds);
-        // only set duration and start if duration is defined
-        if (oldTargetWorkDuration.has_value()) {
-            sHalWrapper->setTargetWorkDuration(*oldTargetWorkDuration);
-            // only start if possible to run and both threadids and duration are defined
-            if (usePowerHintSession() && !oldPowerHintSessionThreadIds.empty()) {
-                mPowerHintSessionRunning = sHalWrapper->startPowerHintSession();
-            }
-        }
     }
 
     // If we make it to this point and still don't have a HAL, it's unlikely we
