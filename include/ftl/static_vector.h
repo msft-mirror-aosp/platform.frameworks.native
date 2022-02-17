@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <ftl/array_traits.h>
+#include <ftl/details/array_traits.h>
 #include <ftl/initializer_list.h>
 
 #include <algorithm>
@@ -73,14 +73,14 @@ constexpr struct IteratorRangeTag {
 //   assert(strings[2] == "???");
 //
 template <typename T, std::size_t N>
-class StaticVector final : ArrayTraits<T>,
-                           ArrayIterators<StaticVector<T, N>, T>,
-                           ArrayComparators<StaticVector> {
+class StaticVector final : details::ArrayTraits<T>,
+                           details::ArrayIterators<StaticVector<T, N>, T>,
+                           details::ArrayComparators<StaticVector> {
   static_assert(N > 0);
 
-  using ArrayTraits<T>::construct_at;
+  using details::ArrayTraits<T>::construct_at;
 
-  using Iter = ArrayIterators<StaticVector, T>;
+  using Iter = details::ArrayIterators<StaticVector, T>;
   friend Iter;
 
   // There is ambiguity when constructing from two iterator-like elements like pointers:
@@ -189,8 +189,7 @@ class StaticVector final : ArrayTraits<T>,
   }
 
   StaticVector& operator=(StaticVector&& other) {
-    std::destroy(begin(), end());
-    size_ = 0;
+    clear();
     swap<true>(other);
     return *this;
   }
@@ -279,6 +278,15 @@ class StaticVector final : ArrayTraits<T>,
   // The last() and end() iterators are invalidated.
   //
   void pop_back() { unstable_erase(last()); }
+
+  // Removes all elements.
+  //
+  // All iterators are invalidated.
+  //
+  void clear() {
+    std::destroy(begin(), end());
+    size_ = 0;
+  }
 
   // Erases an element, but does not preserve order. Rather than shifting subsequent elements,
   // this moves the last element to the slot of the erased element.
