@@ -22,7 +22,7 @@
 #pragma clang diagnostic ignored "-Wextra"
 
 #include <type_traits>
-#include "DisplayIdentificationTest.h"
+#include "DisplayIdentificationTestHelpers.h"
 
 #include <binder/IPCThreadState.h>
 #include <compositionengine/Display.h>
@@ -47,9 +47,7 @@
 #include "mock/DisplayHardware/MockComposer.h"
 #include "mock/DisplayHardware/MockPowerAdvisor.h"
 #include "mock/MockEventThread.h"
-#include "mock/MockMessageQueue.h"
 #include "mock/MockNativeWindowSurface.h"
-#include "mock/MockSchedulerCallback.h"
 #include "mock/MockSurfaceInterceptor.h"
 #include "mock/MockVsyncController.h"
 #include "mock/system/window/MockNativeWindow.h"
@@ -67,9 +65,9 @@ using testing::ResultOf;
 using testing::Return;
 using testing::SetArgPointee;
 
+using aidl::android::hardware::graphics::composer3::DisplayCapability;
 using hal::ColorMode;
 using hal::Connection;
-using hal::DisplayCapability;
 using hal::DisplayType;
 using hal::Error;
 using hal::Hdr;
@@ -118,12 +116,10 @@ public:
     // to keep a reference to them for use in setting up call expectations.
     renderengine::mock::RenderEngine* mRenderEngine = new renderengine::mock::RenderEngine();
     Hwc2::mock::Composer* mComposer = nullptr;
-    mock::MessageQueue* mMessageQueue = new mock::MessageQueue();
     sp<mock::SurfaceInterceptor> mSurfaceInterceptor = new mock::SurfaceInterceptor;
 
     mock::VsyncController* mVsyncController = new mock::VsyncController;
     mock::VSyncTracker* mVSyncTracker = new mock::VSyncTracker;
-    mock::SchedulerCallback mSchedulerCallback;
     mock::EventThread* mEventThread = new mock::EventThread;
     mock::EventThread* mSFEventThread = new mock::EventThread;
 
@@ -233,7 +229,7 @@ struct HwcDisplayIdGetter<PhysicalDisplayIdType<PhysicalDisplay>> {
 //     2) HalVirtualDisplayIdType<...> for hard-coded ID of virtual display backed by HWC.
 //     3) GpuVirtualDisplayIdType for virtual display without HWC backing.
 template <typename DisplayIdType, int width, int height, Critical critical, Async async,
-          Secure secure, Primary primary, int grallocUsage>
+          Secure secure, Primary primary, int grallocUsage, int displayFlags>
 struct DisplayVariant {
     using DISPLAY_ID = DisplayIdGetter<DisplayIdType>;
     using CONNECTION_TYPE = DisplayConnectionTypeGetter<DisplayIdType>;
@@ -261,16 +257,13 @@ struct DisplayVariant {
     // Whether the display is primary
     static constexpr Primary PRIMARY = primary;
 
+    static constexpr int DISPLAY_FLAGS = displayFlags;
+
     static auto makeFakeExistingDisplayInjector(DisplayTransactionTest* test) {
         auto ceDisplayArgs = compositionengine::DisplayCreationArgsBuilder();
         ceDisplayArgs.setId(DISPLAY_ID::get())
                 .setPixels({WIDTH, HEIGHT})
                 .setPowerAdvisor(&test->mPowerAdvisor);
-
-        const auto connectionType = CONNECTION_TYPE::value;
-        if (connectionType) {
-            ceDisplayArgs.setConnectionType(*connectionType);
-        }
 
         auto compositionDisplay =
                 compositionengine::impl::createDisplay(test->mFlinger.getCompositionEngine(),
@@ -279,7 +272,7 @@ struct DisplayVariant {
         auto injector =
                 TestableSurfaceFlinger::FakeDisplayDeviceInjector(test->mFlinger,
                                                                   compositionDisplay,
-                                                                  connectionType,
+                                                                  CONNECTION_TYPE::value,
                                                                   HWC_DISPLAY_ID_OPT::value,
                                                                   static_cast<bool>(PRIMARY));
 
@@ -388,7 +381,6 @@ struct HwcDisplayVariant {
 
         auto ceDisplayArgs = compositionengine::DisplayCreationArgsBuilder()
                                      .setId(DisplayVariant::DISPLAY_ID::get())
-                                     .setConnectionType(PhysicalDisplay::CONNECTION_TYPE)
                                      .setPixels({DisplayVariant::WIDTH, DisplayVariant::HEIGHT})
                                      .setIsSecure(static_cast<bool>(DisplayVariant::SECURE))
                                      .setPowerAdvisor(&test->mPowerAdvisor)
@@ -475,16 +467,19 @@ struct HwcDisplayVariant {
 constexpr uint32_t GRALLOC_USAGE_PHYSICAL_DISPLAY =
         GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_COMPOSER | GRALLOC_USAGE_HW_FB;
 
+constexpr int PHYSICAL_DISPLAY_FLAGS = 0x1;
+
 template <typename PhysicalDisplay, int width, int height, Critical critical>
 struct PhysicalDisplayVariant
       : DisplayVariant<PhysicalDisplayIdType<PhysicalDisplay>, width, height, critical,
                        Async::FALSE, Secure::TRUE, PhysicalDisplay::PRIMARY,
-                       GRALLOC_USAGE_PHYSICAL_DISPLAY>,
-        HwcDisplayVariant<PhysicalDisplay::HWC_DISPLAY_ID, DisplayType::PHYSICAL,
-                          DisplayVariant<PhysicalDisplayIdType<PhysicalDisplay>, width, height,
-                                         critical, Async::FALSE, Secure::TRUE,
-                                         PhysicalDisplay::PRIMARY, GRALLOC_USAGE_PHYSICAL_DISPLAY>,
-                          PhysicalDisplay> {};
+                       GRALLOC_USAGE_PHYSICAL_DISPLAY, PHYSICAL_DISPLAY_FLAGS>,
+        HwcDisplayVariant<
+                PhysicalDisplay::HWC_DISPLAY_ID, DisplayType::PHYSICAL,
+                DisplayVariant<PhysicalDisplayIdType<PhysicalDisplay>, width, height, critical,
+                               Async::FALSE, Secure::TRUE, PhysicalDisplay::PRIMARY,
+                               GRALLOC_USAGE_PHYSICAL_DISPLAY, PHYSICAL_DISPLAY_FLAGS>,
+                PhysicalDisplay> {};
 
 template <bool hasIdentificationData>
 struct PrimaryDisplay {
@@ -526,13 +521,16 @@ using TertiaryDisplayVariant = PhysicalDisplayVariant<TertiaryDisplay, 1600, 120
 // A virtual display not supported by the HWC.
 constexpr uint32_t GRALLOC_USAGE_NONHWC_VIRTUAL_DISPLAY = 0;
 
+constexpr int VIRTUAL_DISPLAY_FLAGS = 0x0;
+
 template <int width, int height, Secure secure>
 struct NonHwcVirtualDisplayVariant
       : DisplayVariant<GpuVirtualDisplayIdType, width, height, Critical::FALSE, Async::TRUE, secure,
-                       Primary::FALSE, GRALLOC_USAGE_NONHWC_VIRTUAL_DISPLAY> {
-    using Base =
-            DisplayVariant<GpuVirtualDisplayIdType, width, height, Critical::FALSE, Async::TRUE,
-                           secure, Primary::FALSE, GRALLOC_USAGE_NONHWC_VIRTUAL_DISPLAY>;
+                       Primary::FALSE, GRALLOC_USAGE_NONHWC_VIRTUAL_DISPLAY,
+                       VIRTUAL_DISPLAY_FLAGS> {
+    using Base = DisplayVariant<GpuVirtualDisplayIdType, width, height, Critical::FALSE,
+                                Async::TRUE, secure, Primary::FALSE,
+                                GRALLOC_USAGE_NONHWC_VIRTUAL_DISPLAY, VIRTUAL_DISPLAY_FLAGS>;
 
     static void injectHwcDisplay(DisplayTransactionTest*) {}
 
@@ -575,13 +573,16 @@ constexpr uint32_t GRALLOC_USAGE_HWC_VIRTUAL_DISPLAY = GRALLOC_USAGE_HW_COMPOSER
 template <int width, int height, Secure secure>
 struct HwcVirtualDisplayVariant
       : DisplayVariant<HalVirtualDisplayIdType<42>, width, height, Critical::FALSE, Async::TRUE,
-                       secure, Primary::FALSE, GRALLOC_USAGE_HWC_VIRTUAL_DISPLAY>,
-        HwcDisplayVariant<HWC_VIRTUAL_DISPLAY_HWC_DISPLAY_ID, DisplayType::VIRTUAL,
-                          DisplayVariant<HalVirtualDisplayIdType<42>, width, height,
-                                         Critical::FALSE, Async::TRUE, secure, Primary::FALSE,
-                                         GRALLOC_USAGE_HWC_VIRTUAL_DISPLAY>> {
+                       secure, Primary::FALSE, GRALLOC_USAGE_HWC_VIRTUAL_DISPLAY,
+                       VIRTUAL_DISPLAY_FLAGS>,
+        HwcDisplayVariant<
+                HWC_VIRTUAL_DISPLAY_HWC_DISPLAY_ID, DisplayType::VIRTUAL,
+                DisplayVariant<HalVirtualDisplayIdType<42>, width, height, Critical::FALSE,
+                               Async::TRUE, secure, Primary::FALSE,
+                               GRALLOC_USAGE_HWC_VIRTUAL_DISPLAY, VIRTUAL_DISPLAY_FLAGS>> {
     using Base = DisplayVariant<HalVirtualDisplayIdType<42>, width, height, Critical::FALSE,
-                                Async::TRUE, secure, Primary::FALSE, GRALLOC_USAGE_HW_COMPOSER>;
+                                Async::TRUE, secure, Primary::FALSE, GRALLOC_USAGE_HW_COMPOSER,
+                                VIRTUAL_DISPLAY_FLAGS>;
     using Self = HwcVirtualDisplayVariant<width, height, secure>;
 
     static std::shared_ptr<compositionengine::Display> injectCompositionDisplay(
@@ -615,8 +616,8 @@ struct HwcVirtualDisplayVariant
     }
 
     static void setupHwcVirtualDisplayCreationCallExpectations(DisplayTransactionTest* test) {
-        EXPECT_CALL(*test->mComposer, createVirtualDisplay(Base::WIDTH, Base::HEIGHT, _, _, _))
-                .WillOnce(DoAll(SetArgPointee<4>(Self::HWC_DISPLAY_ID), Return(Error::NONE)));
+        EXPECT_CALL(*test->mComposer, createVirtualDisplay(Base::WIDTH, Base::HEIGHT, _, _))
+                .WillOnce(DoAll(SetArgPointee<3>(Self::HWC_DISPLAY_ID), Return(Error::NONE)));
         EXPECT_CALL(*test->mComposer, setClientTargetSlotCount(_)).WillOnce(Return(Error::NONE));
     }
 };
@@ -671,7 +672,6 @@ struct WideColorNotSupportedVariant {
     static constexpr bool WIDE_COLOR_SUPPORTED = false;
 
     static void injectConfigChange(DisplayTransactionTest* test) {
-        test->mFlinger.mutableUseColorManagement() = true;
         test->mFlinger.mutableHasWideColorDisplay() = true;
     }
 
@@ -690,7 +690,6 @@ struct WideColorSupportNotConfiguredVariant {
 
     static void injectConfigChange(DisplayTransactionTest* test) {
         test->mFlinger.mutableHasWideColorDisplay() = false;
-        test->mFlinger.mutableUseColorManagement() = false;
         test->mFlinger.mutableDisplayColorSetting() = DisplayColorSetting::kUnmanaged;
     }
 
