@@ -304,7 +304,7 @@ SurfaceFrame::SurfaceFrame(const FrameTimelineInfo& frameTimelineInfo, pid_t own
                            frametimeline::TimelineItem&& predictions,
                            std::shared_ptr<TimeStats> timeStats,
                            JankClassificationThresholds thresholds,
-                           TraceCookieCounter* traceCookieCounter, bool isBuffer, int32_t gameMode)
+                           TraceCookieCounter* traceCookieCounter, bool isBuffer, GameMode gameMode)
       : mToken(frameTimelineInfo.vsyncId),
         mInputEventId(frameTimelineInfo.inputEventId),
         mOwnerPid(ownerPid),
@@ -492,13 +492,18 @@ std::string SurfaceFrame::miniDump() const {
 
 void SurfaceFrame::classifyJankLocked(int32_t displayFrameJankType, const Fps& refreshRate,
                                       nsecs_t& deadlineDelta) {
-    if (mPredictionState == PredictionState::Expired ||
-        mActuals.presentTime == Fence::SIGNAL_TIME_INVALID) {
+    if (mActuals.presentTime == Fence::SIGNAL_TIME_INVALID) {
         // Cannot do any classification for invalid present time.
-        // For prediction expired case, we do not know what happened here to classify this
-        // correctly. This could potentially be AppDeadlineMissed but that's assuming no app will
-        // request frames 120ms apart.
         mJankType = JankType::Unknown;
+        deadlineDelta = -1;
+        return;
+    }
+
+    if (mPredictionState == PredictionState::Expired) {
+        // We classify prediction expired as AppDeadlineMissed as the
+        // TokenManager::kMaxTokens we store is large enough to account for a
+        // reasonable app, so prediction expire would mean a huge scheduling delay.
+        mJankType = JankType::AppDeadlineMissed;
         deadlineDelta = -1;
         return;
     }
@@ -667,7 +672,8 @@ void SurfaceFrame::traceActuals(int64_t displayFrameToken) const {
             packet->set_timestamp(
                     static_cast<uint64_t>(endTime - kPredictionExpiredStartTimeDelta));
         } else {
-            packet->set_timestamp(static_cast<uint64_t>(mPredictions.startTime));
+            packet->set_timestamp(static_cast<uint64_t>(
+                    mActuals.startTime == 0 ? mPredictions.startTime : mActuals.startTime));
         }
 
         auto* event = packet->set_frame_timeline_event();
@@ -778,7 +784,7 @@ void FrameTimeline::registerDataSource() {
 
 std::shared_ptr<SurfaceFrame> FrameTimeline::createSurfaceFrameForToken(
         const FrameTimelineInfo& frameTimelineInfo, pid_t ownerPid, uid_t ownerUid, int32_t layerId,
-        std::string layerName, std::string debugName, bool isBuffer, int32_t gameMode) {
+        std::string layerName, std::string debugName, bool isBuffer, GameMode gameMode) {
     ATRACE_CALL();
     if (frameTimelineInfo.vsyncId == FrameTimelineInfo::INVALID_VSYNC_ID) {
         return std::make_shared<SurfaceFrame>(frameTimelineInfo, ownerPid, ownerUid, layerId,
