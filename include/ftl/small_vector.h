@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <ftl/array_traits.h>
+#include <ftl/details/array_traits.h>
 #include <ftl/static_vector.h>
 
 #include <algorithm>
@@ -73,7 +73,7 @@ struct is_small_vector;
 //   assert(strings[2] == "???");
 //
 template <typename T, std::size_t N>
-class SmallVector final : ArrayTraits<T>, ArrayComparators<SmallVector> {
+class SmallVector final : details::ArrayTraits<T>, details::ArrayComparators<SmallVector> {
   using Static = StaticVector<T, N>;
   using Dynamic = SmallVector<T, 0>;
 
@@ -151,8 +151,6 @@ class SmallVector final : ArrayTraits<T>, ArrayComparators<SmallVector> {
   DISPATCH(reference, back, noexcept)
   DISPATCH(const_reference, back, const)
 
-#undef DISPATCH
-
   reference operator[](size_type i) {
     return dynamic() ? std::get<Dynamic>(vector_)[i] : std::get<Static>(vector_)[i];
   }
@@ -214,13 +212,15 @@ class SmallVector final : ArrayTraits<T>, ArrayComparators<SmallVector> {
   //
   // The last() and end() iterators are invalidated.
   //
-  void pop_back() {
-    if (dynamic()) {
-      std::get<Dynamic>(vector_).pop_back();
-    } else {
-      std::get<Static>(vector_).pop_back();
-    }
-  }
+  DISPATCH(void, pop_back, noexcept)
+
+  // Removes all elements.
+  //
+  // All iterators are invalidated.
+  //
+  DISPATCH(void, clear, noexcept)
+
+#undef DISPATCH
 
   // Erases an element, but does not preserve order. Rather than shifting subsequent elements,
   // this moves the last element to the slot of the erased element.
@@ -266,12 +266,12 @@ class SmallVector final : ArrayTraits<T>, ArrayComparators<SmallVector> {
 
 // Partial specialization without static storage.
 template <typename T>
-class SmallVector<T, 0> final : ArrayTraits<T>,
-                                ArrayIterators<SmallVector<T, 0>, T>,
+class SmallVector<T, 0> final : details::ArrayTraits<T>,
+                                details::ArrayIterators<SmallVector<T, 0>, T>,
                                 std::vector<T> {
-  using ArrayTraits<T>::construct_at;
+  using details::ArrayTraits<T>::construct_at;
 
-  using Iter = ArrayIterators<SmallVector, T>;
+  using Iter = details::ArrayIterators<SmallVector, T>;
   using Impl = std::vector<T>;
 
   friend Iter;
@@ -345,10 +345,11 @@ class SmallVector<T, 0> final : ArrayTraits<T>,
     return true;
   }
 
+  using Impl::clear;
   using Impl::pop_back;
 
   void unstable_erase(iterator it) {
-    if (it != last()) std::iter_swap(it, last());
+    if (it != last()) replace(it, std::move(back()));
     pop_back();
   }
 
