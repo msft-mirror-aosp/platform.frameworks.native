@@ -8,47 +8,54 @@ package {
     default_applicable_licenses: ["frameworks_native_license"],
 }
 
-cc_test {
-    name: "installd_utils_test",
+cc_defaults {
+    name: "installd_tests_defaults",
     test_suites: ["device-tests"],
     clang: true,
-    srcs: ["installd_utils_test.cpp"],
-    cflags: ["-Wall", "-Werror"],
+    cpp_std: "c++2a",
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
     shared_libs: [
         "libbase",
-        "libutils",
         "libcutils",
+        "libext2_uuid",
+        "libutils",
     ],
+    static_libs: [
+        "liblog",
+    ],
+}
+
+cc_test {
+    name: "installd_utils_test",
+    defaults: ["installd_tests_defaults"],
+    srcs: ["installd_utils_test.cpp"],
     static_libs: [
         "libasync_safe",
         "libdiskusage",
         "libinstalld",
-        "liblog",
     ],
     test_config: "installd_utils_test.xml",
 }
 
 cc_test {
     name: "installd_cache_test",
-    test_suites: ["device-tests"],
-    clang: true,
+    defaults: ["installd_tests_defaults"],
     srcs: ["installd_cache_test.cpp"],
-    cflags: ["-Wall", "-Werror"],
     shared_libs: [
-        "libbase",
         "libbinder",
         "libcrypto",
-        "libcutils",
         "libprocessgroup",
         "libselinux",
-        "libutils",
         "server_configurable_flags",
     ],
     static_libs: [
         "libasync_safe",
         "libdiskusage",
         "libinstalld",
-        "liblog",
+        "libziparchive",
         "liblogwrap",
     ],
     test_config: "installd_cache_test.xml",
@@ -71,25 +78,21 @@ cc_test {
 
 cc_test {
     name: "installd_service_test",
-    test_suites: ["device-tests"],
-    clang: true,
+    defaults: ["installd_tests_defaults"],
     srcs: ["installd_service_test.cpp"],
-    cflags: ["-Wall", "-Werror"],
     shared_libs: [
-        "libbase",
         "libbinder",
         "libcrypto",
-        "libcutils",
         "libprocessgroup",
         "libselinux",
-        "libutils",
+        "packagemanager_aidl-cpp",
         "server_configurable_flags",
     ],
     static_libs: [
         "libasync_safe",
         "libdiskusage",
         "libinstalld",
-        "liblog",
+        "libziparchive",
         "liblogwrap",
     ],
     test_config: "installd_service_test.xml",
@@ -112,25 +115,19 @@ cc_test {
 
 cc_test {
     name: "installd_dexopt_test",
-    test_suites: ["device-tests"],
-    clang: true,
+    defaults: ["installd_tests_defaults"],
     srcs: ["installd_dexopt_test.cpp"],
-    cflags: ["-Wall", "-Werror"],
     shared_libs: [
-        "libbase",
         "libbinder",
         "libcrypto",
-        "libcutils",
         "libprocessgroup",
         "libselinux",
-        "libutils",
         "server_configurable_flags",
     ],
     static_libs: [
         "libasync_safe",
         "libdiskusage",
         "libinstalld",
-        "liblog",
         "liblogwrap",
         "libziparchive",
         "libz",
@@ -155,18 +152,21 @@ cc_test {
 
 cc_test {
     name: "installd_otapreopt_test",
-    test_suites: ["device-tests"],
-    clang: true,
+    defaults: ["installd_tests_defaults"],
     srcs: ["installd_otapreopt_test.cpp"],
-    cflags: ["-Wall", "-Werror"],
     shared_libs: [
-        "libbase",
-        "libcutils",
-        "libutils",
         "server_configurable_flags",
     ],
     static_libs: [
-        "liblog",
-        "libotapreoptparameters"
+        "libotapreoptparameters",
+    ],
+}
+
+cc_test {
+    name: "installd_file_test",
+    defaults: ["installd_tests_defaults"],
+    srcs: ["installd_file_test.cpp"],
+    static_libs: [
+        "libinstalld",
     ],
 }

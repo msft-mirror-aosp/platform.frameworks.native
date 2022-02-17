@@ -22,7 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <input/Flags.h>
+#include <ftl/Flags.h>
 #include <filesystem>
 
 #include <batteryservice/BatteryService.h>
@@ -146,6 +146,8 @@ enum class InputDeviceClass : uint32_t {
 enum class SysfsClass : uint32_t {
     POWER_SUPPLY = 0,
     LEDS = 1,
+
+    ftl_last = LEDS
 };
 
 enum class LightColor : uint32_t {
@@ -304,6 +306,7 @@ public:
     virtual int32_t getSwitchState(int32_t deviceId, int32_t sw) const = 0;
     virtual status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
                                           int32_t* outValue) const = 0;
+    virtual int32_t getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const = 0;
 
     /*
      * Examine key input devices for specific framework keycode support
@@ -312,6 +315,7 @@ public:
                                        uint8_t* outFlags) const = 0;
 
     virtual bool hasScanCode(int32_t deviceId, int32_t scanCode) const = 0;
+    virtual bool hasKeyCode(int32_t deviceId, int32_t keyCode) const = 0;
 
     /* LED related functions expect Android LED constants, not scan codes or HID usages */
     virtual bool hasLed(int32_t deviceId, int32_t led) const = 0;
@@ -479,6 +483,8 @@ public:
     int32_t getScanCodeState(int32_t deviceId, int32_t scanCode) const override final;
     int32_t getKeyCodeState(int32_t deviceId, int32_t keyCode) const override final;
     int32_t getSwitchState(int32_t deviceId, int32_t sw) const override final;
+    int32_t getKeyCodeForKeyLocation(int32_t deviceId,
+                                     int32_t locationKeyCode) const override final;
     status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
                                   int32_t* outValue) const override final;
 
@@ -489,6 +495,7 @@ public:
     std::vector<TouchVideoFrame> getVideoFrames(int32_t deviceId) override final;
 
     bool hasScanCode(int32_t deviceId, int32_t scanCode) const override final;
+    bool hasKeyCode(int32_t deviceId, int32_t keyCode) const override final;
     bool hasLed(int32_t deviceId, int32_t led) const override final;
     void setLedState(int32_t deviceId, int32_t led, bool on) override final;
 
@@ -663,6 +670,9 @@ private:
     const std::unordered_map<int32_t, RawLightInfo>& getLightInfoLocked(int32_t deviceId) const
             REQUIRES(mLock);
 
+    void addDeviceInputInotify();
+    void addDeviceInotify();
+
     // Protect all internal state.
     mutable std::mutex mLock;
 
@@ -702,8 +712,8 @@ private:
     int mWakeReadPipeFd;
     int mWakeWritePipeFd;
 
-    int mInputWd;
-    int mVideoWd;
+    int mDeviceInputWd;
+    int mDeviceWd = -1;
 
     // Maximum number of signalled FDs to handle at a time.
     static const int EPOLL_MAX_EVENTS = 16;

@@ -38,7 +38,6 @@ DisplayTransactionTest::DisplayTransactionTest() {
 
     // Default to no wide color display support configured
     mFlinger.mutableHasWideColorDisplay() = false;
-    mFlinger.mutableUseColorManagement() = false;
     mFlinger.mutableDisplayColorSetting() = DisplayColorSetting::kUnmanaged;
 
     mFlinger.setCreateBufferQueueFunction([](auto, auto, auto) {
@@ -51,7 +50,6 @@ DisplayTransactionTest::DisplayTransactionTest() {
     });
 
     injectMockScheduler();
-    mFlinger.mutableEventQueue().reset(mMessageQueue);
     mFlinger.setupRenderEngine(std::unique_ptr<renderengine::RenderEngine>(mRenderEngine));
     mFlinger.mutableInterceptor() = mSurfaceInterceptor;
 
@@ -62,6 +60,7 @@ DisplayTransactionTest::~DisplayTransactionTest() {
     const ::testing::TestInfo* const test_info =
             ::testing::UnitTest::GetInstance()->current_test_info();
     ALOGD("**** Tearing down after %s.%s\n", test_info->test_case_name(), test_info->name());
+    mFlinger.resetScheduler(nullptr);
 }
 
 void DisplayTransactionTest::injectMockScheduler() {
@@ -78,7 +77,8 @@ void DisplayTransactionTest::injectMockScheduler() {
     mFlinger.setupScheduler(std::unique_ptr<scheduler::VsyncController>(mVsyncController),
                             std::unique_ptr<scheduler::VSyncTracker>(mVSyncTracker),
                             std::unique_ptr<EventThread>(mEventThread),
-                            std::unique_ptr<EventThread>(mSFEventThread), &mSchedulerCallback);
+                            std::unique_ptr<EventThread>(mSFEventThread),
+                            TestableSurfaceFlinger::SchedulerCallbackImpl::kMock);
 }
 
 void DisplayTransactionTest::injectMockComposer(int virtualDisplayCount) {
@@ -122,7 +122,7 @@ void DisplayTransactionTest::injectFakeNativeWindowSurfaceFactory() {
 
 sp<DisplayDevice> DisplayTransactionTest::injectDefaultInternalDisplay(
         std::function<void(FakeDisplayDeviceInjector&)> injectExtra) {
-    constexpr PhysicalDisplayId DEFAULT_DISPLAY_ID(777);
+    constexpr PhysicalDisplayId DEFAULT_DISPLAY_ID = PhysicalDisplayId::fromPort(255u);
     constexpr int DEFAULT_DISPLAY_WIDTH = 1080;
     constexpr int DEFAULT_DISPLAY_HEIGHT = 1920;
     constexpr HWDisplayId DEFAULT_DISPLAY_HWC_DISPLAY_ID = 0;
@@ -139,20 +139,18 @@ sp<DisplayDevice> DisplayTransactionTest::injectDefaultInternalDisplay(
     EXPECT_CALL(*mNativeWindow, perform(NATIVE_WINDOW_SET_USAGE64));
     EXPECT_CALL(*mNativeWindow, perform(NATIVE_WINDOW_API_DISCONNECT)).Times(AnyNumber());
 
-    constexpr auto kConnectionType = ui::DisplayConnectionType::Internal;
-    constexpr bool kIsPrimary = true;
-
     auto compositionDisplay =
             compositionengine::impl::createDisplay(mFlinger.getCompositionEngine(),
                                                    compositionengine::DisplayCreationArgsBuilder()
                                                            .setId(DEFAULT_DISPLAY_ID)
-                                                           .setConnectionType(kConnectionType)
                                                            .setPixels({DEFAULT_DISPLAY_WIDTH,
                                                                        DEFAULT_DISPLAY_HEIGHT})
                                                            .setPowerAdvisor(&mPowerAdvisor)
                                                            .build());
 
-    auto injector = FakeDisplayDeviceInjector(mFlinger, compositionDisplay, kConnectionType,
+    constexpr bool kIsPrimary = true;
+    auto injector = FakeDisplayDeviceInjector(mFlinger, compositionDisplay,
+                                              ui::DisplayConnectionType::Internal,
                                               DEFAULT_DISPLAY_HWC_DISPLAY_ID, kIsPrimary);
 
     injector.setNativeWindow(mNativeWindow);
