@@ -37,6 +37,8 @@ protected:
         ASSERT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
         const ui::Size& resolution = mode.resolution;
 
+        mDisplaySize = resolution;
+
         // Background surface
         mBGSurfaceControl = createLayer(String8("BG Test Surface"), resolution.getWidth(),
                                         resolution.getHeight(), 0);
@@ -53,7 +55,7 @@ protected:
         TransactionUtils::fillSurfaceRGBA8(mFGSurfaceControl, 195, 63, 63);
 
         asTransaction([&](Transaction& t) {
-            t.setDisplayLayerStack(display, 0);
+            t.setDisplayLayerStack(display, ui::DEFAULT_LAYER_STACK);
 
             t.setLayer(mBGSurfaceControl, INT32_MAX - 2).show(mBGSurfaceControl);
 
@@ -72,6 +74,7 @@ protected:
     sp<SurfaceControl> mBGSurfaceControl;
     sp<SurfaceControl> mFGSurfaceControl;
     std::unique_ptr<ScreenCapture> mCapture;
+    ui::Size mDisplaySize;
 };
 
 TEST_F(ScreenCaptureTest, SetFlagsSecureEUidSystem) {
@@ -515,18 +518,8 @@ TEST_F(ScreenCaptureTest, CaptureSize) {
 }
 
 TEST_F(ScreenCaptureTest, CaptureInvalidLayer) {
-    sp<SurfaceControl> redLayer = createLayer(String8("Red surface"), 60, 60,
-                                              ISurfaceComposerClient::eFXSurfaceBufferState);
-
-    ASSERT_NO_FATAL_FAILURE(fillBufferQueueLayerColor(redLayer, Color::RED, 60, 60));
-
-    auto redLayerHandle = redLayer->getHandle();
-    Transaction().reparent(redLayer, nullptr).apply();
-    redLayer.clear();
-    SurfaceComposerClient::Transaction().apply(true);
-
     LayerCaptureArgs args;
-    args.layerHandle = redLayerHandle;
+    args.layerHandle = new BBinder();
 
     ScreenCaptureResults captureResults;
     // Layer was deleted so captureLayers should fail with NAME_NOT_FOUND
@@ -563,7 +556,7 @@ TEST_F(ScreenCaptureTest, CaptureSecureLayer) {
     Transaction()
             .show(redLayer)
             .show(secureLayer)
-            .setLayerStack(redLayer, 0)
+            .setLayerStack(redLayer, ui::DEFAULT_LAYER_STACK)
             .setLayer(redLayer, INT32_MAX)
             .apply();
 
@@ -655,7 +648,7 @@ TEST_F(ScreenCaptureTest, CaptureDisplayPrimaryDisplayOnly) {
     Transaction()
             .show(layer)
             .hide(mFGSurfaceControl)
-            .setLayerStack(layer, 0)
+            .setLayerStack(layer, ui::DEFAULT_LAYER_STACK)
             .setLayer(layer, INT32_MAX)
             .setColor(layer, {layerColor.r / 255, layerColor.g / 255, layerColor.b / 255})
             .setCrop(layer, bounds)
@@ -702,7 +695,7 @@ TEST_F(ScreenCaptureTest, CaptureDisplayChildPrimaryDisplayOnly) {
             .show(layer)
             .show(childLayer)
             .hide(mFGSurfaceControl)
-            .setLayerStack(layer, 0)
+            .setLayerStack(layer, ui::DEFAULT_LAYER_STACK)
             .setLayer(layer, INT32_MAX)
             .setColor(layer, {layerColor.r / 255, layerColor.g / 255, layerColor.b / 255})
             .setColor(childLayer, {childColor.r / 255, childColor.g / 255, childColor.b / 255})
@@ -838,6 +831,33 @@ TEST_F(ScreenCaptureTest, CaptureWithGrayscale) {
     expectedColor = luminance.b * 255;
     mCapture->expectColor(Rect(0, 0, 32, 32),
                           Color{expectedColor, expectedColor, expectedColor, 255}, tolerance);
+}
+
+TEST_F(ScreenCaptureTest, CaptureOffscreen) {
+    sp<SurfaceControl> layer;
+    ASSERT_NO_FATAL_FAILURE(layer = createLayer("test layer", 32, 32,
+                                                ISurfaceComposerClient::eFXSurfaceBufferState,
+                                                mBGSurfaceControl.get()));
+    ASSERT_NO_FATAL_FAILURE(fillBufferStateLayerColor(layer, Color::RED, 32, 32));
+
+    Transaction().show(layer).hide(mFGSurfaceControl).reparent(layer, nullptr).apply();
+
+    DisplayCaptureArgs displayCaptureArgs;
+    displayCaptureArgs.displayToken = mDisplay;
+
+    {
+        // Validate that the red layer is not on screen
+        ScreenCapture::captureDisplay(&mCapture, displayCaptureArgs);
+        mCapture->expectColor(Rect(0, 0, mDisplaySize.width, mDisplaySize.height),
+                              {63, 63, 195, 255});
+    }
+
+    LayerCaptureArgs captureArgs;
+    captureArgs.layerHandle = layer->getHandle();
+
+    ScreenCapture::captureLayers(&mCapture, captureArgs);
+    mCapture->expectSize(32, 32);
+    mCapture->expectColor(Rect(0, 0, 32, 32), Color::RED);
 }
 
 // In the following tests we verify successful skipping of a parent layer,

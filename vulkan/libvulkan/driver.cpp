@@ -365,7 +365,7 @@ CreateInfoWrapper::CreateInfoWrapper(const VkInstanceCreateInfo& create_info,
                                      const VkAllocationCallbacks& allocator)
     : is_instance_(true),
       allocator_(allocator),
-      loader_api_version_(VK_API_VERSION_1_1),
+      loader_api_version_(VK_API_VERSION_1_3),
       icd_api_version_(icd_api_version),
       physical_dev_(VK_NULL_HANDLE),
       instance_info_(create_info),
@@ -377,7 +377,7 @@ CreateInfoWrapper::CreateInfoWrapper(VkPhysicalDevice physical_dev,
                                      const VkAllocationCallbacks& allocator)
     : is_instance_(false),
       allocator_(allocator),
-      loader_api_version_(VK_API_VERSION_1_1),
+      loader_api_version_(VK_API_VERSION_1_3),
       icd_api_version_(icd_api_version),
       physical_dev_(physical_dev),
       dev_info_(create_info),
@@ -519,6 +519,14 @@ VkResult CreateInfoWrapper::SanitizeExtensions() {
         is_instance_ ? loader_api_version_
                      : std::min(icd_api_version_, loader_api_version_);
     switch (api_version) {
+        case VK_API_VERSION_1_3:
+            hook_extensions_.set(ProcHook::EXTENSION_CORE_1_3);
+            hal_extensions_.set(ProcHook::EXTENSION_CORE_1_3);
+            [[clang::fallthrough]];
+        case VK_API_VERSION_1_2:
+            hook_extensions_.set(ProcHook::EXTENSION_CORE_1_2);
+            hal_extensions_.set(ProcHook::EXTENSION_CORE_1_2);
+            [[clang::fallthrough]];
         case VK_API_VERSION_1_1:
             hook_extensions_.set(ProcHook::EXTENSION_CORE_1_1);
             hal_extensions_.set(ProcHook::EXTENSION_CORE_1_1);
@@ -653,6 +661,7 @@ void CreateInfoWrapper::FilterExtension(const char* name) {
             case ProcHook::EXTENSION_CORE_1_0:
             case ProcHook::EXTENSION_CORE_1_1:
             case ProcHook::EXTENSION_CORE_1_2:
+            case ProcHook::EXTENSION_CORE_1_3:
             case ProcHook::EXTENSION_COUNT:
                 // Device and meta extensions. If we ever get here it's a bug in
                 // our code. But enumerating them lets us avoid having a default
@@ -707,6 +716,7 @@ void CreateInfoWrapper::FilterExtension(const char* name) {
             case ProcHook::EXTENSION_CORE_1_0:
             case ProcHook::EXTENSION_CORE_1_1:
             case ProcHook::EXTENSION_CORE_1_2:
+            case ProcHook::EXTENSION_CORE_1_3:
             case ProcHook::EXTENSION_COUNT:
                 // Instance and meta extensions. If we ever get here it's a bug
                 // in our code. But enumerating them lets us avoid having a
@@ -979,6 +989,8 @@ VkResult EnumerateInstanceExtensionProperties(
 void QueryPresentationProperties(
     VkPhysicalDevice physicalDevice,
     VkPhysicalDevicePresentationPropertiesANDROID* presentation_properties) {
+    ATRACE_CALL();
+
     // Request the android-specific presentation properties via GPDP2
     VkPhysicalDeviceProperties2 properties = {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
@@ -994,7 +1006,17 @@ void QueryPresentationProperties(
     presentation_properties->pNext = nullptr;
     presentation_properties->sharedImage = VK_FALSE;
 
-    GetPhysicalDeviceProperties2(physicalDevice, &properties);
+    const auto& driver = GetData(physicalDevice).driver;
+
+    if (driver.GetPhysicalDeviceProperties2) {
+        // >= 1.1 driver, supports core GPDP2 entrypoint.
+        driver.GetPhysicalDeviceProperties2(physicalDevice, &properties);
+    } else if (driver.GetPhysicalDeviceProperties2KHR) {
+        // Old driver, but may support presentation properties
+        // if we have the GPDP2 extension. Otherwise, no presentation
+        // properties supported.
+        driver.GetPhysicalDeviceProperties2KHR(physicalDevice, &properties);
+    }
 }
 
 VkResult EnumerateDeviceExtensionProperties(
@@ -1099,7 +1121,7 @@ VkResult CreateInstance(const VkInstanceCreateInfo* pCreateInfo,
         if (result != VK_SUCCESS)
             return result;
 
-        icd_api_version ^= VK_VERSION_PATCH(icd_api_version);
+        icd_api_version ^= VK_API_VERSION_PATCH(icd_api_version);
     }
 
     CreateInfoWrapper wrapper(*pCreateInfo, icd_api_version, data_allocator);
@@ -1183,7 +1205,7 @@ VkResult CreateDevice(VkPhysicalDevice physicalDevice,
 
     CreateInfoWrapper wrapper(
         physicalDevice, *pCreateInfo,
-        properties.apiVersion ^ VK_VERSION_PATCH(properties.apiVersion),
+        properties.apiVersion ^ VK_API_VERSION_PATCH(properties.apiVersion),
         data_allocator);
     VkResult result = wrapper.Validate();
     if (result != VK_SUCCESS)

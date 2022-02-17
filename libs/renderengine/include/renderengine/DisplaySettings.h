@@ -43,6 +43,9 @@ struct DisplaySettings {
     // Maximum luminance pulled from the display's HDR capabilities.
     float maxLuminance = 1.0f;
 
+    // Current luminance of the display
+    float currentLuminanceNits = -1.f;
+
     // Output dataspace that will be populated if wide color gamut is used, or
     // DataSpace::UNKNOWN otherwise.
     ui::Dataspace outputDataspace = ui::Dataspace::UNKNOWN;
@@ -51,9 +54,9 @@ struct DisplaySettings {
     // dataspace, in non-linear space.
     mat4 colorTransform = mat4();
 
-    // Region that will be cleared to (0, 0, 0, 1) prior to rendering.
-    // This is specified in layer-stack space.
-    Region clearRegion = Region::INVALID_REGION;
+    // If true, and colorTransform is non-identity, most client draw calls can
+    // ignore it. Some draws (e.g. screen decorations) may need it, though.
+    bool deviceHandlesColorTransform = false;
 
     // An additional orientation flag to be applied after clipping the output.
     // By way of example, this may be used for supporting fullscreen screenshot
@@ -61,15 +64,16 @@ struct DisplaySettings {
     // orientation.
     uint32_t orientation = ui::Transform::ROT_0;
 
-    // SDR white point, -1f if unknown
-    float sdrWhitePointNits = -1.f;
+    // Target luminance of the display. -1f if unknown.
+    // All layers will be dimmed by (max(layer white points) / targetLuminanceNits).
+    // If the target luminance is unknown, then no display-level dimming occurs.
+    float targetLuminanceNits = -1.f;
 };
 
 static inline bool operator==(const DisplaySettings& lhs, const DisplaySettings& rhs) {
     return lhs.physicalDisplay == rhs.physicalDisplay && lhs.clip == rhs.clip &&
             lhs.maxLuminance == rhs.maxLuminance && lhs.outputDataspace == rhs.outputDataspace &&
-            lhs.colorTransform == rhs.colorTransform &&
-            lhs.clearRegion.hasSameRects(rhs.clearRegion) && lhs.orientation == rhs.orientation;
+            lhs.colorTransform == rhs.colorTransform && lhs.orientation == rhs.orientation;
 }
 
 // Defining PrintTo helps with Google Tests.
@@ -84,9 +88,6 @@ static inline void PrintTo(const DisplaySettings& settings, ::std::ostream* os) 
     PrintTo(settings.outputDataspace, os);
     *os << "\n    .colorTransform = " << settings.colorTransform;
     *os << "\n    .clearRegion = ";
-    PrintTo(settings.clearRegion, os);
-    *os << "\n    .orientation = " << settings.orientation;
-    *os << "\n}";
 }
 
 } // namespace renderengine

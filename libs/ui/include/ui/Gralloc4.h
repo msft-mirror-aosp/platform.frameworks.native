@@ -17,6 +17,7 @@
 #ifndef ANDROID_UI_GRALLOC4_H
 #define ANDROID_UI_GRALLOC4_H
 
+#include <aidl/android/hardware/graphics/allocator/IAllocator.h>
 #include <android/hardware/graphics/allocator/4.0/IAllocator.h>
 #include <android/hardware/graphics/common/1.1/types.h>
 #include <android/hardware/graphics/mapper/4.0/IMapper.h>
@@ -108,6 +109,8 @@ public:
                          std::optional<ui::Cta861_3>* outCta861_3) const override;
     status_t getSmpte2094_40(buffer_handle_t bufferHandle,
                              std::optional<std::vector<uint8_t>>* outSmpte2094_40) const override;
+    status_t getSmpte2094_10(buffer_handle_t bufferHandle,
+                             std::optional<std::vector<uint8_t>>* outSmpte2094_10) const override;
 
     status_t getDefaultPixelFormatFourCC(uint32_t width, uint32_t height, PixelFormat format,
                                          uint32_t layerCount, uint64_t usage,
@@ -151,10 +154,6 @@ public:
 
 private:
     friend class GraphicBufferAllocator;
-
-    // Determines whether the passed info is compatible with the mapper.
-    status_t validateBufferDescriptorInfo(
-            hardware::graphics::mapper::V4_0::IMapper::BufferDescriptorInfo* descriptorInfo) const;
 
     template <class T>
     using DecodeFunction = status_t (*)(const hardware::hidl_vec<uint8_t>& input, T* output);
@@ -202,6 +201,8 @@ public:
 private:
     const Gralloc4Mapper& mMapper;
     sp<hardware::graphics::allocator::V4_0::IAllocator> mAllocator;
+    // Optional "4.1" allocator
+    std::shared_ptr<aidl::android::hardware::graphics::allocator::IAllocator> mAidlAllocator;
 };
 
 } // namespace android
