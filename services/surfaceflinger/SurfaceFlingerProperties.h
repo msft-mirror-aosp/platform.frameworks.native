@@ -59,8 +59,6 @@ bool start_graphics_allocator_service(bool defaultValue);
 SurfaceFlingerProperties::primary_display_orientation_values primary_display_orientation(
         SurfaceFlingerProperties::primary_display_orientation_values defaultValue);
 
-bool use_color_management(bool defaultValue);
-
 int64_t default_composition_dataspace(
         android::hardware::graphics::common::V1_2::Dataspace defaultValue);
 
@@ -89,8 +87,6 @@ bool use_content_detection_for_refresh_rate(bool defaultValue);
 bool enable_protected_contents(bool defaultValue);
 
 bool support_kernel_idle_timer(bool defaultValue);
-
-bool use_frame_rate_api(bool defaultValue);
 
 int32_t display_update_imminent_timeout_ms(int32_t defaultValue);
 
