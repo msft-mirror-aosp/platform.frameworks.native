@@ -16,30 +16,32 @@
 
 #pragma once
 
-#include <android-base/stringprintf.h>
-#include <gui/DisplayEventReceiver.h>
-
 #include <algorithm>
 #include <numeric>
 #include <optional>
 #include <type_traits>
+#include <utility>
+
+#include <android-base/stringprintf.h>
+#include <gui/DisplayEventReceiver.h>
+
+#include <scheduler/Fps.h>
+#include <scheduler/Seamlessness.h>
 
 #include "DisplayHardware/DisplayMode.h"
 #include "DisplayHardware/HWComposer.h"
-#include "Fps.h"
-#include "Scheduler/SchedulerUtils.h"
-#include "Scheduler/Seamlessness.h"
+#include "Scheduler/OneShotTimer.h"
 #include "Scheduler/StrongTyping.h"
 
 namespace android::scheduler {
 
 using namespace std::chrono_literals;
 
-enum class RefreshRateConfigEvent : unsigned { None = 0b0, Changed = 0b1 };
+enum class DisplayModeEvent : unsigned { None = 0b0, Changed = 0b1 };
 
-inline RefreshRateConfigEvent operator|(RefreshRateConfigEvent lhs, RefreshRateConfigEvent rhs) {
-    using T = std::underlying_type_t<RefreshRateConfigEvent>;
-    return static_cast<RefreshRateConfigEvent>(static_cast<T>(lhs) | static_cast<T>(rhs));
+inline DisplayModeEvent operator|(DisplayModeEvent lhs, DisplayModeEvent rhs) {
+    using T = std::underlying_type_t<DisplayModeEvent>;
+    return static_cast<DisplayModeEvent>(static_cast<T>(lhs) | static_cast<T>(rhs));
 }
 
 using FrameRateOverride = DisplayEventReceiver::Event::FrameRateOverride;
@@ -64,31 +66,25 @@ public:
         };
 
     public:
-        RefreshRate(DisplayModeId modeId, DisplayModePtr mode, Fps fps, ConstructorTag)
-              : modeId(modeId), mode(mode), fps(std::move(fps)) {}
+        RefreshRate(DisplayModePtr mode, ConstructorTag) : mode(mode) {}
 
-        DisplayModeId getModeId() const { return modeId; }
+        DisplayModeId getModeId() const { return mode->getId(); }
         nsecs_t getVsyncPeriod() const { return mode->getVsyncPeriod(); }
         int32_t getModeGroup() const { return mode->getGroup(); }
-        std::string getName() const { return to_string(fps); }
-        Fps getFps() const { return fps; }
+        std::string getName() const { return to_string(getFps()); }
+        Fps getFps() const { return mode->getFps(); }
+        DisplayModePtr getMode() const { return mode; }
 
         // Checks whether the fps of this RefreshRate struct is within a given min and max refresh
         // rate passed in. Margin of error is applied to the boundaries for approximation.
-        bool inPolicy(Fps minRefreshRate, Fps maxRefreshRate) const {
-            return minRefreshRate.lessThanOrEqualWithMargin(fps) &&
-                    fps.lessThanOrEqualWithMargin(maxRefreshRate);
-        }
+        bool inPolicy(Fps minRefreshRate, Fps maxRefreshRate) const;
 
-        bool operator!=(const RefreshRate& other) const {
-            return modeId != other.modeId || mode != other.mode;
-        }
+        bool operator==(const RefreshRate& other) const { return mode == other.mode; }
+        bool operator!=(const RefreshRate& other) const { return !operator==(other); }
 
         bool operator<(const RefreshRate& other) const {
-            return getFps().getValue() < other.getFps().getValue();
+            return isStrictlyLess(getFps(), other.getFps());
         }
-
-        bool operator==(const RefreshRate& other) const { return !(*this != other); }
 
         std::string toString() const;
         friend std::ostream& operator<<(std::ostream& os, const RefreshRate& refreshRate) {
@@ -99,21 +95,18 @@ public:
         friend RefreshRateConfigs;
         friend class RefreshRateConfigsTest;
 
-        const DisplayModeId modeId;
         DisplayModePtr mode;
-        // Refresh rate in frames per second
-        const Fps fps{0.0f};
     };
 
     using AllRefreshRatesMapType =
             std::unordered_map<DisplayModeId, std::unique_ptr<const RefreshRate>>;
 
     struct FpsRange {
-        Fps min{0.0f};
-        Fps max{std::numeric_limits<float>::max()};
+        Fps min = Fps::fromValue(0.f);
+        Fps max = Fps::fromValue(std::numeric_limits<float>::max());
 
         bool operator==(const FpsRange& other) const {
-            return min.equalsWithMargin(other.min) && max.equalsWithMargin(other.max);
+            return isApproxEqual(min, other.min) && isApproxEqual(max, other.max);
         }
 
         bool operator!=(const FpsRange& other) const { return !(*this == other); }
@@ -213,6 +206,7 @@ public:
         ExplicitExact,           // Specific refresh rate that was provided by the app with
                                  // Exact compatibility
 
+        ftl_last = ExplicitExact
     };
 
     // Captures the layer requirements for a refresh rate. This will be used to determine the
@@ -225,7 +219,7 @@ public:
         // Layer vote type.
         LayerVoteType vote = LayerVoteType::NoVote;
         // Layer's desired refresh rate, if applicable.
-        Fps desiredRefreshRate{0.0f};
+        Fps desiredRefreshRate;
         // If a seamless mode switch is required.
         Seamlessness seamlessness = Seamlessness::Default;
         // Layer's weight in the range of [0, 1]. The higher the weight the more impact this layer
@@ -236,7 +230,7 @@ public:
 
         bool operator==(const LayerRequirement& other) const {
             return name == other.name && vote == other.vote &&
-                    desiredRefreshRate.equalsWithMargin(other.desiredRefreshRate) &&
+                    isApproxEqual(desiredRefreshRate, other.desiredRefreshRate) &&
                     seamlessness == other.seamlessness && weight == other.weight &&
                     focused == other.focused;
         }
@@ -251,20 +245,15 @@ public:
         // True if the system hasn't seen any buffers posted to layers recently.
         bool idle = false;
 
-        bool operator==(const GlobalSignals& other) const {
+        bool operator==(GlobalSignals other) const {
             return touch == other.touch && idle == other.idle;
         }
     };
 
-    // Returns the refresh rate that fits best to the given layers.
-    //   layers - The layer requirements to consider.
-    //   globalSignals - global state of touch and idle
-    //   outSignalsConsidered - An output param that tells the caller whether the refresh rate was
-    //                          chosen based on touch boost and/or idle timer.
-    RefreshRate getBestRefreshRate(const std::vector<LayerRequirement>& layers,
-                                   const GlobalSignals& globalSignals,
-                                   GlobalSignals* outSignalsConsidered = nullptr) const
-            EXCLUDES(mLock);
+    // Returns the refresh rate that best fits the given layers, and whether the refresh rate was
+    // chosen based on touch boost and/or idle timer.
+    std::pair<RefreshRate, GlobalSignals> getBestRefreshRate(const std::vector<LayerRequirement>&,
+                                                             GlobalSignals) const EXCLUDES(mLock);
 
     FpsRange getSupportedRefreshRateRange() const EXCLUDES(mLock) {
         std::lock_guard lock(mLock);
@@ -296,9 +285,6 @@ public:
     // Stores the current modeId the device operates at
     void setCurrentModeId(DisplayModeId) EXCLUDES(mLock);
 
-    // Returns a string that represents the layer vote type
-    static std::string layerVoteTypeString(LayerVoteType vote);
-
     // Returns a known frame rate that is the closest to frameRate
     Fps findClosestKnownFrameRate(Fps frameRate) const;
 
@@ -310,13 +296,22 @@ public:
         // or heuristic, such that refresh rates higher than this value will not be voted for. 0 if
         // no threshold is set.
         int frameRateMultipleThreshold = 0;
+
+        // The Idle Timer timeout. 0 timeout means no idle timer.
+        int32_t idleTimerTimeoutMs = 0;
+
+        // Whether to use idle timer callbacks that support the kernel timer.
+        bool supportKernelIdleTimer = false;
     };
 
-    RefreshRateConfigs(const DisplayModes& modes, DisplayModeId currentModeId,
+    RefreshRateConfigs(const DisplayModes&, DisplayModeId,
                        Config config = {.enableFrameRateOverride = false,
-                                        .frameRateMultipleThreshold = 0});
+                                        .frameRateMultipleThreshold = 0,
+                                        .idleTimerTimeoutMs = 0,
+                                        .supportKernelIdleTimer = false});
 
-    void updateDisplayModes(const DisplayModes& mode, DisplayModeId currentModeId) EXCLUDES(mLock);
+    RefreshRateConfigs(const RefreshRateConfigs&) = delete;
+    RefreshRateConfigs& operator=(const RefreshRateConfigs&) = delete;
 
     // Returns whether switching modes (refresh rate or resolution) is possible.
     // TODO(b/158780872): Consider HAL support, and skip frame rate detection if the modes only
@@ -335,27 +330,72 @@ public:
     // refresh rates.
     KernelIdleTimerAction getIdleTimerAction() const;
 
-    bool supportsFrameRateOverride() const { return mSupportsFrameRateOverride; }
+    bool supportsFrameRateOverrideByContent() const { return mSupportsFrameRateOverrideByContent; }
 
     // Return the display refresh rate divider to match the layer
     // frame rate, or 0 if the display refresh rate is not a multiple of the
     // layer refresh rate.
     static int getFrameRateDivider(Fps displayFrameRate, Fps layerFrameRate);
 
+    // Returns if the provided frame rates have a ratio t*1000/1001 or t*1001/1000
+    // for an integer t.
+    static bool isFractionalPairOrMultiple(Fps, Fps);
+
     using UidToFrameRateOverride = std::map<uid_t, Fps>;
+
     // Returns the frame rate override for each uid.
-    //
-    // @param layers list of visible layers
-    // @param displayFrameRate the display frame rate
-    // @param touch whether touch timer is active (i.e. user touched the screen recently)
-    UidToFrameRateOverride getFrameRateOverrides(const std::vector<LayerRequirement>& layers,
-                                                 Fps displayFrameRate, bool touch) const
+    UidToFrameRateOverride getFrameRateOverrides(const std::vector<LayerRequirement>&,
+                                                 Fps displayFrameRate, GlobalSignals) const
             EXCLUDES(mLock);
+
+    bool supportsKernelIdleTimer() const { return mConfig.supportKernelIdleTimer; }
+
+    struct IdleTimerCallbacks {
+        struct Callbacks {
+            std::function<void()> onReset;
+            std::function<void()> onExpired;
+        };
+
+        Callbacks platform;
+        Callbacks kernel;
+    };
+
+    void setIdleTimerCallbacks(IdleTimerCallbacks callbacks) EXCLUDES(mIdleTimerCallbacksMutex) {
+        std::scoped_lock lock(mIdleTimerCallbacksMutex);
+        mIdleTimerCallbacks = std::move(callbacks);
+    }
+
+    void clearIdleTimerCallbacks() EXCLUDES(mIdleTimerCallbacksMutex) {
+        std::scoped_lock lock(mIdleTimerCallbacksMutex);
+        mIdleTimerCallbacks.reset();
+    }
+
+    void startIdleTimer() {
+        if (mIdleTimer) {
+            mIdleTimer->start();
+        }
+    }
+
+    void stopIdleTimer() {
+        if (mIdleTimer) {
+            mIdleTimer->stop();
+        }
+    }
+
+    void resetIdleTimer(bool kernelOnly) {
+        if (!mIdleTimer) {
+            return;
+        }
+        if (kernelOnly && !mConfig.supportKernelIdleTimer) {
+            return;
+        }
+        mIdleTimer->reset();
+    }
 
     void dump(std::string& result) const EXCLUDES(mLock);
 
 private:
-    friend class RefreshRateConfigsTest;
+    friend struct TestableRefreshRateConfigs;
 
     void constructAvailableRefreshRates() REQUIRES(mLock);
 
@@ -363,14 +403,8 @@ private:
             const std::function<bool(const RefreshRate&)>& shouldAddRefreshRate,
             std::vector<const RefreshRate*>* outRefreshRates) REQUIRES(mLock);
 
-    std::optional<RefreshRate> getCachedBestRefreshRate(const std::vector<LayerRequirement>& layers,
-                                                        const GlobalSignals& globalSignals,
-                                                        GlobalSignals* outSignalsConsidered) const
-            REQUIRES(mLock);
-
-    RefreshRate getBestRefreshRateLocked(const std::vector<LayerRequirement>& layers,
-                                         const GlobalSignals& globalSignals,
-                                         GlobalSignals* outSignalsConsidered) const REQUIRES(mLock);
+    std::pair<RefreshRate, GlobalSignals> getBestRefreshRateLocked(
+            const std::vector<LayerRequirement>&, GlobalSignals) const REQUIRES(mLock);
 
     // Returns the refresh rate with the highest score in the collection specified from begin
     // to end. If there are more than one with the same highest refresh rate, the first one is
@@ -388,7 +422,11 @@ private:
 
     // Returns the highest refresh rate according to the current policy. May change at runtime. Only
     // uses the primary range, not the app request range.
-    const RefreshRate& getMaxRefreshRateByPolicyLocked() const REQUIRES(mLock);
+    const RefreshRate& getMaxRefreshRateByPolicyLocked() const REQUIRES(mLock) {
+        return getMaxRefreshRateByPolicyLocked(mCurrentRefreshRate->getModeGroup());
+    }
+
+    const RefreshRate& getMaxRefreshRateByPolicyLocked(int anchorGroup) const REQUIRES(mLock);
 
     // Returns the current refresh rate, if allowed. Otherwise the default that is allowed by
     // the policy.
@@ -404,6 +442,20 @@ private:
     // and the frame rate override for certains applications.
     float calculateLayerScoreLocked(const LayerRequirement&, const RefreshRate&,
                                     bool isSeamlessSwitch) const REQUIRES(mLock);
+
+    float calculateNonExactMatchingLayerScoreLocked(const LayerRequirement&,
+                                                    const RefreshRate&) const REQUIRES(mLock);
+
+    void updateDisplayModes(const DisplayModes& mode, DisplayModeId currentModeId) EXCLUDES(mLock);
+
+    void initializeIdleTimer();
+
+    std::optional<IdleTimerCallbacks::Callbacks> getIdleTimerCallbacks() const
+            REQUIRES(mIdleTimerCallbacksMutex) {
+        if (!mIdleTimerCallbacks) return {};
+        return mConfig.supportKernelIdleTimer ? mIdleTimerCallbacks->kernel
+                                              : mIdleTimerCallbacks->platform;
+    }
 
     // The list of refresh rates, indexed by display modes ID. This may change after this
     // object is initialized.
@@ -438,16 +490,19 @@ private:
     const std::vector<Fps> mKnownFrameRates;
 
     const Config mConfig;
-    bool mSupportsFrameRateOverride;
+    bool mSupportsFrameRateOverrideByContent;
 
-    struct GetBestRefreshRateInvocation {
-        std::vector<LayerRequirement> layerRequirements;
-        GlobalSignals globalSignals;
-        GlobalSignals outSignalsConsidered;
-        RefreshRate resultingBestRefreshRate;
+    struct GetBestRefreshRateCache {
+        std::pair<std::vector<LayerRequirement>, GlobalSignals> arguments;
+        std::pair<RefreshRate, GlobalSignals> result;
     };
-    mutable std::optional<GetBestRefreshRateInvocation> lastBestRefreshRateInvocation
-            GUARDED_BY(mLock);
+    mutable std::optional<GetBestRefreshRateCache> mGetBestRefreshRateCache GUARDED_BY(mLock);
+
+    // Declare mIdleTimer last to ensure its thread joins before the mutex/callbacks are destroyed.
+    std::mutex mIdleTimerCallbacksMutex;
+    std::optional<IdleTimerCallbacks> mIdleTimerCallbacks GUARDED_BY(mIdleTimerCallbacksMutex);
+    // Used to detect (lack of) frame activity.
+    std::optional<scheduler::OneShotTimer> mIdleTimer;
 };
 
 } // namespace android::scheduler
