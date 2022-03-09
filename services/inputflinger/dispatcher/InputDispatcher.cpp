@@ -66,35 +66,77 @@ namespace android::inputdispatcher {
 
 namespace {
 
-// Log detailed debug messages about each inbound event notification to the dispatcher.
-constexpr bool DEBUG_INBOUND_EVENT_DETAILS = false;
+/**
+ * Log detailed debug messages about each inbound event notification to the dispatcher.
+ * Enable this via "adb shell setprop log.tag.InputDispatcherInboundEvent DEBUG" (requires restart)
+ */
+const bool DEBUG_INBOUND_EVENT_DETAILS =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "InboundEvent", ANDROID_LOG_INFO);
 
-// Log detailed debug messages about each outbound event processed by the dispatcher.
-constexpr bool DEBUG_OUTBOUND_EVENT_DETAILS = false;
+/**
+ * Log detailed debug messages about each outbound event processed by the dispatcher.
+ * Enable this via "adb shell setprop log.tag.InputDispatcherOutboundEvent DEBUG" (requires restart)
+ */
+const bool DEBUG_OUTBOUND_EVENT_DETAILS =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "OutboundEvent", ANDROID_LOG_INFO);
 
-// Log debug messages about the dispatch cycle.
-constexpr bool DEBUG_DISPATCH_CYCLE = false;
+/**
+ * Log debug messages about the dispatch cycle.
+ * Enable this via "adb shell setprop log.tag.InputDispatcherDispatchCycle DEBUG" (requires restart)
+ */
+const bool DEBUG_DISPATCH_CYCLE =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "DispatchCycle", ANDROID_LOG_INFO);
 
-// Log debug messages about channel creation
-constexpr bool DEBUG_CHANNEL_CREATION = false;
+/**
+ * Log debug messages about channel creation
+ * Enable this via "adb shell setprop log.tag.InputDispatcherChannelCreation DEBUG" (requires
+ * restart)
+ */
+const bool DEBUG_CHANNEL_CREATION =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "ChannelCreation", ANDROID_LOG_INFO);
 
-// Log debug messages about input event injection.
-constexpr bool DEBUG_INJECTION = false;
+/**
+ * Log debug messages about input event injection.
+ * Enable this via "adb shell setprop log.tag.InputDispatcherInjection DEBUG" (requires restart)
+ */
+const bool DEBUG_INJECTION =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "Injection", ANDROID_LOG_INFO);
 
-// Log debug messages about input focus tracking.
-constexpr bool DEBUG_FOCUS = false;
+/**
+ * Log debug messages about input focus tracking.
+ * Enable this via "adb shell setprop log.tag.InputDispatcherFocus DEBUG" (requires restart)
+ */
+const bool DEBUG_FOCUS =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "Focus", ANDROID_LOG_INFO);
 
-// Log debug messages about touch mode event
-constexpr bool DEBUG_TOUCH_MODE = false;
+/**
+ * Log debug messages about touch mode event
+ * Enable this via "adb shell setprop log.tag.InputDispatcherTouchMode DEBUG" (requires restart)
+ */
+const bool DEBUG_TOUCH_MODE =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "TouchMode", ANDROID_LOG_INFO);
 
-// Log debug messages about touch occlusion
-constexpr bool DEBUG_TOUCH_OCCLUSION = true;
+/**
+ * Log debug messages about touch occlusion
+ * Enable this via "adb shell setprop log.tag.InputDispatcherTouchOcclusion DEBUG" (requires
+ * restart)
+ */
+const bool DEBUG_TOUCH_OCCLUSION =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "TouchOcclusion", ANDROID_LOG_INFO);
 
-// Log debug messages about the app switch latency optimization.
-constexpr bool DEBUG_APP_SWITCH = false;
+/**
+ * Log debug messages about the app switch latency optimization.
+ * Enable this via "adb shell setprop log.tag.InputDispatcherAppSwitch DEBUG" (requires restart)
+ */
+const bool DEBUG_APP_SWITCH =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "AppSwitch", ANDROID_LOG_INFO);
 
-// Log debug messages about hover events.
-constexpr bool DEBUG_HOVER = false;
+/**
+ * Log debug messages about hover events.
+ * Enable this via "adb shell setprop log.tag.InputDispatcherHover DEBUG" (requires restart)
+ */
+const bool DEBUG_HOVER =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "Hover", ANDROID_LOG_INFO);
 
 // Temporarily releases a held mutex for the lifetime of the instance.
 // Named to match std::scoped_lock
@@ -2698,18 +2740,16 @@ InputDispatcher::TouchOcclusionInfo InputDispatcher::computeTouchOcclusionInfoLo
 
 std::string InputDispatcher::dumpWindowForTouchOcclusion(const WindowInfo* info,
                                                          bool isTouchedWindow) const {
-    return StringPrintf(INDENT2
-                        "* %spackage=%s/%" PRId32 ", id=%" PRId32 ", mode=%s, alpha=%.2f, "
-                        "frame=[%" PRId32 ",%" PRId32 "][%" PRId32 ",%" PRId32
-                        "], touchableRegion=%s, window={%s}, inputConfig={%s}, inputFeatures={%s}, "
-                        "hasToken=%s, applicationInfo.name=%s, applicationInfo.token=%s\n",
+    return StringPrintf(INDENT2 "* %spackage=%s/%" PRId32 ", id=%" PRId32 ", mode=%s, alpha=%.2f, "
+                                "frame=[%" PRId32 ",%" PRId32 "][%" PRId32 ",%" PRId32
+                                "], touchableRegion=%s, window={%s}, inputConfig={%s}, "
+                                "hasToken=%s, applicationInfo.name=%s, applicationInfo.token=%s\n",
                         isTouchedWindow ? "[TOUCHED] " : "", info->packageName.c_str(),
                         info->ownerUid, info->id, toString(info->touchOcclusionMode).c_str(),
                         info->alpha, info->frameLeft, info->frameTop, info->frameRight,
                         info->frameBottom, dumpRegion(info->touchableRegion).c_str(),
                         info->name.c_str(), info->inputConfig.string().c_str(),
-                        info->inputFeatures.string().c_str(), toString(info->token != nullptr),
-                        info->applicationInfo.name.c_str(),
+                        toString(info->token != nullptr), info->applicationInfo.name.c_str(),
                         toString(info->applicationInfo.token).c_str());
 }
 
@@ -2787,7 +2827,7 @@ void InputDispatcher::pokeUserActivityLocked(const EventEntry& eventEntry) {
     sp<WindowInfoHandle> focusedWindowHandle = getFocusedWindowHandleLocked(displayId);
     if (focusedWindowHandle != nullptr) {
         const WindowInfo* info = focusedWindowHandle->getInfo();
-        if (info->inputFeatures.test(WindowInfo::Feature::DISABLE_USER_ACTIVITY)) {
+        if (info->inputConfig.test(WindowInfo::InputConfig::DISABLE_USER_ACTIVITY)) {
             if (DEBUG_DISPATCH_CYCLE) {
                 ALOGD("Not poking user activity: disabled by window '%s'.", info->name.c_str());
             }
@@ -4516,7 +4556,7 @@ sp<WindowInfoHandle> InputDispatcher::getFocusedWindowHandleLocked(int displayId
 bool InputDispatcher::hasResponsiveConnectionLocked(WindowInfoHandle& windowHandle) const {
     sp<Connection> connection = getConnectionLocked(windowHandle.getToken());
     const bool noInputChannel =
-            windowHandle.getInfo()->inputFeatures.test(WindowInfo::Feature::NO_INPUT_CHANNEL);
+            windowHandle.getInfo()->inputConfig.test(WindowInfo::InputConfig::NO_INPUT_CHANNEL);
     if (connection != nullptr && noInputChannel) {
         ALOGW("%s has feature NO_INPUT_CHANNEL, but it matched to connection %s",
               windowHandle.getName().c_str(), connection->inputChannel->getName().c_str());
@@ -4566,7 +4606,7 @@ void InputDispatcher::updateWindowHandlesForDisplayLocked(
         const WindowInfo* info = handle->getInfo();
         if (getInputChannelLocked(handle->getToken()) == nullptr) {
             const bool noInputChannel =
-                    info->inputFeatures.test(WindowInfo::Feature::NO_INPUT_CHANNEL);
+                    info->inputConfig.test(WindowInfo::InputConfig::NO_INPUT_CHANNEL);
             const bool canReceiveInput =
                     !info->inputConfig.test(WindowInfo::InputConfig::NOT_TOUCHABLE) ||
                     !info->inputConfig.test(WindowInfo::InputConfig::NOT_FOCUSABLE);
@@ -4632,7 +4672,7 @@ void InputDispatcher::setInputWindowsLocked(
         const WindowInfo& info = *window->getInfo();
 
         // Ensure all tokens are null if the window has feature NO_INPUT_CHANNEL
-        const bool noInputWindow = info.inputFeatures.test(WindowInfo::Feature::NO_INPUT_CHANNEL);
+        const bool noInputWindow = info.inputConfig.test(WindowInfo::InputConfig::NO_INPUT_CHANNEL);
         if (noInputWindow && window->getToken() != nullptr) {
             ALOGE("%s has feature NO_INPUT_WINDOW, but a non-null token. Clearing",
                   window->getName().c_str());
@@ -5209,8 +5249,6 @@ void InputDispatcher::dumpDispatchStateLocked(std::string& dump) {
                                          windowInfo->applicationInfo.name.c_str(),
                                          toString(windowInfo->applicationInfo.token).c_str());
                     dump += dumpRegion(windowInfo->touchableRegion);
-                    dump += StringPrintf(", inputFeatures=%s",
-                                         windowInfo->inputFeatures.string().c_str());
                     dump += StringPrintf(", ownerPid=%d, ownerUid=%d, dispatchingTimeout=%" PRId64
                                          "ms, hasToken=%s, "
                                          "touchOcclusionMode=%s\n",
@@ -6248,13 +6286,14 @@ void InputDispatcher::onWindowInfosChanged(const std::vector<WindowInfo>& window
 
 bool InputDispatcher::shouldDropInput(
         const EventEntry& entry, const sp<android::gui::WindowInfoHandle>& windowHandle) const {
-    if (windowHandle->getInfo()->inputFeatures.test(WindowInfo::Feature::DROP_INPUT) ||
-        (windowHandle->getInfo()->inputFeatures.test(WindowInfo::Feature::DROP_INPUT_IF_OBSCURED) &&
+    if (windowHandle->getInfo()->inputConfig.test(WindowInfo::InputConfig::DROP_INPUT) ||
+        (windowHandle->getInfo()->inputConfig.test(
+                 WindowInfo::InputConfig::DROP_INPUT_IF_OBSCURED) &&
          isWindowObscuredLocked(windowHandle))) {
-        ALOGW("Dropping %s event targeting %s as requested by input feature %s on display "
-              "%" PRId32 ".",
+        ALOGW("Dropping %s event targeting %s as requested by the input configuration {%s} on "
+              "display %" PRId32 ".",
               ftl::enum_string(entry.type).c_str(), windowHandle->getName().c_str(),
-              windowHandle->getInfo()->inputFeatures.string().c_str(),
+              windowHandle->getInfo()->inputConfig.string().c_str(),
               windowHandle->getInfo()->displayId);
         return true;
     }
