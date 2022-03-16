@@ -84,6 +84,8 @@ public:
     static constexpr bool kDefaultInTouchMode = true;
 
     explicit InputDispatcher(const sp<InputDispatcherPolicyInterface>& policy);
+    explicit InputDispatcher(const sp<InputDispatcherPolicyInterface>& policy,
+                             std::chrono::nanoseconds staleEventTimeout);
     ~InputDispatcher() override;
 
     void dump(std::string& dump) override;
@@ -471,6 +473,11 @@ private:
      */
     std::optional<nsecs_t> mNoFocusedWindowTimeoutTime GUARDED_BY(mLock);
 
+    // Amount of time to allow for an event to be dispatched (measured since its eventTime)
+    // before considering it stale and dropping it.
+    const std::chrono::nanoseconds mStaleEventTimeout;
+    bool isStaleEvent(nsecs_t currentTime, const EventEntry& entry);
+
     bool shouldPruneInboundQueueLocked(const MotionEntry& motionEntry) REQUIRES(mLock);
 
     /**
@@ -503,11 +510,11 @@ private:
      */
     void processConnectionResponsiveLocked(const Connection& connection) REQUIRES(mLock);
 
-    void sendMonitorUnresponsiveCommandLocked(int32_t pid, std::string reason) REQUIRES(mLock);
-    void sendWindowUnresponsiveCommandLocked(const sp<IBinder>& connectionToken, std::string reason)
+    void sendWindowUnresponsiveCommandLocked(const sp<IBinder>& connectionToken,
+                                             std::optional<int32_t> pid, std::string reason)
             REQUIRES(mLock);
-    void sendMonitorResponsiveCommandLocked(int32_t pid) REQUIRES(mLock);
-    void sendWindowResponsiveCommandLocked(const sp<IBinder>& connectionToken) REQUIRES(mLock);
+    void sendWindowResponsiveCommandLocked(const sp<IBinder>& connectionToken,
+                                           std::optional<int32_t> pid) REQUIRES(mLock);
 
     // Optimization: AnrTracker is used to quickly find which connection is due for a timeout next.
     // AnrTracker must be kept in-sync with all responsive connection.waitQueues.

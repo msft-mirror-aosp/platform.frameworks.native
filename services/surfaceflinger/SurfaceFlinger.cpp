@@ -169,6 +169,8 @@
 using aidl::android::hardware::graphics::common::DisplayDecorationSupport;
 using aidl::android::hardware::graphics::composer3::Capability;
 using aidl::android::hardware::graphics::composer3::DisplayCapability;
+using KernelIdleTimerController =
+        ::android::scheduler::RefreshRateConfigs::KernelIdleTimerController;
 
 namespace android {
 
@@ -270,39 +272,33 @@ bool validateCompositionDataspace(Dataspace dataspace) {
     return dataspace == Dataspace::V0_SRGB || dataspace == Dataspace::DISPLAY_P3;
 }
 
-
-struct IdleTimerConfig {
-    int32_t timeoutMs;
-    bool supportKernelIdleTimer;
-};
-
-IdleTimerConfig getIdleTimerConfiguration(DisplayId displayId) {
-    // TODO(adyabr): use ro.surface_flinger.* namespace
-
+std::chrono::milliseconds getIdleTimerTimeout(DisplayId displayId) {
     const auto displayIdleTimerMsKey = [displayId] {
         std::stringstream ss;
         ss << "debug.sf.set_idle_timer_ms_" << displayId.value;
         return ss.str();
     }();
 
+    const int32_t displayIdleTimerMs = base::GetIntProperty(displayIdleTimerMsKey, 0);
+    if (displayIdleTimerMs > 0) {
+        return std::chrono::milliseconds(displayIdleTimerMs);
+    }
+
+    const int32_t setIdleTimerMs = base::GetIntProperty("debug.sf.set_idle_timer_ms", 0);
+    const int32_t millis = setIdleTimerMs ? setIdleTimerMs : sysprop::set_idle_timer_ms(0);
+    return std::chrono::milliseconds(millis);
+}
+
+bool getKernelIdleTimerSyspropConfig(DisplayId displayId) {
     const auto displaySupportKernelIdleTimerKey = [displayId] {
         std::stringstream ss;
         ss << "debug.sf.support_kernel_idle_timer_" << displayId.value;
         return ss.str();
     }();
 
-    const int32_t displayIdleTimerMs = base::GetIntProperty(displayIdleTimerMsKey, 0);
     const auto displaySupportKernelIdleTimer =
             base::GetBoolProperty(displaySupportKernelIdleTimerKey, false);
-
-    if (displayIdleTimerMs > 0) {
-        return {displayIdleTimerMs, displaySupportKernelIdleTimer};
-    }
-
-    const int32_t setIdleTimerMs = base::GetIntProperty("debug.sf.set_idle_timer_ms", 0);
-    const int32_t millis = setIdleTimerMs ? setIdleTimerMs : sysprop::set_idle_timer_ms(0);
-
-    return {millis, sysprop::support_kernel_idle_timer(false)};
+    return displaySupportKernelIdleTimer || sysprop::support_kernel_idle_timer(false);
 }
 
 }  // namespace anonymous
@@ -500,6 +496,8 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
     if (!mIsUserBuild && base::GetBoolProperty("debug.sf.enable_transaction_tracing"s, true)) {
         mTransactionTracing.emplace();
     }
+
+    mIgnoreHdrCameraLayers = ignore_hdr_camera_layers(false);
 }
 
 LatchUnsignaledConfig SurfaceFlinger::getLatchUnsignaledConfig() {
@@ -1436,8 +1434,15 @@ status_t SurfaceFlinger::getBootDisplayModeSupport(bool* outSupport) const {
 
 status_t SurfaceFlinger::setBootDisplayMode(const sp<IBinder>& displayToken, ui::DisplayModeId id) {
     auto future = mScheduler->schedule([=]() MAIN_THREAD -> status_t {
-        if (const auto displayId = getPhysicalDisplayIdLocked(displayToken)) {
-            return getHwComposer().setBootDisplayMode(*displayId, id);
+        if (const auto displayDevice = getDisplayDeviceLocked(displayToken)) {
+            const auto mode = displayDevice->getMode(DisplayModeId{id});
+            if (mode == nullptr) {
+                ALOGE("%s: invalid display mode (%d)", __FUNCTION__, id);
+                return BAD_VALUE;
+            }
+
+            return getHwComposer().setBootDisplayMode(displayDevice->getPhysicalId(),
+                                                      mode->getHwcId());
         } else {
             ALOGE("%s: Invalid display token %p", __FUNCTION__, displayToken.get());
             return BAD_VALUE;
@@ -1957,8 +1962,8 @@ void SurfaceFlinger::onComposerHalRefresh(hal::HWDisplayId) {
 }
 
 void SurfaceFlinger::onComposerHalVsyncIdle(hal::HWDisplayId) {
-    // TODO(b/198106220): force enable HWVsync to avoid drift problem during
-    // idle.
+    ATRACE_CALL();
+    mScheduler->forceNextResync();
 }
 
 void SurfaceFlinger::setVsyncEnabled(bool enabled) {
@@ -2185,8 +2190,8 @@ bool SurfaceFlinger::commit(nsecs_t frameTime, int64_t vsyncId, nsecs_t expected
     return mustComposite && CC_LIKELY(mBootStage != BootStage::BOOTLOADER);
 }
 
-void SurfaceFlinger::composite(nsecs_t frameTime) {
-    ATRACE_CALL();
+void SurfaceFlinger::composite(nsecs_t frameTime, int64_t vsyncId) {
+    ATRACE_FORMAT("%s %" PRId64, __func__, vsyncId);
     MainThreadScopedGuard mainThreadGuard(SF_MAIN_THREAD);
     if (mPowerHintSessionData.sessionEnabled) {
         mPowerHintSessionData.compositeStart = systemTime();
@@ -2376,6 +2381,19 @@ void SurfaceFlinger::setCompositorTimingSnapped(const DisplayStatInfo& stats,
     getBE().mCompositorTiming.presentLatency = snappedCompositeToPresentLatency;
 }
 
+bool SurfaceFlinger::isHdrLayer(Layer* layer) const {
+    if (!isHdrDataspace(layer->getDataSpace())) {
+        return false;
+    }
+    if (mIgnoreHdrCameraLayers) {
+        auto buffer = layer->getBuffer();
+        if (buffer && (buffer->getUsage() & GRALLOC_USAGE_HW_CAMERA_WRITE) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void SurfaceFlinger::postComposition() {
     ATRACE_CALL();
     ALOGV("postComposition");
@@ -2461,7 +2479,7 @@ void SurfaceFlinger::postComposition() {
             mDrawingState.traverse([&, compositionDisplay = compositionDisplay](Layer* layer) {
                 const auto layerFe = layer->getCompositionEngineLayerFE();
                 if (layer->isVisible() && compositionDisplay->includesLayer(layerFe)) {
-                    if (isHdrDataspace(layer->getDataSpace())) {
+                    if (isHdrLayer(layer)) {
                         const auto* outputLayer =
                             compositionDisplay->getOutputLayerForLayer(layerFe);
                         if (outputLayer) {
@@ -2583,6 +2601,13 @@ FloatRect SurfaceFlinger::getMaxDisplayBounds() {
     // Find the largest width and height among all the displays.
     int32_t maxDisplayWidth = 0;
     int32_t maxDisplayHeight = 0;
+
+    // If there are no displays, set a valid display bounds so we can still compute a valid layer
+    // bounds.
+    if (ON_MAIN_THREAD(mDisplays.size()) == 0) {
+        maxDisplayWidth = maxDisplayHeight = 5000;
+    }
+
     for (const auto& pair : ON_MAIN_THREAD(mDisplays)) {
         const auto& displayDevice = pair.second;
         int32_t width = displayDevice->getWidth();
@@ -2800,14 +2825,15 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
         creationArgs.connectionType = physical->type;
         creationArgs.supportedModes = physical->supportedModes;
         creationArgs.activeModeId = physical->activeMode->getId();
-        const auto [idleTimerTimeoutMs, supportKernelIdleTimer] =
-                getIdleTimerConfiguration(compositionDisplay->getId());
+        const auto [kernelIdleTimerController, idleTimerTimeoutMs] =
+                getKernelIdleTimerProperties(compositionDisplay->getId());
+
         scheduler::RefreshRateConfigs::Config config =
                 {.enableFrameRateOverride = android::sysprop::enable_frame_rate_override(false),
                  .frameRateMultipleThreshold =
                          base::GetIntProperty("debug.sf.frame_rate_multiple_threshold", 0),
-                 .idleTimerTimeoutMs = idleTimerTimeoutMs,
-                 .supportKernelIdleTimer = supportKernelIdleTimer};
+                 .idleTimerTimeout = idleTimerTimeoutMs,
+                 .kernelIdleTimerController = kernelIdleTimerController};
         creationArgs.refreshRateConfigs =
                 std::make_shared<scheduler::RefreshRateConfigs>(creationArgs.supportedModes,
                                                                 creationArgs.activeModeId, config);
@@ -3381,7 +3407,7 @@ void SurfaceFlinger::initScheduler(const sp<DisplayDevice>& display) {
                                                         features);
     {
         auto configs = display->holdRefreshRateConfigs();
-        if (configs->supportsKernelIdleTimer()) {
+        if (configs->kernelIdleTimerController().has_value()) {
             features |= Feature::kKernelIdleTimer;
         }
 
@@ -3647,11 +3673,12 @@ bool SurfaceFlinger::stopTransactionProcessing(
     return false;
 }
 
-void SurfaceFlinger::flushPendingTransactionQueues(
+int SurfaceFlinger::flushPendingTransactionQueues(
         std::vector<TransactionState>& transactions,
-        std::unordered_set<sp<IBinder>, SpHash<IBinder>>& bufferLayersReadyToPresent,
+        std::unordered_map<sp<IBinder>, uint64_t, SpHash<IBinder>>& bufferLayersReadyToPresent,
         std::unordered_set<sp<IBinder>, SpHash<IBinder>>& applyTokensWithUnsignaledTransactions,
         bool tryApplyUnsignaled) {
+    int transactionsPendingBarrier = 0;
     auto it = mPendingTransactionQueues.begin();
     while (it != mPendingTransactionQueues.end()) {
         auto& [applyToken, transactionQueue] = *it;
@@ -3674,8 +3701,21 @@ void SurfaceFlinger::flushPendingTransactionQueues(
                 setTransactionFlags(eTransactionFlushNeeded);
                 break;
             }
+            if (ready == TransactionReadiness::NotReadyBarrier) {
+                transactionsPendingBarrier++;
+                setTransactionFlags(eTransactionFlushNeeded);
+                break;
+            }
             transaction.traverseStatesWithBuffers([&](const layer_state_t& state) {
-                bufferLayersReadyToPresent.insert(state.surface);
+                const bool frameNumberChanged = 
+                    state.bufferData->flags.test(BufferData::BufferDataChange::frameNumberChanged);
+                if (frameNumberChanged) {
+                    bufferLayersReadyToPresent[state.surface] = state.bufferData->frameNumber;
+                } else {
+                    // Barrier function only used for BBQ which always includes a frame number
+                    bufferLayersReadyToPresent[state.surface] =
+                        std::numeric_limits<uint64_t>::max();
+                }
             });
             const bool appliedUnsignaled = (ready == TransactionReadiness::ReadyUnsignaled);
             if (appliedUnsignaled) {
@@ -3693,6 +3733,7 @@ void SurfaceFlinger::flushPendingTransactionQueues(
             it = std::next(it, 1);
         }
     }
+    return transactionsPendingBarrier;
 }
 
 bool SurfaceFlinger::flushTransactionQueues(int64_t vsyncId) {
@@ -3701,19 +3742,21 @@ bool SurfaceFlinger::flushTransactionQueues(int64_t vsyncId) {
     // states) around outside the scope of the lock
     std::vector<TransactionState> transactions;
     // Layer handles that have transactions with buffers that are ready to be applied.
-    std::unordered_set<sp<IBinder>, SpHash<IBinder>> bufferLayersReadyToPresent;
+    std::unordered_map<sp<IBinder>, uint64_t, SpHash<IBinder>> bufferLayersReadyToPresent;
     std::unordered_set<sp<IBinder>, SpHash<IBinder>> applyTokensWithUnsignaledTransactions;
     {
         Mutex::Autolock _l(mStateLock);
         {
             Mutex::Autolock _l(mQueueLock);
 
+            int lastTransactionsPendingBarrier = 0;
+            int transactionsPendingBarrier = 0;
             // First collect transactions from the pending transaction queues.
             // We are not allowing unsignaled buffers here as we want to
             // collect all the transactions from applyTokens that are ready first.
-            flushPendingTransactionQueues(transactions, bufferLayersReadyToPresent,
-                                          applyTokensWithUnsignaledTransactions,
-                                          /*tryApplyUnsignaled*/ false);
+            transactionsPendingBarrier =
+                    flushPendingTransactionQueues(transactions, bufferLayersReadyToPresent,
+                            applyTokensWithUnsignaledTransactions, /*tryApplyUnsignaled*/ false);
 
             // Second, collect transactions from the transaction queue.
             // Here as well we are not allowing unsignaled buffers for the same
@@ -3738,16 +3781,46 @@ bool SurfaceFlinger::flushTransactionQueues(int64_t vsyncId) {
                                                          /*tryApplyUnsignaled*/ false);
                 }();
                 ATRACE_INT("TransactionReadiness", static_cast<int>(ready));
-                if (ready == TransactionReadiness::NotReady) {
+                if (ready != TransactionReadiness::Ready) {
+                    if (ready == TransactionReadiness::NotReadyBarrier) {
+                        transactionsPendingBarrier++;
+                    }
                     mPendingTransactionQueues[transaction.applyToken].push(std::move(transaction));
                 } else {
                     transaction.traverseStatesWithBuffers([&](const layer_state_t& state) {
-                        bufferLayersReadyToPresent.insert(state.surface);
-                    });
+                        const bool frameNumberChanged = 
+                            state.bufferData->flags.test(BufferData::BufferDataChange::frameNumberChanged);
+                        if (frameNumberChanged) {
+                            bufferLayersReadyToPresent[state.surface] = state.bufferData->frameNumber;
+                        } else {
+                            // Barrier function only used for BBQ which always includes a frame number.
+                            // This value only used for barrier logic.
+                            bufferLayersReadyToPresent[state.surface] =
+                                std::numeric_limits<uint64_t>::max();
+                        }
+                      });
                     transactions.emplace_back(std::move(transaction));
                 }
                 mTransactionQueue.pop_front();
                 ATRACE_INT("TransactionQueue", mTransactionQueue.size());
+            }
+
+            // Transactions with a buffer pending on a barrier may be on a different applyToken
+            // than the transaction which satisfies our barrier. In fact this is the exact use case
+            // that the primitive is designed for. This means we may first process
+            // the barrier dependent transaction, determine it ineligible to complete
+            // and then satisfy in a later inner iteration of flushPendingTransactionQueues.
+            // The barrier dependent transaction was eligible to be presented in this frame
+            // but we would have prevented it without case. To fix this we continually
+            // loop through flushPendingTransactionQueues until we perform an iteration
+            // where the number of transactionsPendingBarrier doesn't change. This way
+            // we can continue to resolve dependency chains of barriers as far as possible.
+            while (lastTransactionsPendingBarrier != transactionsPendingBarrier) {
+                lastTransactionsPendingBarrier = transactionsPendingBarrier;
+                transactionsPendingBarrier =
+                    flushPendingTransactionQueues(transactions, bufferLayersReadyToPresent,
+                        applyTokensWithUnsignaledTransactions,
+                        /*tryApplyUnsignaled*/ false);
             }
 
             // We collected all transactions that could apply without latching unsignaled buffers.
@@ -3865,7 +3938,8 @@ bool SurfaceFlinger::shouldLatchUnsignaled(const sp<Layer>& layer, const layer_s
 auto SurfaceFlinger::transactionIsReadyToBeApplied(
         const FrameTimelineInfo& info, bool isAutoTimestamp, int64_t desiredPresentTime,
         uid_t originUid, const Vector<ComposerState>& states,
-        const std::unordered_set<sp<IBinder>, SpHash<IBinder>>& bufferLayersReadyToPresent,
+        const std::unordered_map<
+            sp<IBinder>, uint64_t, SpHash<IBinder>>& bufferLayersReadyToPresent,
         size_t totalTXapplied, bool tryApplyUnsignaled) const -> TransactionReadiness {
     ATRACE_FORMAT("transactionIsReadyToBeApplied vsyncId: %" PRId64, info.vsyncId);
     const nsecs_t expectedPresentTime = mExpectedPresentTime.load();
@@ -3903,6 +3977,17 @@ auto SurfaceFlinger::transactionIsReadyToBeApplied(
             continue;
         }
 
+        if (s.hasBufferChanges() && s.bufferData->hasBarrier &&
+            ((layer->getDrawingState().frameNumber) < s.bufferData->barrierFrameNumber)) {
+            const bool willApplyBarrierFrame =
+                (bufferLayersReadyToPresent.find(s.surface) != bufferLayersReadyToPresent.end()) &&
+                (bufferLayersReadyToPresent.at(s.surface) >= s.bufferData->barrierFrameNumber);
+            if (!willApplyBarrierFrame) {
+                ATRACE_NAME("NotReadyBarrier");
+                return TransactionReadiness::NotReadyBarrier;
+            }
+        }
+
         const bool allowLatchUnsignaled = tryApplyUnsignaled &&
                 shouldLatchUnsignaled(layer, s, states.size(), totalTXapplied);
         ATRACE_FORMAT("%s allowLatchUnsignaled=%s", layer->getName().c_str(),
@@ -3923,8 +4008,8 @@ auto SurfaceFlinger::transactionIsReadyToBeApplied(
         if (s.hasBufferChanges()) {
             // If backpressure is enabled and we already have a buffer to commit, keep the
             // transaction in the queue.
-            const bool hasPendingBuffer =
-                    bufferLayersReadyToPresent.find(s.surface) != bufferLayersReadyToPresent.end();
+            const bool hasPendingBuffer = bufferLayersReadyToPresent.find(s.surface) !=
+                bufferLayersReadyToPresent.end();
             if (layer->backpressureEnabled() && hasPendingBuffer && isAutoTimestamp) {
                 ATRACE_NAME("hasPendingBuffer");
                 return TransactionReadiness::NotReady;
@@ -3936,24 +4021,6 @@ auto SurfaceFlinger::transactionIsReadyToBeApplied(
 
 void SurfaceFlinger::queueTransaction(TransactionState& state) {
     Mutex::Autolock _l(mQueueLock);
-
-    // If its TransactionQueue already has a pending TransactionState or if it is pending
-    auto itr = mPendingTransactionQueues.find(state.applyToken);
-    // if this is an animation frame, wait until prior animation frame has
-    // been applied by SF
-    if (state.flags & eAnimation) {
-        while (itr != mPendingTransactionQueues.end()) {
-            status_t err =
-                    mTransactionQueueCV.waitRelative(mQueueLock, mAnimationTransactionTimeout);
-            if (CC_UNLIKELY(err != NO_ERROR)) {
-                ALOGW_IF(err == TIMED_OUT,
-                         "setTransactionState timed out "
-                         "waiting for animation frame to apply");
-                break;
-            }
-            itr = mPendingTransactionQueues.find(state.applyToken);
-        }
-    }
 
     // Generate a CountDownLatch pending state if this is a synchronous transaction.
     if ((state.flags & eSynchronous) || state.inputWindowCommands.syncInputWindows) {
@@ -5489,9 +5556,6 @@ status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
         case SET_FRAME_RATE:
         case GET_DISPLAY_BRIGHTNESS_SUPPORT:
         case GET_DISPLAY_DECORATION_SUPPORT:
-        // captureLayers and captureDisplay will handle the permission check in the function
-        case CAPTURE_LAYERS:
-        case CAPTURE_DISPLAY:
         case SET_FRAME_TIMELINE_INFO:
         case GET_GPU_CONTEXT_PRIORITY:
         case GET_MAX_ACQUIRED_BUFFER_COUNT: {
@@ -5526,8 +5590,7 @@ status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
             }
             return OK;
         }
-        case ADD_TRANSACTION_TRACE_LISTENER:
-        case CAPTURE_DISPLAY_BY_ID: {
+        case ADD_TRANSACTION_TRACE_LISTENER: {
             IPCThreadState* ipc = IPCThreadState::self();
             const int uid = ipc->getCallingUid();
             if (uid == AID_ROOT || uid == AID_GRAPHICS || uid == AID_SYSTEM || uid == AID_SHELL) {
@@ -5557,6 +5620,11 @@ status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
             }
             return PERMISSION_DENIED;
         }
+        case CAPTURE_LAYERS:
+        case CAPTURE_DISPLAY:
+        case CAPTURE_DISPLAY_BY_ID:
+            LOG_FATAL("Deprecated opcode: %d", code);
+            return PERMISSION_DENIED;
     }
 
     // These codes are used for the IBinder protocol to either interrogate the recipient
@@ -6053,7 +6121,6 @@ void SurfaceFlinger::kernelTimerChanged(bool expired) {
     static bool updateOverlay =
             property_get_bool("debug.sf.kernel_idle_timer_update_overlay", true);
     if (!updateOverlay) return;
-    if (Mutex::Autolock lock(mStateLock); !isRefreshRateOverlayEnabled()) return;
 
     // Update the overlay on the main thread to avoid race conditions with
     // mRefreshRateConfigs->getCurrentRefreshRate()
@@ -6063,6 +6130,7 @@ void SurfaceFlinger::kernelTimerChanged(bool expired) {
             ALOGW("%s: default display is null", __func__);
             return;
         }
+        if (!display->isRefreshRateOverlayEnabled()) return;
 
         const auto desiredActiveMode = display->getDesiredActiveMode();
         const std::optional<DisplayModeId> desiredModeId = desiredActiveMode
@@ -6077,6 +6145,47 @@ void SurfaceFlinger::kernelTimerChanged(bool expired) {
     }));
 }
 
+std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds>
+SurfaceFlinger::getKernelIdleTimerProperties(DisplayId displayId) {
+    const bool isKernelIdleTimerHwcSupported = getHwComposer().getComposer()->isSupported(
+            android::Hwc2::Composer::OptionalFeature::KernelIdleTimer);
+    const auto timeout = getIdleTimerTimeout(displayId);
+    if (isKernelIdleTimerHwcSupported) {
+        if (const auto id = PhysicalDisplayId::tryCast(displayId);
+            getHwComposer().hasDisplayIdleTimerCapability(*id)) {
+            // In order to decide if we can use the HWC api for idle timer
+            // we query DisplayCapability::DISPLAY_IDLE_TIMER directly on the composer
+            // without relying on hasDisplayCapability.
+            // hasDisplayCapability relies on DisplayCapabilities
+            // which are updated after we set the PowerMode::ON.
+            // DISPLAY_IDLE_TIMER is a display driver property
+            // and is available before the PowerMode::ON
+            return {KernelIdleTimerController::HwcApi, timeout};
+        }
+        return {std::nullopt, timeout};
+    }
+    if (getKernelIdleTimerSyspropConfig(displayId)) {
+        return {KernelIdleTimerController::Sysprop, timeout};
+    }
+
+    return {std::nullopt, timeout};
+}
+
+void SurfaceFlinger::updateKernelIdleTimer(std::chrono::milliseconds timeout,
+                                           KernelIdleTimerController controller,
+                                           PhysicalDisplayId displayId) {
+    switch (controller) {
+        case KernelIdleTimerController::HwcApi: {
+            getHwComposer().setIdleTimerEnabled(displayId, timeout);
+            break;
+        }
+        case KernelIdleTimerController::Sysprop: {
+            base::SetProperty(KERNEL_IDLE_TIMER_PROP, timeout > 0ms ? "true" : "false");
+            break;
+        }
+    }
+}
+
 void SurfaceFlinger::toggleKernelIdleTimer() {
     using KernelIdleTimerAction = scheduler::RefreshRateConfigs::KernelIdleTimerAction;
 
@@ -6088,23 +6197,31 @@ void SurfaceFlinger::toggleKernelIdleTimer() {
 
     // If the support for kernel idle timer is disabled for the active display,
     // don't do anything.
-    if (!display->refreshRateConfigs().supportsKernelIdleTimer()) {
+    const std::optional<KernelIdleTimerController> kernelIdleTimerController =
+            display->refreshRateConfigs().kernelIdleTimerController();
+    if (!kernelIdleTimerController.has_value()) {
         return;
     }
 
     const KernelIdleTimerAction action = display->refreshRateConfigs().getIdleTimerAction();
+
     switch (action) {
         case KernelIdleTimerAction::TurnOff:
             if (mKernelIdleTimerEnabled) {
                 ATRACE_INT("KernelIdleTimer", 0);
-                base::SetProperty(KERNEL_IDLE_TIMER_PROP, "false");
+                std::chrono::milliseconds constexpr kTimerDisabledTimeout = 0ms;
+                updateKernelIdleTimer(kTimerDisabledTimeout, kernelIdleTimerController.value(),
+                                      display->getPhysicalId());
                 mKernelIdleTimerEnabled = false;
             }
             break;
         case KernelIdleTimerAction::TurnOn:
             if (!mKernelIdleTimerEnabled) {
                 ATRACE_INT("KernelIdleTimer", 1);
-                base::SetProperty(KERNEL_IDLE_TIMER_PROP, "true");
+                const std::chrono::milliseconds timeout =
+                        display->refreshRateConfigs().getIdleTimerTimeout();
+                updateKernelIdleTimer(timeout, kernelIdleTimerController.value(),
+                                      display->getPhysicalId());
                 mKernelIdleTimerEnabled = true;
             }
             break;
@@ -6382,19 +6499,6 @@ status_t SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
         // and failed if display is not in native mode. This provide a way to force using native
         // colors when capture.
         dataspace = args.dataspace;
-        if (dataspace == ui::Dataspace::UNKNOWN) {
-            auto display = findDisplay([layerStack = parent->getLayerStack()](const auto& display) {
-                return display.getLayerStack() == layerStack;
-            });
-            if (!display) {
-                // If the layer is not on a display, use the dataspace for the default display.
-                display = getDefaultDisplayDeviceLocked();
-            }
-
-            const ui::ColorMode colorMode = display->getCompositionDisplay()->getState().colorMode;
-            dataspace = pickDataspaceFromColorMode(colorMode);
-        }
-
     } // mStateLock
 
     // really small crop or frameScale
@@ -6523,7 +6627,7 @@ std::shared_future<renderengine::RenderEngineResult> SurfaceFlinger::captureScre
 
         renderArea->render([&] {
             renderEngineResultFuture =
-                    renderScreenImplLocked(*renderArea, traverseLayers, buffer,
+                    renderScreenImpl(*renderArea, traverseLayers, buffer,
                                            canCaptureBlackoutContent, regionSampling, grayscale,
                                            captureResults);
         });
@@ -6556,7 +6660,7 @@ std::shared_future<renderengine::RenderEngineResult> SurfaceFlinger::captureScre
     }
 }
 
-std::shared_future<renderengine::RenderEngineResult> SurfaceFlinger::renderScreenImplLocked(
+std::shared_future<renderengine::RenderEngineResult> SurfaceFlinger::renderScreenImpl(
         const RenderArea& renderArea, TraverseLayersFunction traverseLayers,
         const std::shared_ptr<renderengine::ExternalTexture>& buffer,
         bool canCaptureBlackoutContent, bool regionSampling, bool grayscale,
@@ -6580,7 +6684,22 @@ std::shared_future<renderengine::RenderEngineResult> SurfaceFlinger::renderScree
     }
 
     captureResults.buffer = buffer->getBuffer();
-    captureResults.capturedDataspace = renderArea.getReqDataSpace();
+    auto dataspace = renderArea.getReqDataSpace();
+    auto parent = renderArea.getParentLayer();
+    if ((dataspace == ui::Dataspace::UNKNOWN) && (parent != nullptr)) {
+        Mutex::Autolock lock(mStateLock);
+        auto display = findDisplay([layerStack = parent->getLayerStack()](const auto& display) {
+            return display.getLayerStack() == layerStack;
+        });
+        if (!display) {
+            // If the layer is not on a display, use the dataspace for the default display.
+            display = getDefaultDisplayDeviceLocked();
+        }
+
+        const ui::ColorMode colorMode = display->getCompositionDisplay()->getState().colorMode;
+        dataspace = pickDataspaceFromColorMode(colorMode);
+    }
+    captureResults.capturedDataspace = dataspace;
 
     const auto reqWidth = renderArea.getReqWidth();
     const auto reqHeight = renderArea.getReqHeight();
@@ -6598,7 +6717,7 @@ std::shared_future<renderengine::RenderEngineResult> SurfaceFlinger::renderScree
     clientCompositionDisplay.clip = sourceCrop;
     clientCompositionDisplay.orientation = rotation;
 
-    clientCompositionDisplay.outputDataspace = renderArea.getReqDataSpace();
+    clientCompositionDisplay.outputDataspace = dataspace;
     clientCompositionDisplay.maxLuminance = DisplayDevice::sDefaultMaxLumiance;
 
     const float colorSaturation = grayscale ? 0 : 1;
@@ -7205,6 +7324,34 @@ bool SurfaceFlinger::commitCreatedLayers() {
     mLayersAdded = true;
     return true;
 }
+
+// gui::ISurfaceComposer
+binder::Status SurfaceComposerAIDL::captureDisplay(
+        const DisplayCaptureArgs& args, const sp<IScreenCaptureListener>& captureListener) {
+    status_t status = mFlinger->captureDisplay(args, captureListener);
+    return binder::Status::fromStatusT(status);
+}
+
+binder::Status SurfaceComposerAIDL::captureDisplayById(
+        int64_t displayId, const sp<IScreenCaptureListener>& captureListener) {
+    status_t status;
+    IPCThreadState* ipc = IPCThreadState::self();
+    const int uid = ipc->getCallingUid();
+    if (uid == AID_ROOT || uid == AID_GRAPHICS || uid == AID_SYSTEM || uid == AID_SHELL) {
+        std::optional<DisplayId> id = DisplayId::fromValue(static_cast<uint64_t>(displayId));
+        status = mFlinger->captureDisplay(*id, captureListener);
+    } else {
+        status = PERMISSION_DENIED;
+    }
+    return binder::Status::fromStatusT(status);
+}
+
+binder::Status SurfaceComposerAIDL::captureLayers(
+        const LayerCaptureArgs& args, const sp<IScreenCaptureListener>& captureListener) {
+    status_t status = mFlinger->captureLayers(args, captureListener);
+    return binder::Status::fromStatusT(status);
+}
+
 } // namespace android
 
 #if defined(__gl_h_)

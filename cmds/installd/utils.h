@@ -32,6 +32,7 @@
 
 #define MEASURE_DEBUG 0
 #define FIXUP_DEBUG 0
+#define SDK_DEBUG 1
 
 #define BYPASS_QUOTA 0
 #define BYPASS_SDCARDFS 0
@@ -60,12 +61,13 @@ std::string create_data_user_de_package_path(const char* volume_uuid,
 std::string create_data_user_ce_package_path_as_user_link(
         const char* volume_uuid, userid_t userid, const char* package_name);
 
-std::string create_data_misc_supplemental_path(const char* volume_uuid, bool isCeData,
-                                               userid_t userid);
-std::string create_data_misc_supplemental_package_path(const char* volume_uuid, bool isCeData,
-                                                       userid_t userid, const char* package_name);
-std::string create_data_misc_supplemental_shared_path(const char* volume_uuid, bool isCeData,
+std::string create_data_misc_sdk_sandbox_path(const char* volume_uuid, bool isCeData,
+                                              userid_t userid);
+std::string create_data_misc_sdk_sandbox_package_path(const char* volume_uuid, bool isCeData,
                                                       userid_t userid, const char* package_name);
+std::string create_data_misc_sdk_sandbox_sdk_path(const char* volume_uuid, bool isCeData,
+                                                  userid_t userid, const char* package_name,
+                                                  const char* sub_dir_name);
 
 std::string create_data_misc_ce_rollback_base_path(const char* volume_uuid, userid_t user);
 std::string create_data_misc_de_rollback_base_path(const char* volume_uuid, userid_t user);
@@ -129,6 +131,8 @@ int delete_dir_contents_and_dir(const std::string& pathname, bool ignore_if_miss
 
 bool is_renamed_deleted_dir(const std::string& path);
 int rename_delete_dir_contents_and_dir(const std::string& pathname, bool ignore_if_missing = true);
+
+int foreach_subdir(const std::string& pathname, std::function<void(const std::string&)> fn);
 
 void cleanup_invalid_package_dirs_under_path(const std::string& pathname);
 

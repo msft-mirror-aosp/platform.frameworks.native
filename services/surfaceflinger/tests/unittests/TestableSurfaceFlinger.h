@@ -334,16 +334,14 @@ public:
     /* ------------------------------------------------------------------------
      * Forwarding for functions being tested
      */
-
     nsecs_t commit() {
-        constexpr int64_t kVsyncId = 123;
         const nsecs_t now = systemTime();
         const nsecs_t expectedVsyncTime = now + 10'000'000;
         mFlinger->commit(now, kVsyncId, expectedVsyncTime);
         return now;
     }
 
-    void commitAndComposite() { mFlinger->composite(commit()); }
+    void commitAndComposite() { mFlinger->composite(commit(), kVsyncId); }
 
     auto createDisplay(const String8& displayName, bool secure) {
         return mFlinger->createDisplay(displayName, secure);
@@ -402,12 +400,12 @@ public:
         return mFlinger->setPowerModeInternal(display, mode);
     }
 
-    auto renderScreenImplLocked(const RenderArea& renderArea,
+    auto renderScreenImpl(const RenderArea& renderArea,
                                 SurfaceFlinger::TraverseLayersFunction traverseLayers,
                                 const std::shared_ptr<renderengine::ExternalTexture>& buffer,
                                 bool forSystem, bool regionSampling) {
         ScreenCaptureResults captureResults;
-        return mFlinger->renderScreenImplLocked(renderArea, traverseLayers, buffer, forSystem,
+        return mFlinger->renderScreenImpl(renderArea, traverseLayers, buffer, forSystem,
                                                 regionSampling, false /* grayscale */,
                                                 captureResults);
     }
@@ -877,6 +875,8 @@ public:
     };
 
 private:
+    constexpr static int64_t kVsyncId = 123;
+
     surfaceflinger::test::Factory mFactory;
     sp<SurfaceFlinger> mFlinger;
     scheduler::mock::SchedulerCallback mSchedulerCallback;

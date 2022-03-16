@@ -23,6 +23,7 @@
  */
 
 #include <android-base/thread_annotations.h>
+#include <android/gui/BnSurfaceComposer.h>
 #include <cutils/atomic.h>
 #include <cutils/compiler.h>
 #include <gui/BufferQueue.h>
@@ -106,9 +107,13 @@ class RegionSamplingThread;
 class RenderArea;
 class TimeStats;
 class FrameTracer;
+class ScreenCapturer;
 class WindowInfosListenerInvoker;
 
+using gui::CaptureArgs;
+using gui::DisplayCaptureArgs;
 using gui::IRegionSamplingListener;
+using gui::LayerCaptureArgs;
 using gui::ScreenCaptureResults;
 
 namespace frametimeline {
@@ -370,6 +375,7 @@ private:
     friend class MonitoredProducer;
     friend class RefreshRateOverlay;
     friend class RegionSamplingThread;
+    friend class LayerRenderArea;
     friend class LayerTracing;
 
     // For unit tests
@@ -457,6 +463,8 @@ private:
     };
 
     using ActiveModeInfo = DisplayDevice::ActiveModeInfo;
+    using KernelIdleTimerController =
+            ::android::scheduler::RefreshRateConfigs::KernelIdleTimerController;
 
     enum class BootStage {
         BOOTLOADER,
@@ -540,9 +548,9 @@ private:
             ISurfaceComposer::VsyncSource vsyncSource = eVsyncSourceApp,
             ISurfaceComposer::EventRegistrationFlags eventRegistration = {}) override;
 
-    status_t captureDisplay(const DisplayCaptureArgs&, const sp<IScreenCaptureListener>&) override;
-    status_t captureDisplay(DisplayId, const sp<IScreenCaptureListener>&) override;
-    status_t captureLayers(const LayerCaptureArgs&, const sp<IScreenCaptureListener>&) override;
+    status_t captureDisplay(const DisplayCaptureArgs&, const sp<IScreenCaptureListener>&);
+    status_t captureDisplay(DisplayId, const sp<IScreenCaptureListener>&);
+    status_t captureLayers(const LayerCaptureArgs&, const sp<IScreenCaptureListener>&);
 
     status_t getDisplayStats(const sp<IBinder>& displayToken, DisplayStatInfo* stats) override;
     status_t getDisplayState(const sp<IBinder>& displayToken, ui::DisplayState*)
@@ -661,7 +669,7 @@ private:
 
     // Composites a frame for each display. CompositionEngine performs GPU and/or HAL composition
     // via RenderEngine and the Composer HAL, respectively.
-    void composite(nsecs_t frameTime) override;
+    void composite(nsecs_t frameTime, int64_t vsyncId) override;
 
     // Samples the composited frame via RegionSamplingThread.
     void sample() override;
@@ -680,6 +688,14 @@ private:
     void triggerOnFrameRateOverridesChanged() override;
     // Toggles the kernel idle timer on or off depending the policy decisions around refresh rates.
     void toggleKernelIdleTimer() REQUIRES(mStateLock);
+    // Get the controller and timeout that will help decide how the kernel idle timer will be
+    // configured and what value to use as the timeout.
+    std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds>
+            getKernelIdleTimerProperties(DisplayId) REQUIRES(mStateLock);
+    // Updates the kernel idle timer either through HWC or through sysprop
+    // depending on which controller is provided
+    void updateKernelIdleTimer(std::chrono::milliseconds timeoutMs, KernelIdleTimerController,
+                               PhysicalDisplayId) REQUIRES(mStateLock);
     // Keeps track of whether the kernel idle timer is currently enabled, so we don't have to
     // make calls to sys prop each time.
     bool mKernelIdleTimerEnabled = false;
@@ -750,9 +766,9 @@ private:
     // Returns true if there is at least one transaction that needs to be flushed
     bool transactionFlushNeeded();
 
-    void flushPendingTransactionQueues(
+    int flushPendingTransactionQueues(
             std::vector<TransactionState>& transactions,
-            std::unordered_set<sp<IBinder>, SpHash<IBinder>>& bufferLayersReadyToPresent,
+            std::unordered_map<sp<IBinder>, uint64_t, SpHash<IBinder>>& bufferLayersReadyToPresent,
             std::unordered_set<sp<IBinder>, SpHash<IBinder>>& applyTokensWithUnsignaledTransactions,
             bool tryApplyUnsignaled) REQUIRES(mStateLock, mQueueLock);
 
@@ -779,13 +795,15 @@ private:
     void commitOffscreenLayers();
     enum class TransactionReadiness {
         NotReady,
+        NotReadyBarrier,
         Ready,
         ReadyUnsignaled,
     };
     TransactionReadiness transactionIsReadyToBeApplied(
             const FrameTimelineInfo& info, bool isAutoTimestamp, int64_t desiredPresentTime,
             uid_t originUid, const Vector<ComposerState>& states,
-            const std::unordered_set<sp<IBinder>, SpHash<IBinder>>& bufferLayersReadyToPresent,
+            const std::unordered_map<
+                sp<IBinder>, uint64_t, SpHash<IBinder>>& bufferLayersReadyToPresent,
             size_t totalTXapplied, bool tryApplyUnsignaled) const REQUIRES(mStateLock);
     static LatchUnsignaledConfig getLatchUnsignaledConfig();
     bool shouldLatchUnsignaled(const sp<Layer>& layer, const layer_state_t&, size_t numStates,
@@ -846,10 +864,10 @@ private:
             RenderAreaFuture, TraverseLayersFunction,
             const std::shared_ptr<renderengine::ExternalTexture>&, bool regionSampling,
             bool grayscale, const sp<IScreenCaptureListener>&);
-    std::shared_future<renderengine::RenderEngineResult> renderScreenImplLocked(
+    std::shared_future<renderengine::RenderEngineResult> renderScreenImpl(
             const RenderArea&, TraverseLayersFunction,
             const std::shared_ptr<renderengine::ExternalTexture>&, bool canCaptureBlackoutContent,
-            bool regionSampling, bool grayscale, ScreenCaptureResults&);
+            bool regionSampling, bool grayscale, ScreenCaptureResults&) EXCLUDES(mStateLock);
 
     // If the uid provided is not UNSET_UID, the traverse will skip any layers that don't have a
     // matching ownerUid
@@ -1126,6 +1144,8 @@ private:
     void updateInternalDisplayVsyncLocked(const sp<DisplayDevice>& activeDisplay)
             REQUIRES(mStateLock);
 
+    bool isHdrLayer(Layer* layer) const;
+
     sp<StartPropertySetThread> mStartPropertySetThread;
     surfaceflinger::Factory& mFactory;
     pid_t mPid;
@@ -1174,6 +1194,7 @@ private:
     // Used to ensure we omit a callback when HDR layer info listener is newly added but the
     // scene hasn't changed
     bool mAddingHDRLayerInfoListener = false;
+    bool mIgnoreHdrCameraLayers = false;
 
     // Set during transaction application stage to track if the input info or children
     // for a layer has changed.
@@ -1407,6 +1428,22 @@ private:
     } mPowerHintSessionData GUARDED_BY(SF_MAIN_THREAD);
 
     nsecs_t mAnimationTransactionTimeout = s2ns(5);
+
+    friend class SurfaceComposerAIDL;
+};
+
+class SurfaceComposerAIDL : public gui::BnSurfaceComposer {
+public:
+    SurfaceComposerAIDL(sp<SurfaceFlinger> sf) { mFlinger = sf; }
+
+    binder::Status captureDisplay(const DisplayCaptureArgs&,
+                                  const sp<IScreenCaptureListener>&) override;
+    binder::Status captureDisplayById(int64_t, const sp<IScreenCaptureListener>&) override;
+    binder::Status captureLayers(const LayerCaptureArgs&,
+                                 const sp<IScreenCaptureListener>&) override;
+
+private:
+    sp<SurfaceFlinger> mFlinger;
 };
 
 } // namespace android

@@ -311,6 +311,7 @@ void BufferLayer::preparePerFrameCompositionState() {
             ? 0
             : mBufferInfo.mBufferSlot;
     compositionState->acquireFence = mBufferInfo.mFence;
+    compositionState->frameNumber = mBufferInfo.mFrameNumber;
     compositionState->sidebandStreamHasFrame = false;
 }
 
@@ -360,6 +361,8 @@ void BufferLayer::onPostComposition(const DisplayDevice* display,
     // mFrameLatencyNeeded is true when a new frame was latched for the
     // composition.
     if (!mBufferInfo.mFrameLatencyNeeded) return;
+
+    mAlreadyDisplayedThisCompose = false;
 
     // Update mFrameEventHistory.
     {

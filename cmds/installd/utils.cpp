@@ -198,40 +198,42 @@ std::string create_data_user_de_path(const char* volume_uuid, userid_t userid) {
 }
 
 /**
- * Create the path name where supplemental data for all apps will be stored.
- * E.g. /data/misc_ce/0/supplemental
+ * Create the path name where sdk_sandbox data for all apps will be stored.
+ * E.g. /data/misc_ce/0/sdksandbox
  */
-std::string create_data_misc_supplemental_path(const char* uuid, bool isCeData, userid_t user) {
+std::string create_data_misc_sdk_sandbox_path(const char* uuid, bool isCeData, userid_t user) {
     std::string data(create_data_path(uuid));
     if (isCeData) {
-        return StringPrintf("%s/misc_ce/%d/supplemental", data.c_str(), user);
+        return StringPrintf("%s/misc_ce/%d/sdksandbox", data.c_str(), user);
     } else {
-        return StringPrintf("%s/misc_de/%d/supplemental", data.c_str(), user);
+        return StringPrintf("%s/misc_de/%d/sdksandbox", data.c_str(), user);
     }
 }
 
 /**
  * Create the path name where code data for all codes in a particular app will be stored.
- * E.g. /data/misc_ce/0/supplemental/<app-name>
+ * E.g. /data/misc_ce/0/sdksandbox/<package-name>
  */
-std::string create_data_misc_supplemental_package_path(const char* volume_uuid, bool isCeData,
-                                                       userid_t user, const char* package_name) {
+std::string create_data_misc_sdk_sandbox_package_path(const char* volume_uuid, bool isCeData,
+                                                      userid_t user, const char* package_name) {
     check_package_name(package_name);
     return StringPrintf("%s/%s",
-                        create_data_misc_supplemental_path(volume_uuid, isCeData, user).c_str(),
+                        create_data_misc_sdk_sandbox_path(volume_uuid, isCeData, user).c_str(),
                         package_name);
 }
 
 /**
- * Create the path name where shared code data for a particular app will be stored.
- * E.g. /data/misc_ce/0/supplemental/<app-name>/shared
+ * Create the path name where sdk data for a particular sdk will be stored.
+ * E.g. /data/misc_ce/0/sdksandbox/<package-name>/com.foo@randomstrings
  */
-std::string create_data_misc_supplemental_shared_path(const char* volume_uuid, bool isCeData,
-                                                      userid_t user, const char* package_name) {
-    return StringPrintf("%s/shared",
-                        create_data_misc_supplemental_package_path(volume_uuid, isCeData, user,
-                                                                   package_name)
-                                .c_str());
+std::string create_data_misc_sdk_sandbox_sdk_path(const char* volume_uuid, bool isCeData,
+                                                  userid_t user, const char* package_name,
+                                                  const char* sub_dir_name) {
+    return StringPrintf("%s/%s",
+                        create_data_misc_sdk_sandbox_package_path(volume_uuid, isCeData, user,
+                                                                  package_name)
+                                .c_str(),
+                        sub_dir_name);
 }
 
 std::string create_data_misc_ce_rollback_base_path(const char* volume_uuid, userid_t user) {
@@ -694,6 +696,34 @@ static auto open_dir(const char* dir) {
         void operator()(DIR* d) const noexcept { ::closedir(d); }
     };
     return std::unique_ptr<DIR, DirCloser>(::opendir(dir));
+}
+
+// Collects filename of subdirectories of given directory and passes it to the function
+int foreach_subdir(const std::string& pathname, const std::function<void(const std::string&)> fn) {
+    auto dir = open_dir(pathname.c_str());
+    if (!dir) return -1;
+
+    int dfd = dirfd(dir.get());
+    if (dfd < 0) {
+        ALOGE("Couldn't dirfd %s: %s\n", pathname.c_str(), strerror(errno));
+        return -1;
+    }
+
+    struct dirent* de;
+    while ((de = readdir(dir.get()))) {
+        if (de->d_type != DT_DIR) {
+            continue;
+        }
+
+        std::string name{de->d_name};
+        // always skip "." and ".."
+        if (name == "." || name == "..") {
+            continue;
+        }
+        fn(name);
+    }
+
+    return 0;
 }
 
 void cleanup_invalid_package_dirs_under_path(const std::string& pathname) {
