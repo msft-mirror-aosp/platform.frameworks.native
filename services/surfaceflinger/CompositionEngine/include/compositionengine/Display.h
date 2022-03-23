@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <ui/DisplayIdentification.h>
+#include "DisplayHardware/DisplayIdentification.h"
 
 #include <compositionengine/Output.h>
 

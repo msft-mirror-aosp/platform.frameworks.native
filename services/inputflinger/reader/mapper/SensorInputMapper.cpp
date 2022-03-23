@@ -16,9 +16,8 @@
 
 #include <locale>
 
-#include <ftl/enum.h>
-
 #include "../Macros.h"
+
 #include "SensorInputMapper.h"
 
 // Log detailed debug messages about each sensor event notification to the dispatcher.
@@ -57,7 +56,7 @@ SensorInputMapper::SensorInputMapper(InputDeviceContext& deviceContext)
 
 SensorInputMapper::~SensorInputMapper() {}
 
-uint32_t SensorInputMapper::getSources() const {
+uint32_t SensorInputMapper::getSources() {
     return AINPUT_SOURCE_SENSOR;
 }
 
@@ -94,7 +93,7 @@ void SensorInputMapper::dump(std::string& dump) {
     dump += StringPrintf(INDENT3 " mHasHardwareTimestamp %d\n", mHasHardwareTimestamp);
     dump += INDENT3 "Sensors:\n";
     for (const auto& [sensorType, sensor] : mSensors) {
-        dump += StringPrintf(INDENT4 "%s\n", ftl::enum_string(sensorType).c_str());
+        dump += StringPrintf(INDENT4 "%s\n", NamedEnum::string(sensorType).c_str());
         dump += StringPrintf(INDENT5 "enabled: %d\n", sensor.enabled);
         dump += StringPrintf(INDENT5 "samplingPeriod: %lld\n", sensor.samplingPeriod.count());
         dump += StringPrintf(INDENT5 "maxBatchReportLatency: %lld\n",
@@ -209,10 +208,10 @@ SensorInputMapper::Sensor SensorInputMapper::createSensor(InputDeviceSensorType 
                                      axis.max /* maxRange */, axis.scale /* resolution */,
                                      0.0f /* power */, 0 /* minDelay */,
                                      0 /* fifoReservedEventCount */, 0 /* fifoMaxEventCount */,
-                                     ftl::enum_string(sensorType), 0 /* maxDelay */, 0 /* flags */,
+                                     NamedEnum::string(sensorType), 0 /* maxDelay */, 0 /* flags */,
                                      getDeviceId());
 
-    std::string prefix = "sensor." + ftl::enum_string(sensorType);
+    std::string prefix = "sensor." + NamedEnum::string(sensorType);
     transform(prefix.begin(), prefix.end(), prefix.begin(), ::tolower);
 
     int32_t reportingMode = 0;
@@ -304,7 +303,7 @@ bool SensorInputMapper::setSensorEnabled(InputDeviceSensorType sensorType, bool 
      * the device
      */
     mDeviceEnabled = false;
-    for (const auto& [_, sensor] : mSensors) {
+    for (const auto& [sensorType, sensor] : mSensors) {
         // If any sensor is on we will turn on the device.
         if (sensor.enabled) {
             mDeviceEnabled = true;
@@ -336,7 +335,7 @@ bool SensorInputMapper::enableSensor(InputDeviceSensorType sensorType,
                                      std::chrono::microseconds maxBatchReportLatency) {
     if (DEBUG_SENSOR_EVENT_DETAILS) {
         ALOGD("Enable Sensor %s samplingPeriod %lld maxBatchReportLatency %lld",
-              ftl::enum_string(sensorType).c_str(), samplingPeriod.count(),
+              NamedEnum::string(sensorType).c_str(), samplingPeriod.count(),
               maxBatchReportLatency.count());
     }
 
@@ -360,7 +359,7 @@ bool SensorInputMapper::enableSensor(InputDeviceSensorType sensorType,
 
 void SensorInputMapper::disableSensor(InputDeviceSensorType sensorType) {
     if (DEBUG_SENSOR_EVENT_DETAILS) {
-        ALOGD("Disable Sensor %s", ftl::enum_string(sensorType).c_str());
+        ALOGD("Disable Sensor %s", NamedEnum::string(sensorType).c_str());
     }
 
     if (!setSensorEnabled(sensorType, false /* enabled */)) {
@@ -394,12 +393,13 @@ void SensorInputMapper::sync(nsecs_t when, bool force) {
         nsecs_t timestamp = mHasHardwareTimestamp ? mHardwareTimestamp : when;
         if (DEBUG_SENSOR_EVENT_DETAILS) {
             ALOGD("Sensor %s timestamp %" PRIu64 " values [%f %f %f]",
-                  ftl::enum_string(sensorType).c_str(), timestamp, values[0], values[1], values[2]);
+                  NamedEnum::string(sensorType).c_str(), timestamp, values[0], values[1],
+                  values[2]);
         }
         if (sensor.lastSampleTimeNs.has_value() &&
             timestamp - sensor.lastSampleTimeNs.value() < sensor.samplingPeriod.count()) {
             if (DEBUG_SENSOR_EVENT_DETAILS) {
-                ALOGD("Sensor %s Skip a sample.", ftl::enum_string(sensorType).c_str());
+                ALOGD("Sensor %s Skip a sample.", NamedEnum::string(sensorType).c_str());
             }
         } else {
             // Convert to Android unit
@@ -411,7 +411,7 @@ void SensorInputMapper::sync(nsecs_t when, bool force) {
                                           sensor.sensorInfo.accuracy /* accuracyChanged */,
                                   timestamp /* hwTimestamp */, values);
 
-            getListener().notifySensor(&args);
+            getListener()->notifySensor(&args);
             sensor.lastSampleTimeNs = timestamp;
             sensor.accuracy = sensor.sensorInfo.accuracy;
         }

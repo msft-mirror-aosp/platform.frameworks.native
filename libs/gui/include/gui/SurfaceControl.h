@@ -19,7 +19,6 @@
 
 #include <stdint.h>
 #include <sys/types.h>
-#include <optional>
 
 #include <utils/RefBase.h>
 #include <utils/threads.h>
@@ -99,8 +98,6 @@ public:
 
     sp<SurfaceControl> getParentingLayer();
 
-    uint64_t resolveFrameNumber(const std::optional<uint64_t>& frameNumber);
-
 private:
     // can't be copied
     SurfaceControl& operator = (SurfaceControl& rhs);
@@ -127,7 +124,6 @@ private:
     uint32_t mHeight;
     PixelFormat mFormat;
     uint32_t mCreateFlags;
-    uint64_t mFallbackFrameNumber = 100;
 };
 
 }; // namespace android

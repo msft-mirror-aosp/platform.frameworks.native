@@ -49,16 +49,14 @@ cc_test {
         "LatencyTracker_test.cpp",
         "TestInputListener.cpp",
         "UinputDevice.cpp",
-        "UnwantedInteractionBlocker_test.cpp",
     ],
     aidl: {
         include_dirs: [
-            "frameworks/native/libs/gui",
             "frameworks/native/libs/input",
         ],
     },
     static_libs: [
-        "libc++fs",
+        "libc++fs"
     ],
     require_root: true,
     test_suites: ["device-tests"],

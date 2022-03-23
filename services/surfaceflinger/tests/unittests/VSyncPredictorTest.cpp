@@ -464,16 +464,16 @@ TEST_F(VSyncPredictorTest, isVSyncInPhase) {
     EXPECT_THAT(tracker.nextAnticipatedVSyncTimeFrom(mNow + 100), Eq(mNow + mPeriod - bias));
     EXPECT_THAT(tracker.nextAnticipatedVSyncTimeFrom(mNow + 990), Eq(mNow + 2 * mPeriod - bias));
 
-    const auto maxDivisor = 5;
+    const auto maxDivider = 5;
     const auto maxPeriods = 15;
-    for (int divisor = 1; divisor < maxDivisor; divisor++) {
+    for (int divider = 1; divider < maxDivider; divider++) {
         for (int i = 0; i < maxPeriods; i++) {
-            const bool expectedInPhase = (i % divisor) == 0;
+            const bool expectedInPhase = (i % divider) == 0;
             EXPECT_THAT(expectedInPhase,
                         tracker.isVSyncInPhase(mNow + i * mPeriod - bias,
-                                               Fps::fromPeriodNsecs(divisor * mPeriod)))
+                                               Fps::fromPeriodNsecs(divider * mPeriod)))
                     << "vsync at " << mNow + (i + 1) * mPeriod - bias << " is "
-                    << (expectedInPhase ? "not " : "") << "in phase for divisor " << divisor;
+                    << (expectedInPhase ? "not " : "") << "in phase for divider " << divider;
         }
     }
 }

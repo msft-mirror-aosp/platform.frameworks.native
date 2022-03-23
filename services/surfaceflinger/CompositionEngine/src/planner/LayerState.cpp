@@ -93,7 +93,11 @@ Flags<LayerStateField> LayerState::getDifferingFields(const LayerState& other) c
 
 void LayerState::dump(std::string& result) const {
     for (const StateInterface* field : getNonUniqueFields()) {
-        base::StringAppendF(&result, "  %16s: ", ftl::flag_string(field->getField()).c_str());
+        if (auto viewOpt = flag_name(field->getField()); viewOpt) {
+            base::StringAppendF(&result, "  %16s: ", std::string(*viewOpt).c_str());
+        } else {
+            result.append("<UNKNOWN FIELD>:\n");
+        }
 
         bool first = true;
         for (const std::string& line : field->toStrings()) {
@@ -122,7 +126,11 @@ std::optional<std::string> LayerState::compare(const LayerState& other) const {
             continue;
         }
 
-        base::StringAppendF(&result, "  %16s: ", ftl::flag_string(thisField->getField()).c_str());
+        if (auto viewOpt = flag_name(thisField->getField()); viewOpt) {
+            base::StringAppendF(&result, "  %16s: ", std::string(*viewOpt).c_str());
+        } else {
+            result.append("<UNKNOWN FIELD>:\n");
+        }
 
         const auto& thisStrings = thisField->toStrings();
         const auto& otherStrings = otherField->toStrings();
@@ -160,8 +168,7 @@ bool operator==(const LayerState& lhs, const LayerState& rhs) {
             lhs.mColorTransform == rhs.mColorTransform &&
             lhs.mCompositionType == rhs.mCompositionType &&
             lhs.mSidebandStream == rhs.mSidebandStream && lhs.mBuffer == rhs.mBuffer &&
-            (lhs.mCompositionType.get() !=
-                     aidl::android::hardware::graphics::composer3::Composition::SOLID_COLOR ||
+            (lhs.mCompositionType.get() != hal::Composition::SOLID_COLOR ||
              lhs.mSolidColor == rhs.mSolidColor);
 }
 

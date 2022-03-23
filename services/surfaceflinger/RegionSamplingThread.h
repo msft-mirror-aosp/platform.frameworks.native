@@ -17,7 +17,6 @@
 #pragma once
 
 #include <android-base/thread_annotations.h>
-#include <android/gui/IRegionSamplingListener.h>
 #include <binder/IBinder.h>
 #include <renderengine/ExternalTexture.h>
 #include <ui/GraphicBuffer.h>
@@ -31,16 +30,14 @@
 #include <unordered_map>
 
 #include "Scheduler/OneShotTimer.h"
-#include "WpHash.h"
 
 namespace android {
 
+class IRegionSamplingListener;
 class Layer;
 class Scheduler;
 class SurfaceFlinger;
 struct SamplingOffsetCallback;
-
-using gui::IRegionSamplingListener;
 
 float sampleArea(const uint32_t* data, int32_t width, int32_t height, int32_t stride,
                  uint32_t orientation, const Rect& area);
@@ -91,6 +88,11 @@ private:
         sp<IRegionSamplingListener> listener;
     };
 
+    struct WpHash {
+        size_t operator()(const wp<IBinder>& p) const {
+            return std::hash<IBinder*>()(p.unsafe_get());
+        }
+    };
     std::vector<float> sampleBuffer(
             const sp<GraphicBuffer>& buffer, const Point& leftTop,
             const std::vector<RegionSamplingThread::Descriptor>& descriptors, uint32_t orientation);
