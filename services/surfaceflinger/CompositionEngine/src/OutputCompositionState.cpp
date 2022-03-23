@@ -28,7 +28,9 @@ void OutputCompositionState::dump(std::string& out) const {
     dumpVal(out, "usesDeviceComposition", usesDeviceComposition);
     dumpVal(out, "flipClientTarget", flipClientTarget);
     dumpVal(out, "reusedClientComposition", reusedClientComposition);
-    dumpVal(out, "layerFilter", layerFilter);
+
+    dumpVal(out, "layerStack", layerStackId);
+    dumpVal(out, "layerStackInternal", layerStackInternal);
 
     out.append("\n   ");
 
@@ -52,10 +54,6 @@ void OutputCompositionState::dump(std::string& out) const {
     dumpVal(out, "dataspace", toString(dataspace), dataspace);
     dumpVal(out, "colorTransformMatrix", colorTransformMatrix);
     dumpVal(out, "target dataspace", toString(targetDataspace), targetDataspace);
-    dumpVal(out, "displayBrightnessNits", displayBrightnessNits);
-    dumpVal(out, "sdrWhitePointNits", sdrWhitePointNits);
-    dumpVal(out, "clientTargetBrightness", clientTargetBrightness);
-    dumpVal(out, "displayBrightness", displayBrightness);
 
     out.append("\n");
 }

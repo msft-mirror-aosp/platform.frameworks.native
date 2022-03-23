@@ -19,11 +19,11 @@
 #include <gtest/gtest.h>
 
 #include <SurfaceFlingerProperties.h>
-#include <android/gui/IDisplayEventConnection.h>
 #include <android/hardware/configstore/1.0/ISurfaceFlingerConfigs.h>
 #include <binder/ProcessState.h>
 #include <configstore/Utils.h>
 #include <gui/BufferItemConsumer.h>
+#include <gui/IDisplayEventConnection.h>
 #include <gui/IProducerListener.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/Surface.h>
@@ -31,12 +31,9 @@
 #include <gui/SyncScreenCaptureListener.h>
 #include <inttypes.h>
 #include <private/gui/ComposerService.h>
-#include <private/gui/ComposerServiceAIDL.h>
-#include <sys/types.h>
 #include <ui/BufferQueueDefs.h>
 #include <ui/DisplayMode.h>
 #include <ui/Rect.h>
-#include <utils/Errors.h>
 #include <utils/String8.h>
 
 #include <limits>
@@ -48,9 +45,6 @@ using namespace std::chrono_literals;
 // retrieve wide-color and hdr settings from configstore
 using namespace android::hardware::configstore;
 using namespace android::hardware::configstore::V1_0;
-using aidl::android::hardware::graphics::common::DisplayDecorationSupport;
-using gui::IDisplayEventConnection;
-using gui::IRegionSamplingListener;
 using ui::ColorMode;
 
 using Transaction = SurfaceComposerClient::Transaction;
@@ -206,13 +200,13 @@ protected:
 
     static status_t captureDisplay(DisplayCaptureArgs& captureArgs,
                                    ScreenCaptureResults& captureResults) {
-        const auto sf = ComposerServiceAIDL::getComposerService();
+        const auto sf = ComposerService::getComposerService();
         SurfaceComposerClient::Transaction().apply(true);
 
         const sp<SyncScreenCaptureListener> captureListener = new SyncScreenCaptureListener();
-        binder::Status status = sf->captureDisplay(captureArgs, captureListener);
-        if (status.transactionError() != NO_ERROR) {
-            return status.transactionError();
+        status_t status = sf->captureDisplay(captureArgs, captureListener);
+        if (status != NO_ERROR) {
+            return status;
         }
         captureResults = captureListener->waitForResults();
         return captureResults.result;
@@ -700,7 +694,6 @@ public:
             bool /*secure*/) override { return nullptr; }
     void destroyDisplay(const sp<IBinder>& /*display */) override {}
     std::vector<PhysicalDisplayId> getPhysicalDisplayIds() const override { return {}; }
-    status_t getPrimaryPhysicalDisplayId(PhysicalDisplayId*) const override { return NO_ERROR; }
     sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId) const override { return nullptr; }
     status_t setTransactionState(const FrameTimelineInfo& /*frameTimelineInfo*/,
                                  const Vector<ComposerState>& /*state*/,
@@ -759,14 +752,21 @@ public:
     }
     status_t setActiveColorMode(const sp<IBinder>& /*display*/,
         ColorMode /*colorMode*/) override { return NO_ERROR; }
-    status_t getBootDisplayModeSupport(bool* /*outSupport*/) const override { return NO_ERROR; }
-    status_t setBootDisplayMode(const sp<IBinder>& /*display*/, ui::DisplayModeId /*id*/) override {
+    status_t captureDisplay(const DisplayCaptureArgs& /* captureArgs */,
+                            const sp<IScreenCaptureListener>& /* captureListener */) override {
         return NO_ERROR;
     }
-    status_t clearBootDisplayMode(const sp<IBinder>& /*display*/) override { return NO_ERROR; }
     void setAutoLowLatencyMode(const sp<IBinder>& /*display*/, bool /*on*/) override {}
     void setGameContentType(const sp<IBinder>& /*display*/, bool /*on*/) override {}
-
+    status_t captureDisplay(uint64_t /*displayOrLayerStack*/,
+                            const sp<IScreenCaptureListener>& /* captureListener */) override {
+        return NO_ERROR;
+    }
+    virtual status_t captureLayers(
+            const LayerCaptureArgs& /* captureArgs */,
+            const sp<IScreenCaptureListener>& /* captureListener */) override {
+        return NO_ERROR;
+    }
     status_t clearAnimationFrameStats() override { return NO_ERROR; }
     status_t getAnimationFrameStats(FrameStats* /*outStats*/) const override {
         return NO_ERROR;
@@ -881,14 +881,12 @@ public:
         return NO_ERROR;
     }
 
-    status_t getDisplayDecorationSupport(
-            const sp<IBinder>& /*displayToken*/,
-            std::optional<DisplayDecorationSupport>* /*outSupport*/) const override {
+    status_t setFrameRate(const sp<IGraphicBufferProducer>& /*surface*/, float /*frameRate*/,
+                          int8_t /*compatibility*/, int8_t /*changeFrameRateStrategy*/) override {
         return NO_ERROR;
     }
 
-    status_t setFrameRate(const sp<IGraphicBufferProducer>& /*surface*/, float /*frameRate*/,
-                          int8_t /*compatibility*/, int8_t /*changeFrameRateStrategy*/) override {
+    status_t acquireFrameRateFlexibilityToken(sp<IBinder>* /*outToken*/) override {
         return NO_ERROR;
     }
 
@@ -905,18 +903,6 @@ public:
     int getGPUContextPriority() override { return 0; };
 
     status_t getMaxAcquiredBufferCount(int* /*buffers*/) const override { return NO_ERROR; }
-
-    status_t addWindowInfosListener(
-            const sp<gui::IWindowInfosListener>& /*windowInfosListener*/) const override {
-        return NO_ERROR;
-    }
-
-    status_t removeWindowInfosListener(
-            const sp<gui::IWindowInfosListener>& /*windowInfosListener*/) const override {
-        return NO_ERROR;
-    }
-
-    status_t setOverrideFrameRate(uid_t /*uid*/, float /*frameRate*/) override { return NO_ERROR; }
 
 protected:
     IBinder* onAsBinder() override { return nullptr; }
