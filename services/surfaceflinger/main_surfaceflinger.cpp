@@ -63,17 +63,18 @@ static status_t startGraphicsAllocatorService() {
     return OK;
 }
 
-static void startDisplayService() {
+static status_t startDisplayService() {
     using android::frameworks::displayservice::V1_0::implementation::DisplayService;
     using android::frameworks::displayservice::V1_0::IDisplayService;
 
     sp<IDisplayService> displayservice = new DisplayService();
     status_t err = displayservice->registerAsService();
 
-    // b/141930622
     if (err != OK) {
-        ALOGE("Did not register (deprecated) IDisplayService service.");
+        ALOGE("Could not register IDisplayService service.");
     }
+
+    return err;
 }
 
 int main(int, char**) {
@@ -150,11 +151,6 @@ int main(int, char**) {
     // publish surface flinger
     sp<IServiceManager> sm(defaultServiceManager());
     sm->addService(String16(SurfaceFlinger::getServiceName()), flinger, false,
-                   IServiceManager::DUMP_FLAG_PRIORITY_CRITICAL | IServiceManager::DUMP_FLAG_PROTO);
-
-    // publish gui::ISurfaceComposer, the new AIDL interface
-    sp<SurfaceComposerAIDL> composerAIDL = new SurfaceComposerAIDL(flinger);
-    sm->addService(String16("SurfaceFlingerAIDL"), composerAIDL, false,
                    IServiceManager::DUMP_FLAG_PRIORITY_CRITICAL | IServiceManager::DUMP_FLAG_PROTO);
 
     startDisplayService(); // dependency on SF getting registered above

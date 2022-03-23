@@ -28,13 +28,13 @@
 
 #include <cutils/compiler.h>
 #include <cutils/trace.h>
-#include <ftl/enum.h>
 
 #undef LOG_TAG
 #define LOG_TAG "LayerInfo"
 
 namespace android::scheduler {
 
+const RefreshRateConfigs* LayerInfo::sRefreshRateConfigs = nullptr;
 bool LayerInfo::sTraceEnabled = false;
 
 LayerInfo::LayerInfo(const std::string& name, uid_t ownerUid,
@@ -42,7 +42,7 @@ LayerInfo::LayerInfo(const std::string& name, uid_t ownerUid,
       : mName(name),
         mOwnerUid(ownerUid),
         mDefaultVote(defaultVote),
-        mLayerVote({defaultVote, Fps()}),
+        mLayerVote({defaultVote, Fps(0.0f)}),
         mRefreshRateHistory(name) {}
 
 void LayerInfo::setLastPresentTime(nsecs_t lastPresentTime, nsecs_t now, LayerUpdateType updateType,
@@ -75,16 +75,12 @@ bool LayerInfo::isFrameTimeValid(const FrameTimeData& frameTime) const {
 }
 
 bool LayerInfo::isFrequent(nsecs_t now) const {
-    using fps_approx_ops::operator>=;
     // If we know nothing about this layer we consider it as frequent as it might be the start
     // of an animation.
     if (mFrameTimes.size() < kFrequentLayerWindowSize) {
         return true;
     }
-    return getFps(now) >= kMinFpsForFrequentLayer;
-}
 
-Fps LayerInfo::getFps(nsecs_t now) const {
     // Find the first active frame
     auto it = mFrameTimes.begin();
     for (; it != mFrameTimes.end(); ++it) {
@@ -95,12 +91,13 @@ Fps LayerInfo::getFps(nsecs_t now) const {
 
     const auto numFrames = std::distance(it, mFrameTimes.end());
     if (numFrames < kFrequentLayerWindowSize) {
-        return Fps();
+        return false;
     }
 
     // Layer is considered frequent if the average frame rate is higher than the threshold
     const auto totalTime = mFrameTimes.back().queueTime - it->queueTime;
-    return Fps::fromPeriodNsecs(totalTime / (numFrames - 1));
+    return Fps::fromPeriodNsecs(totalTime / (numFrames - 1))
+            .greaterThanOrEqualWithMargin(kMinFpsForFrequentLayer);
 }
 
 bool LayerInfo::isAnimating(nsecs_t now) const {
@@ -187,25 +184,26 @@ std::optional<nsecs_t> LayerInfo::calculateAverageFrameTime() const {
     return static_cast<nsecs_t>(averageFrameTime);
 }
 
-std::optional<Fps> LayerInfo::calculateRefreshRateIfPossible(
-        const RefreshRateConfigs& refreshRateConfigs, nsecs_t now) {
+std::optional<Fps> LayerInfo::calculateRefreshRateIfPossible(nsecs_t now) {
     static constexpr float MARGIN = 1.0f; // 1Hz
     if (!hasEnoughDataForHeuristic()) {
         ALOGV("Not enough data");
         return std::nullopt;
     }
 
-    if (const auto averageFrameTime = calculateAverageFrameTime()) {
+    const auto averageFrameTime = calculateAverageFrameTime();
+    if (averageFrameTime.has_value()) {
         const auto refreshRate = Fps::fromPeriodNsecs(*averageFrameTime);
         const bool refreshRateConsistent = mRefreshRateHistory.add(refreshRate, now);
         if (refreshRateConsistent) {
-            const auto knownRefreshRate = refreshRateConfigs.findClosestKnownFrameRate(refreshRate);
-            using fps_approx_ops::operator!=;
+            const auto knownRefreshRate =
+                    sRefreshRateConfigs->findClosestKnownFrameRate(refreshRate);
 
-            // To avoid oscillation, use the last calculated refresh rate if it is close enough.
+            // To avoid oscillation, use the last calculated refresh rate if it is
+            // close enough
             if (std::abs(mLastRefreshRate.calculated.getValue() - refreshRate.getValue()) >
                         MARGIN &&
-                mLastRefreshRate.reported != knownRefreshRate) {
+                !mLastRefreshRate.reported.equalsWithMargin(knownRefreshRate)) {
                 mLastRefreshRate.calculated = refreshRate;
                 mLastRefreshRate.reported = knownRefreshRate;
             }
@@ -222,8 +220,7 @@ std::optional<Fps> LayerInfo::calculateRefreshRateIfPossible(
                                                : std::nullopt;
 }
 
-LayerInfo::LayerVote LayerInfo::getRefreshRateVote(const RefreshRateConfigs& refreshRateConfigs,
-                                                   nsecs_t now) {
+LayerInfo::LayerVote LayerInfo::getRefreshRateVote(nsecs_t now) {
     if (mLayerVote.type != LayerHistory::LayerVoteType::Heuristic) {
         ALOGV("%s voted %d ", mName.c_str(), static_cast<int>(mLayerVote.type));
         return mLayerVote;
@@ -232,7 +229,7 @@ LayerInfo::LayerVote LayerInfo::getRefreshRateVote(const RefreshRateConfigs& ref
     if (isAnimating(now)) {
         ALOGV("%s is animating", mName.c_str());
         mLastRefreshRate.animatingOrInfrequent = true;
-        return {LayerHistory::LayerVoteType::Max, Fps()};
+        return {LayerHistory::LayerVoteType::Max, Fps(0.0f)};
     }
 
     if (!isFrequent(now)) {
@@ -240,7 +237,7 @@ LayerInfo::LayerVote LayerInfo::getRefreshRateVote(const RefreshRateConfigs& ref
         mLastRefreshRate.animatingOrInfrequent = true;
         // Infrequent layers vote for mininal refresh rate for
         // battery saving purposes and also to prevent b/135718869.
-        return {LayerHistory::LayerVoteType::Min, Fps()};
+        return {LayerHistory::LayerVoteType::Min, Fps(0.0f)};
     }
 
     // If the layer was previously tagged as animating or infrequent, we clear
@@ -250,20 +247,20 @@ LayerInfo::LayerVote LayerInfo::getRefreshRateVote(const RefreshRateConfigs& ref
         clearHistory(now);
     }
 
-    auto refreshRate = calculateRefreshRateIfPossible(refreshRateConfigs, now);
+    auto refreshRate = calculateRefreshRateIfPossible(now);
     if (refreshRate.has_value()) {
         ALOGV("%s calculated refresh rate: %s", mName.c_str(), to_string(*refreshRate).c_str());
         return {LayerHistory::LayerVoteType::Heuristic, refreshRate.value()};
     }
 
     ALOGV("%s Max (can't resolve refresh rate)", mName.c_str());
-    return {LayerHistory::LayerVoteType::Max, Fps()};
+    return {LayerHistory::LayerVoteType::Max, Fps(0.0f)};
 }
 
-const char* LayerInfo::getTraceTag(LayerHistory::LayerVoteType type) const {
+const char* LayerInfo::getTraceTag(android::scheduler::LayerHistory::LayerVoteType type) const {
     if (mTraceTags.count(type) == 0) {
-        auto tag = "LFPS " + mName + " " + ftl::enum_string(type);
-        mTraceTags.emplace(type, std::move(tag));
+        const auto tag = "LFPS " + mName + " " + RefreshRateConfigs::layerVoteTypeString(type);
+        mTraceTags.emplace(type, tag);
     }
 
     return mTraceTags.at(type).c_str();
@@ -304,13 +301,9 @@ bool LayerInfo::RefreshRateHistory::add(Fps refreshRate, nsecs_t now) {
 bool LayerInfo::RefreshRateHistory::isConsistent() const {
     if (mRefreshRates.empty()) return true;
 
-    const auto [min, max] =
-            std::minmax_element(mRefreshRates.begin(), mRefreshRates.end(),
-                                [](const auto& lhs, const auto& rhs) {
-                                    return isStrictlyLess(lhs.refreshRate, rhs.refreshRate);
-                                });
-
-    const bool consistent =
+    const auto max = std::max_element(mRefreshRates.begin(), mRefreshRates.end());
+    const auto min = std::min_element(mRefreshRates.begin(), mRefreshRates.end());
+    const auto consistent =
             max->refreshRate.getValue() - min->refreshRate.getValue() < MARGIN_CONSISTENT_FPS;
 
     if (CC_UNLIKELY(sTraceEnabled)) {
