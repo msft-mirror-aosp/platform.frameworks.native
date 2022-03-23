@@ -26,8 +26,7 @@
 #include <ui/PixelFormat.h>
 #include <ui/Size.h>
 
-#include <ui/DisplayIdentification.h>
-
+#include "DisplayHardware/DisplayIdentification.h"
 #include "DisplayHardware/HWComposer.h"
 #include "DisplayHardware/PowerAdvisor.h"
 
@@ -77,15 +76,16 @@ public:
     virtual void applyChangedTypesToLayers(const ChangedTypes&);
     virtual void applyDisplayRequests(const DisplayRequests&);
     virtual void applyLayerRequestsToLayers(const LayerRequests&);
-    virtual void applyClientTargetRequests(const ClientTargetProperty&, float brightness);
+    virtual void applyClientTargetRequests(const ClientTargetProperty&);
 
     // Internal
     virtual void setConfiguration(const compositionengine::DisplayCreationArgs&);
     std::unique_ptr<compositionengine::OutputLayer> createOutputLayer(const sp<LayerFE>&) const;
 
 private:
-    DisplayId mId;
+    bool mIsVirtual = false;
     bool mIsDisconnected = false;
+    DisplayId mId;
     Hwc2::PowerAdvisor* mPowerAdvisor = nullptr;
 };
 

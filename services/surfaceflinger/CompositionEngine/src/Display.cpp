@@ -39,9 +39,6 @@
 
 #include "DisplayHardware/PowerAdvisor.h"
 
-using aidl::android::hardware::graphics::composer3::Capability;
-using aidl::android::hardware::graphics::composer3::DisplayCapability;
-
 namespace android::compositionengine::impl {
 
 std::shared_ptr<Display> createDisplay(
@@ -54,9 +51,12 @@ Display::~Display() = default;
 
 void Display::setConfiguration(const compositionengine::DisplayCreationArgs& args) {
     mId = args.id;
+    mIsVirtual = !args.connectionType;
     mPowerAdvisor = args.powerAdvisor;
     editState().isSecure = args.isSecure;
-    editState().displaySpace.setBounds(args.pixels);
+    editState().displaySpace.bounds = Rect(args.pixels);
+    setLayerStackFilter(args.layerStackId,
+                        args.connectionType == ui::DisplayConnectionType::Internal);
     setName(args.name);
 }
 
@@ -73,7 +73,7 @@ bool Display::isSecure() const {
 }
 
 bool Display::isVirtual() const {
-    return VirtualDisplayId::tryCast(mId).has_value();
+    return mIsVirtual;
 }
 
 std::optional<DisplayId> Display::getDisplayId() const {
@@ -117,8 +117,8 @@ void Display::setColorProfile(const ColorProfile& colorProfile) {
         return;
     }
 
-    if (isVirtual()) {
-        ALOGW("%s: Invalid operation on virtual display", __func__);
+    if (mIsVirtual) {
+        ALOGW("%s: Invalid operation on virtual display", __FUNCTION__);
         return;
     }
 
@@ -136,7 +136,7 @@ void Display::dump(std::string& out) const {
     StringAppendF(&out, "   Composition Display State: [\"%s\"]", getName().c_str());
 
     out.append("\n   ");
-    dumpVal(out, "isVirtual", isVirtual());
+    dumpVal(out, "isVirtual", mIsVirtual);
     dumpVal(out, "DisplayId", to_string(mId));
     out.append("\n");
 
@@ -227,22 +227,10 @@ void Display::chooseCompositionStrategy() {
     // Get any composition changes requested by the HWC device, and apply them.
     std::optional<android::HWComposer::DeviceRequestedChanges> changes;
     auto& hwc = getCompositionEngine().getHwComposer();
-    if (const auto physicalDisplayId = PhysicalDisplayId::tryCast(*halDisplayId);
-        physicalDisplayId && getState().displayBrightness) {
-        const status_t result =
-                hwc.setDisplayBrightness(*physicalDisplayId, *getState().displayBrightness,
-                                         Hwc2::Composer::DisplayBrightnessOptions{
-                                                 .applyImmediately = false})
-                        .get();
-        ALOGE_IF(result != NO_ERROR, "setDisplayBrightness failed for %s: %d, (%s)",
-                 getName().c_str(), result, strerror(-result));
-    }
-
     if (status_t result =
                 hwc.getDeviceCompositionChanges(*halDisplayId, anyLayersRequireClientComposition(),
                                                 getState().earliestPresentTime,
-                                                getState().previousPresentFence,
-                                                getState().expectedPresentTime, &changes);
+                                                getState().previousPresentFence, &changes);
         result != NO_ERROR) {
         ALOGE("chooseCompositionStrategy failed for %s: %d (%s)", getName().c_str(), result,
               strerror(-result));
@@ -252,25 +240,23 @@ void Display::chooseCompositionStrategy() {
         applyChangedTypesToLayers(changes->changedTypes);
         applyDisplayRequests(changes->displayRequests);
         applyLayerRequestsToLayers(changes->layerRequests);
-        applyClientTargetRequests(changes->clientTargetProperty, changes->clientTargetBrightness);
+        applyClientTargetRequests(changes->clientTargetProperty);
     }
 
     // Determine what type of composition we are doing from the final state
     auto& state = editState();
     state.usesClientComposition = anyLayersRequireClientComposition();
     state.usesDeviceComposition = !allLayersRequireClientComposition();
-    // Clear out the display brightness now that it's been communicated to composer.
-    state.displayBrightness.reset();
 }
 
 bool Display::getSkipColorTransform() const {
     const auto& hwc = getCompositionEngine().getHwComposer();
     if (const auto halDisplayId = HalDisplayId::tryCast(mId)) {
         return hwc.hasDisplayCapability(*halDisplayId,
-                                        DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
+                                        hal::DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
     }
 
-    return hwc.hasCapability(Capability::SKIP_CLIENT_COLOR_TRANSFORM);
+    return hwc.hasCapability(hal::Capability::SKIP_CLIENT_COLOR_TRANSFORM);
 }
 
 bool Display::anyLayersRequireClientComposition() const {
@@ -298,8 +284,7 @@ void Display::applyChangedTypesToLayers(const ChangedTypes& changedTypes) {
 
         if (auto it = changedTypes.find(hwcLayer); it != changedTypes.end()) {
             layer->applyDeviceCompositionTypeChange(
-                    static_cast<aidl::android::hardware::graphics::composer3::Composition>(
-                            it->second));
+                    static_cast<Hwc2::IComposerClient::Composition>(it->second));
         }
     }
 }
@@ -327,14 +312,12 @@ void Display::applyLayerRequestsToLayers(const LayerRequests& layerRequests) {
     }
 }
 
-void Display::applyClientTargetRequests(const ClientTargetProperty& clientTargetProperty,
-                                        float brightness) {
+void Display::applyClientTargetRequests(const ClientTargetProperty& clientTargetProperty) {
     if (clientTargetProperty.dataspace == ui::Dataspace::UNKNOWN) {
         return;
     }
 
     editState().dataspace = clientTargetProperty.dataspace;
-    editState().clientTargetBrightness = brightness;
     getRenderSurface()->setBufferDataspace(clientTargetProperty.dataspace);
     getRenderSurface()->setBufferPixelFormat(clientTargetProperty.pixelFormat);
 }
@@ -381,7 +364,8 @@ void Display::finishFrame(const compositionengine::CompositionRefreshArgs& refre
     // 1) It is being handled by hardware composer, which may need this to
     //    keep its virtual display state machine in sync, or
     // 2) There is work to be done (the dirty region isn't empty)
-    if (GpuVirtualDisplayId::tryCast(mId) && getDirtyRegion().isEmpty()) {
+    if (GpuVirtualDisplayId::tryCast(mId) &&
+        getDirtyRegion(refreshArgs.repaintEverything).isEmpty()) {
         ALOGV("Skipping display composition");
         return;
     }

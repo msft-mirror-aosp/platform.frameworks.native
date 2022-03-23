@@ -16,7 +16,6 @@
 #pragma once
 
 #include <gui/SyncScreenCaptureListener.h>
-#include <private/gui/ComposerServiceAIDL.h>
 #include <ui/Rect.h>
 #include <utils/String8.h>
 #include <functional>
@@ -32,15 +31,15 @@ class ScreenCapture : public RefBase {
 public:
     static status_t captureDisplay(DisplayCaptureArgs& captureArgs,
                                    ScreenCaptureResults& captureResults) {
-        const auto sf = ComposerServiceAIDL::getComposerService();
+        const auto sf = ComposerService::getComposerService();
         SurfaceComposerClient::Transaction().apply(true);
 
         captureArgs.dataspace = ui::Dataspace::V0_SRGB;
         const sp<SyncScreenCaptureListener> captureListener = new SyncScreenCaptureListener();
-        binder::Status status = sf->captureDisplay(captureArgs, captureListener);
+        status_t status = sf->captureDisplay(captureArgs, captureListener);
 
-        if (status.transactionError() != NO_ERROR) {
-            return status.transactionError();
+        if (status != NO_ERROR) {
+            return status;
         }
         captureResults = captureListener->waitForResults();
         return captureResults.result;
@@ -65,14 +64,14 @@ public:
 
     static status_t captureLayers(LayerCaptureArgs& captureArgs,
                                   ScreenCaptureResults& captureResults) {
-        const auto sf = ComposerServiceAIDL::getComposerService();
+        const auto sf = ComposerService::getComposerService();
         SurfaceComposerClient::Transaction().apply(true);
 
         captureArgs.dataspace = ui::Dataspace::V0_SRGB;
         const sp<SyncScreenCaptureListener> captureListener = new SyncScreenCaptureListener();
-        binder::Status status = sf->captureLayers(captureArgs, captureListener);
-        if (status.transactionError() != NO_ERROR) {
-            return status.transactionError();
+        status_t status = sf->captureLayers(captureArgs, captureListener);
+        if (status != NO_ERROR) {
+            return status;
         }
         captureResults = captureListener->waitForResults();
         return captureResults.result;
@@ -175,11 +174,6 @@ public:
     void expectBGColor(uint32_t x, uint32_t y) { checkPixel(x, y, 63, 63, 195); }
 
     void expectChildColor(uint32_t x, uint32_t y) { checkPixel(x, y, 200, 200, 200); }
-
-    void expectSize(uint32_t width, uint32_t height) {
-        EXPECT_EQ(width, mOutBuffer->getWidth());
-        EXPECT_EQ(height, mOutBuffer->getHeight());
-    }
 
     explicit ScreenCapture(const sp<GraphicBuffer>& outBuffer) : mOutBuffer(outBuffer) {
         if (mOutBuffer) {

@@ -26,7 +26,7 @@ namespace android {
 ExternalStylusInputMapper::ExternalStylusInputMapper(InputDeviceContext& deviceContext)
       : InputMapper(deviceContext) {}
 
-uint32_t ExternalStylusInputMapper::getSources() const {
+uint32_t ExternalStylusInputMapper::getSources() {
     return AINPUT_SOURCE_STYLUS;
 }
 
