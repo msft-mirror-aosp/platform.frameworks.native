@@ -22,13 +22,18 @@ cc_fuzz {
         "main.cpp",
         "random_fd.cpp",
         "random_parcel.cpp",
+        "util.cpp",
     ],
     static_libs: [
         "libbase",
         "libbinder_random_parcel",
+        "libcgrouprc",
+        "libcgrouprc_format",
         "libcutils",
         "libhidlbase",
         "liblog",
+        "libprocessgroup",
+        "libjsoncpp",
         "libutils",
     ],
 
@@ -66,13 +71,10 @@ cc_library_static {
     srcs: [
         "random_fd.cpp",
         "random_parcel.cpp",
-        "libbinder_driver.cpp",
-        "libbinder_ndk_driver.cpp",
     ],
     shared_libs: [
         "libbase",
         "libbinder",
-        "libbinder_ndk",
         "libcutils",
         "libutils",
     ],

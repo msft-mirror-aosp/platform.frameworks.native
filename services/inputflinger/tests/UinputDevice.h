@@ -142,7 +142,6 @@ public:
     void sendPointerUp();
     void sendUp();
     void sendToolType(int32_t toolType);
-    void sendSync();
 
     const Point getCenterPoint();
 
