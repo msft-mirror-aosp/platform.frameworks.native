@@ -20,7 +20,6 @@
 #include "InputState.h"
 
 #include <input/InputTransport.h>
-#include <utils/RefBase.h>
 #include <deque>
 
 namespace android::inputdispatcher {
@@ -33,16 +32,13 @@ protected:
     virtual ~Connection();
 
 public:
-    enum class Status {
+    enum Status {
         // Everything is peachy.
-        NORMAL,
+        STATUS_NORMAL,
         // An unrecoverable communication error has occurred.
-        BROKEN,
+        STATUS_BROKEN,
         // The input channel has been unregistered.
-        ZOMBIE,
-
-        ftl_first = NORMAL,
-        ftl_last = ZOMBIE,
+        STATUS_ZOMBIE
     };
 
     Status status;
@@ -69,6 +65,7 @@ public:
     inline const std::string getInputChannelName() const { return inputChannel->getName(); }
 
     const std::string getWindowName() const;
+    const char* getStatusLabel() const;
 
     std::deque<DispatchEntry*>::iterator findWaitQueueEntry(uint32_t seq);
 };

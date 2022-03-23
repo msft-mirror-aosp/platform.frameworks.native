@@ -17,10 +17,10 @@
 #ifndef _UI_INPUT_INPUTDISPATCHER_INPUTTARGET_H
 #define _UI_INPUT_INPUTDISPATCHER_INPUTTARGET_H
 
-#include <gui/constants.h>
 #include <input/InputTransport.h>
 #include <ui/Transform.h>
 #include <utils/BitSet.h>
+#include <utils/RefBase.h>
 
 namespace android::inputdispatcher {
 
@@ -100,8 +100,8 @@ struct InputTarget {
     // (ignored for KeyEvents)
     float globalScaleFactor = 1.0f;
 
-    // Current display transform. Used for compatibility for raw coordinates.
-    ui::Transform displayTransform;
+    // Display-size in its natural rotation. Used for compatibility transform of raw coordinates.
+    int2 displaySize = {AMOTION_EVENT_INVALID_DISPLAY_SIZE, AMOTION_EVENT_INVALID_DISPLAY_SIZE};
 
     // The subset of pointer ids to include in motion events dispatched to this input target
     // if FLAG_SPLIT is set.

@@ -17,15 +17,12 @@
 #pragma once
 
 #include <atomic>
-#include <chrono>
 #include <unordered_set>
 
 #include <utils/Mutex.h>
 
-#include <ui/DisplayIdentification.h>
 #include "../Scheduler/OneShotTimer.h"
-
-using namespace std::chrono_literals;
+#include "DisplayIdentification.h"
 
 namespace android {
 
@@ -43,13 +40,6 @@ public:
     virtual void setExpensiveRenderingExpected(DisplayId displayId, bool expected) = 0;
     virtual bool isUsingExpensiveRendering() = 0;
     virtual void notifyDisplayUpdateImminent() = 0;
-    virtual bool usePowerHintSession() = 0;
-    virtual bool supportsPowerHintSession() = 0;
-    virtual bool isPowerHintSessionRunning() = 0;
-    virtual void setTargetWorkDuration(int64_t targetDurationNanos) = 0;
-    virtual void sendActualWorkDuration(int64_t actualDurationNanos, nsecs_t timestamp) = 0;
-    virtual void enablePowerHint(bool enabled) = 0;
-    virtual bool startPowerHintSession(const std::vector<int32_t>& threadIds) = 0;
 };
 
 namespace impl {
@@ -64,17 +54,6 @@ public:
 
         virtual bool setExpensiveRendering(bool enabled) = 0;
         virtual bool notifyDisplayUpdateImminent() = 0;
-        virtual bool supportsPowerHintSession() = 0;
-        virtual bool isPowerHintSessionRunning() = 0;
-        virtual void restartPowerHintSession() = 0;
-        virtual void setPowerHintSessionThreadIds(const std::vector<int32_t>& threadIds) = 0;
-        virtual bool startPowerHintSession() = 0;
-        virtual void setTargetWorkDuration(int64_t targetDurationNanos) = 0;
-        virtual void sendActualWorkDuration(int64_t actualDurationNanos,
-                                            nsecs_t timeStampNanos) = 0;
-        virtual bool shouldReconnectHAL() = 0;
-        virtual std::vector<int32_t> getPowerHintSessionThreadIds() = 0;
-        virtual std::optional<int64_t> getTargetWorkDuration() = 0;
     };
 
     PowerAdvisor(SurfaceFlinger& flinger);
@@ -83,15 +62,8 @@ public:
     void init() override;
     void onBootFinished() override;
     void setExpensiveRenderingExpected(DisplayId displayId, bool expected) override;
-    bool isUsingExpensiveRendering() override { return mNotifiedExpensiveRendering; };
+    bool isUsingExpensiveRendering() override { return mNotifiedExpensiveRendering; }
     void notifyDisplayUpdateImminent() override;
-    bool usePowerHintSession() override;
-    bool supportsPowerHintSession() override;
-    bool isPowerHintSessionRunning() override;
-    void setTargetWorkDuration(int64_t targetDurationNanos) override;
-    void sendActualWorkDuration(int64_t actualDurationNanos, nsecs_t timestamp) override;
-    void enablePowerHint(bool enabled) override;
-    bool startPowerHintSession(const std::vector<int32_t>& threadIds) override;
 
 private:
     HalWrapper* getPowerHal() REQUIRES(mPowerHalMutex);
@@ -99,15 +71,6 @@ private:
     std::mutex mPowerHalMutex;
 
     std::atomic_bool mBootFinished = false;
-    std::optional<bool> mPowerHintEnabled;
-    std::optional<bool> mSupportsPowerHint;
-    bool mPowerHintSessionRunning = false;
-
-    // An adjustable safety margin which moves the "target" earlier to allow flinger to
-    // go a bit over without dropping a frame, especially since we can't measure
-    // the exact time HWC finishes composition so "actual" durations are measured
-    // from the end of present() instead, which is a bit later.
-    static constexpr const std::chrono::nanoseconds kTargetSafetyMargin = 2ms;
 
     std::unordered_set<DisplayId> mExpensiveDisplays;
     bool mNotifiedExpensiveRendering = false;

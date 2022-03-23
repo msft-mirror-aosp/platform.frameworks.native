@@ -93,7 +93,7 @@ protected:
         ASSERT_TRUE(mBGSurfaceControl->isValid());
 
         Transaction t;
-        t.setDisplayLayerStack(mDisplay, ui::DEFAULT_LAYER_STACK);
+        t.setDisplayLayerStack(mDisplay, 0);
         ASSERT_EQ(NO_ERROR,
                   t.setLayer(mBGSurfaceControl, INT_MAX - 3).show(mBGSurfaceControl).apply());
     }
