@@ -14,22 +14,11 @@
  * limitations under the License.
  */
 
-#pragma once
+#include "mock/DisplayHardware/MockIPower.h"
 
-#include <android-base/unique_fd.h>
-#include <ui/GraphicBuffer.h>
+namespace android::Hwc2::mock {
 
-namespace android::compositionengine::impl {
+// Explicit default instantiation is recommended.
+MockIPower::MockIPower() = default;
 
-struct GpuCompositionResult {
-    // Composition ready fence.
-    base::unique_fd fence{};
-
-    // Buffer to be used for gpu composition. If gpu composition was not successful,
-    // then we want to reuse the buffer instead of dequeuing another buffer.
-    std::shared_ptr<renderengine::ExternalTexture> buffer = nullptr;
-
-    bool bufferAvailable() const { return buffer != nullptr; };
-};
-
-} // namespace android::compositionengine::impl
+} // namespace android::Hwc2::mock

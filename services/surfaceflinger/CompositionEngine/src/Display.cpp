@@ -58,16 +58,6 @@ void Display::setConfiguration(const compositionengine::DisplayCreationArgs& arg
     editState().isSecure = args.isSecure;
     editState().displaySpace.setBounds(args.pixels);
     setName(args.name);
-    bool isBootModeSupported = getCompositionEngine().getHwComposer().getBootDisplayModeSupport();
-    const auto physicalId = PhysicalDisplayId::tryCast(mId);
-    if (!physicalId || !isBootModeSupported) {
-        return;
-    }
-    std::optional<hal::HWConfigId> preferredBootModeId =
-            getCompositionEngine().getHwComposer().getPreferredBootDisplayMode(*physicalId);
-    if (preferredBootModeId.has_value()) {
-        mPreferredBootHwcConfigId = static_cast<int32_t>(preferredBootModeId.value());
-    }
 }
 
 bool Display::isValid() const {
@@ -88,10 +78,6 @@ bool Display::isVirtual() const {
 
 std::optional<DisplayId> Display::getDisplayId() const {
     return mId;
-}
-
-int32_t Display::getPreferredBootHwcConfigId() const {
-    return mPreferredBootHwcConfigId;
 }
 
 void Display::disconnect() {
@@ -221,12 +207,12 @@ void Display::setReleasedLayers(const compositionengine::CompositionRefreshArgs&
     setReleasedLayers(std::move(releasedLayers));
 }
 
-std::optional<android::HWComposer::DeviceRequestedChanges> Display::chooseCompositionStrategy() {
+void Display::chooseCompositionStrategy() {
     ATRACE_CALL();
     ALOGV(__FUNCTION__);
 
     if (mIsDisconnected) {
-        return {};
+        return;
     }
 
     // Default to the base settings -- client composition only.
@@ -235,7 +221,7 @@ std::optional<android::HWComposer::DeviceRequestedChanges> Display::chooseCompos
     // If we don't have a HWC display, then we are done.
     const auto halDisplayId = HalDisplayId::tryCast(mId);
     if (!halDisplayId) {
-        return {};
+        return;
     }
 
     // Get any composition changes requested by the HWC device, and apply them.
@@ -260,13 +246,8 @@ std::optional<android::HWComposer::DeviceRequestedChanges> Display::chooseCompos
         result != NO_ERROR) {
         ALOGE("chooseCompositionStrategy failed for %s: %d (%s)", getName().c_str(), result,
               strerror(-result));
-        return {};
+        return;
     }
-
-    return changes;
-}
-
-void Display::applyCompositionStrategy(const std::optional<DeviceRequestedChanges>& changes) {
     if (changes) {
         applyChangedTypesToLayers(changes->changedTypes);
         applyDisplayRequests(changes->displayRequests);
@@ -290,6 +271,12 @@ bool Display::getSkipColorTransform() const {
     }
 
     return hwc.hasCapability(Capability::SKIP_CLIENT_COLOR_TRANSFORM);
+}
+
+bool Display::anyLayersRequireClientComposition() const {
+    const auto layers = getOutputLayersOrderedByZ();
+    return std::any_of(layers.begin(), layers.end(),
+                       [](const auto& layer) { return layer->requiresClientComposition(); });
 }
 
 bool Display::allLayersRequireClientComposition() const {
@@ -389,8 +376,7 @@ void Display::setExpensiveRenderingExpected(bool enabled) {
     }
 }
 
-void Display::finishFrame(const compositionengine::CompositionRefreshArgs& refreshArgs,
-                          GpuCompositionResult&& result) {
+void Display::finishFrame(const compositionengine::CompositionRefreshArgs& refreshArgs) {
     // We only need to actually compose the display if:
     // 1) It is being handled by hardware composer, which may need this to
     //    keep its virtual display state machine in sync, or
@@ -400,7 +386,7 @@ void Display::finishFrame(const compositionengine::CompositionRefreshArgs& refre
         return;
     }
 
-    impl::Output::finishFrame(refreshArgs, std::move(result));
+    impl::Output::finishFrame(refreshArgs);
 }
 
 } // namespace android::compositionengine::impl

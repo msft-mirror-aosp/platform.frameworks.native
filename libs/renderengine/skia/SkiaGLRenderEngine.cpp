@@ -39,6 +39,7 @@
 #include <gui/TraceUtils.h>
 #include <sync/sync.h>
 #include <ui/BlurRegion.h>
+#include <ui/DataspaceUtils.h>
 #include <ui/DebugUtils.h>
 #include <ui/GraphicBuffer.h>
 #include <utils/Trace.h>
@@ -654,10 +655,14 @@ sk_sp<SkShader> SkiaGLRenderEngine::createRuntimeEffectShader(
         colorTransform *=
                 mat4::scale(vec4(parameters.layerDimmingRatio, parameters.layerDimmingRatio,
                                  parameters.layerDimmingRatio, 1.f));
+        const auto targetBuffer = parameters.layer.source.buffer.buffer;
+        const auto graphicBuffer = targetBuffer ? targetBuffer->getBuffer() : nullptr;
+        const auto hardwareBuffer = graphicBuffer ? graphicBuffer->toAHardwareBuffer() : nullptr;
         return createLinearEffectShader(parameters.shader, effect, runtimeEffect, colorTransform,
                                         parameters.display.maxLuminance,
                                         parameters.display.currentLuminanceNits,
-                                        parameters.layer.source.buffer.maxLuminanceNits);
+                                        parameters.layer.source.buffer.maxLuminanceNits,
+                                        hardwareBuffer);
     }
     return parameters.shader;
 }
@@ -868,18 +873,21 @@ void SkiaGLRenderEngine::drawLayersInternal(
             // save a snapshot of the activeSurface to use as input to the blur shaders
             blurInput = activeSurface->makeImageSnapshot();
 
-            // TODO we could skip this step if we know the blur will cover the entire image
-            //  blit the offscreen framebuffer into the destination AHB
-            SkPaint paint;
-            paint.setBlendMode(SkBlendMode::kSrc);
-            if (CC_UNLIKELY(mCapture->isCaptureRunning())) {
-                uint64_t id = mCapture->endOffscreenCapture(&offscreenCaptureState);
-                dstCanvas->drawAnnotation(SkRect::Make(dstCanvas->imageInfo().dimensions()),
-                                          String8::format("SurfaceID|%" PRId64, id).c_str(),
-                                          nullptr);
-                dstCanvas->drawImage(blurInput, 0, 0, SkSamplingOptions(), &paint);
-            } else {
-                activeSurface->draw(dstCanvas, 0, 0, SkSamplingOptions(), &paint);
+            // blit the offscreen framebuffer into the destination AHB, but only
+            // if there are blur regions. backgroundBlurRadius blurs the entire
+            // image below, so it can skip this step.
+            if (layer.blurRegions.size()) {
+                SkPaint paint;
+                paint.setBlendMode(SkBlendMode::kSrc);
+                if (CC_UNLIKELY(mCapture->isCaptureRunning())) {
+                    uint64_t id = mCapture->endOffscreenCapture(&offscreenCaptureState);
+                    dstCanvas->drawAnnotation(SkRect::Make(dstCanvas->imageInfo().dimensions()),
+                                              String8::format("SurfaceID|%" PRId64, id).c_str(),
+                                              nullptr);
+                    dstCanvas->drawImage(blurInput, 0, 0, SkSamplingOptions(), &paint);
+                } else {
+                    activeSurface->draw(dstCanvas, 0, 0, SkSamplingOptions(), &paint);
+                }
             }
 
             // assign dstCanvas to canvas and ensure that the canvas state is up to date
@@ -1098,9 +1106,15 @@ void SkiaGLRenderEngine::drawLayersInternal(
                                                   .requiresLinearEffect = requiresLinearEffect,
                                                   .layerDimmingRatio = layerDimmingRatio}));
 
-            // Turn on dithering when dimming beyond this threshold.
+            // Turn on dithering when dimming beyond this (arbitrary) threshold...
             static constexpr float kDimmingThreshold = 0.2f;
-            if (layerDimmingRatio <= kDimmingThreshold) {
+            // ...or we're rendering an HDR layer down to an 8-bit target
+            // Most HDR standards require at least 10-bits of color depth for source content, so we
+            // can just extract the transfer function rather than dig into precise gralloc layout.
+            // Furthermore, we can assume that the only 8-bit target we support is RGBA8888.
+            const bool requiresDownsample = isHdrDataspace(layer.sourceDataspace) &&
+                    buffer->getPixelFormat() == PIXEL_FORMAT_RGBA_8888;
+            if (layerDimmingRatio <= kDimmingThreshold || requiresDownsample) {
                 paint.setDither(true);
             }
             paint.setAlphaf(layer.alpha);

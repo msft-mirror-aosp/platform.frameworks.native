@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 The Android Open Source Project
+ * Copyright (C) 2022 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,23 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <fuzzbinder/libbinder_ndk_driver.h>
 
-#pragma once
+#include <fuzzbinder/libbinder_driver.h>
+#include <fuzzbinder/random_parcel.h>
 
-#include <utils/Mutex.h>
+// libbinder_ndk doesn't export this header which breaks down its API for NDK
+// and APEX users, but we need access to it to fuzz.
+#include "../../ndk/ibinder_internal.h"
 
 namespace android {
-namespace {
 
-// Helps to ensure that some functions runs on SF's main thread by using the
-// clang thread safety annotations.
-class CAPABILITY("mutex") MainThreadGuard {
-} SF_MAIN_THREAD;
+void fuzzService(AIBinder* binder, FuzzedDataProvider&& provider) {
+    fuzzService(binder->getBinder(), std::move(provider));
+}
 
-struct SCOPED_CAPABILITY MainThreadScopedGuard {
-public:
-    explicit MainThreadScopedGuard(MainThreadGuard& mutex) ACQUIRE(mutex) {}
-    ~MainThreadScopedGuard() RELEASE() {}
-};
-} // namespace
 } // namespace android

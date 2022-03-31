@@ -56,6 +56,7 @@
 #include "DisplayHardware/PowerAdvisor.h"
 #include "DisplayIdGenerator.h"
 #include "Effects/Daltonizer.h"
+#include "FlagManager.h"
 #include "FrameTracker.h"
 #include "LayerVector.h"
 #include "Scheduler/RefreshRateConfigs.h"
@@ -63,6 +64,7 @@
 #include "Scheduler/Scheduler.h"
 #include "Scheduler/VsyncModulator.h"
 #include "SurfaceFlingerFactory.h"
+#include "ThreadContext.h"
 #include "TracedOrdinal.h"
 #include "Tracing/LayerTracing.h"
 #include "Tracing/TransactionTracing.h"
@@ -182,11 +184,6 @@ struct SurfaceFlingerBE {
     std::atomic<nsecs_t> mLastSwapTime = 0;
 };
 
-struct SCOPED_CAPABILITY UnnecessaryLock {
-    explicit UnnecessaryLock(Mutex& mutex) ACQUIRE(mutex) {}
-    ~UnnecessaryLock() RELEASE() {}
-};
-
 class SurfaceFlinger : public BnSurfaceComposer,
                        public PriorityDumper,
                        private IBinder::DeathRecipient,
@@ -256,8 +253,6 @@ public:
     // found on devices with wide color gamut (e.g. Display-P3) display.
     static bool hasWideColorDisplay;
 
-    static ui::Rotation internalDisplayOrientation;
-
     // Indicate if device wants color management on its display.
     static const constexpr bool useColorManagement = true;
 
@@ -288,10 +283,13 @@ public:
     SurfaceFlingerBE& getBE() { return mBE; }
     const SurfaceFlingerBE& getBE() const { return mBE; }
 
+    // Indicates frame activity, i.e. whether commit and/or composite is taking place.
+    enum class FrameHint { kNone, kActive };
+
     // Schedule commit of transactions on the main thread ahead of the next VSYNC.
     void scheduleCommit(FrameHint);
     // As above, but also force composite regardless if transactions were committed.
-    void scheduleComposite(FrameHint) override;
+    void scheduleComposite(FrameHint);
     // As above, but also force dirty geometry to repaint.
     void scheduleRepaint();
     // Schedule sampling independently from commit or composite.
@@ -344,11 +342,6 @@ public:
     void disableExpensiveRendering();
     FloatRect getMaxDisplayBounds();
 
-    // If set, composition engine tries to predict the composition strategy provided by HWC
-    // based on the previous frame. If the strategy can be predicted, gpu composition will
-    // run parallel to the hwc validateDisplay call and re-run if the predition is incorrect.
-    bool mPredictCompositionStrategy = false;
-
 protected:
     // We're reference counted, never destroy SurfaceFlinger directly
     virtual ~SurfaceFlinger();
@@ -380,6 +373,7 @@ private:
     friend class MonitoredProducer;
     friend class RefreshRateOverlay;
     friend class RegionSamplingThread;
+    friend class LayerRenderArea;
     friend class LayerTracing;
 
     // For unit tests
@@ -467,6 +461,8 @@ private:
     };
 
     using ActiveModeInfo = DisplayDevice::ActiveModeInfo;
+    using KernelIdleTimerController =
+            ::android::scheduler::RefreshRateConfigs::KernelIdleTimerController;
 
     enum class BootStage {
         BOOTLOADER,
@@ -671,7 +667,7 @@ private:
 
     // Composites a frame for each display. CompositionEngine performs GPU and/or HAL composition
     // via RenderEngine and the Composer HAL, respectively.
-    void composite(nsecs_t frameTime) override;
+    void composite(nsecs_t frameTime, int64_t vsyncId) override;
 
     // Samples the composited frame via RegionSamplingThread.
     void sample() override;
@@ -682,14 +678,22 @@ private:
 
     // Toggles hardware VSYNC by calling into HWC.
     void setVsyncEnabled(bool) override;
-    // Initiates a refresh rate change to be applied on commit.
-    void changeRefreshRate(const RefreshRate&, DisplayModeEvent) override;
+    // Sets the desired display mode if allowed by policy.
+    void requestDisplayMode(DisplayModePtr, DisplayModeEvent) override;
     // Called when kernel idle timer has expired. Used to update the refresh rate overlay.
     void kernelTimerChanged(bool expired) override;
     // Called when the frame rate override list changed to trigger an event.
     void triggerOnFrameRateOverridesChanged() override;
     // Toggles the kernel idle timer on or off depending the policy decisions around refresh rates.
     void toggleKernelIdleTimer() REQUIRES(mStateLock);
+    // Get the controller and timeout that will help decide how the kernel idle timer will be
+    // configured and what value to use as the timeout.
+    std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds>
+            getKernelIdleTimerProperties(DisplayId) REQUIRES(mStateLock);
+    // Updates the kernel idle timer either through HWC or through sysprop
+    // depending on which controller is provided
+    void updateKernelIdleTimer(std::chrono::milliseconds timeoutMs, KernelIdleTimerController,
+                               PhysicalDisplayId) REQUIRES(mStateLock);
     // Keeps track of whether the kernel idle timer is currently enabled, so we don't have to
     // make calls to sys prop each time.
     bool mKernelIdleTimerEnabled = false;
@@ -732,7 +736,7 @@ private:
     void updateLayerGeometry();
 
     void updateInputFlinger();
-    void persistDisplayBrightness(bool needsComposite) REQUIRES(SF_MAIN_THREAD);
+    void persistDisplayBrightness(bool needsComposite) REQUIRES(kMainThreadContext);
     void buildWindowInfos(std::vector<gui::WindowInfo>& outWindowInfos,
                           std::vector<gui::DisplayInfo>& outDisplayInfos);
     void commitInputWindowCommands() REQUIRES(mStateLock);
@@ -766,27 +770,27 @@ private:
             std::unordered_set<sp<IBinder>, SpHash<IBinder>>& applyTokensWithUnsignaledTransactions,
             bool tryApplyUnsignaled) REQUIRES(mStateLock, mQueueLock);
 
+    int flushUnsignaledPendingTransactionQueues(
+            std::vector<TransactionState>& transactions,
+            std::unordered_map<sp<IBinder>, uint64_t, SpHash<IBinder>>& bufferLayersReadyToPresent,
+            std::unordered_set<sp<IBinder>, SpHash<IBinder>>& applyTokensWithUnsignaledTransactions)
+            REQUIRES(mStateLock, mQueueLock);
+
     uint32_t setClientStateLocked(const FrameTimelineInfo&, ComposerState&,
                                   int64_t desiredPresentTime, bool isAutoTimestamp,
                                   int64_t postTime, uint32_t permissions) REQUIRES(mStateLock);
 
     uint32_t getTransactionFlags() const;
 
-    // Sets the masked bits, and returns the old flags.
-    uint32_t setTransactionFlags(uint32_t mask);
+    // Sets the masked bits, and schedules a commit if needed.
+    void setTransactionFlags(uint32_t mask, TransactionSchedule = TransactionSchedule::Late,
+                             const sp<IBinder>& applyToken = nullptr);
 
     // Clears and returns the masked bits.
     uint32_t clearTransactionFlags(uint32_t mask);
 
-    // Indicate SF should call doTraversal on layers, but don't trigger a wakeup! We use this cases
-    // where there are still pending transactions but we know they won't be ready until a frame
-    // arrives from a different layer. So we need to ensure we performTransaction from invalidate
-    // but there is no need to try and wake up immediately to do it. Rather we rely on
-    // onFrameAvailable or another layer update to wake us up.
-    void setTraversalNeeded();
-    uint32_t setTransactionFlags(uint32_t mask, TransactionSchedule,
-                                 const sp<IBinder>& applyToken = {});
     void commitOffscreenLayers();
+
     enum class TransactionReadiness {
         NotReady,
         NotReadyBarrier,
@@ -858,10 +862,10 @@ private:
             RenderAreaFuture, TraverseLayersFunction,
             const std::shared_ptr<renderengine::ExternalTexture>&, bool regionSampling,
             bool grayscale, const sp<IScreenCaptureListener>&);
-    std::shared_future<renderengine::RenderEngineResult> renderScreenImplLocked(
+    std::shared_future<renderengine::RenderEngineResult> renderScreenImpl(
             const RenderArea&, TraverseLayersFunction,
             const std::shared_ptr<renderengine::ExternalTexture>&, bool canCaptureBlackoutContent,
-            bool regionSampling, bool grayscale, ScreenCaptureResults&);
+            bool regionSampling, bool grayscale, ScreenCaptureResults&) EXCLUDES(mStateLock);
 
     // If the uid provided is not UNSET_UID, the traverse will skip any layers that don't have a
     // matching ownerUid
@@ -965,13 +969,14 @@ private:
     void setCompositorTimingSnapped(const DisplayStatInfo& stats,
                                     nsecs_t compositeToPresentLatency);
 
-    void postFrame();
+    void postFrame() REQUIRES(kMainThreadContext);
 
     /*
      * Display management
      */
-    void loadDisplayModes(PhysicalDisplayId displayId, DisplayModes& outModes,
-                          DisplayModePtr& outActiveMode) const REQUIRES(mStateLock);
+    std::pair<DisplayModes, DisplayModePtr> loadDisplayModes(PhysicalDisplayId) const
+            REQUIRES(mStateLock);
+
     sp<DisplayDevice> setupNewDisplayDeviceInternal(
             const wp<IBinder>& displayToken,
             std::shared_ptr<compositionengine::Display> compositionDisplay,
@@ -1079,7 +1084,7 @@ private:
     void clearStatsLocked(const DumpArgs& args, std::string& result);
     void dumpTimeStats(const DumpArgs& args, bool asProto, std::string& result) const;
     void dumpFrameTimeline(const DumpArgs& args, std::string& result) const;
-    void logFrameStats();
+    void logFrameStats() REQUIRES(kMainThreadContext);
 
     void dumpVSync(std::string& result) const REQUIRES(mStateLock);
     void dumpStaticScreenStats(std::string& result) const;
@@ -1139,6 +1144,9 @@ private:
             REQUIRES(mStateLock);
 
     bool isHdrLayer(Layer* layer) const;
+
+    ui::Rotation getPhysicalDisplayOrientation(DisplayId, bool isPrimary) const
+            REQUIRES(mStateLock);
 
     sp<StartPropertySetThread> mStartPropertySetThread;
     surfaceflinger::Factory& mFactory;
@@ -1407,7 +1415,7 @@ private:
 
     const sp<WindowInfosListenerInvoker> mWindowInfosListenerInvoker;
 
-    std::unique_ptr<FlagManager> mFlagManager;
+    FlagManager mFlagManager;
 
     // returns the framerate of the layer with the given sequence ID
     float getLayerFramerate(nsecs_t now, int32_t id) const {
@@ -1419,7 +1427,7 @@ private:
         nsecs_t commitStart;
         nsecs_t compositeStart;
         nsecs_t presentEnd;
-    } mPowerHintSessionData GUARDED_BY(SF_MAIN_THREAD);
+    } mPowerHintSessionData GUARDED_BY(kMainThreadContext);
 
     nsecs_t mAnimationTransactionTimeout = s2ns(5);
 

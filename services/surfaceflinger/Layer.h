@@ -1,4 +1,3 @@
-
 /*
  * Copyright (C) 2007 The Android Open Source Project
  *
@@ -1049,7 +1048,7 @@ protected:
     mutable bool mDrawingStateModified = false;
 
     sp<Fence> mLastClientCompositionFence;
-    bool mLastClientCompositionDisplayed = false;
+    bool mAlreadyDisplayedThisCompose = false;
 private:
     virtual void setTransformHint(ui::Transform::RotationFlags) {}
 
@@ -1139,6 +1138,7 @@ private:
     bool mIsAtRoot = false;
 
     uint32_t mLayerCreationFlags;
+    bool findInHierarchy(const sp<Layer>&);
 };
 
 std::ostream& operator<<(std::ostream& stream, const Layer::FrameRate& rate);
