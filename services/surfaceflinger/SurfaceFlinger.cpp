@@ -681,7 +681,9 @@ void SurfaceFlinger::bootFinished() {
             if (renderEngineTid.has_value()) {
                 tidList.emplace_back(*renderEngineTid);
             }
-            mPowerAdvisor.startPowerHintSession(tidList);
+            if (!mPowerAdvisor.startPowerHintSession(tidList)) {
+                ALOGW("Cannot start power hint session");
+            }
         }
 
         mBootStage = BootStage::FINISHED;
@@ -993,13 +995,8 @@ status_t SurfaceFlinger::getDynamicDisplayInfo(const sp<IBinder>& displayToken,
 
         outMode.resolution = ui::Size(width, height);
 
-        if (mEmulatedDisplayDensity) {
-            outMode.xDpi = mEmulatedDisplayDensity;
-            outMode.yDpi = mEmulatedDisplayDensity;
-        } else {
-            outMode.xDpi = xDpi;
-            outMode.yDpi = yDpi;
-        }
+        outMode.xDpi = xDpi;
+        outMode.yDpi = yDpi;
 
         const nsecs_t period = mode->getVsyncPeriod();
         outMode.refreshRate = Fps::fromPeriodNsecs(period).getValue();
