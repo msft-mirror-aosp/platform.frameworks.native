@@ -684,8 +684,10 @@ void Output::ensureOutputLayerIfVisible(sp<compositionengine::LayerFE>& layerFE,
             visibleNonShadowRegion.intersect(outputState.layerStackSpace.getContent()));
     outputLayerState.shadowRegion = shadowRegion;
     outputLayerState.outputSpaceBlockingRegionHint =
-            layerFEState->compositionType == Composition::DISPLAY_DECORATION ? transparentRegion
-                                                                             : Region();
+            layerFEState->compositionType == Composition::DISPLAY_DECORATION
+            ? outputState.transform.transform(
+                      transparentRegion.intersect(outputState.layerStackSpace.getContent()))
+            : Region();
 }
 
 void Output::setReleasedLayers(const compositionengine::CompositionRefreshArgs&) {
@@ -1078,6 +1080,7 @@ std::optional<base::unique_fd> Output::composeSurfaces(
             mDisplayColorProfile->getHdrCapabilities().getDesiredMaxLuminance();
     clientCompositionDisplay.targetLuminanceNits =
             outputState.clientTargetBrightness * outputState.displayBrightnessNits;
+    clientCompositionDisplay.dimmingStage = outputState.clientTargetDimmingStage;
 
     // Compute the global color transform matrix.
     clientCompositionDisplay.colorTransform = outputState.colorTransformMatrix;

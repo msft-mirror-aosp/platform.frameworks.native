@@ -154,6 +154,11 @@ bool Display::hasDisplayIdleTimerCapability() const {
             isCapabilitySupported;
 }
 
+Error Display::getPhysicalDisplayOrientation(Hwc2::AidlTransform* outTransform) const {
+    auto error = mComposer.getPhysicalDisplayOrientation(mId, outTransform);
+    return static_cast<Error>(error);
+}
+
 Error Display::getChangedCompositionTypes(std::unordered_map<HWC2::Layer*, Composition>* outTypes) {
     std::vector<Hwc2::Layer> layerIds;
     std::vector<Composition> types;
@@ -580,10 +585,10 @@ Error Display::setContentType(ContentType contentType) {
     return static_cast<Error>(intError);
 }
 
-Error Display::getClientTargetProperty(ClientTargetProperty* outClientTargetProperty,
-                                       float* outWhitePointNits) {
-    const auto error =
-            mComposer.getClientTargetProperty(mId, outClientTargetProperty, outWhitePointNits);
+Error Display::getClientTargetProperty(
+        aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness*
+                outClientTargetProperty) {
+    const auto error = mComposer.getClientTargetProperty(mId, outClientTargetProperty);
     return static_cast<Error>(error);
 }
 

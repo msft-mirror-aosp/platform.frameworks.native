@@ -140,6 +140,8 @@ public:
             bool* _aidl_return);
     binder::Status clearAppProfiles(const std::string& packageName, const std::string& profileName);
     binder::Status destroyAppProfiles(const std::string& packageName);
+    binder::Status deleteReferenceProfile(const std::string& packageName,
+                                          const std::string& profileName);
 
     binder::Status createProfileSnapshot(int32_t appId, const std::string& packageName,
             const std::string& profileName, const std::string& classpath, bool* _aidl_return);
@@ -168,6 +170,7 @@ public:
         int32_t storageFlag, std::vector<uint8_t>* _aidl_return);
 
     binder::Status invalidateMounts();
+    binder::Status setFirstBoot();
     binder::Status isQuotaSupported(const std::optional<std::string>& volumeUuid,
             bool* _aidl_return);
     binder::Status tryMountDataMirror(const std::optional<std::string>& volumeUuid);
@@ -182,6 +185,11 @@ public:
 
     binder::Status cleanupInvalidPackageDirs(const std::optional<std::string>& uuid, int32_t userId,
                                              int32_t flags);
+
+    binder::Status getOdexVisibility(const std::string& packageName, const std::string& apkPath,
+                                     const std::string& instructionSet,
+                                     const std::optional<std::string>& outputPath,
+                                     int32_t* _aidl_return);
 
 private:
     std::recursive_mutex mLock;
