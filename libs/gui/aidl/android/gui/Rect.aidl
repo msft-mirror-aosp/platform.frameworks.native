@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 The Android Open Source Project
+ * Copyright 2022 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,21 +14,22 @@
  * limitations under the License.
  */
 
-#pragma once
+package android.gui;
 
-#include <cstdint>
+// copied from libs/arect/include/android/rect.h
+// TODO(b/221473398):
+// use hardware/interfaces/graphics/common/aidl/android/hardware/graphics/common/Rect.aidl
+/** @hide */
+parcelable Rect {
+    /// Minimum X coordinate of the rectangle.
+    int left;
 
-#include <ftl/flags.h>
+    /// Minimum Y coordinate of the rectangle.
+    int top;
 
-namespace android::scheduler {
+    /// Maximum X coordinate of the rectangle.
+    int right;
 
-enum class Feature : std::uint8_t {
-    kPresentFences = 0b1,
-    kKernelIdleTimer = 0b10,
-    kContentDetection = 0b100,
-    kTracePredictedVsync = 0b1000,
-};
-
-using FeatureFlags = ftl::Flags<Feature>;
-
-} // namespace android::scheduler
+    /// Maximum Y coordinate of the rectangle.
+    int bottom;
+}
