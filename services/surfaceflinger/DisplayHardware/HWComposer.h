@@ -45,6 +45,7 @@
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
 #include <aidl/android/hardware/graphics/composer3/Capability.h>
+#include <aidl/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.h>
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
 
@@ -78,7 +79,8 @@ public:
         using ChangedTypes =
                 std::unordered_map<HWC2::Layer*,
                                    aidl::android::hardware::graphics::composer3::Composition>;
-        using ClientTargetProperty = hal::ClientTargetProperty;
+        using ClientTargetProperty =
+                aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness;
         using DisplayRequests = hal::DisplayRequest;
         using LayerRequests = std::unordered_map<HWC2::Layer*, hal::LayerRequest>;
 
@@ -86,7 +88,6 @@ public:
         DisplayRequests displayRequests;
         LayerRequests layerRequests;
         ClientTargetProperty clientTargetProperty;
-        float clientTargetBrightness;
     };
 
     struct HWCDisplayMode {
@@ -278,6 +279,13 @@ public:
     virtual bool hasDisplayIdleTimerCapability(PhysicalDisplayId) const = 0;
     virtual Hwc2::AidlTransform getPhysicalDisplayOrientation(PhysicalDisplayId) const = 0;
 };
+
+static inline bool operator==(const android::HWComposer::DeviceRequestedChanges& lhs,
+                              const android::HWComposer::DeviceRequestedChanges& rhs) {
+    return lhs.changedTypes == rhs.changedTypes && lhs.displayRequests == rhs.displayRequests &&
+            lhs.layerRequests == rhs.layerRequests &&
+            lhs.clientTargetProperty == rhs.clientTargetProperty;
+}
 
 namespace impl {
 
