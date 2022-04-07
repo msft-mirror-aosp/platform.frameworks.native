@@ -540,6 +540,8 @@ public:
         // Sets that this surface control and its children are trusted overlays for input
         Transaction& setTrustedOverlay(const sp<SurfaceControl>& sc, bool isTrustedOverlay);
 
+        Transaction& setDropInputMode(const sp<SurfaceControl>& sc, gui::DropInputMode mode);
+
         // Queues up transactions using this token in SurfaceFlinger.  By default, all transactions
         // from a client are placed on the same queue. This can be used to prevent multiple
         // transactions from blocking each other.
@@ -585,6 +587,14 @@ public:
         void setAnimationTransaction();
         void setEarlyWakeupStart();
         void setEarlyWakeupEnd();
+
+        /**
+         * Strip the transaction of all permissioned requests, required when
+         * accepting transactions across process boundaries.
+         *
+         * TODO (b/213644870): Remove all permissioned things from Transaction
+         */
+        void sanitize();
     };
 
     status_t clearLayerFrameStats(const sp<IBinder>& token) const;

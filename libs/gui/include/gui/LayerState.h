@@ -26,6 +26,7 @@
 #include <gui/ITransactionCompletedListener.h>
 #include <math/mat4.h>
 
+#include <android/gui/DropInputMode.h>
 #ifndef NO_INPUT
 #include <android/FocusRequest.h>
 #include <input/InputWindow.h>
@@ -62,6 +63,12 @@ struct client_cache_t {
  * Used to communicate layer information between SurfaceFlinger and its clients.
  */
 struct layer_state_t {
+    enum Permission {
+        ACCESS_SURFACE_FLINGER = 0x1,
+        ROTATE_SURFACE_FLINGER = 0x2,
+        INTERNAL_SYSTEM_WINDOW = 0x4,
+    };
+
     enum {
         eLayerHidden = 0x01,         // SURFACE_HIDDEN in SurfaceControl.java
         eLayerOpaque = 0x02,         // SURFACE_OPAQUE
@@ -116,6 +123,7 @@ struct layer_state_t {
         eFixedTransformHintChanged = 0x200'00000000,
         eFrameNumberChanged = 0x400'00000000,
         eBlurRegionsChanged = 0x800'00000000,
+        eDropInputModeChanged = 0x8000'00000000,
         eAutoRefreshChanged = 0x1000'00000000,
         eStretchChanged = 0x2000'00000000,
         eTrustedOverlayChanged = 0x4000'00000000,
@@ -128,6 +136,7 @@ struct layer_state_t {
     status_t read(const Parcel& input);
     bool hasBufferChanges() const;
     bool hasValidBuffer() const;
+    void sanitize(int32_t permissions);
 
     struct matrix22_t {
         float dsdx{0};
@@ -232,6 +241,9 @@ struct layer_state_t {
 
     // Stretch effect to be applied to this layer
     StretchEffect stretchEffect;
+
+    // Force inputflinger to drop all input events for the layer and its children.
+    gui::DropInputMode dropInputMode;
 
     Rect bufferCrop;
     Rect destinationFrame;
