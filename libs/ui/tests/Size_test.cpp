@@ -33,7 +33,8 @@
 
 #include <gtest/gtest.h>
 
-namespace android::ui {
+namespace android {
+namespace ui {
 
 TEST(SizeTest, BasicConstructionAndEqualityComparison) {
     Size s(123, 456);
@@ -214,4 +215,5 @@ TEST(SizeTest, Uint32RangeIsClamped) {
     ClampTest(uint32_t(0), int32_t(0));
 }
 
-} // namespace android::ui
+} // namespace ui
+} // namespace android

@@ -74,23 +74,10 @@ void LayerFECompositionState::dump(std::string& out) const {
     dumpVal(out, "blend", toString(blendMode), blendMode);
     dumpVal(out, "alpha", alpha);
     dumpVal(out, "backgroundBlurRadius", backgroundBlurRadius);
-    if (stretchEffect.hasEffect()) {
-        dumpVal(out, "stretchEffect", stretchEffect);
-    }
 
-    if (!blurRegions.empty()) {
-        out.append("\n      blurRegions {");
-        for (const auto& region : blurRegions) {
-            out.append("\n           ");
-            base::StringAppendF(&out,
-                                "{radius=%du, cornerRadii=[%f, %f, %f, %f], alpha=%f, rect=[%d, "
-                                "%d, %d, %d]",
-                                region.blurRadius, region.cornerRadiusTL, region.cornerRadiusTR,
-                                region.cornerRadiusBL, region.cornerRadiusBR, region.alpha,
-                                region.left, region.top, region.right, region.bottom);
-        }
-        out.append("\n      }\n      ");
-    }
+    out.append("\n      ");
+    dumpVal(out, "type", type);
+    dumpVal(out, "appId", appId);
 
     if (!metadata.empty()) {
         out.append("\n      metadata {");

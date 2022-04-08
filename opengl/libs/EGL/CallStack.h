@@ -16,9 +16,8 @@
 
 #pragma once
 
-#include <backtrace/Backtrace.h>
 #include <log/log.h>
-
+#include <backtrace/Backtrace.h>
 #include <memory>
 
 class CallStack {
@@ -31,8 +30,9 @@ public:
         if (backtrace->Unwind(2)) {
             for (size_t i = 0, c = backtrace->NumFrames(); i < c; i++) {
                 __android_log_print(ANDROID_LOG_DEBUG, logtag, "%s",
-                                    backtrace->FormatFrameData(i).c_str());
+                        backtrace->FormatFrameData(i).c_str());
             }
         }
     }
 };
+

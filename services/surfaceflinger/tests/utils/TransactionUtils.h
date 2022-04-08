@@ -16,10 +16,6 @@
 
 #pragma once
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wconversion"
-#pragma clang diagnostic ignored "-Wextra"
-
 #include <chrono>
 
 #include <android/native_window.h>
@@ -126,7 +122,7 @@ public:
             const uint8_t* src = pixels + (outBuffer->getStride() * (y + j) + x) * 4;
             for (int32_t i = 0; i < width; i++) {
                 const uint8_t expected[4] = {color.r, color.g, color.b, color.a};
-                ASSERT_TRUE(std::equal(src, src + 4, expected, colorCompare))
+                EXPECT_TRUE(std::equal(src, src + 4, expected, colorCompare))
                         << "pixel @ (" << x + i << ", " << y + j << "): "
                         << "expected (" << color << "), "
                         << "got (" << Color{src[0], src[1], src[2], src[3]} << ")";
@@ -161,22 +157,6 @@ public:
             ASSERT_EQ(NO_ERROR, s->unlockAndPost());
         }
     }
-
-    static void setFrame(Transaction& t, const sp<SurfaceControl>& sc, Rect source, Rect dest,
-                         int32_t transform = 0) {
-        uint32_t sourceWidth = source.getWidth();
-        uint32_t sourceHeight = source.getHeight();
-
-        if (transform & ui::Transform::ROT_90) {
-            std::swap(sourceWidth, sourceHeight);
-        }
-
-        float dsdx = dest.getWidth() / static_cast<float>(sourceWidth);
-        float dsdy = dest.getHeight() / static_cast<float>(sourceHeight);
-
-        t.setMatrix(sc, dsdx, 0, 0, dsdy);
-        t.setPosition(sc, dest.left, dest.top);
-    }
 };
 
 enum class RenderPath { SCREENSHOT, VIRTUAL_DISPLAY };
@@ -201,6 +181,3 @@ public:
 };
 } // namespace
 } // namespace android
-
-// TODO(b/129481165): remove the #pragma below and fix conversion issues
-#pragma clang diagnostic pop // ignored "-Wconversion -Wextra"

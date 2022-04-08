@@ -74,14 +74,6 @@ enum {
     GET_CONSUMER_USAGE,
     SET_LEGACY_BUFFER_DROP,
     SET_AUTO_PREROTATION,
-    REQUEST_BUFFERS,
-    DEQUEUE_BUFFERS,
-    DETACH_BUFFERS,
-    ATTACH_BUFFERS,
-    QUEUE_BUFFERS,
-    CANCEL_BUFFERS,
-    QUERY_MULTIPLE,
-    GET_LAST_QUEUED_BUFFER2,
 };
 
 class BpGraphicBufferProducer : public BpInterface<IGraphicBufferProducer>
@@ -98,7 +90,7 @@ public:
         Parcel data, reply;
         data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
         data.writeInt32(bufferIdx);
-        status_t result = remote()->transact(REQUEST_BUFFER, data, &reply);
+        status_t result =remote()->transact(REQUEST_BUFFER, data, &reply);
         if (result != NO_ERROR) {
             return result;
         }
@@ -112,27 +104,6 @@ public:
             }
         }
         result = reply.readInt32();
-        return result;
-    }
-
-    virtual status_t requestBuffers(
-            const std::vector<int32_t>& slots,
-            std::vector<RequestBufferOutput>* outputs) override {
-        Parcel data, reply;
-        data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
-        data.writeInt32Vector(slots);
-        status_t result = remote()->transact(REQUEST_BUFFERS, data, &reply);
-        if (result != NO_ERROR) {
-            return result;
-        }
-        result = reply.resizeOutVector(outputs);
-        for (RequestBufferOutput& output : *outputs) {
-            if (result != NO_ERROR) {
-                return result;
-            }
-            result = reply.read(output);
-        }
-
         return result;
     }
 
@@ -212,29 +183,6 @@ public:
         return result;
     }
 
-    virtual status_t dequeueBuffers(
-            const std::vector<DequeueBufferInput>& inputs,
-            std::vector<DequeueBufferOutput>* outputs) {
-        Parcel data, reply;
-        data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
-        data.writeVectorSize(inputs);
-        for (const auto& input : inputs) {
-            data.write(input);
-        }
-        status_t result = remote()->transact(DEQUEUE_BUFFERS, data, &reply);
-        if (result != NO_ERROR) {
-            return result;
-        }
-        result = reply.resizeOutVector(outputs);
-        for (auto& output : *outputs) {
-            if (result != NO_ERROR) {
-                return result;
-            }
-            result = reply.read(output);
-        }
-        return result;
-    }
-
     virtual status_t detachBuffer(int slot) {
         Parcel data, reply;
         data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
@@ -244,19 +192,6 @@ public:
             return result;
         }
         result = reply.readInt32();
-        return result;
-    }
-
-    virtual status_t detachBuffers(const std::vector<int32_t>& slots,
-                                   std::vector<status_t>* results) {
-        Parcel data, reply;
-        data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
-        data.writeInt32Vector(slots);
-        status_t result = remote()->transact(DETACH_BUFFERS, data, &reply);
-        if (result != NO_ERROR) {
-            return result;
-        }
-        result = reply.readInt32Vector(results);
         return result;
     }
 
@@ -321,39 +256,6 @@ public:
         return result;
     }
 
-    virtual status_t attachBuffers(
-            const std::vector<sp<GraphicBuffer>>& buffers,
-            std::vector<AttachBufferOutput>* outputs) {
-        Parcel data, reply;
-        data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
-        data.writeVectorSize(buffers);
-        for (const sp<GraphicBuffer>& buffer : buffers) {
-            data.write(*buffer.get());
-        }
-        status_t result = remote()->transact(ATTACH_BUFFERS, data, &reply);
-        if (result != NO_ERROR) {
-            return result;
-        }
-        result = reply.resizeOutVector(outputs);
-        for (AttachBufferOutput& output : *outputs) {
-            if (result != NO_ERROR) {
-                return result;
-            }
-            result = reply.read(output);
-        }
-        if (result == NO_ERROR) {
-            for (AttachBufferOutput& output : *outputs) {
-                if (output.result == NO_ERROR && output.slot < 0) {
-                    ALOGE("attachBuffers returned invalid slot %d",
-                          output.slot);
-                    android_errorWriteLog(0x534e4554, "37478824");
-                    output.result = UNKNOWN_ERROR;
-                }
-            }
-        }
-        return result;
-    }
-
     virtual status_t queueBuffer(int buf,
             const QueueBufferInput& input, QueueBufferOutput* output) {
         Parcel data, reply;
@@ -376,28 +278,6 @@ public:
         return result;
     }
 
-    virtual status_t queueBuffers(const std::vector<QueueBufferInput>& inputs,
-                                  std::vector<QueueBufferOutput>* outputs) {
-        Parcel data, reply;
-        data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
-        data.writeVectorSize(inputs);
-        for (const QueueBufferInput& input : inputs) {
-            data.write(input);
-        }
-        status_t result = remote()->transact(QUEUE_BUFFERS, data, &reply);
-        if (result != NO_ERROR) {
-            return result;
-        }
-        result = reply.resizeOutVector(outputs);
-        for (QueueBufferOutput& output : *outputs) {
-            if (result != NO_ERROR) {
-                return result;
-            }
-            result = reply.read(output);
-        }
-        return result;
-    }
-
     virtual status_t cancelBuffer(int buf, const sp<Fence>& fence) {
         Parcel data, reply;
         data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
@@ -411,23 +291,6 @@ public:
         return result;
     }
 
-    virtual status_t cancelBuffers(
-            const std::vector<CancelBufferInput>& inputs,
-            std::vector<status_t>* results) {
-        Parcel data, reply;
-        data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
-        data.writeVectorSize(inputs);
-        for (const CancelBufferInput& input : inputs) {
-            data.write(input);
-        }
-        status_t result = remote()->transact(CANCEL_BUFFERS, data, &reply);
-        if (result != NO_ERROR) {
-            return result;
-        }
-        result = reply.readInt32Vector(results);
-        return result;
-    }
-
     virtual int query(int what, int* value) {
         Parcel data, reply;
         data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
@@ -438,25 +301,6 @@ public:
         }
         value[0] = reply.readInt32();
         result = reply.readInt32();
-        return result;
-    }
-
-    virtual status_t query(const std::vector<int32_t> inputs,
-                           std::vector<QueryOutput>* outputs) {
-        Parcel data, reply;
-        data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
-        data.writeInt32Vector(inputs);
-        status_t result = remote()->transact(QUERY_MULTIPLE, data, &reply);
-        if (result != NO_ERROR) {
-            return result;
-        }
-        result = reply.resizeOutVector(outputs);
-        for (QueryOutput& output : *outputs) {
-            if (result != NO_ERROR) {
-                return result;
-            }
-            result = reply.read(output);
-        }
         return result;
     }
 
@@ -647,56 +491,6 @@ public:
         return result;
     }
 
-    virtual status_t getLastQueuedBuffer(sp<GraphicBuffer>* outBuffer, sp<Fence>* outFence,
-                                         Rect* outRect, uint32_t* outTransform) override {
-        Parcel data, reply;
-        data.writeInterfaceToken(IGraphicBufferProducer::getInterfaceDescriptor());
-        status_t result = remote()->transact(GET_LAST_QUEUED_BUFFER2, data, &reply);
-        if (result != NO_ERROR) {
-            ALOGE("getLastQueuedBuffer failed to transact: %d", result);
-            return result;
-        }
-        status_t remoteError = NO_ERROR;
-        result = reply.readInt32(&remoteError);
-        if (result != NO_ERROR) {
-            ALOGE("getLastQueuedBuffer failed to read status: %d", result);
-            return result;
-        }
-        if (remoteError != NO_ERROR) {
-            return remoteError;
-        }
-        bool hasBuffer = false;
-        result = reply.readBool(&hasBuffer);
-        if (result != NO_ERROR) {
-            ALOGE("getLastQueuedBuffer failed to read buffer: %d", result);
-            return result;
-        }
-        sp<GraphicBuffer> buffer;
-        if (hasBuffer) {
-            buffer = new GraphicBuffer();
-            result = reply.read(*buffer);
-            if (result == NO_ERROR) {
-                result = reply.read(*outRect);
-            }
-            if (result == NO_ERROR) {
-                result = reply.readUint32(outTransform);
-            }
-        }
-        if (result != NO_ERROR) {
-            ALOGE("getLastQueuedBuffer failed to read buffer: %d", result);
-            return result;
-        }
-        sp<Fence> fence(new Fence);
-        result = reply.read(*fence);
-        if (result != NO_ERROR) {
-            ALOGE("getLastQueuedBuffer failed to read fence: %d", result);
-            return result;
-        }
-        *outBuffer = buffer;
-        *outFence = fence;
-        return result;
-    }
-
     virtual void getFrameTimestamps(FrameEventHistoryDelta* outDelta) {
         Parcel data, reply;
         status_t result = data.writeInterfaceToken(
@@ -782,12 +576,6 @@ public:
         return mBase->requestBuffer(slot, buf);
     }
 
-    status_t requestBuffers(
-            const std::vector<int32_t>& slots,
-            std::vector<RequestBufferOutput>* outputs) override {
-        return mBase->requestBuffers(slots, outputs);
-    }
-
     status_t setMaxDequeuedBufferCount(int maxDequeuedBuffers) override {
         return mBase->setMaxDequeuedBufferCount(maxDequeuedBuffers);
     }
@@ -802,19 +590,8 @@ public:
         return mBase->dequeueBuffer(slot, fence, w, h, format, usage, outBufferAge, outTimestamps);
     }
 
-    status_t dequeueBuffers(
-            const std::vector<DequeueBufferInput>& inputs,
-            std::vector<DequeueBufferOutput>* outputs) override {
-        return mBase->dequeueBuffers(inputs, outputs);
-    }
-
     status_t detachBuffer(int slot) override {
         return mBase->detachBuffer(slot);
-    }
-
-    status_t detachBuffers(const std::vector<int32_t>& slots,
-                           std::vector<status_t>* results) override {
-        return mBase->detachBuffers(slots, results);
     }
 
     status_t detachNextBuffer(
@@ -827,12 +604,6 @@ public:
         return mBase->attachBuffer(outSlot, buffer);
     }
 
-    status_t attachBuffers(
-            const std::vector<sp<GraphicBuffer>>& buffers,
-            std::vector<AttachBufferOutput>* outputs) override {
-        return mBase->attachBuffers(buffers, outputs);
-    }
-
     status_t queueBuffer(
             int slot,
             const QueueBufferInput& input,
@@ -840,28 +611,12 @@ public:
         return mBase->queueBuffer(slot, input, output);
     }
 
-    status_t queueBuffers(const std::vector<QueueBufferInput>& inputs,
-                          std::vector<QueueBufferOutput>* outputs) override {
-        return mBase->queueBuffers(inputs, outputs);
-    }
-
     status_t cancelBuffer(int slot, const sp<Fence>& fence) override {
         return mBase->cancelBuffer(slot, fence);
     }
 
-    status_t cancelBuffers(
-            const std::vector<CancelBufferInput>& inputs,
-            std::vector<status_t>* results) override {
-        return mBase->cancelBuffers(inputs, results);
-    }
-
     int query(int what, int* value) override {
         return mBase->query(what, value);
-    }
-
-    status_t query(const std::vector<int32_t> inputs,
-                   std::vector<QueryOutput>* outputs) override {
-        return mBase->query(inputs, outputs);
     }
 
     status_t connect(
@@ -919,11 +674,6 @@ public:
             float outTransformMatrix[16]) override {
         return mBase->getLastQueuedBuffer(
                 outBuffer, outFence, outTransformMatrix);
-    }
-
-    status_t getLastQueuedBuffer(sp<GraphicBuffer>* outBuffer, sp<Fence>* outFence, Rect* outRect,
-                                 uint32_t* outTransform) override {
-        return mBase->getLastQueuedBuffer(outBuffer, outFence, outRect, outTransform);
     }
 
     void getFrameTimestamps(FrameEventHistoryDelta* outDelta) override {
@@ -1039,7 +789,7 @@ status_t BnGraphicBufferProducer::onTransact(
     switch(code) {
         case REQUEST_BUFFER: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            int bufferIdx = data.readInt32();
+            int bufferIdx   = data.readInt32();
             sp<GraphicBuffer> buffer;
             int result = requestBuffer(bufferIdx, &buffer);
             reply->writeInt32(buffer != nullptr);
@@ -1048,24 +798,6 @@ status_t BnGraphicBufferProducer::onTransact(
             }
             reply->writeInt32(result);
             return NO_ERROR;
-        }
-        case REQUEST_BUFFERS: {
-            CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            std::vector<int32_t> slots;
-            std::vector<RequestBufferOutput> outputs;
-            status_t result = data.readInt32Vector(&slots);
-            if (result != NO_ERROR) {
-                return result;
-            }
-            (void)requestBuffers(slots, &outputs);
-            result = reply->writeVectorSize(outputs);
-            for (const RequestBufferOutput& output : outputs) {
-                if (result != NO_ERROR) {
-                    return result;
-                }
-                result = reply->write(output);
-            }
-            return result;
         }
         case SET_MAX_DEQUEUED_BUFFER_COUNT: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
@@ -1109,47 +841,12 @@ status_t BnGraphicBufferProducer::onTransact(
             reply->writeInt32(result);
             return NO_ERROR;
         }
-        case DEQUEUE_BUFFERS: {
-            CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            std::vector<DequeueBufferInput> inputs;
-            std::vector<DequeueBufferOutput> outputs;
-            status_t result = data.resizeOutVector(&inputs);
-            if (result != NO_ERROR) {
-                return result;
-            }
-            for (DequeueBufferInput& input : inputs) {
-                result = data.read(input);
-                if (result != NO_ERROR) {
-                    return result;
-                }
-            }
-            (void)dequeueBuffers(inputs, &outputs);
-            result = reply->writeVectorSize(outputs);
-            for (const DequeueBufferOutput& output : outputs) {
-                if (result != NO_ERROR) {
-                    return result;
-                }
-                result = reply->write(output);
-            }
-            return result;
-        }
         case DETACH_BUFFER: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
             int slot = data.readInt32();
             int result = detachBuffer(slot);
             reply->writeInt32(result);
             return NO_ERROR;
-        }
-        case DETACH_BUFFERS: {
-            CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            std::vector<int32_t> slots;
-            std::vector<status_t> results;
-            status_t result = data.readInt32Vector(&slots);
-            if (result != NO_ERROR) {
-                return result;
-            }
-            (void)detachBuffers(slots, &results);
-            return reply->writeInt32Vector(results);
         }
         case DETACH_NEXT_BUFFER: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
@@ -1181,31 +878,6 @@ status_t BnGraphicBufferProducer::onTransact(
             reply->writeInt32(result);
             return NO_ERROR;
         }
-        case ATTACH_BUFFERS: {
-            CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            std::vector<sp<GraphicBuffer>> buffers;
-            status_t result = data.resizeOutVector(&buffers);
-            if (result != NO_ERROR) {
-                return result;
-            }
-            for (sp<GraphicBuffer>& buffer : buffers) {
-                buffer = new GraphicBuffer();
-                result = data.read(*buffer.get());
-                if (result != NO_ERROR) {
-                    return result;
-                }
-            }
-            std::vector<AttachBufferOutput> outputs;
-            (void)attachBuffers(buffers, &outputs);
-            result = reply->writeVectorSize(outputs);
-            for (const AttachBufferOutput& output : outputs) {
-                if (result != NO_ERROR) {
-                    return result;
-                }
-                result = reply->write(output);
-            }
-            return result;
-        }
         case QUEUE_BUFFER: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
 
@@ -1218,30 +890,6 @@ status_t BnGraphicBufferProducer::onTransact(
 
             return NO_ERROR;
         }
-        case QUEUE_BUFFERS: {
-            CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            std::vector<QueueBufferInput> inputs;
-            status_t result = data.resizeOutVector(&inputs);
-            if (result != NO_ERROR) {
-                return result;
-            }
-            for (QueueBufferInput& input : inputs) {
-                result = data.read(input);
-                if (result != NO_ERROR) {
-                    return result;
-                }
-            }
-            std::vector<QueueBufferOutput> outputs;
-            (void)queueBuffers(inputs, &outputs);
-            result = reply->writeVectorSize(outputs);
-            for (const QueueBufferOutput& output : outputs) {
-                if (result != NO_ERROR) {
-                    return result;
-                }
-                result = reply->write(output);
-            }
-            return result;
-        }
         case CANCEL_BUFFER: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
             int buf = data.readInt32();
@@ -1253,26 +901,6 @@ status_t BnGraphicBufferProducer::onTransact(
             reply->writeInt32(result);
             return NO_ERROR;
         }
-        case CANCEL_BUFFERS: {
-            CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            std::vector<CancelBufferInput> inputs;
-            status_t result = data.resizeOutVector(&inputs);
-            for (CancelBufferInput& input : inputs) {
-                if (result != NO_ERROR) {
-                    return result;
-                }
-                result = data.read(input);
-            }
-            if (result != NO_ERROR) {
-                return result;
-            }
-            std::vector<status_t> results;
-            result = cancelBuffers(inputs, &results);
-            if (result != NO_ERROR) {
-                return result;
-            }
-            return reply->writeInt32Vector(results);
-        }
         case QUERY: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
             int value = 0;
@@ -1281,27 +909,6 @@ status_t BnGraphicBufferProducer::onTransact(
             reply->writeInt32(value);
             reply->writeInt32(res);
             return NO_ERROR;
-        }
-        case QUERY_MULTIPLE: {
-            CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            std::vector<int32_t> inputs;
-            status_t result = data.readInt32Vector(&inputs);
-            if (result != NO_ERROR) {
-                return result;
-            }
-            std::vector<QueryOutput> outputs;
-            result = query(inputs, &outputs);
-            if (result != NO_ERROR) {
-                return result;
-            }
-            result = reply->writeVectorSize(outputs);
-            for (const QueryOutput& output : outputs) {
-                if (result != NO_ERROR) {
-                    return result;
-                }
-                result = reply->write(output);
-            }
-            return result;
         }
         case CONNECT: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
@@ -1418,45 +1025,6 @@ status_t BnGraphicBufferProducer::onTransact(
             }
             return NO_ERROR;
         }
-        case GET_LAST_QUEUED_BUFFER2: {
-            CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            sp<GraphicBuffer> buffer(nullptr);
-            sp<Fence> fence(Fence::NO_FENCE);
-            Rect crop;
-            uint32_t transform;
-            status_t result = getLastQueuedBuffer(&buffer, &fence, &crop, &transform);
-            reply->writeInt32(result);
-            if (result != NO_ERROR) {
-                return result;
-            }
-            if (!buffer.get()) {
-                reply->writeBool(false);
-            } else {
-                reply->writeBool(true);
-                result = reply->write(*buffer);
-                if (result == NO_ERROR) {
-                    result = reply->write(crop);
-                }
-                if (result == NO_ERROR) {
-                    result = reply->writeUint32(transform);
-                }
-            }
-            if (result != NO_ERROR) {
-                ALOGE("getLastQueuedBuffer failed to write buffer: %d", result);
-                return result;
-            }
-            if (fence == nullptr) {
-                ALOGE("getLastQueuedBuffer returned a NULL fence, setting to Fence::NO_FENCE");
-                fence = Fence::NO_FENCE;
-            }
-            result = reply->write(*fence);
-            if (result != NO_ERROR) {
-                ALOGE("getLastQueuedBuffer failed to write fence: %d", result);
-                return result;
-            }
-            return NO_ERROR;
-        }
-
         case GET_FRAME_TIMESTAMPS: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
             FrameEventHistoryDelta frameTimestamps;
@@ -1514,5 +1082,12 @@ status_t BnGraphicBufferProducer::onTransact(
     }
     return BBinder::onTransact(code, data, reply, flags);
 }
+
+// ----------------------------------------------------------------------------
+
+IGraphicBufferProducer::QueueBufferInput::QueueBufferInput(const Parcel& parcel) {
+    parcel.read(*this);
+}
+
 
 }; // namespace android

@@ -21,7 +21,7 @@
 #include <gui/ISurfaceComposer.h>
 #include <gui/Surface.h>
 #include <gui/SurfaceComposerClient.h>
-#include <ui/DisplayMode.h>
+#include <ui/DisplayConfig.h>
 #include <ui/DisplayState.h>
 
 using namespace android;
@@ -42,10 +42,10 @@ WindowSurface::WindowSurface() {
         return;
     }
 
-    ui::DisplayMode displayMode;
-    err = SurfaceComposerClient::getActiveDisplayMode(displayToken, &displayMode);
+    DisplayConfig displayConfig;
+    err = SurfaceComposerClient::getActiveDisplayConfig(displayToken, &displayConfig);
     if (err != NO_ERROR) {
-        fprintf(stderr, "ERROR: unable to get active display mode\n");
+        fprintf(stderr, "ERROR: unable to get active display config\n");
         return;
     }
 
@@ -56,7 +56,7 @@ WindowSurface::WindowSurface() {
         return;
     }
 
-    const ui::Size& resolution = displayMode.resolution;
+    const ui::Size& resolution = displayConfig.resolution;
     auto width = resolution.getWidth();
     auto height = resolution.getHeight();
 

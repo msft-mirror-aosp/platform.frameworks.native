@@ -48,7 +48,7 @@ protected:
     }
 };
 
-struct FakeListener : public BnConsumerListener {
+struct DummyListener : public BnConsumerListener {
     virtual void onFrameAvailable(const BufferItem& /* item */) {}
     virtual void onBuffersReleased() {}
     virtual void onSidebandStreamChanged() {}
@@ -64,7 +64,7 @@ TEST_F(StreamSplitterTest, OneInputOneOutput) {
     sp<IGraphicBufferProducer> outputProducer;
     sp<IGraphicBufferConsumer> outputConsumer;
     BufferQueue::createBufferQueue(&outputProducer, &outputConsumer);
-    ASSERT_EQ(OK, outputConsumer->consumerConnect(new FakeListener, false));
+    ASSERT_EQ(OK, outputConsumer->consumerConnect(new DummyListener, false));
 
     sp<StreamSplitter> splitter;
     status_t status = StreamSplitter::createSplitter(inputConsumer, &splitter);
@@ -75,9 +75,8 @@ TEST_F(StreamSplitterTest, OneInputOneOutput) {
     ASSERT_EQ(OK, outputProducer->allowAllocation(false));
 
     IGraphicBufferProducer::QueueBufferOutput qbOutput;
-    ASSERT_EQ(OK,
-              inputProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false,
-                                     &qbOutput));
+    ASSERT_EQ(OK, inputProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, false, &qbOutput));
 
     int slot;
     sp<Fence> fence;
@@ -133,7 +132,8 @@ TEST_F(StreamSplitterTest, OneInputMultipleOutputs) {
     for (int output = 0; output < NUM_OUTPUTS; ++output) {
         BufferQueue::createBufferQueue(&outputProducers[output],
                 &outputConsumers[output]);
-        ASSERT_EQ(OK, outputConsumers[output]->consumerConnect(new FakeListener, false));
+        ASSERT_EQ(OK, outputConsumers[output]->consumerConnect(
+                    new DummyListener, false));
     }
 
     sp<StreamSplitter> splitter;
@@ -147,9 +147,8 @@ TEST_F(StreamSplitterTest, OneInputMultipleOutputs) {
     }
 
     IGraphicBufferProducer::QueueBufferOutput qbOutput;
-    ASSERT_EQ(OK,
-              inputProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false,
-                                     &qbOutput));
+    ASSERT_EQ(OK, inputProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, false, &qbOutput));
 
     int slot;
     sp<Fence> fence;
@@ -204,7 +203,7 @@ TEST_F(StreamSplitterTest, OutputAbandonment) {
     sp<IGraphicBufferProducer> outputProducer;
     sp<IGraphicBufferConsumer> outputConsumer;
     BufferQueue::createBufferQueue(&outputProducer, &outputConsumer);
-    ASSERT_EQ(OK, outputConsumer->consumerConnect(new FakeListener, false));
+    ASSERT_EQ(OK, outputConsumer->consumerConnect(new DummyListener, false));
 
     sp<StreamSplitter> splitter;
     status_t status = StreamSplitter::createSplitter(inputConsumer, &splitter);
@@ -212,9 +211,8 @@ TEST_F(StreamSplitterTest, OutputAbandonment) {
     ASSERT_EQ(OK, splitter->addOutput(outputProducer));
 
     IGraphicBufferProducer::QueueBufferOutput qbOutput;
-    ASSERT_EQ(OK,
-              inputProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false,
-                                     &qbOutput));
+    ASSERT_EQ(OK, inputProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, false, &qbOutput));
 
     int slot;
     sp<Fence> fence;

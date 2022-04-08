@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "MockConsumer.h"
+#include "DummyConsumer.h"
 
 #include <gtest/gtest.h>
 
@@ -28,11 +28,9 @@
 #include <gui/ISurfaceComposer.h>
 #include <gui/Surface.h>
 #include <gui/SurfaceComposerClient.h>
-#include <gui/SyncScreenCaptureListener.h>
 #include <inttypes.h>
 #include <private/gui/ComposerService.h>
 #include <ui/BufferQueueDefs.h>
-#include <ui/DisplayMode.h>
 #include <ui/Rect.h>
 #include <utils/String8.h>
 
@@ -58,11 +56,12 @@ class FakeProducerFrameEventHistory;
 
 static constexpr uint64_t NO_FRAME_INDEX = std::numeric_limits<uint64_t>::max();
 
-class FakeSurfaceListener : public SurfaceListener {
+class DummySurfaceListener : public SurfaceListener {
 public:
-    FakeSurfaceListener(bool enableReleasedCb = false)
-          : mEnableReleaseCb(enableReleasedCb), mBuffersReleased(0) {}
-    virtual ~FakeSurfaceListener() = default;
+    DummySurfaceListener(bool enableReleasedCb = false) :
+            mEnableReleaseCb(enableReleasedCb),
+            mBuffersReleased(0) {}
+    virtual ~DummySurfaceListener() = default;
 
     virtual void onBufferReleased() {
         mBuffersReleased++;
@@ -102,13 +101,14 @@ protected:
         //   test flakiness.
         mSurfaceControl = mComposerClient->createSurface(
                 String8("Test Surface"), 32, 32, PIXEL_FORMAT_RGBA_8888, 0);
-        SurfaceComposerClient::Transaction().apply(true);
 
         ASSERT_TRUE(mSurfaceControl != nullptr);
         ASSERT_TRUE(mSurfaceControl->isValid());
 
         Transaction t;
-        ASSERT_EQ(NO_ERROR, t.setLayer(mSurfaceControl, 0x7fffffff).show(mSurfaceControl).apply());
+        ASSERT_EQ(NO_ERROR, t.setLayer(mSurfaceControl, 0x7fffffff)
+                .show(mSurfaceControl)
+                .apply());
 
         mSurface = mSurfaceControl->getSurface();
         ASSERT_TRUE(mSurface != nullptr);
@@ -124,15 +124,15 @@ protected:
         sp<IGraphicBufferConsumer> consumer;
         BufferQueue::createBufferQueue(&producer, &consumer);
 
-        sp<MockConsumer> mockConsumer(new MockConsumer);
-        consumer->consumerConnect(mockConsumer, false);
+        sp<DummyConsumer> dummyConsumer(new DummyConsumer);
+        consumer->consumerConnect(dummyConsumer, false);
         consumer->setConsumerName(String8("TestConsumer"));
 
         sp<Surface> surface = new Surface(producer);
         sp<ANativeWindow> window(surface);
-        sp<FakeSurfaceListener> listener;
+        sp<DummySurfaceListener> listener;
         if (hasSurfaceListener) {
-            listener = new FakeSurfaceListener(enableReleasedCb);
+            listener = new DummySurfaceListener(enableReleasedCb);
         }
         ASSERT_EQ(OK, surface->connect(
                 NATIVE_WINDOW_API_CPU,
@@ -198,20 +198,6 @@ protected:
         ASSERT_EQ(NO_ERROR, surface->disconnect(NATIVE_WINDOW_API_CPU));
     }
 
-    static status_t captureDisplay(DisplayCaptureArgs& captureArgs,
-                                   ScreenCaptureResults& captureResults) {
-        const auto sf = ComposerService::getComposerService();
-        SurfaceComposerClient::Transaction().apply(true);
-
-        const sp<SyncScreenCaptureListener> captureListener = new SyncScreenCaptureListener();
-        status_t status = sf->captureDisplay(captureArgs, captureListener);
-        if (status != NO_ERROR) {
-            return status;
-        }
-        captureResults = captureListener->waitForResults();
-        return captureResults.result;
-    }
-
     sp<Surface> mSurface;
     sp<SurfaceComposerClient> mComposerClient;
     sp<SurfaceControl> mSurfaceControl;
@@ -259,13 +245,11 @@ TEST_F(SurfaceTest, ScreenshotsOfProtectedBuffersDontSucceed) {
     const sp<IBinder> display = sf->getInternalDisplayToken();
     ASSERT_FALSE(display == nullptr);
 
-    DisplayCaptureArgs captureArgs;
-    captureArgs.displayToken = display;
-    captureArgs.width = 64;
-    captureArgs.height = 64;
-
-    ScreenCaptureResults captureResults;
-    ASSERT_EQ(NO_ERROR, captureDisplay(captureArgs, captureResults));
+    sp<GraphicBuffer> outBuffer;
+    bool ignored;
+    ASSERT_EQ(NO_ERROR,
+              sf->captureScreen(display, &outBuffer, ignored, ui::Dataspace::V0_SRGB,
+                                ui::PixelFormat::RGBA_8888, Rect(), 64, 64, false));
 
     ASSERT_EQ(NO_ERROR, native_window_api_connect(anw.get(),
             NATIVE_WINDOW_API_CPU));
@@ -295,7 +279,9 @@ TEST_F(SurfaceTest, ScreenshotsOfProtectedBuffersDontSucceed) {
                 &buf));
         ASSERT_EQ(NO_ERROR, anw->queueBuffer(anw.get(), buf, -1));
     }
-    ASSERT_EQ(NO_ERROR, captureDisplay(captureArgs, captureResults));
+    ASSERT_EQ(NO_ERROR,
+              sf->captureScreen(display, &outBuffer, ignored, ui::Dataspace::V0_SRGB,
+                                ui::PixelFormat::RGBA_8888, Rect(), 64, 64, false));
 }
 
 TEST_F(SurfaceTest, ConcreteTypeIsSurface) {
@@ -395,8 +381,8 @@ TEST_F(SurfaceTest, GetConsumerName) {
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<MockConsumer> mockConsumer(new MockConsumer);
-    consumer->consumerConnect(mockConsumer, false);
+    sp<DummyConsumer> dummyConsumer(new DummyConsumer);
+    consumer->consumerConnect(dummyConsumer, false);
     consumer->setConsumerName(String8("TestConsumer"));
 
     sp<Surface> surface = new Surface(producer);
@@ -411,8 +397,8 @@ TEST_F(SurfaceTest, GetWideColorSupport) {
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<MockConsumer> mockConsumer(new MockConsumer);
-    consumer->consumerConnect(mockConsumer, false);
+    sp<DummyConsumer> dummyConsumer(new DummyConsumer);
+    consumer->consumerConnect(dummyConsumer, false);
     consumer->setConsumerName(String8("TestConsumer"));
 
     sp<Surface> surface = new Surface(producer);
@@ -442,8 +428,8 @@ TEST_F(SurfaceTest, GetHdrSupport) {
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<MockConsumer> mockConsumer(new MockConsumer);
-    consumer->consumerConnect(mockConsumer, false);
+    sp<DummyConsumer> dummyConsumer(new DummyConsumer);
+    consumer->consumerConnect(dummyConsumer, false);
     consumer->setConsumerName(String8("TestConsumer"));
 
     sp<Surface> surface = new Surface(producer);
@@ -466,8 +452,8 @@ TEST_F(SurfaceTest, SetHdrMetadata) {
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<MockConsumer> mockConsumer(new MockConsumer);
-    consumer->consumerConnect(mockConsumer, false);
+    sp<DummyConsumer> dummyConsumer(new DummyConsumer);
+    consumer->consumerConnect(dummyConsumer, false);
     consumer->setConsumerName(String8("TestConsumer"));
 
     sp<Surface> surface = new Surface(producer);
@@ -511,8 +497,8 @@ TEST_F(SurfaceTest, DynamicSetBufferCount) {
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<MockConsumer> mockConsumer(new MockConsumer);
-    consumer->consumerConnect(mockConsumer, false);
+    sp<DummyConsumer> dummyConsumer(new DummyConsumer);
+    consumer->consumerConnect(dummyConsumer, false);
     consumer->setConsumerName(String8("TestConsumer"));
 
     sp<Surface> surface = new Surface(producer);
@@ -537,13 +523,13 @@ TEST_F(SurfaceTest, GetAndFlushRemovedBuffers) {
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<MockConsumer> mockConsumer(new MockConsumer);
-    consumer->consumerConnect(mockConsumer, false);
+    sp<DummyConsumer> dummyConsumer(new DummyConsumer);
+    consumer->consumerConnect(dummyConsumer, false);
     consumer->setConsumerName(String8("TestConsumer"));
 
     sp<Surface> surface = new Surface(producer);
     sp<ANativeWindow> window(surface);
-    sp<StubProducerListener> listener = new StubProducerListener();
+    sp<DummyProducerListener> listener = new DummyProducerListener();
     ASSERT_EQ(OK, surface->connect(
             NATIVE_WINDOW_API_CPU,
             /*listener*/listener,
@@ -677,7 +663,8 @@ public:
     NewFrameEventsEntry mNewFrameEntryOverride = { 0, 0, 0, nullptr };
 };
 
-class FakeSurfaceComposer : public ISurfaceComposer {
+
+class FakeSurfaceComposer : public ISurfaceComposer{
 public:
     ~FakeSurfaceComposer() override {}
 
@@ -687,7 +674,7 @@ public:
 
     sp<ISurfaceComposerClient> createConnection() override { return nullptr; }
     sp<IDisplayEventConnection> createDisplayEventConnection(
-            ISurfaceComposer::VsyncSource, ISurfaceComposer::EventRegistrationFlags) override {
+            ISurfaceComposer::VsyncSource, ISurfaceComposer::ConfigChanged) override {
         return nullptr;
     }
     sp<IBinder> createDisplay(const String8& /*displayName*/,
@@ -695,17 +682,13 @@ public:
     void destroyDisplay(const sp<IBinder>& /*display */) override {}
     std::vector<PhysicalDisplayId> getPhysicalDisplayIds() const override { return {}; }
     sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId) const override { return nullptr; }
-    status_t setTransactionState(const FrameTimelineInfo& /*frameTimelineInfo*/,
-                                 const Vector<ComposerState>& /*state*/,
-                                 const Vector<DisplayState>& /*displays*/, uint32_t /*flags*/,
-                                 const sp<IBinder>& /*applyToken*/,
-                                 const InputWindowCommands& /*inputWindowCommands*/,
-                                 int64_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/,
-                                 const client_cache_t& /*cachedBuffer*/,
-                                 bool /*hasListenerCallbacks*/,
-                                 const std::vector<ListenerCallbacks>& /*listenerCallbacks*/,
-                                 uint64_t /*transactionId*/) override {
-        return NO_ERROR;
+    void setTransactionState(const Vector<ComposerState>& /*state*/,
+                             const Vector<DisplayState>& /*displays*/, uint32_t /*flags*/,
+                             const sp<IBinder>& /*applyToken*/,
+                             const InputWindowCommands& /*inputWindowCommands*/,
+                             int64_t /*desiredPresentTime*/, const client_cache_t& /*cachedBuffer*/,
+                             bool /*hasListenerCallbacks*/,
+                             const std::vector<ListenerCallbacks>& /*listenerCallbacks*/) override {
     }
 
     void bootFinished() override {}
@@ -734,11 +717,10 @@ public:
     }
 
     void setPowerMode(const sp<IBinder>& /*display*/, int /*mode*/) override {}
-    status_t getStaticDisplayInfo(const sp<IBinder>& /*display*/, ui::StaticDisplayInfo*) override {
+    status_t getDisplayInfo(const sp<IBinder>& /*display*/, DisplayInfo*) override {
         return NO_ERROR;
     }
-    status_t getDynamicDisplayInfo(const sp<IBinder>& /*display*/,
-                                   ui::DynamicDisplayInfo*) override {
+    status_t getDisplayConfigs(const sp<IBinder>& /*display*/, Vector<DisplayConfig>*) override {
         return NO_ERROR;
     }
     status_t getDisplayState(const sp<IBinder>& /*display*/, ui::DisplayState*) override {
@@ -746,37 +728,58 @@ public:
     }
     status_t getDisplayStats(const sp<IBinder>& /*display*/,
             DisplayStatInfo* /*stats*/) override { return NO_ERROR; }
+    int getActiveConfig(const sp<IBinder>& /*display*/) override { return 0; }
+    status_t getDisplayColorModes(const sp<IBinder>& /*display*/,
+            Vector<ColorMode>* /*outColorModes*/) override {
+        return NO_ERROR;
+    }
     status_t getDisplayNativePrimaries(const sp<IBinder>& /*display*/,
             ui::DisplayPrimaries& /*primaries*/) override {
         return NO_ERROR;
     }
+    ColorMode getActiveColorMode(const sp<IBinder>& /*display*/)
+            override {
+        return ColorMode::NATIVE;
+    }
     status_t setActiveColorMode(const sp<IBinder>& /*display*/,
         ColorMode /*colorMode*/) override { return NO_ERROR; }
-    status_t captureDisplay(const DisplayCaptureArgs& /* captureArgs */,
-                            const sp<IScreenCaptureListener>& /* captureListener */) override {
+    status_t captureScreen(const sp<IBinder>& /*display*/, sp<GraphicBuffer>* /*outBuffer*/,
+                           bool& /*outCapturedSecureLayers*/, ui::Dataspace /*reqDataspace*/,
+                           ui::PixelFormat /*reqPixelFormat*/, const Rect& /*sourceCrop*/,
+                           uint32_t /*reqWidth*/, uint32_t /*reqHeight*/,
+                           bool /*useIdentityTransform*/, ui::Rotation,
+                           bool /*captureSecureLayers*/) override {
+        return NO_ERROR;
+    }
+    status_t getAutoLowLatencyModeSupport(const sp<IBinder>& /*display*/,
+                                          bool* /*outSupport*/) const override {
         return NO_ERROR;
     }
     void setAutoLowLatencyMode(const sp<IBinder>& /*display*/, bool /*on*/) override {}
+    status_t getGameContentTypeSupport(const sp<IBinder>& /*display*/,
+                                       bool* /*outSupport*/) const override {
+        return NO_ERROR;
+    }
     void setGameContentType(const sp<IBinder>& /*display*/, bool /*on*/) override {}
-    status_t captureDisplay(uint64_t /*displayOrLayerStack*/,
-                            const sp<IScreenCaptureListener>& /* captureListener */) override {
+    status_t captureScreen(uint64_t /*displayOrLayerStack*/, ui::Dataspace* /*outDataspace*/,
+                           sp<GraphicBuffer>* /*outBuffer*/) override {
         return NO_ERROR;
     }
     virtual status_t captureLayers(
-            const LayerCaptureArgs& /* captureArgs */,
-            const sp<IScreenCaptureListener>& /* captureListener */) override {
+            const sp<IBinder>& /*parentHandle*/, sp<GraphicBuffer>* /*outBuffer*/,
+            ui::Dataspace /*reqDataspace*/, ui::PixelFormat /*reqPixelFormat*/,
+            const Rect& /*sourceCrop*/,
+            const std::unordered_set<sp<IBinder>,
+                                     ISurfaceComposer::SpHash<IBinder>>& /*excludeHandles*/,
+            float /*frameScale*/, bool /*childrenOnly*/) override {
         return NO_ERROR;
     }
     status_t clearAnimationFrameStats() override { return NO_ERROR; }
     status_t getAnimationFrameStats(FrameStats* /*outStats*/) const override {
         return NO_ERROR;
     }
-    status_t overrideHdrTypes(const sp<IBinder>& /*display*/,
-                              const std::vector<ui::Hdr>& /*hdrTypes*/) override {
-        return NO_ERROR;
-    }
-    status_t onPullAtom(const int32_t /*atomId*/, std::string* /*outData*/,
-                        bool* /*success*/) override {
+    status_t getHdrCapabilities(const sp<IBinder>& /*display*/,
+            HdrCapabilities* /*outCapabilities*/) const override {
         return NO_ERROR;
     }
     status_t enableVSyncInjections(bool /*enable*/) override {
@@ -818,17 +821,7 @@ public:
         return NO_ERROR;
     }
     status_t setDisplayBrightness(const sp<IBinder>& /*displayToken*/,
-                                  const gui::DisplayBrightness& /*brightness*/) override {
-        return NO_ERROR;
-    }
-
-    status_t addHdrLayerInfoListener(const sp<IBinder>&,
-                                     const sp<gui::IHdrLayerInfoListener>&) override {
-        return NO_ERROR;
-    }
-
-    status_t removeHdrLayerInfoListener(const sp<IBinder>&,
-                                        const sp<gui::IHdrLayerInfoListener>&) override {
+                                  float /*brightness*/) override {
         return NO_ERROR;
     }
 
@@ -841,39 +834,23 @@ public:
             const sp<IRegionSamplingListener>& /*listener*/) override {
         return NO_ERROR;
     }
-    status_t addFpsListener(int32_t /*taskId*/, const sp<gui::IFpsListener>& /*listener*/) {
+    status_t setDesiredDisplayConfigSpecs(const sp<IBinder>& /*displayToken*/,
+                                          int32_t /*defaultConfig*/,
+                                          float /*primaryRefreshRateMin*/,
+                                          float /*primaryRefreshRateMax*/,
+                                          float /*appRequestRefreshRateMin*/,
+                                          float /*appRequestRefreshRateMax*/) {
         return NO_ERROR;
     }
-    status_t removeFpsListener(const sp<gui::IFpsListener>& /*listener*/) { return NO_ERROR; }
-
-    status_t addTunnelModeEnabledListener(const sp<gui::ITunnelModeEnabledListener>& /*listener*/) {
-        return NO_ERROR;
-    }
-
-    status_t removeTunnelModeEnabledListener(
-            const sp<gui::ITunnelModeEnabledListener>& /*listener*/) {
-        return NO_ERROR;
-    }
-
-    status_t setDesiredDisplayModeSpecs(const sp<IBinder>& /*displayToken*/,
-                                        ui::DisplayModeId /*defaultMode*/,
-                                        bool /*allowGroupSwitching*/,
-                                        float /*primaryRefreshRateMin*/,
-                                        float /*primaryRefreshRateMax*/,
-                                        float /*appRequestRefreshRateMin*/,
-                                        float /*appRequestRefreshRateMax*/) {
-        return NO_ERROR;
-    }
-    status_t getDesiredDisplayModeSpecs(const sp<IBinder>& /*displayToken*/,
-                                        ui::DisplayModeId* /*outDefaultMode*/,
-                                        bool* /*outAllowGroupSwitching*/,
-                                        float* /*outPrimaryRefreshRateMin*/,
-                                        float* /*outPrimaryRefreshRateMax*/,
-                                        float* /*outAppRequestRefreshRateMin*/,
-                                        float* /*outAppRequestRefreshRateMax*/) override {
+    status_t getDesiredDisplayConfigSpecs(const sp<IBinder>& /*displayToken*/,
+                                          int32_t* /*outDefaultConfig*/,
+                                          float* /*outPrimaryRefreshRateMin*/,
+                                          float* /*outPrimaryRefreshRateMax*/,
+                                          float* /*outAppRequestRefreshRateMin*/,
+                                          float* /*outAppRequestRefreshRateMax*/) override {
         return NO_ERROR;
     };
-    status_t notifyPowerBoost(int32_t /*boostId*/) override { return NO_ERROR; }
+    status_t notifyPowerHint(int32_t /*hintId*/) override { return NO_ERROR; }
 
     status_t setGlobalShadowSettings(const half4& /*ambientColor*/, const half4& /*spotColor*/,
                                      float /*lightPosY*/, float /*lightPosZ*/,
@@ -882,27 +859,11 @@ public:
     }
 
     status_t setFrameRate(const sp<IGraphicBufferProducer>& /*surface*/, float /*frameRate*/,
-                          int8_t /*compatibility*/, int8_t /*changeFrameRateStrategy*/) override {
+                          int8_t /*compatibility*/) override {
         return NO_ERROR;
     }
 
-    status_t acquireFrameRateFlexibilityToken(sp<IBinder>* /*outToken*/) override {
-        return NO_ERROR;
-    }
-
-    status_t setFrameTimelineInfo(const sp<IGraphicBufferProducer>& /*surface*/,
-                                  const FrameTimelineInfo& /*frameTimelineInfo*/) override {
-        return NO_ERROR;
-    }
-
-    status_t addTransactionTraceListener(
-            const sp<gui::ITransactionTraceListener>& /*listener*/) override {
-        return NO_ERROR;
-    }
-
-    int getGPUContextPriority() override { return 0; };
-
-    status_t getMaxAcquiredBufferCount(int* /*buffers*/) const override { return NO_ERROR; }
+    status_t acquireFrameRateFlexibilityToken(sp<IBinder>* /*outToken*/) { return NO_ERROR; }
 
 protected:
     IBinder* onAsBinder() override { return nullptr; }
@@ -1949,8 +1910,8 @@ TEST_F(SurfaceTest, DequeueWithConsumerDrivenSize) {
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<MockConsumer> mockConsumer(new MockConsumer);
-    consumer->consumerConnect(mockConsumer, false);
+    sp<DummyConsumer> dummyConsumer(new DummyConsumer);
+    consumer->consumerConnect(dummyConsumer, false);
     consumer->setDefaultBufferSize(10, 10);
 
     sp<Surface> surface = new Surface(producer);
@@ -2019,8 +1980,8 @@ TEST_F(SurfaceTest, DefaultMaxBufferCountSetAndUpdated) {
     sp<IGraphicBufferConsumer> consumer;
     BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<MockConsumer> mockConsumer(new MockConsumer);
-    consumer->consumerConnect(mockConsumer, false);
+    sp<DummyConsumer> dummyConsumer(new DummyConsumer);
+    consumer->consumerConnect(dummyConsumer, false);
 
     sp<Surface> surface = new Surface(producer);
     sp<ANativeWindow> window(surface);
@@ -2037,88 +1998,6 @@ TEST_F(SurfaceTest, DefaultMaxBufferCountSetAndUpdated) {
     ASSERT_EQ(NO_ERROR, native_window_api_disconnect(window.get(), NATIVE_WINDOW_API_CPU));
     ASSERT_EQ(NO_ERROR, window->query(window.get(), NATIVE_WINDOW_MAX_BUFFER_COUNT, &count));
     EXPECT_EQ(BufferQueueDefs::NUM_BUFFER_SLOTS, count);
-}
-
-TEST_F(SurfaceTest, BatchOperations) {
-    const int BUFFER_COUNT = 16;
-    const int BATCH_SIZE = 8;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
-    sp<Surface> surface = new Surface(producer);
-    sp<ANativeWindow> window(surface);
-    sp<StubProducerListener> listener = new StubProducerListener();
-
-    ASSERT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, /*listener*/listener,
-            /*reportBufferRemoval*/false));
-
-    ASSERT_EQ(NO_ERROR, native_window_set_buffer_count(window.get(), BUFFER_COUNT));
-
-    std::vector<Surface::BatchBuffer> buffers(BATCH_SIZE);
-
-    // Batch dequeued buffers can be queued individually
-    ASSERT_EQ(NO_ERROR, surface->dequeueBuffers(&buffers));
-    for (size_t i = 0; i < BATCH_SIZE; i++) {
-        ANativeWindowBuffer* buffer = buffers[i].buffer;
-        int fence = buffers[i].fenceFd;
-        ASSERT_EQ(NO_ERROR, window->queueBuffer(window.get(), buffer, fence));
-    }
-
-    // Batch dequeued buffers can be canceled individually
-    ASSERT_EQ(NO_ERROR, surface->dequeueBuffers(&buffers));
-    for (size_t i = 0; i < BATCH_SIZE; i++) {
-        ANativeWindowBuffer* buffer = buffers[i].buffer;
-        int fence = buffers[i].fenceFd;
-        ASSERT_EQ(NO_ERROR, window->cancelBuffer(window.get(), buffer, fence));
-    }
-
-    // Batch dequeued buffers can be batch cancelled
-    ASSERT_EQ(NO_ERROR, surface->dequeueBuffers(&buffers));
-    ASSERT_EQ(NO_ERROR, surface->cancelBuffers(buffers));
-
-    // Batch dequeued buffers can be batch queued
-    ASSERT_EQ(NO_ERROR, surface->dequeueBuffers(&buffers));
-    std::vector<Surface::BatchQueuedBuffer> queuedBuffers(BATCH_SIZE);
-    for (size_t i = 0; i < BATCH_SIZE; i++) {
-        queuedBuffers[i].buffer = buffers[i].buffer;
-        queuedBuffers[i].fenceFd = buffers[i].fenceFd;
-        queuedBuffers[i].timestamp = NATIVE_WINDOW_TIMESTAMP_AUTO;
-    }
-    ASSERT_EQ(NO_ERROR, surface->queueBuffers(queuedBuffers));
-
-    ASSERT_EQ(NO_ERROR, surface->disconnect(NATIVE_WINDOW_API_CPU));
-}
-
-TEST_F(SurfaceTest, BatchIllegalOperations) {
-    const int BUFFER_COUNT = 16;
-    const int BATCH_SIZE = 8;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
-    sp<Surface> surface = new Surface(producer);
-    sp<ANativeWindow> window(surface);
-    sp<StubProducerListener> listener = new StubProducerListener();
-
-    ASSERT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, /*listener*/listener,
-            /*reportBufferRemoval*/false));
-
-    ASSERT_EQ(NO_ERROR, native_window_set_buffer_count(window.get(), BUFFER_COUNT));
-
-    std::vector<Surface::BatchBuffer> buffers(BATCH_SIZE);
-    std::vector<Surface::BatchQueuedBuffer> queuedBuffers(BATCH_SIZE);
-
-    // Batch operations are invalid in shared buffer mode
-    surface->setSharedBufferMode(true);
-    ASSERT_EQ(INVALID_OPERATION, surface->dequeueBuffers(&buffers));
-    ASSERT_EQ(INVALID_OPERATION, surface->cancelBuffers(buffers));
-    ASSERT_EQ(INVALID_OPERATION, surface->queueBuffers(queuedBuffers));
-    surface->setSharedBufferMode(false);
-
-    ASSERT_EQ(NO_ERROR, surface->disconnect(NATIVE_WINDOW_API_CPU));
 }
 
 } // namespace android

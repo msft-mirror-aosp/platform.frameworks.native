@@ -29,7 +29,8 @@
 #include <mutex>
 
 #include <jni.h>
-#include <nativehelper/scoped_local_ref.h>
+#include <nativehelper/JNIHelp.h>
+#include <nativehelper/ScopedLocalRef.h>
 
 struct ASurfaceTexture {
     android::sp<android::SurfaceTexture> consumer;

@@ -116,7 +116,6 @@ LayerProtoParser::Layer LayerProtoParser::generateLayer(const LayerProto& layerP
     }
     layer.cornerRadiusCrop = generateFloatRect(layerProto.corner_radius_crop());
     layer.shadowRadius = layerProto.shadow_radius();
-    layer.ownerUid = layerProto.owner_uid();
     return layer;
 }
 
@@ -278,7 +277,7 @@ std::string LayerProtoParser::Region::to_string(const char* what) const {
 
 std::string LayerProtoParser::Layer::to_string() const {
     std::string result;
-    StringAppendF(&result, "+ %s (%s) uid=%d\n", type.c_str(), name.c_str(), ownerUid);
+    StringAppendF(&result, "+ %s (%s)\n", type.c_str(), name.c_str());
     result.append(transparentRegion.to_string("TransparentRegion").c_str());
     result.append(visibleRegion.to_string("VisibleRegion").c_str());
     result.append(damageRegion.to_string("SurfaceDamageRegion").c_str());

@@ -15,10 +15,8 @@
  */
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
-#include "renderengine/ExternalTexture.h"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
-#pragma clang diagnostic ignored "-Wextra"
 
 #undef LOG_TAG
 #define LOG_TAG "CompositionTest"
@@ -37,17 +35,16 @@
 #include <utils/String8.h>
 
 #include "BufferQueueLayer.h"
-#include "ContainerLayer.h"
-#include "DisplayRenderArea.h"
 #include "EffectLayer.h"
 #include "Layer.h"
 #include "TestableSurfaceFlinger.h"
 #include "mock/DisplayHardware/MockComposer.h"
 #include "mock/DisplayHardware/MockPowerAdvisor.h"
+#include "mock/MockDispSync.h"
+#include "mock/MockEventControlThread.h"
 #include "mock/MockEventThread.h"
 #include "mock/MockMessageQueue.h"
 #include "mock/MockTimeStats.h"
-#include "mock/MockVsyncController.h"
 #include "mock/system/window/MockNativeWindow.h"
 
 namespace android {
@@ -63,9 +60,15 @@ using hal::Transform;
 
 using testing::_;
 using testing::AtLeast;
+using testing::Between;
+using testing::ByMove;
 using testing::DoAll;
+using testing::Field;
+using testing::Invoke;
 using testing::IsNull;
 using testing::Mock;
+using testing::NotNull;
+using testing::Ref;
 using testing::Return;
 using testing::ReturnRef;
 using testing::SetArgPointee;
@@ -77,10 +80,11 @@ constexpr hal::HWDisplayId HWC_DISPLAY = FakeHwcDisplayInjector::DEFAULT_HWC_DIS
 constexpr hal::HWLayerId HWC_LAYER = 5000;
 constexpr Transform DEFAULT_TRANSFORM = static_cast<Transform>(0);
 
-constexpr PhysicalDisplayId DEFAULT_DISPLAY_ID(42);
+constexpr DisplayId DEFAULT_DISPLAY_ID = DisplayId{42};
 constexpr int DEFAULT_DISPLAY_WIDTH = 1920;
 constexpr int DEFAULT_DISPLAY_HEIGHT = 1024;
 
+constexpr int DEFAULT_CONFIG_ID = 0;
 constexpr int DEFAULT_TEXTURE_ID = 6000;
 constexpr int DEFAULT_LAYER_STACK = 7000;
 
@@ -105,9 +109,7 @@ public:
 
         mFlinger.setupRenderEngine(std::unique_ptr<renderengine::RenderEngine>(mRenderEngine));
         mFlinger.setupTimeStats(std::shared_ptr<TimeStats>(mTimeStats));
-
-        mComposer = new Hwc2::mock::Composer();
-        mFlinger.setupComposer(std::unique_ptr<Hwc2::Composer>(mComposer));
+        setupComposer(0);
     }
 
     ~CompositionTest() {
@@ -116,36 +118,40 @@ public:
         ALOGD("**** Tearing down after %s.%s\n", test_info->test_case_name(), test_info->name());
     }
 
+    void setupComposer(int virtualDisplayCount) {
+        mComposer = new Hwc2::mock::Composer();
+        EXPECT_CALL(*mComposer, getMaxVirtualDisplayCount()).WillOnce(Return(virtualDisplayCount));
+        mFlinger.setupComposer(std::unique_ptr<Hwc2::Composer>(mComposer));
+
+        Mock::VerifyAndClear(mComposer);
+    }
+
     void setupScheduler() {
         auto eventThread = std::make_unique<mock::EventThread>();
         auto sfEventThread = std::make_unique<mock::EventThread>();
 
         EXPECT_CALL(*eventThread, registerDisplayEventConnection(_));
         EXPECT_CALL(*eventThread, createEventConnection(_, _))
-                .WillOnce(Return(new EventThreadConnection(eventThread.get(), /*callingUid=*/0,
-                                                           ResyncCallback())));
+                .WillOnce(Return(
+                        new EventThreadConnection(eventThread.get(), ResyncCallback(),
+                                                  ISurfaceComposer::eConfigChangedSuppress)));
 
         EXPECT_CALL(*sfEventThread, registerDisplayEventConnection(_));
         EXPECT_CALL(*sfEventThread, createEventConnection(_, _))
-                .WillOnce(Return(new EventThreadConnection(sfEventThread.get(), /*callingUid=*/0,
-                                                           ResyncCallback())));
+                .WillOnce(Return(
+                        new EventThreadConnection(sfEventThread.get(), ResyncCallback(),
+                                                  ISurfaceComposer::eConfigChangedSuppress)));
 
-        auto vsyncController = std::make_unique<mock::VsyncController>();
-        auto vsyncTracker = std::make_unique<mock::VSyncTracker>();
+        auto primaryDispSync = std::make_unique<mock::DispSync>();
 
-        EXPECT_CALL(*vsyncTracker, nextAnticipatedVSyncTimeFrom(_)).WillRepeatedly(Return(0));
-        EXPECT_CALL(*vsyncTracker, currentPeriod())
-                .WillRepeatedly(Return(FakeHwcDisplayInjector::DEFAULT_VSYNC_PERIOD));
-        EXPECT_CALL(*vsyncTracker, nextAnticipatedVSyncTimeFrom(_)).WillRepeatedly(Return(0));
+        EXPECT_CALL(*primaryDispSync, computeNextRefresh(0, _)).WillRepeatedly(Return(0));
+        EXPECT_CALL(*primaryDispSync, getPeriod())
+                .WillRepeatedly(Return(FakeHwcDisplayInjector::DEFAULT_REFRESH_RATE));
+        EXPECT_CALL(*primaryDispSync, expectedPresentTime(_)).WillRepeatedly(Return(0));
 
-        constexpr ISchedulerCallback* kCallback = nullptr;
-        constexpr bool kHasMultipleConfigs = true;
-        mFlinger.setupScheduler(std::move(vsyncController), std::move(vsyncTracker),
-                                std::move(eventThread), std::move(sfEventThread), kCallback,
-                                kHasMultipleConfigs);
-
-        // Layer history should be created if there are multiple configs.
-        ASSERT_TRUE(mFlinger.scheduler()->hasLayerHistory());
+        mFlinger.setupScheduler(std::move(primaryDispSync),
+                                std::make_unique<mock::EventControlThread>(),
+                                std::move(eventThread), std::move(sfEventThread));
     }
 
     void setupForceGeometryDirty() {
@@ -176,7 +182,6 @@ public:
     sp<compositionengine::mock::DisplaySurface> mDisplaySurface =
             new compositionengine::mock::DisplaySurface();
     mock::NativeWindow* mNativeWindow = new mock::NativeWindow();
-    std::vector<sp<Layer>> mAuxiliaryLayers;
 
     sp<GraphicBuffer> mBuffer = new GraphicBuffer();
     ANativeWindowBuffer* mNativeWindowBuffer = mBuffer->getNativeBuffer();
@@ -189,7 +194,7 @@ public:
 
     sp<Fence> mClientTargetAcquireFence = Fence::NO_FENCE;
 
-    std::shared_ptr<renderengine::ExternalTexture> mCaptureScreenBuffer;
+    sp<GraphicBuffer> mCaptureScreenBuffer;
 };
 
 template <typename LayerCase>
@@ -224,30 +229,32 @@ void CompositionTest::captureScreenComposition() {
     LayerCase::setupForScreenCapture(this);
 
     const Rect sourceCrop(0, 0, DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT);
+    constexpr bool useIdentityTransform = true;
     constexpr bool forSystem = true;
     constexpr bool regionSampling = false;
 
-    auto renderArea = DisplayRenderArea::create(mDisplay, sourceCrop, sourceCrop.getSize(),
-                                                ui::Dataspace::V0_SRGB, ui::Transform::ROT_0);
+    DisplayRenderArea renderArea(mDisplay, sourceCrop, DEFAULT_DISPLAY_WIDTH,
+                                 DEFAULT_DISPLAY_HEIGHT, ui::Dataspace::V0_SRGB,
+                                 ui::Transform::ROT_0);
 
     auto traverseLayers = [this](const LayerVector::Visitor& visitor) {
-        return mFlinger.traverseLayersInLayerStack(mDisplay->getLayerStack(),
-                                                   CaptureArgs::UNSET_UID, visitor);
+        return mFlinger.traverseLayersInDisplay(mDisplay, visitor);
     };
 
     // TODO: Eliminate expensive/real allocation if possible.
     const uint32_t usage = GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN |
             GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
-    mCaptureScreenBuffer = std::make_shared<
-            renderengine::ExternalTexture>(new GraphicBuffer(renderArea->getReqWidth(),
-                                                             renderArea->getReqHeight(),
-                                                             HAL_PIXEL_FORMAT_RGBA_8888, 1, usage,
-                                                             "screenshot"),
-                                           *mRenderEngine, true);
+    mCaptureScreenBuffer = new GraphicBuffer(renderArea.getReqWidth(), renderArea.getReqHeight(),
+                                             HAL_PIXEL_FORMAT_RGBA_8888, 1, usage, "screenshot");
 
+    int fd = -1;
     status_t result =
-            mFlinger.renderScreenImplLocked(*renderArea, traverseLayers, mCaptureScreenBuffer,
-                                            forSystem, regionSampling);
+            mFlinger.captureScreenImplLocked(renderArea, traverseLayers, mCaptureScreenBuffer.get(),
+                                             useIdentityTransform, forSystem, &fd, regionSampling);
+    if (fd >= 0) {
+        close(fd);
+    }
+
     EXPECT_EQ(NO_ERROR, result);
 
     LayerCase::cleanup(this);
@@ -283,23 +290,23 @@ struct BaseDisplayVariant {
         const ::testing::TestInfo* const test_info =
                 ::testing::UnitTest::GetInstance()->current_test_info();
 
-        auto ceDisplayArgs = compositionengine::DisplayCreationArgsBuilder()
-                                     .setId(DEFAULT_DISPLAY_ID)
-                                     .setConnectionType(ui::DisplayConnectionType::Internal)
-                                     .setPixels({DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT})
-                                     .setIsSecure(Derived::IS_SECURE)
-                                     .setLayerStackId(DEFAULT_LAYER_STACK)
-                                     .setPowerAdvisor(&test->mPowerAdvisor)
-                                     .setName(std::string("Injected display for ") +
-                                              test_info->test_case_name() + "." + test_info->name())
-                                     .build();
+        auto ceDisplayArgs =
+                compositionengine::DisplayCreationArgsBuilder()
+                        .setPhysical({DEFAULT_DISPLAY_ID, DisplayConnectionType::Internal})
+                        .setPixels({DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT})
+                        .setIsSecure(Derived::IS_SECURE)
+                        .setLayerStackId(DEFAULT_LAYER_STACK)
+                        .setPowerAdvisor(&test->mPowerAdvisor)
+                        .setName(std::string("Injected display for ") +
+                                 test_info->test_case_name() + "." + test_info->name())
+                        .build();
 
         auto compositionDisplay =
                 compositionengine::impl::createDisplay(test->mFlinger.getCompositionEngine(),
                                                        ceDisplayArgs);
 
         test->mDisplay = FakeDisplayDeviceInjector(test->mFlinger, compositionDisplay,
-                                                   ui::DisplayConnectionType::Internal, HWC_DISPLAY,
+                                                   DisplayConnectionType::Internal, HWC_DISPLAY,
                                                    true /* isPrimary */)
                                  .setDisplaySurface(test->mDisplaySurface)
                                  .setNativeWindow(test->mNativeWindow)
@@ -327,6 +334,8 @@ struct BaseDisplayVariant {
         EXPECT_CALL(*test->mComposer, presentDisplay(HWC_DISPLAY, _)).Times(1);
         EXPECT_CALL(*test->mComposer, getReleaseFences(HWC_DISPLAY, _, _)).Times(1);
 
+        EXPECT_CALL(*test->mRenderEngine, useNativeFenceSync()).WillRepeatedly(Return(true));
+
         EXPECT_CALL(*test->mDisplaySurface, onFrameCommitted()).Times(1);
         EXPECT_CALL(*test->mDisplaySurface, advanceFrame()).Times(1);
 
@@ -339,8 +348,8 @@ struct BaseDisplayVariant {
         EXPECT_CALL(*test->mRenderEngine, drawLayers)
                 .WillRepeatedly([](const renderengine::DisplaySettings& displaySettings,
                                    const std::vector<const renderengine::LayerSettings*>&,
-                                   const std::shared_ptr<renderengine::ExternalTexture>&,
-                                   const bool, base::unique_fd&&, base::unique_fd*) -> status_t {
+                                   ANativeWindowBuffer*, const bool, base::unique_fd&&,
+                                   base::unique_fd*) -> status_t {
                     EXPECT_EQ(DEFAULT_DISPLAY_MAX_LUMINANCE, displaySettings.maxLuminance);
                     EXPECT_EQ(Rect(DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT),
                               displaySettings.physicalDisplay);
@@ -388,8 +397,8 @@ struct BaseDisplayVariant {
         EXPECT_CALL(*test->mRenderEngine, drawLayers)
                 .WillRepeatedly([](const renderengine::DisplaySettings& displaySettings,
                                    const std::vector<const renderengine::LayerSettings*>&,
-                                   const std::shared_ptr<renderengine::ExternalTexture>&,
-                                   const bool, base::unique_fd&&, base::unique_fd*) -> status_t {
+                                   ANativeWindowBuffer*, const bool, base::unique_fd&&,
+                                   base::unique_fd*) -> status_t {
                     EXPECT_EQ(DEFAULT_DISPLAY_MAX_LUMINANCE, displaySettings.maxLuminance);
                     EXPECT_EQ(Rect(DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT),
                               displaySettings.physicalDisplay);
@@ -435,6 +444,8 @@ struct PoweredOffDisplaySetupVariant : public BaseDisplayVariant<PoweredOffDispl
 
     template <typename Case>
     static void setupCommonCompositionCallExpectations(CompositionTest* test) {
+        EXPECT_CALL(*test->mRenderEngine, useNativeFenceSync()).WillRepeatedly(Return(true));
+
         // TODO: This seems like an unnecessary call if display is powered off.
         EXPECT_CALL(*test->mComposer,
                     setColorTransform(HWC_DISPLAY, _, Hwc2::ColorTransform::IDENTITY))
@@ -449,6 +460,8 @@ struct PoweredOffDisplaySetupVariant : public BaseDisplayVariant<PoweredOffDispl
     static void setupHwcForcedClientCompositionCallExpectations(CompositionTest*) {}
 
     static void setupRECompositionCallExpectations(CompositionTest* test) {
+        EXPECT_CALL(*test->mRenderEngine, useNativeFenceSync()).WillRepeatedly(Return(true));
+
         // TODO: This seems like an unnecessary call if display is powered off.
         EXPECT_CALL(*test->mDisplaySurface, getClientTargetAcquireFence())
                 .WillRepeatedly(ReturnRef(test->mClientTargetAcquireFence));
@@ -531,6 +544,7 @@ struct BaseLayerProperties {
         enqueueBuffer(test, layer);
         Mock::VerifyAndClearExpectations(test->mMessageQueue);
 
+        EXPECT_CALL(*test->mRenderEngine, useNativeFenceSync()).WillRepeatedly(Return(true));
         bool ignoredRecomputeVisibleRegions;
         layer->latchBuffer(ignoredRecomputeVisibleRegions, 0, 0);
         Mock::VerifyAndClear(test->mRenderEngine);
@@ -538,6 +552,12 @@ struct BaseLayerProperties {
 
     static void setupLayerState(CompositionTest* test, sp<BufferQueueLayer> layer) {
         setupLatchedBuffer(test, layer);
+    }
+
+    static void setupBufferLayerPostFrameCallExpectations(CompositionTest* test) {
+        // BufferLayer::onPostComposition(), when there is no present fence
+        EXPECT_CALL(*test->mComposer, getActiveConfig(HWC_DISPLAY, _))
+                .WillOnce(DoAll(SetArgPointee<1>(DEFAULT_CONFIG_ID), Return(Error::NONE)));
     }
 
     static void setupHwcSetGeometryCallExpectations(CompositionTest* test) {
@@ -557,6 +577,8 @@ struct BaseLayerProperties {
                     .Times(1);
             // TODO: Coverage of other values
             EXPECT_CALL(*test->mComposer, setLayerZOrder(HWC_DISPLAY, HWC_LAYER, 0u)).Times(1);
+            // TODO: Coverage of other values
+            EXPECT_CALL(*test->mComposer, setLayerInfo(HWC_DISPLAY, HWC_LAYER, 0u, 0u)).Times(1);
 
             // These expectations retire on saturation as the code path these
             // expectations are for appears to make an extra call to them.
@@ -618,14 +640,16 @@ struct BaseLayerProperties {
                     .Times(1);
             EXPECT_CALL(*test->mComposer, setLayerBuffer(HWC_DISPLAY, HWC_LAYER, _, _, _)).Times(1);
         }
+
+        setupBufferLayerPostFrameCallExpectations(test);
     }
 
     static void setupREBufferCompositionCommonCallExpectations(CompositionTest* test) {
         EXPECT_CALL(*test->mRenderEngine, drawLayers)
                 .WillOnce([](const renderengine::DisplaySettings& displaySettings,
                              const std::vector<const renderengine::LayerSettings*>& layerSettings,
-                             const std::shared_ptr<renderengine::ExternalTexture>&, const bool,
-                             base::unique_fd&&, base::unique_fd*) -> status_t {
+                             ANativeWindowBuffer*, const bool, base::unique_fd&&,
+                             base::unique_fd*) -> status_t {
                     EXPECT_EQ(DEFAULT_DISPLAY_MAX_LUMINANCE, displaySettings.maxLuminance);
                     EXPECT_EQ(Rect(DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT),
                               displaySettings.physicalDisplay);
@@ -673,8 +697,8 @@ struct BaseLayerProperties {
         EXPECT_CALL(*test->mRenderEngine, drawLayers)
                 .WillOnce([](const renderengine::DisplaySettings& displaySettings,
                              const std::vector<const renderengine::LayerSettings*>& layerSettings,
-                             const std::shared_ptr<renderengine::ExternalTexture>&, const bool,
-                             base::unique_fd&&, base::unique_fd*) -> status_t {
+                             ANativeWindowBuffer*, const bool, base::unique_fd&&,
+                             base::unique_fd*) -> status_t {
                     EXPECT_EQ(DEFAULT_DISPLAY_MAX_LUMINANCE, displaySettings.maxLuminance);
                     EXPECT_EQ(Rect(DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT),
                               displaySettings.physicalDisplay);
@@ -742,16 +766,17 @@ struct SidebandLayerProperties : public BaseLayerProperties<SidebandLayerPropert
     static void setupREBufferCompositionCommonCallExpectations(CompositionTest* /*test*/) {}
 };
 
-template <typename LayerProperties>
-struct CommonSecureLayerProperties : public BaseLayerProperties<LayerProperties> {
-    using Base = BaseLayerProperties<LayerProperties>;
+struct SecureLayerProperties : public BaseLayerProperties<SecureLayerProperties> {
+    using Base = BaseLayerProperties<SecureLayerProperties>;
+
+    static constexpr uint32_t LAYER_FLAGS = ISurfaceComposerClient::eSecure;
 
     static void setupInsecureREBufferCompositionCommonCallExpectations(CompositionTest* test) {
         EXPECT_CALL(*test->mRenderEngine, drawLayers)
                 .WillOnce([](const renderengine::DisplaySettings& displaySettings,
                              const std::vector<const renderengine::LayerSettings*>& layerSettings,
-                             const std::shared_ptr<renderengine::ExternalTexture>&, const bool,
-                             base::unique_fd&&, base::unique_fd*) -> status_t {
+                             ANativeWindowBuffer*, const bool, base::unique_fd&&,
+                             base::unique_fd*) -> status_t {
                     EXPECT_EQ(DEFAULT_DISPLAY_MAX_LUMINANCE, displaySettings.maxLuminance);
                     EXPECT_EQ(Rect(DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT),
                               displaySettings.physicalDisplay);
@@ -777,18 +802,12 @@ struct CommonSecureLayerProperties : public BaseLayerProperties<LayerProperties>
 
     static void setupInsecureREBufferCompositionCallExpectations(CompositionTest* test) {
         setupInsecureREBufferCompositionCommonCallExpectations(test);
+        Base::setupBufferLayerPostFrameCallExpectations(test);
     }
 
     static void setupInsecureREBufferScreenshotCompositionCallExpectations(CompositionTest* test) {
         setupInsecureREBufferCompositionCommonCallExpectations(test);
     }
-};
-
-struct ParentSecureLayerProperties
-      : public CommonSecureLayerProperties<ParentSecureLayerProperties> {};
-
-struct SecureLayerProperties : public CommonSecureLayerProperties<SecureLayerProperties> {
-    static constexpr uint32_t LAYER_FLAGS = ISurfaceComposerClient::eSecure;
 };
 
 struct CursorLayerProperties : public BaseLayerProperties<CursorLayerProperties> {
@@ -826,20 +845,15 @@ struct BaseLayerVariant {
         Mock::VerifyAndClear(test->mRenderEngine);
         Mock::VerifyAndClearExpectations(test->mMessageQueue);
 
-        initLayerDrawingStateAndComputeBounds(test, layer);
-
-        return layer;
-    }
-
-    template <typename L>
-    static void initLayerDrawingStateAndComputeBounds(CompositionTest* test, sp<L> layer) {
         auto& layerDrawingState = test->mFlinger.mutableLayerDrawingState(layer);
         layerDrawingState.layerStack = DEFAULT_LAYER_STACK;
-        layerDrawingState.width = 100;
-        layerDrawingState.height = 100;
+        layerDrawingState.active.w = 100;
+        layerDrawingState.active.h = 100;
         layerDrawingState.color = half4(LayerProperties::COLOR[0], LayerProperties::COLOR[1],
                                         LayerProperties::COLOR[2], LayerProperties::COLOR[3]);
         layer->computeBounds(FloatRect(0, 0, 100, 100), ui::Transform(), 0.f /* shadowRadius */);
+
+        return layer;
     }
 
     static void injectLayer(CompositionTest* test, sp<Layer> layer) {
@@ -877,13 +891,13 @@ struct EffectLayerVariant : public BaseLayerVariant<LayerProperties> {
     static FlingerLayerType createLayer(CompositionTest* test) {
         FlingerLayerType layer = Base::template createLayerWithFactory<EffectLayer>(test, [test]() {
             return new EffectLayer(
-                    LayerCreationArgs(test->mFlinger.flinger(), sp<Client>(), "test-layer",
+                    LayerCreationArgs(test->mFlinger.mFlinger.get(), sp<Client>(), "test-layer",
                                       LayerProperties::WIDTH, LayerProperties::HEIGHT,
                                       LayerProperties::LAYER_FLAGS, LayerMetadata()));
         });
 
         auto& layerDrawingState = test->mFlinger.mutableLayerDrawingState(layer);
-        layerDrawingState.crop = Rect(0, 0, LayerProperties::HEIGHT, LayerProperties::WIDTH);
+        layerDrawingState.crop_legacy = Rect(0, 0, LayerProperties::HEIGHT, LayerProperties::WIDTH);
         return layer;
     }
 
@@ -916,7 +930,8 @@ struct BufferLayerVariant : public BaseLayerVariant<LayerProperties> {
 
         FlingerLayerType layer =
                 Base::template createLayerWithFactory<BufferQueueLayer>(test, [test]() {
-                    LayerCreationArgs args(test->mFlinger.flinger(), sp<Client>(), "test-layer",
+                    sp<Client> client;
+                    LayerCreationArgs args(test->mFlinger.mFlinger.get(), client, "test-layer",
                                            LayerProperties::WIDTH, LayerProperties::HEIGHT,
                                            LayerProperties::LAYER_FLAGS, LayerMetadata());
                     args.textureName = test->mFlinger.mutableTexturePool().back();
@@ -957,49 +972,6 @@ struct BufferLayerVariant : public BaseLayerVariant<LayerProperties> {
 
     static void setupInsecureREScreenshotCompositionCallExpectations(CompositionTest* test) {
         LayerProperties::setupInsecureREBufferScreenshotCompositionCallExpectations(test);
-    }
-};
-
-template <typename LayerProperties>
-struct ContainerLayerVariant : public BaseLayerVariant<LayerProperties> {
-    using Base = BaseLayerVariant<LayerProperties>;
-    using FlingerLayerType = sp<ContainerLayer>;
-
-    static FlingerLayerType createLayer(CompositionTest* test) {
-        LayerCreationArgs args(test->mFlinger.flinger(), sp<Client>(), "test-container-layer",
-                               LayerProperties::WIDTH, LayerProperties::HEIGHT,
-                               LayerProperties::LAYER_FLAGS, LayerMetadata());
-        FlingerLayerType layer = new ContainerLayer(args);
-        Base::template initLayerDrawingStateAndComputeBounds(test, layer);
-        return layer;
-    }
-};
-
-template <typename LayerVariant, typename ParentLayerVariant>
-struct ChildLayerVariant : public LayerVariant {
-    using Base = LayerVariant;
-    using FlingerLayerType = typename LayerVariant::FlingerLayerType;
-    using ParentBase = ParentLayerVariant;
-
-    static FlingerLayerType createLayer(CompositionTest* test) {
-        // Need to create child layer first. Otherwise layer history size will be 2.
-        FlingerLayerType layer = Base::createLayer(test);
-
-        typename ParentBase::FlingerLayerType parentLayer = ParentBase::createLayer(test);
-        parentLayer->addChild(layer);
-        test->mFlinger.setLayerDrawingParent(layer, parentLayer);
-
-        test->mAuxiliaryLayers.push_back(parentLayer);
-
-        return layer;
-    }
-
-    static void cleanupInjectedLayers(CompositionTest* test) {
-        // Clear auxiliary layers first so that child layer can be successfully destroyed in the
-        // following call.
-        test->mAuxiliaryLayers.clear();
-
-        Base::cleanupInjectedLayers(test);
     }
 };
 
@@ -1392,38 +1364,6 @@ TEST_F(CompositionTest, captureScreenSecureBufferLayerOnInsecureDisplay) {
 }
 
 /* ------------------------------------------------------------------------
- *  Layers with a parent layer with ISurfaceComposerClient::eSecure, on a non-secure display
- */
-
-TEST_F(CompositionTest,
-       HWCComposedBufferLayerWithSecureParentLayerOnInsecureDisplayWithDirtyGeometry) {
-    displayRefreshCompositionDirtyGeometry<
-            CompositionCase<InsecureDisplaySetupVariant,
-                            ChildLayerVariant<BufferLayerVariant<ParentSecureLayerProperties>,
-                                              ContainerLayerVariant<SecureLayerProperties>>,
-                            KeepCompositionTypeVariant<IComposerClient::Composition::CLIENT>,
-                            ForcedClientCompositionResultVariant>>();
-}
-
-TEST_F(CompositionTest,
-       HWCComposedBufferLayerWithSecureParentLayerOnInsecureDisplayWithDirtyFrame) {
-    displayRefreshCompositionDirtyFrame<
-            CompositionCase<InsecureDisplaySetupVariant,
-                            ChildLayerVariant<BufferLayerVariant<ParentSecureLayerProperties>,
-                                              ContainerLayerVariant<SecureLayerProperties>>,
-                            KeepCompositionTypeVariant<IComposerClient::Composition::CLIENT>,
-                            ForcedClientCompositionResultVariant>>();
-}
-
-TEST_F(CompositionTest, captureScreenBufferLayerWithSecureParentLayerOnInsecureDisplay) {
-    captureScreenComposition<
-            CompositionCase<InsecureDisplaySetupVariant,
-                            ChildLayerVariant<BufferLayerVariant<ParentSecureLayerProperties>,
-                                              ContainerLayerVariant<SecureLayerProperties>>,
-                            NoCompositionTypeVariant, REScreenshotResultVariant>>();
-}
-
-/* ------------------------------------------------------------------------
  *  Cursor layers
  */
 
@@ -1512,4 +1452,4 @@ TEST_F(CompositionTest, DebugOptionForcingClientCompositionOfBufferLayerWithDirt
 } // namespace android
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
-#pragma clang diagnostic pop // ignored "-Wconversion -Wextra"
+#pragma clang diagnostic pop // ignored "-Wconversion"

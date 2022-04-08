@@ -119,7 +119,7 @@ status_t BnProducerListener::onTransact(uint32_t code, const Parcel& data,
     return BBinder::onTransact(code, data, reply, flags);
 }
 
-StubProducerListener::~StubProducerListener() = default;
+DummyProducerListener::~DummyProducerListener() = default;
 
 bool BnProducerListener::needsReleaseNotify() {
     return true;

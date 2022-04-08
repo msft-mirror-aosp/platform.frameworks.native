@@ -53,19 +53,11 @@
         },
         {
           "include-filter": "*RelativeZTest.*"
-        },
-        {
-          "include-filter": "*RefreshRateOverlayTest.*"
         }
       ]
     },
     {
-      "name": "CtsGraphicsTestCases",
-      "options": [
-        {
-          "include-filter": "android.graphics.cts.VulkanPreTransformTest"
-        }
-      ]
+      "name": "libsurfaceflinger_unittest"
     }
   ]
 }

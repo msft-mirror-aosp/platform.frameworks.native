@@ -21,7 +21,6 @@
 #include <android-base/macros.h>
 
 #include "Command.h"
-#include "ParentDebugInfoLevel.h"
 #include "utils.h"
 
 namespace android {
@@ -43,8 +42,9 @@ private:
     std::string mInterfaceName;
     std::vector<std::string> mOptions;
 
-    // See comment on ParentDebugInfoLevel.
-    ParentDebugInfoLevel mParentDebugInfoLevel = ParentDebugInfoLevel::FULL;
+    // Outputs the actual descriptor of a hal instead of the debug output
+    // if the arguments provided are a superclass of the actual hal impl.
+    bool mExcludesParentInstances;
 
     DISALLOW_COPY_AND_ASSIGN(DebugCommand);
 };

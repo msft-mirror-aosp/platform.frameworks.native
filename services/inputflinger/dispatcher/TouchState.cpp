@@ -137,7 +137,8 @@ bool TouchState::isSlippery() const {
     for (const TouchedWindow& window : windows) {
         if (window.targetFlags & InputTarget::FLAG_FOREGROUND) {
             if (haveSlipperyForegroundWindow ||
-                !window.windowHandle->getInfo()->flags.test(InputWindowInfo::Flag::SLIPPERY)) {
+                !(window.windowHandle->getInfo()->layoutParamsFlags &
+                  InputWindowInfo::FLAG_SLIPPERY)) {
                 return false;
             }
             haveSlipperyForegroundWindow = true;

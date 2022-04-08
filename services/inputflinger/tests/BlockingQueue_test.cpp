@@ -26,7 +26,7 @@ namespace android {
 // --- BlockingQueueTest ---
 
 /**
- * Validate basic pop and push operation.
+ * Sanity check of basic pop and push operation.
  */
 TEST(BlockingQueueTest, Queue_AddAndRemove) {
     constexpr size_t capacity = 10;

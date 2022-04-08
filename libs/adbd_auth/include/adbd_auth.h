@@ -26,6 +26,7 @@
 #endif
 
 __BEGIN_DECLS
+#if !defined(__ANDROID__) || __ANDROID_API__ >= 30
 
 // The transport type of the device connection.
 enum AdbTransportType : int32_t {
@@ -185,4 +186,5 @@ enum AdbdAuthFeature : int32_t {
  */
 bool adbd_auth_supports_feature(AdbdAuthFeature feature);
 
+#endif  //!__ANDROID__ || __ANDROID_API__ >= 30
 __END_DECLS

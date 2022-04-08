@@ -1,13 +1,4 @@
 // Build the unit tests for installd
-package {
-    // See: http://go/android-license-faq
-    // A large-scale-change added 'default_applicable_licenses' to import
-    // all of the 'license_kinds' from "frameworks_native_license"
-    // to get the below license kinds:
-    //   SPDX-license-identifier-Apache-2.0
-    default_applicable_licenses: ["frameworks_native_license"],
-}
-
 cc_test {
     name: "installd_utils_test",
     test_suites: ["device-tests"],
@@ -20,7 +11,6 @@ cc_test {
         "libcutils",
     ],
     static_libs: [
-        "libasync_safe",
         "libdiskusage",
         "libinstalld",
         "liblog",
@@ -45,28 +35,12 @@ cc_test {
         "server_configurable_flags",
     ],
     static_libs: [
-        "libasync_safe",
         "libdiskusage",
         "libinstalld",
         "liblog",
         "liblogwrap",
     ],
     test_config: "installd_cache_test.xml",
-
-    product_variables: {
-        arc: {
-            exclude_srcs: [
-                "QuotaUtils.cpp",
-            ],
-            static_libs: [
-                "libarcdiskquota",
-                "arc_services_aidl",
-            ],
-            cflags: [
-                "-DUSE_ARC",
-            ],
-        },
-    },
 }
 
 cc_test {
@@ -86,28 +60,12 @@ cc_test {
         "server_configurable_flags",
     ],
     static_libs: [
-        "libasync_safe",
         "libdiskusage",
         "libinstalld",
         "liblog",
         "liblogwrap",
     ],
     test_config: "installd_service_test.xml",
-
-    product_variables: {
-        arc: {
-            exclude_srcs: [
-                "QuotaUtils.cpp",
-            ],
-            static_libs: [
-                "libarcdiskquota",
-                "arc_services_aidl",
-            ],
-            cflags: [
-                "-DUSE_ARC",
-            ],
-        },
-    },
 }
 
 cc_test {
@@ -127,7 +85,6 @@ cc_test {
         "server_configurable_flags",
     ],
     static_libs: [
-        "libasync_safe",
         "libdiskusage",
         "libinstalld",
         "liblog",
@@ -136,21 +93,6 @@ cc_test {
         "libz",
     ],
     test_config: "installd_dexopt_test.xml",
-
-    product_variables: {
-        arc: {
-            exclude_srcs: [
-                "QuotaUtils.cpp",
-            ],
-            static_libs: [
-                "libarcdiskquota",
-                "arc_services_aidl",
-            ],
-            cflags: [
-                "-DUSE_ARC",
-            ],
-        },
-    },
 }
 
 cc_test {
@@ -170,3 +112,4 @@ cc_test {
         "libotapreoptparameters"
     ],
 }
+

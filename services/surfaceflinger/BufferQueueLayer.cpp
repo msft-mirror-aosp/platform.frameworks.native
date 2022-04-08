@@ -17,7 +17,6 @@
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
-#pragma clang diagnostic ignored "-Wextra"
 
 #undef LOG_TAG
 #define LOG_TAG "BufferQueueLayer"
@@ -36,7 +35,6 @@
 #include "TimeStats/TimeStats.h"
 
 namespace android {
-using PresentState = frametimeline::SurfaceFrame::PresentState;
 
 BufferQueueLayer::BufferQueueLayer(const LayerCreationArgs& args) : BufferLayer(args) {}
 
@@ -100,10 +98,18 @@ int32_t BufferQueueLayer::getQueuedFrameCount() const {
     return mQueuedFrames;
 }
 
-bool BufferQueueLayer::isBufferDue(nsecs_t expectedPresentTime) const {
+bool BufferQueueLayer::shouldPresentNow(nsecs_t expectedPresentTime) const {
+    if (getSidebandStreamChanged() || getAutoRefresh()) {
+        return true;
+    }
+
+    if (!hasFrameUpdate()) {
+        return false;
+    }
+
     Mutex::Autolock lock(mQueueItemLock);
 
-    const int64_t addedTime = mQueueItems[0].item.mTimestamp;
+    const int64_t addedTime = mQueueItems[0].mTimestamp;
 
     // Ignore timestamps more than a second in the future
     const bool isPlausible = addedTime < (expectedPresentTime + s2ns(1));
@@ -125,9 +131,7 @@ bool BufferQueueLayer::isBufferDue(nsecs_t expectedPresentTime) const {
 // -----------------------------------------------------------------------
 
 bool BufferQueueLayer::fenceHasSignaled() const {
-    Mutex::Autolock lock(mQueueItemLock);
-
-    if (SurfaceFlinger::enableLatchUnsignaled) {
+    if (latchUnsignaledBuffers()) {
         return true;
     }
 
@@ -135,7 +139,8 @@ bool BufferQueueLayer::fenceHasSignaled() const {
         return true;
     }
 
-    if (mQueueItems[0].item.mIsDroppable) {
+    Mutex::Autolock lock(mQueueItemLock);
+    if (mQueueItems[0].mIsDroppable) {
         // Even though this buffer's fence may not have signaled yet, it could
         // be replaced by another buffer before it has a chance to, which means
         // that it's possible to get into a situation where a buffer is never
@@ -143,7 +148,7 @@ bool BufferQueueLayer::fenceHasSignaled() const {
         return true;
     }
     const bool fenceSignaled =
-            mQueueItems[0].item.mFenceTime->getSignalTime() != Fence::SIGNAL_TIME_PENDING;
+            mQueueItems[0].mFenceTime->getSignalTime() != Fence::SIGNAL_TIME_PENDING;
     if (!fenceSignaled) {
         mFlinger->mTimeStats->incrementLatchSkipped(getSequence(),
                                                     TimeStats::LatchSkipReason::LateAcquire);
@@ -158,12 +163,12 @@ bool BufferQueueLayer::framePresentTimeIsCurrent(nsecs_t expectedPresentTime) co
     }
 
     Mutex::Autolock lock(mQueueItemLock);
-    return mQueueItems[0].item.mTimestamp <= expectedPresentTime;
+    return mQueueItems[0].mTimestamp <= expectedPresentTime;
 }
 
 uint64_t BufferQueueLayer::getFrameNumber(nsecs_t expectedPresentTime) const {
     Mutex::Autolock lock(mQueueItemLock);
-    uint64_t frameNumber = mQueueItems[0].item.mFrameNumber;
+    uint64_t frameNumber = mQueueItems[0].mFrameNumber;
 
     // The head of the queue will be dropped if there are signaled and timely frames behind it
     if (isRemovedFromCurrentState()) {
@@ -172,35 +177,39 @@ uint64_t BufferQueueLayer::getFrameNumber(nsecs_t expectedPresentTime) const {
 
     for (int i = 1; i < mQueueItems.size(); i++) {
         const bool fenceSignaled =
-                mQueueItems[i].item.mFenceTime->getSignalTime() != Fence::SIGNAL_TIME_PENDING;
+                mQueueItems[i].mFenceTime->getSignalTime() != Fence::SIGNAL_TIME_PENDING;
         if (!fenceSignaled) {
             break;
         }
 
         // We don't drop frames without explicit timestamps
-        if (mQueueItems[i].item.mIsAutoTimestamp) {
+        if (mQueueItems[i].mIsAutoTimestamp) {
             break;
         }
 
-        const nsecs_t desiredPresent = mQueueItems[i].item.mTimestamp;
+        const nsecs_t desiredPresent = mQueueItems[i].mTimestamp;
         if (desiredPresent < expectedPresentTime - BufferQueueConsumer::MAX_REASONABLE_NSEC ||
             desiredPresent > expectedPresentTime) {
             break;
         }
 
-        frameNumber = mQueueItems[i].item.mFrameNumber;
+        frameNumber = mQueueItems[i].mFrameNumber;
     }
 
     return frameNumber;
 }
 
-bool BufferQueueLayer::latchSidebandStream(bool& recomputeVisibleRegions) {
-    // We need to update the sideband stream if the layer has both a buffer and a sideband stream.
-    const bool updateSidebandStream = hasFrameUpdate() && mSidebandStream.get();
+bool BufferQueueLayer::getAutoRefresh() const {
+    return mAutoRefresh;
+}
 
+bool BufferQueueLayer::getSidebandStreamChanged() const {
+    return mSidebandStreamChanged;
+}
+
+bool BufferQueueLayer::latchSidebandStream(bool& recomputeVisibleRegions) {
     bool sidebandStreamChanged = true;
-    if (mSidebandStreamChanged.compare_exchange_strong(sidebandStreamChanged, false) ||
-        updateSidebandStream) {
+    if (mSidebandStreamChanged.compare_exchange_strong(sidebandStreamChanged, false)) {
         // mSidebandStreamChanged was changed to false
         mSidebandStream = mConsumer->getSidebandStream();
         auto* layerCompositionState = editCompositionState();
@@ -220,6 +229,10 @@ bool BufferQueueLayer::hasFrameUpdate() const {
     return mQueuedFrames > 0;
 }
 
+status_t BufferQueueLayer::bindTextureImage() {
+    return mConsumer->bindTextureImage();
+}
+
 status_t BufferQueueLayer::updateTexImage(bool& recomputeVisibleRegions, nsecs_t latchTime,
                                           nsecs_t expectedPresentTime) {
     // This boolean is used to make sure that SurfaceFlinger's shadow copy
@@ -228,8 +241,8 @@ status_t BufferQueueLayer::updateTexImage(bool& recomputeVisibleRegions, nsecs_t
     // buffer mode.
     bool queuedBuffer = false;
     const int32_t layerId = getSequence();
-    LayerRejecter r(mDrawingState, getDrawingState(), recomputeVisibleRegions,
-                    getProducerStickyTransform() != 0, mName,
+    LayerRejecter r(mDrawingState, getCurrentState(), recomputeVisibleRegions,
+                    getProducerStickyTransform() != 0, mName, mOverrideScalingMode,
                     getTransformToDisplayInverse());
 
     if (isRemovedFromCurrentState()) {
@@ -245,20 +258,18 @@ status_t BufferQueueLayer::updateTexImage(bool& recomputeVisibleRegions, nsecs_t
         Mutex::Autolock lock(mQueueItemLock);
         for (int i = 0; i < mQueueItems.size(); i++) {
             bool fenceSignaled =
-                    mQueueItems[i].item.mFenceTime->getSignalTime() != Fence::SIGNAL_TIME_PENDING;
+                    mQueueItems[i].mFenceTime->getSignalTime() != Fence::SIGNAL_TIME_PENDING;
             if (!fenceSignaled) {
                 break;
             }
-            lastSignaledFrameNumber = mQueueItems[i].item.mFrameNumber;
+            lastSignaledFrameNumber = mQueueItems[i].mFrameNumber;
         }
     }
     const uint64_t maxFrameNumberToAcquire =
             std::min(mLastFrameNumberReceived.load(), lastSignaledFrameNumber);
 
-    bool autoRefresh;
-    status_t updateResult = mConsumer->updateTexImage(&r, expectedPresentTime, &autoRefresh,
+    status_t updateResult = mConsumer->updateTexImage(&r, expectedPresentTime, &mAutoRefresh,
                                                       &queuedBuffer, maxFrameNumberToAcquire);
-    mAutoRefresh = autoRefresh;
     if (updateResult == BufferQueue::PRESENT_LATER) {
         // Producer doesn't want buffer to be displayed yet.  Signal a
         // layer update so we check again at the next opportunity.
@@ -269,12 +280,9 @@ status_t BufferQueueLayer::updateTexImage(bool& recomputeVisibleRegions, nsecs_t
         // and return early
         if (queuedBuffer) {
             Mutex::Autolock lock(mQueueItemLock);
-            mConsumer->mergeSurfaceDamage(mQueueItems[0].item.mSurfaceDamage);
-            mFlinger->mTimeStats->removeTimeRecord(layerId, mQueueItems[0].item.mFrameNumber);
-            if (mQueueItems[0].surfaceFrame) {
-                addSurfaceFrameDroppedForBuffer(mQueueItems[0].surfaceFrame);
-            }
-            mQueueItems.erase(mQueueItems.begin());
+            mConsumer->mergeSurfaceDamage(mQueueItems[0].mSurfaceDamage);
+            mFlinger->mTimeStats->removeTimeRecord(layerId, mQueueItems[0].mFrameNumber);
+            mQueueItems.removeAt(0);
             mQueuedFrames--;
         }
         return BAD_VALUE;
@@ -285,11 +293,6 @@ status_t BufferQueueLayer::updateTexImage(bool& recomputeVisibleRegions, nsecs_t
         // early.
         if (queuedBuffer) {
             Mutex::Autolock lock(mQueueItemLock);
-            for (auto& [item, surfaceFrame] : mQueueItems) {
-                if (surfaceFrame) {
-                    addSurfaceFrameDroppedForBuffer(surfaceFrame);
-                }
-            }
             mQueueItems.clear();
             mQueuedFrames = 0;
             mFlinger->mTimeStats->onDestroy(layerId);
@@ -313,27 +316,22 @@ status_t BufferQueueLayer::updateTexImage(bool& recomputeVisibleRegions, nsecs_t
 
         // Remove any stale buffers that have been dropped during
         // updateTexImage
-        while (mQueueItems[0].item.mFrameNumber != currentFrameNumber) {
-            mConsumer->mergeSurfaceDamage(mQueueItems[0].item.mSurfaceDamage);
-            mFlinger->mTimeStats->removeTimeRecord(layerId, mQueueItems[0].item.mFrameNumber);
-            if (mQueueItems[0].surfaceFrame) {
-                addSurfaceFrameDroppedForBuffer(mQueueItems[0].surfaceFrame);
-            }
-            mQueueItems.erase(mQueueItems.begin());
+        while (mQueueItems[0].mFrameNumber != currentFrameNumber) {
+            mConsumer->mergeSurfaceDamage(mQueueItems[0].mSurfaceDamage);
+            mFlinger->mTimeStats->removeTimeRecord(layerId, mQueueItems[0].mFrameNumber);
+            mQueueItems.removeAt(0);
             mQueuedFrames--;
         }
 
-        uint64_t bufferID = mQueueItems[0].item.mGraphicBuffer->getId();
+        uint64_t bufferID = mQueueItems[0].mGraphicBuffer->getId();
+        mFlinger->mFrameTracer->traceFence(layerId, bufferID, currentFrameNumber,
+                                           mQueueItems[0].mFenceTime,
+                                           FrameTracer::FrameEvent::ACQUIRE_FENCE);
         mFlinger->mTimeStats->setLatchTime(layerId, currentFrameNumber, latchTime);
         mFlinger->mFrameTracer->traceTimestamp(layerId, bufferID, currentFrameNumber, latchTime,
                                                FrameTracer::FrameEvent::LATCH);
 
-        if (mQueueItems[0].surfaceFrame) {
-            addSurfaceFramePresentedForBuffer(mQueueItems[0].surfaceFrame,
-                                              mQueueItems[0].item.mFenceTime->getSignalTime(),
-                                              latchTime);
-        }
-        mQueueItems.erase(mQueueItems.begin());
+        mQueueItems.removeAt(0);
     }
 
     // Decrement the queued-frames count.  Signal another event if we
@@ -369,10 +367,6 @@ status_t BufferQueueLayer::updateFrameNumber(nsecs_t latchTime) {
     return NO_ERROR;
 }
 
-void BufferQueueLayer::setFrameTimelineInfoForBuffer(const FrameTimelineInfo& frameTimelineInfo) {
-    mFrameTimelineInfo = frameTimelineInfo;
-}
-
 // -----------------------------------------------------------------------
 // Interface implementation for BufferLayerConsumer::ContentsChangedListener
 // -----------------------------------------------------------------------
@@ -399,12 +393,8 @@ void BufferQueueLayer::onFrameCancelled(const uint64_t bufferId) {
 
 void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
     const int32_t layerId = getSequence();
-    const uint64_t bufferId = item.mGraphicBuffer->getId();
-    mFlinger->mFrameTracer->traceTimestamp(layerId, bufferId, item.mFrameNumber, systemTime(),
-                                           FrameTracer::FrameEvent::QUEUE);
-    mFlinger->mFrameTracer->traceFence(layerId, bufferId, item.mFrameNumber,
-                                       std::make_shared<FenceTime>(item.mFence),
-                                       FrameTracer::FrameEvent::ACQUIRE_FENCE);
+    mFlinger->mFrameTracer->traceTimestamp(layerId, item.mGraphicBuffer->getId(), item.mFrameNumber,
+                                           systemTime(), FrameTracer::FrameEvent::QUEUE);
 
     ATRACE_CALL();
     // Add this buffer from our internal queue tracker
@@ -429,9 +419,7 @@ void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
             }
         }
 
-        auto surfaceFrame = createSurfaceFrameForBuffer(mFrameTimelineInfo, systemTime(), mName);
-
-        mQueueItems.push_back({item, surfaceFrame});
+        mQueueItems.push_back(item);
         mQueuedFrames++;
 
         // Wake up any pending callbacks
@@ -464,10 +452,7 @@ void BufferQueueLayer::onFrameReplaced(const BufferItem& item) {
             ALOGE("Can't replace a frame on an empty queue");
             return;
         }
-
-        auto surfaceFrame = createSurfaceFrameForBuffer(mFrameTimelineInfo, systemTime(), mName);
-        mQueueItems[mQueueItems.size() - 1].item = item;
-        mQueueItems[mQueueItems.size() - 1].surfaceFrame = std::move(surfaceFrame);
+        mQueueItems.editItemAt(mQueueItems.size() - 1) = item;
 
         // Wake up any pending callbacks
         mLastFrameNumberReceived = item.mFrameNumber;
@@ -475,12 +460,8 @@ void BufferQueueLayer::onFrameReplaced(const BufferItem& item) {
     }
 
     const int32_t layerId = getSequence();
-    const uint64_t bufferId = item.mGraphicBuffer->getId();
-    mFlinger->mFrameTracer->traceTimestamp(layerId, bufferId, item.mFrameNumber, systemTime(),
-                                           FrameTracer::FrameEvent::QUEUE);
-    mFlinger->mFrameTracer->traceFence(layerId, bufferId, item.mFrameNumber,
-                                       std::make_shared<FenceTime>(item.mFence),
-                                       FrameTracer::FrameEvent::ACQUIRE_FENCE);
+    mFlinger->mFrameTracer->traceTimestamp(layerId, item.mGraphicBuffer->getId(), item.mFrameNumber,
+                                           systemTime(), FrameTracer::FrameEvent::QUEUE);
     mConsumer->onBufferAvailable(item);
 }
 
@@ -511,7 +492,10 @@ void BufferQueueLayer::onFirstRef() {
     mConsumer->setContentsChangedListener(mContentsChangedListener);
     mConsumer->setName(String8(mName.data(), mName.size()));
 
-    mProducer->setMaxDequeuedBufferCount(2);
+    // BufferQueueCore::mMaxDequeuedBufferCount is default to 1
+    if (!mFlinger->isLayerTripleBufferingDisabled()) {
+        mProducer->setMaxDequeuedBufferCount(2);
+    }
 }
 
 status_t BufferQueueLayer::setDefaultBufferProperties(uint32_t w, uint32_t h, PixelFormat format) {
@@ -628,4 +612,4 @@ void BufferQueueLayer::ContentsChangedListener::abandon() {
 } // namespace android
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
-#pragma clang diagnostic pop // ignored "-Wconversion -Wextra"
+#pragma clang diagnostic pop // ignored "-Wconversion"

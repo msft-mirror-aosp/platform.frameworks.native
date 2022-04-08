@@ -39,13 +39,8 @@ struct DumpstateInfo {
     std::string calling_package;
 };
 
-static binder::Status exception(uint32_t code, const std::string& msg,
-                                const std::string& extra_msg = "") {
-    if (extra_msg.empty()) {
-        MYLOGE("%s (%d) ", msg.c_str(), code);
-    } else {
-        MYLOGE("%s %s (%d) ", msg.c_str(), extra_msg.c_str(), code);
-    }
+static binder::Status exception(uint32_t code, const std::string& msg) {
+    MYLOGE("%s (%d) ", msg.c_str(), code);
     return binder::Status::fromExceptionCode(code, String8(msg.c_str()));
 }
 
@@ -65,7 +60,7 @@ static binder::Status exception(uint32_t code, const std::string& msg,
 
 }  // namespace
 
-DumpstateService::DumpstateService() : ds_(nullptr), calling_uid_(-1), calling_package_() {
+DumpstateService::DumpstateService() : ds_(nullptr) {
 }
 
 char const* DumpstateService::getServiceName() {
@@ -136,10 +131,6 @@ binder::Status DumpstateService::startBugreport(int32_t calling_uid,
     ds_->SetOptions(std::move(options));
     ds_->listener_ = listener;
 
-    // Track caller info for cancellation purposes.
-    calling_uid_ = calling_uid;
-    calling_package_ = calling_package;
-
     DumpstateInfo* ds_info = new DumpstateInfo();
     ds_info->ds = ds_;
     ds_info->calling_uid = calling_uid;
@@ -158,20 +149,8 @@ binder::Status DumpstateService::startBugreport(int32_t calling_uid,
     return binder::Status::ok();
 }
 
-binder::Status DumpstateService::cancelBugreport(int32_t calling_uid,
-                                                 const std::string& calling_package) {
+binder::Status DumpstateService::cancelBugreport() {
     std::lock_guard<std::mutex> lock(lock_);
-    if (calling_uid != calling_uid_ || calling_package != calling_package_) {
-        // Note: we use a SecurityException to prevent BugreportManagerServiceImpl from killing the
-        // report in progress (from another caller).
-        return exception(
-            binder::Status::EX_SECURITY,
-            StringPrintf("Cancellation requested by %d/%s does not match report in "
-                         "progress",
-                         calling_uid, calling_package.c_str()),
-            // Sharing the owner of the BR is a (minor) leak, so leave it out of the app's exception
-            StringPrintf("started by %d/%s", calling_uid_, calling_package_.c_str()));
-    }
     ds_->Cancel();
     return binder::Status::ok();
 }

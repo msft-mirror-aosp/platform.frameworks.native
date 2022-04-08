@@ -17,7 +17,6 @@
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
-#pragma clang diagnostic ignored "-Wextra"
 
 // #define LOG_NDEBUG 0
 #undef LOG_TAG
@@ -28,7 +27,6 @@
 #include "FakeComposerUtils.h"
 #include "MockComposerHal.h"
 
-#include <binder/Parcel.h>
 #include <gui/DisplayEventReceiver.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/LayerDebugInfo.h>
@@ -43,8 +41,7 @@
 #include <hwbinder/ProcessState.h>
 #include <log/log.h>
 #include <private/gui/ComposerService.h>
-#include <ui/DisplayMode.h>
-#include <ui/DynamicDisplayInfo.h>
+#include <ui/DisplayConfig.h>
 #include <utils/Looper.h>
 
 #include <gmock/gmock.h>
@@ -64,20 +61,16 @@ namespace {
 
 // Mock test helpers
 using ::testing::_;
+using ::testing::AtLeast;
 using ::testing::DoAll;
+using ::testing::Invoke;
 using ::testing::Return;
 using ::testing::SetArgPointee;
 
 using Transaction = SurfaceComposerClient::Transaction;
 using Attribute = V2_4::IComposerClient::Attribute;
-using Display = V2_1::Display;
 
 ///////////////////////////////////////////////
-constexpr PhysicalDisplayId physicalIdFromHwcDisplayId(Display hwcId) {
-    return PhysicalDisplayId::fromPort(hwcId);
-}
-constexpr PhysicalDisplayId kPrimaryDisplayId = physicalIdFromHwcDisplayId(PRIMARY_DISPLAY);
-constexpr PhysicalDisplayId kExternalDisplayId = physicalIdFromHwcDisplayId(EXTERNAL_DISPLAY);
 
 struct TestColor {
 public:
@@ -91,6 +84,7 @@ constexpr static TestColor RED = {195, 63, 63, 255};
 constexpr static TestColor LIGHT_RED = {255, 177, 177, 255};
 constexpr static TestColor GREEN = {63, 195, 63, 255};
 constexpr static TestColor BLUE = {63, 63, 195, 255};
+constexpr static TestColor DARK_GRAY = {63, 63, 63, 255};
 constexpr static TestColor LIGHT_GRAY = {200, 200, 200, 255};
 
 // Fill an RGBA_8888 formatted surface with a single color.
@@ -158,7 +152,7 @@ protected:
                 self->mReceivedDisplayEvents.push_back(buffer[i]);
             }
         }
-        ALOGD_IF(n < 0, "Error reading events (%s)", strerror(-n));
+        ALOGD_IF(n < 0, "Error reading events (%s)\n", strerror(-n));
         return 1;
     }
 
@@ -174,7 +168,7 @@ protected:
     void setExpectationsForConfigs(Display display, std::vector<TestConfig> testConfigs,
                                    Config activeConfig, V2_4::VsyncPeriodNanos defaultVsyncPeriod) {
         std::vector<Config> configIds;
-        for (size_t i = 0; i < testConfigs.size(); i++) {
+        for (int i = 0; i < testConfigs.size(); i++) {
             configIds.push_back(testConfigs[i].id);
 
             EXPECT_CALL(*mMockComposer,
@@ -244,7 +238,7 @@ protected:
         ASSERT_EQ(NO_ERROR, mComposerClient->initCheck());
 
         mReceiver.reset(new DisplayEventReceiver(ISurfaceComposer::eVsyncSourceApp,
-                                                 ISurfaceComposer::EventRegistration::modeChanged));
+                                                 ISurfaceComposer::eConfigChangedDispatch));
         mLooper = new Looper(false);
         mLooper->addFd(mReceiver->getFd(), 0, ALOOPER_EVENT_INPUT, processDisplayEvents, this);
     }
@@ -268,18 +262,14 @@ protected:
         mMockComposer = nullptr;
     }
 
-    void waitForDisplayTransaction(Display display) {
+    void waitForDisplayTransaction() {
         // Both a refresh and a vsync event are needed to apply pending display
         // transactions.
-        mFakeComposerClient->refreshDisplay(display);
+        mFakeComposerClient->refreshDisplay(EXTERNAL_DISPLAY);
         mFakeComposerClient->runVSyncAndWait();
 
         // Extra vsync and wait to avoid a 10% flake due to a race.
         mFakeComposerClient->runVSyncAndWait();
-    }
-
-    bool waitForHotplugEvent(Display displayId, bool connected) {
-        return waitForHotplugEvent(PhysicalDisplayId(displayId), connected);
     }
 
     bool waitForHotplugEvent(PhysicalDisplayId displayId, bool connected) {
@@ -290,8 +280,9 @@ protected:
                 mReceivedDisplayEvents.pop_front();
 
                 ALOGV_IF(event.header.type == DisplayEventReceiver::DISPLAY_EVENT_HOTPLUG,
-                         "event hotplug: displayId %s, connected %d",
-                         to_string(event.header.displayId).c_str(), event.hotplug.connected);
+                         "event hotplug: displayId %" ANDROID_PHYSICAL_DISPLAY_ID_FORMAT
+                         ", connected %d\t",
+                         event.header.displayId, event.hotplug.connected);
 
                 if (event.header.type == DisplayEventReceiver::DISPLAY_EVENT_HOTPLUG &&
                     event.header.displayId == displayId && event.hotplug.connected == connected) {
@@ -304,20 +295,20 @@ protected:
         return false;
     }
 
-    bool waitForModeChangedEvent(Display display, int32_t modeId) {
-        PhysicalDisplayId displayId(display);
+    bool waitForConfigChangedEvent(PhysicalDisplayId displayId, int32_t configId) {
         int waitCount = 20;
         while (waitCount--) {
             while (!mReceivedDisplayEvents.empty()) {
                 auto event = mReceivedDisplayEvents.front();
                 mReceivedDisplayEvents.pop_front();
 
-                ALOGV_IF(event.header.type == DisplayEventReceiver::DISPLAY_EVENT_MODE_CHANGE,
-                         "event mode: displayId %s, modeId %d",
-                         to_string(event.header.displayId).c_str(), event.modeChange.modeId);
+                ALOGV_IF(event.header.type == DisplayEventReceiver::DISPLAY_EVENT_CONFIG_CHANGED,
+                         "event config: displayId %" ANDROID_PHYSICAL_DISPLAY_ID_FORMAT
+                         ", configId %d\t",
+                         event.header.displayId, event.config.configId);
 
-                if (event.header.type == DisplayEventReceiver::DISPLAY_EVENT_MODE_CHANGE &&
-                    event.header.displayId == displayId && event.modeChange.modeId == modeId) {
+                if (event.header.type == DisplayEventReceiver::DISPLAY_EVENT_CONFIG_CHANGED &&
+                    event.header.displayId == displayId && event.config.configId == configId) {
                     return true;
                 }
             }
@@ -340,18 +331,18 @@ protected:
 
         mFakeComposerClient->hotplugDisplay(EXTERNAL_DISPLAY,
                                             V2_1::IComposerCallback::Connection::CONNECTED);
-        waitForDisplayTransaction(EXTERNAL_DISPLAY);
+        waitForDisplayTransaction();
         EXPECT_TRUE(waitForHotplugEvent(EXTERNAL_DISPLAY, true));
 
         {
-            const auto display = SurfaceComposerClient::getPhysicalDisplayToken(kExternalDisplayId);
+            const auto display = SurfaceComposerClient::getPhysicalDisplayToken(EXTERNAL_DISPLAY);
             EXPECT_FALSE(display == nullptr);
 
-            ui::DisplayMode mode;
-            EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-            const ui::Size& resolution = mode.resolution;
+            DisplayConfig config;
+            EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
+            const ui::Size& resolution = config.resolution;
             EXPECT_EQ(ui::Size(200, 400), resolution);
-            EXPECT_EQ(1e9f / 16'666'666, mode.refreshRate);
+            EXPECT_EQ(1e9f / 16'666'666, config.refreshRate);
 
             auto surfaceControl =
                     mComposerClient->createSurface(String8("Display Test Surface Foo"),
@@ -371,16 +362,16 @@ protected:
 
         mFakeComposerClient->hotplugDisplay(EXTERNAL_DISPLAY,
                                             V2_1::IComposerCallback::Connection::DISCONNECTED);
-        waitForDisplayTransaction(EXTERNAL_DISPLAY);
+        waitForDisplayTransaction();
         mFakeComposerClient->clearFrames();
         EXPECT_TRUE(waitForHotplugEvent(EXTERNAL_DISPLAY, false));
 
         {
-            const auto display = SurfaceComposerClient::getPhysicalDisplayToken(kExternalDisplayId);
+            const auto display = SurfaceComposerClient::getPhysicalDisplayToken(EXTERNAL_DISPLAY);
             EXPECT_TRUE(display == nullptr);
 
-            ui::DisplayMode mode;
-            EXPECT_NE(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
+            DisplayConfig config;
+            EXPECT_NE(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
         }
     }
 
@@ -402,20 +393,20 @@ protected:
 
         mFakeComposerClient->hotplugDisplay(EXTERNAL_DISPLAY,
                                             V2_1::IComposerCallback::Connection::CONNECTED);
-        waitForDisplayTransaction(EXTERNAL_DISPLAY);
+        waitForDisplayTransaction();
         EXPECT_TRUE(waitForHotplugEvent(EXTERNAL_DISPLAY, true));
 
-        const auto display = SurfaceComposerClient::getPhysicalDisplayToken(kExternalDisplayId);
+        const auto display = SurfaceComposerClient::getPhysicalDisplayToken(EXTERNAL_DISPLAY);
         EXPECT_FALSE(display == nullptr);
 
-        ui::DisplayMode mode;
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-        EXPECT_EQ(ui::Size(200, 400), mode.resolution);
-        EXPECT_EQ(1e9f / 16'666'666, mode.refreshRate);
+        DisplayConfig config;
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
+        EXPECT_EQ(ui::Size(200, 400), config.resolution);
+        EXPECT_EQ(1e9f / 16'666'666, config.refreshRate);
 
         mFakeComposerClient->clearFrames();
         {
-            const ui::Size& resolution = mode.resolution;
+            const ui::Size& resolution = config.resolution;
             auto surfaceControl =
                     mComposerClient->createSurface(String8("Display Test Surface Foo"),
                                                    resolution.getWidth(), resolution.getHeight(),
@@ -432,12 +423,11 @@ protected:
             }
         }
 
-        ui::DynamicDisplayInfo info;
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getDynamicDisplayInfo(display, &info));
-        const auto& modes = info.supportedDisplayModes;
-        EXPECT_EQ(modes.size(), 2);
+        Vector<DisplayConfig> configs;
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getDisplayConfigs(display, &configs));
+        EXPECT_EQ(configs.size(), 2);
 
-        // change active mode
+        // change active config
 
         if (mIs2_4Client) {
             EXPECT_CALL(*mMockComposer, setActiveConfigWithConstraints(EXTERNAL_DISPLAY, 2, _, _))
@@ -447,28 +437,28 @@ protected:
                     .WillOnce(Return(V2_1::Error::NONE));
         }
 
-        for (int i = 0; i < modes.size(); i++) {
-            const auto& mode = modes[i];
-            if (mode.resolution.getWidth() == 800) {
+        for (int i = 0; i < configs.size(); i++) {
+            const auto& config = configs[i];
+            if (config.resolution.getWidth() == 800) {
                 EXPECT_EQ(NO_ERROR,
-                          SurfaceComposerClient::setDesiredDisplayModeSpecs(display, i, false,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate));
-                waitForDisplayTransaction(EXTERNAL_DISPLAY);
-                EXPECT_TRUE(waitForModeChangedEvent(EXTERNAL_DISPLAY, i));
+                          SurfaceComposerClient::setDesiredDisplayConfigSpecs(display, i,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate));
+                waitForDisplayTransaction();
+                EXPECT_TRUE(waitForConfigChangedEvent(EXTERNAL_DISPLAY, i));
                 break;
             }
         }
 
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-        EXPECT_EQ(ui::Size(800, 1600), mode.resolution);
-        EXPECT_EQ(1e9f / 11'111'111, mode.refreshRate);
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
+        EXPECT_EQ(ui::Size(800, 1600), config.resolution);
+        EXPECT_EQ(1e9f / 11'111'111, config.refreshRate);
 
         mFakeComposerClient->clearFrames();
         {
-            const ui::Size& resolution = mode.resolution;
+            const ui::Size& resolution = config.resolution;
             auto surfaceControl =
                     mComposerClient->createSurface(String8("Display Test Surface Foo"),
                                                    resolution.getWidth(), resolution.getHeight(),
@@ -487,7 +477,7 @@ protected:
 
         mFakeComposerClient->hotplugDisplay(EXTERNAL_DISPLAY,
                                             V2_1::IComposerCallback::Connection::DISCONNECTED);
-        waitForDisplayTransaction(EXTERNAL_DISPLAY);
+        waitForDisplayTransaction();
         mFakeComposerClient->clearFrames();
         EXPECT_TRUE(waitForHotplugEvent(EXTERNAL_DISPLAY, false));
     }
@@ -510,20 +500,20 @@ protected:
 
         mFakeComposerClient->hotplugDisplay(EXTERNAL_DISPLAY,
                                             V2_1::IComposerCallback::Connection::CONNECTED);
-        waitForDisplayTransaction(EXTERNAL_DISPLAY);
+        waitForDisplayTransaction();
         EXPECT_TRUE(waitForHotplugEvent(EXTERNAL_DISPLAY, true));
 
-        const auto display = SurfaceComposerClient::getPhysicalDisplayToken(kExternalDisplayId);
+        const auto display = SurfaceComposerClient::getPhysicalDisplayToken(EXTERNAL_DISPLAY);
         EXPECT_FALSE(display == nullptr);
 
-        ui::DisplayMode mode;
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-        EXPECT_EQ(ui::Size(800, 1600), mode.resolution);
-        EXPECT_EQ(1e9f / 16'666'666, mode.refreshRate);
+        DisplayConfig config;
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
+        EXPECT_EQ(ui::Size(800, 1600), config.resolution);
+        EXPECT_EQ(1e9f / 16'666'666, config.refreshRate);
 
         mFakeComposerClient->clearFrames();
         {
-            const ui::Size& resolution = mode.resolution;
+            const ui::Size& resolution = config.resolution;
             auto surfaceControl =
                     mComposerClient->createSurface(String8("Display Test Surface Foo"),
                                                    resolution.getWidth(), resolution.getHeight(),
@@ -540,12 +530,11 @@ protected:
             }
         }
 
-        ui::DynamicDisplayInfo info;
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getDynamicDisplayInfo(display, &info));
-        const auto& modes = info.supportedDisplayModes;
-        EXPECT_EQ(modes.size(), 2);
+        Vector<DisplayConfig> configs;
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getDisplayConfigs(display, &configs));
+        EXPECT_EQ(configs.size(), 2);
 
-        // change active mode
+        // change active config
         if (mIs2_4Client) {
             EXPECT_CALL(*mMockComposer, setActiveConfigWithConstraints(EXTERNAL_DISPLAY, 3, _, _))
                     .WillOnce(Return(V2_4::Error::NONE));
@@ -554,28 +543,28 @@ protected:
                     .WillOnce(Return(V2_1::Error::NONE));
         }
 
-        for (int i = 0; i < modes.size(); i++) {
-            const auto& mode = modes[i];
-            if (mode.refreshRate == 1e9f / 11'111'111) {
+        for (int i = 0; i < configs.size(); i++) {
+            const auto& config = configs[i];
+            if (config.refreshRate == 1e9f / 11'111'111) {
                 EXPECT_EQ(NO_ERROR,
-                          SurfaceComposerClient::setDesiredDisplayModeSpecs(display, i, false,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate));
-                waitForDisplayTransaction(EXTERNAL_DISPLAY);
-                EXPECT_TRUE(waitForModeChangedEvent(EXTERNAL_DISPLAY, i));
+                          SurfaceComposerClient::setDesiredDisplayConfigSpecs(display, i,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate));
+                waitForDisplayTransaction();
+                EXPECT_TRUE(waitForConfigChangedEvent(EXTERNAL_DISPLAY, i));
                 break;
             }
         }
 
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-        EXPECT_EQ(ui::Size(800, 1600), mode.resolution);
-        EXPECT_EQ(1e9f / 11'111'111, mode.refreshRate);
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
+        EXPECT_EQ(ui::Size(800, 1600), config.resolution);
+        EXPECT_EQ(1e9f / 11'111'111, config.refreshRate);
 
         mFakeComposerClient->clearFrames();
         {
-            const ui::Size& resolution = mode.resolution;
+            const ui::Size& resolution = config.resolution;
             auto surfaceControl =
                     mComposerClient->createSurface(String8("Display Test Surface Foo"),
                                                    resolution.getWidth(), resolution.getHeight(),
@@ -594,7 +583,7 @@ protected:
 
         mFakeComposerClient->hotplugDisplay(EXTERNAL_DISPLAY,
                                             V2_1::IComposerCallback::Connection::DISCONNECTED);
-        waitForDisplayTransaction(EXTERNAL_DISPLAY);
+        waitForDisplayTransaction();
         mFakeComposerClient->clearFrames();
         EXPECT_TRUE(waitForHotplugEvent(EXTERNAL_DISPLAY, false));
     }
@@ -627,20 +616,20 @@ protected:
 
         mFakeComposerClient->hotplugDisplay(EXTERNAL_DISPLAY,
                                             V2_1::IComposerCallback::Connection::CONNECTED);
-        waitForDisplayTransaction(EXTERNAL_DISPLAY);
+        waitForDisplayTransaction();
         EXPECT_TRUE(waitForHotplugEvent(EXTERNAL_DISPLAY, true));
 
-        const auto display = SurfaceComposerClient::getPhysicalDisplayToken(kExternalDisplayId);
+        const auto display = SurfaceComposerClient::getPhysicalDisplayToken(EXTERNAL_DISPLAY);
         EXPECT_FALSE(display == nullptr);
 
-        ui::DisplayMode mode;
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-        EXPECT_EQ(ui::Size(800, 1600), mode.resolution);
-        EXPECT_EQ(1e9f / 16'666'666, mode.refreshRate);
+        DisplayConfig config;
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
+        EXPECT_EQ(ui::Size(800, 1600), config.resolution);
+        EXPECT_EQ(1e9f / 16'666'666, config.refreshRate);
 
         mFakeComposerClient->clearFrames();
         {
-            const ui::Size& resolution = mode.resolution;
+            const ui::Size& resolution = config.resolution;
             auto surfaceControl =
                     mComposerClient->createSurface(String8("Display Test Surface Foo"),
                                                    resolution.getWidth(), resolution.getHeight(),
@@ -657,12 +646,11 @@ protected:
             }
         }
 
-        ui::DynamicDisplayInfo info;
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getDynamicDisplayInfo(display, &info));
-        const auto& modes = info.supportedDisplayModes;
-        EXPECT_EQ(modes.size(), 4);
+        Vector<DisplayConfig> configs;
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getDisplayConfigs(display, &configs));
+        EXPECT_EQ(configs.size(), 4);
 
-        // change active mode to 800x1600@90Hz
+        // change active config to 800x1600@90Hz
         if (mIs2_4Client) {
             EXPECT_CALL(*mMockComposer, setActiveConfigWithConstraints(EXTERNAL_DISPLAY, 3, _, _))
                     .WillOnce(Return(V2_4::Error::NONE));
@@ -671,28 +659,28 @@ protected:
                     .WillOnce(Return(V2_1::Error::NONE));
         }
 
-        for (size_t i = 0; i < modes.size(); i++) {
-            const auto& mode = modes[i];
-            if (mode.resolution.getWidth() == 800 && mode.refreshRate == 1e9f / 11'111'111) {
+        for (int i = 0; i < configs.size(); i++) {
+            const auto& config = configs[i];
+            if (config.resolution.getWidth() == 800 && config.refreshRate == 1e9f / 11'111'111) {
                 EXPECT_EQ(NO_ERROR,
-                          SurfaceComposerClient::setDesiredDisplayModeSpecs(display, i, false,
-                                                                            modes[i].refreshRate,
-                                                                            modes[i].refreshRate,
-                                                                            modes[i].refreshRate,
-                                                                            modes[i].refreshRate));
-                waitForDisplayTransaction(EXTERNAL_DISPLAY);
-                EXPECT_TRUE(waitForModeChangedEvent(EXTERNAL_DISPLAY, i));
+                          SurfaceComposerClient::
+                                  setDesiredDisplayConfigSpecs(display, i, configs[i].refreshRate,
+                                                               configs[i].refreshRate,
+                                                               configs[i].refreshRate,
+                                                               configs[i].refreshRate));
+                waitForDisplayTransaction();
+                EXPECT_TRUE(waitForConfigChangedEvent(EXTERNAL_DISPLAY, i));
                 break;
             }
         }
 
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-        EXPECT_EQ(ui::Size(800, 1600), mode.resolution);
-        EXPECT_EQ(1e9f / 11'111'111, mode.refreshRate);
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
+        EXPECT_EQ(ui::Size(800, 1600), config.resolution);
+        EXPECT_EQ(1e9f / 11'111'111, config.refreshRate);
 
         mFakeComposerClient->clearFrames();
         {
-            const ui::Size& resolution = mode.resolution;
+            const ui::Size& resolution = config.resolution;
             auto surfaceControl =
                     mComposerClient->createSurface(String8("Display Test Surface Foo"),
                                                    resolution.getWidth(), resolution.getHeight(),
@@ -709,7 +697,7 @@ protected:
             }
         }
 
-        // change active mode to 1600x3200@120Hz
+        // change active config to 1600x3200@120Hz
         if (mIs2_4Client) {
             EXPECT_CALL(*mMockComposer, setActiveConfigWithConstraints(EXTERNAL_DISPLAY, 4, _, _))
                     .WillOnce(Return(V2_4::Error::NONE));
@@ -718,28 +706,28 @@ protected:
                     .WillOnce(Return(V2_1::Error::NONE));
         }
 
-        for (int i = 0; i < modes.size(); i++) {
-            const auto& mode = modes[i];
-            if (mode.refreshRate == 1e9f / 8'333'333) {
+        for (int i = 0; i < configs.size(); i++) {
+            const auto& config = configs[i];
+            if (config.refreshRate == 1e9f / 8'333'333) {
                 EXPECT_EQ(NO_ERROR,
-                          SurfaceComposerClient::setDesiredDisplayModeSpecs(display, i, false,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate));
-                waitForDisplayTransaction(EXTERNAL_DISPLAY);
-                EXPECT_TRUE(waitForModeChangedEvent(EXTERNAL_DISPLAY, i));
+                          SurfaceComposerClient::setDesiredDisplayConfigSpecs(display, i,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate));
+                waitForDisplayTransaction();
+                EXPECT_TRUE(waitForConfigChangedEvent(EXTERNAL_DISPLAY, i));
                 break;
             }
         }
 
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-        EXPECT_EQ(ui::Size(1600, 3200), mode.resolution);
-        EXPECT_EQ(1e9f / 8'333'333, mode.refreshRate);
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
+        EXPECT_EQ(ui::Size(1600, 3200), config.resolution);
+        EXPECT_EQ(1e9f / 8'333'333, config.refreshRate);
 
         mFakeComposerClient->clearFrames();
         {
-            const ui::Size& resolution = mode.resolution;
+            const ui::Size& resolution = config.resolution;
             auto surfaceControl =
                     mComposerClient->createSurface(String8("Display Test Surface Foo"),
                                                    resolution.getWidth(), resolution.getHeight(),
@@ -756,7 +744,7 @@ protected:
             }
         }
 
-        // change active mode to 1600x3200@90Hz
+        // change active config to 1600x3200@90Hz
         if (mIs2_4Client) {
             EXPECT_CALL(*mMockComposer, setActiveConfigWithConstraints(EXTERNAL_DISPLAY, 5, _, _))
                     .WillOnce(Return(V2_4::Error::NONE));
@@ -765,28 +753,28 @@ protected:
                     .WillOnce(Return(V2_1::Error::NONE));
         }
 
-        for (int i = 0; i < modes.size(); i++) {
-            const auto& mode = modes[i];
-            if (mode.resolution.getWidth() == 1600 && mode.refreshRate == 1e9f / 11'111'111) {
+        for (int i = 0; i < configs.size(); i++) {
+            const auto& config = configs[i];
+            if (config.resolution.getWidth() == 1600 && config.refreshRate == 1e9f / 11'111'111) {
                 EXPECT_EQ(NO_ERROR,
-                          SurfaceComposerClient::setDesiredDisplayModeSpecs(display, i, false,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate,
-                                                                            mode.refreshRate));
-                waitForDisplayTransaction(EXTERNAL_DISPLAY);
-                EXPECT_TRUE(waitForModeChangedEvent(EXTERNAL_DISPLAY, i));
+                          SurfaceComposerClient::setDesiredDisplayConfigSpecs(display, i,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate,
+                                                                              config.refreshRate));
+                waitForDisplayTransaction();
+                EXPECT_TRUE(waitForConfigChangedEvent(EXTERNAL_DISPLAY, i));
                 break;
             }
         }
 
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-        EXPECT_EQ(ui::Size(1600, 3200), mode.resolution);
-        EXPECT_EQ(1e9f / 11'111'111, mode.refreshRate);
+        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
+        EXPECT_EQ(ui::Size(1600, 3200), config.resolution);
+        EXPECT_EQ(1e9f / 11'111'111, config.refreshRate);
 
         mFakeComposerClient->clearFrames();
         {
-            const ui::Size& resolution = mode.resolution;
+            const ui::Size& resolution = config.resolution;
             auto surfaceControl =
                     mComposerClient->createSurface(String8("Display Test Surface Foo"),
                                                    resolution.getWidth(), resolution.getHeight(),
@@ -805,7 +793,7 @@ protected:
 
         mFakeComposerClient->hotplugDisplay(EXTERNAL_DISPLAY,
                                             V2_1::IComposerCallback::Connection::DISCONNECTED);
-        waitForDisplayTransaction(EXTERNAL_DISPLAY);
+        waitForDisplayTransaction();
         mFakeComposerClient->clearFrames();
         EXPECT_TRUE(waitForHotplugEvent(EXTERNAL_DISPLAY, false));
     }
@@ -816,15 +804,15 @@ protected:
         mFakeComposerClient->hotplugDisplay(PRIMARY_DISPLAY,
                                             V2_1::IComposerCallback::Connection::DISCONNECTED);
 
-        waitForDisplayTransaction(PRIMARY_DISPLAY);
+        waitForDisplayTransaction();
 
         EXPECT_TRUE(waitForHotplugEvent(PRIMARY_DISPLAY, false));
         {
-            const auto display = SurfaceComposerClient::getPhysicalDisplayToken(kPrimaryDisplayId);
+            const auto display = SurfaceComposerClient::getPhysicalDisplayToken(PRIMARY_DISPLAY);
             EXPECT_TRUE(display == nullptr);
 
-            ui::DisplayMode mode;
-            auto result = SurfaceComposerClient::getActiveDisplayMode(display, &mode);
+            DisplayConfig config;
+            auto result = SurfaceComposerClient::getActiveDisplayConfig(display, &config);
             EXPECT_NE(NO_ERROR, result);
         }
 
@@ -841,136 +829,19 @@ protected:
         mFakeComposerClient->hotplugDisplay(PRIMARY_DISPLAY,
                                             V2_1::IComposerCallback::Connection::CONNECTED);
 
-        waitForDisplayTransaction(PRIMARY_DISPLAY);
+        waitForDisplayTransaction();
 
         EXPECT_TRUE(waitForHotplugEvent(PRIMARY_DISPLAY, true));
 
         {
-            const auto display = SurfaceComposerClient::getPhysicalDisplayToken(kPrimaryDisplayId);
+            const auto display = SurfaceComposerClient::getPhysicalDisplayToken(PRIMARY_DISPLAY);
             EXPECT_FALSE(display == nullptr);
 
-            ui::DisplayMode mode;
-            auto result = SurfaceComposerClient::getActiveDisplayMode(display, &mode);
+            DisplayConfig config;
+            auto result = SurfaceComposerClient::getActiveDisplayConfig(display, &config);
             EXPECT_EQ(NO_ERROR, result);
-            ASSERT_EQ(ui::Size(400, 200), mode.resolution);
-            EXPECT_EQ(1e9f / 16'666'666, mode.refreshRate);
-        }
-    }
-
-    void Test_SubsequentHotplugConnectUpdatesDisplay(Display hwcDisplayId) {
-        ALOGD("DisplayTest::Test_SubsequentHotplugConnectUpdatesDisplay");
-
-        // Send a hotplug connected event to set up the initial display modes.
-        // The primary display is already connected so this will update it.
-        // If we're running the test of an external display this will create it.
-        setExpectationsForConfigs(hwcDisplayId,
-                                  {{.id = 1,
-                                    .w = 800,
-                                    .h = 1600,
-                                    .vsyncPeriod = 11'111'111,
-                                    .group = 1}},
-                                  /* activeConfig */ 1, 11'111'111);
-
-        mFakeComposerClient->hotplugDisplay(hwcDisplayId,
-                                            V2_1::IComposerCallback::Connection::CONNECTED);
-        waitForDisplayTransaction(hwcDisplayId);
-        EXPECT_TRUE(waitForHotplugEvent(hwcDisplayId, true));
-
-        const auto displayId = physicalIdFromHwcDisplayId(hwcDisplayId);
-        const auto display = SurfaceComposerClient::getPhysicalDisplayToken(displayId);
-        EXPECT_FALSE(display == nullptr);
-
-        // Verify that the active mode and the supported moded are updated
-        {
-            ui::DisplayMode mode;
-            EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-            EXPECT_EQ(ui::Size(800, 1600), mode.resolution);
-            EXPECT_EQ(1e9f / 11'111'111, mode.refreshRate);
-
-            ui::DynamicDisplayInfo info;
-            EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getDynamicDisplayInfo(display, &info));
-            const auto& modes = info.supportedDisplayModes;
-            EXPECT_EQ(modes.size(), 1);
-        }
-
-        // Send another hotplug connected event
-        setExpectationsForConfigs(hwcDisplayId,
-                                  {
-                                          {.id = 1,
-                                           .w = 800,
-                                           .h = 1600,
-                                           .vsyncPeriod = 16'666'666,
-                                           .group = 1},
-                                          {.id = 2,
-                                           .w = 800,
-                                           .h = 1600,
-                                           .vsyncPeriod = 11'111'111,
-                                           .group = 1},
-                                          {.id = 3,
-                                           .w = 800,
-                                           .h = 1600,
-                                           .vsyncPeriod = 8'333'333,
-                                           .group = 1},
-                                  },
-                                  /* activeConfig */ 1, 16'666'666);
-
-        mFakeComposerClient->hotplugDisplay(hwcDisplayId,
-                                            V2_1::IComposerCallback::Connection::CONNECTED);
-        waitForDisplayTransaction(hwcDisplayId);
-        EXPECT_TRUE(waitForHotplugEvent(hwcDisplayId, true));
-
-        // Verify that the active mode and the supported moded are updated
-        {
-            ui::DisplayMode mode;
-            EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-            EXPECT_EQ(ui::Size(800, 1600), mode.resolution);
-            EXPECT_EQ(1e9f / 16'666'666, mode.refreshRate);
-        }
-
-        ui::DynamicDisplayInfo info;
-        EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getDynamicDisplayInfo(display, &info));
-        const auto& modes = info.supportedDisplayModes;
-        EXPECT_EQ(modes.size(), 3);
-
-        EXPECT_EQ(ui::Size(800, 1600), modes[0].resolution);
-        EXPECT_EQ(1e9f / 16'666'666, modes[0].refreshRate);
-
-        EXPECT_EQ(ui::Size(800, 1600), modes[1].resolution);
-        EXPECT_EQ(1e9f / 11'111'111, modes[1].refreshRate);
-
-        EXPECT_EQ(ui::Size(800, 1600), modes[2].resolution);
-        EXPECT_EQ(1e9f / 8'333'333, modes[2].refreshRate);
-
-        // Verify that we are able to switch to any of the modes
-        for (int i = modes.size() - 1; i >= 0; i--) {
-            const auto hwcId = i + 1;
-            // Set up HWC expectations for the mode change
-            if (mIs2_4Client) {
-                EXPECT_CALL(*mMockComposer,
-                            setActiveConfigWithConstraints(hwcDisplayId, hwcId, _, _))
-                        .WillOnce(Return(V2_4::Error::NONE));
-            } else {
-                EXPECT_CALL(*mMockComposer, setActiveConfig(hwcDisplayId, hwcId))
-                        .WillOnce(Return(V2_1::Error::NONE));
-            }
-
-            EXPECT_EQ(NO_ERROR,
-                      SurfaceComposerClient::setDesiredDisplayModeSpecs(display, i, false,
-                                                                        modes[i].refreshRate,
-                                                                        modes[i].refreshRate,
-                                                                        modes[i].refreshRate,
-                                                                        modes[i].refreshRate));
-            // We need to refresh twice - once to apply the pending mode change request,
-            // and once to process the change.
-            waitForDisplayTransaction(hwcDisplayId);
-            waitForDisplayTransaction(hwcDisplayId);
-            EXPECT_TRUE(waitForModeChangedEvent(hwcDisplayId, i))
-                    << "Failure while switching to mode " << i;
-
-            ui::DisplayMode mode;
-            EXPECT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
-            EXPECT_EQ(ui::Size(800, 1600), mode.resolution);
-            EXPECT_EQ(modes[i].refreshRate, mode.refreshRate);
+            ASSERT_EQ(ui::Size(400, 200), config.resolution);
+            EXPECT_EQ(1e9f / 16'666'666, config.refreshRate);
         }
     }
 
@@ -990,25 +861,6 @@ protected:
 
 using DisplayTest_2_1 = DisplayTest<FakeComposerService_2_1>;
 
-// Tests that VSYNC injection can be safely toggled while invalidating.
-TEST_F(DisplayTest_2_1, VsyncInjection) {
-    const auto flinger = ComposerService::getComposerService();
-    bool enable = true;
-
-    for (int i = 0; i < 100; i++) {
-        flinger->enableVSyncInjections(enable);
-        enable = !enable;
-
-        constexpr uint32_t kForceInvalidate = 1004;
-        android::Parcel data, reply;
-        data.writeInterfaceToken(String16("android.ui.ISurfaceComposer"));
-        EXPECT_EQ(NO_ERROR,
-                  android::IInterface::asBinder(flinger)->transact(kForceInvalidate, data, &reply));
-
-        std::this_thread::sleep_for(5ms);
-    }
-}
-
 TEST_F(DisplayTest_2_1, HotplugOneConfig) {
     Test_HotplugOneConfig();
 }
@@ -1027,14 +879,6 @@ TEST_F(DisplayTest_2_1, HotplugThreeConfigsMixedGroups) {
 
 TEST_F(DisplayTest_2_1, HotplugPrimaryOneConfig) {
     Test_HotplugPrimaryDisplay();
-}
-
-TEST_F(DisplayTest_2_1, SubsequentHotplugConnectUpdatesPrimaryDisplay) {
-    Test_SubsequentHotplugConnectUpdatesDisplay(PRIMARY_DISPLAY);
-}
-
-TEST_F(DisplayTest_2_1, SubsequentHotplugConnectUpdatesExternalDisplay) {
-    Test_SubsequentHotplugConnectUpdatesDisplay(EXTERNAL_DISPLAY);
 }
 
 using DisplayTest_2_2 = DisplayTest<FakeComposerService_2_2>;
@@ -1059,14 +903,6 @@ TEST_F(DisplayTest_2_2, HotplugPrimaryOneConfig) {
     Test_HotplugPrimaryDisplay();
 }
 
-TEST_F(DisplayTest_2_2, SubsequentHotplugConnectUpdatesPrimaryDisplay) {
-    Test_SubsequentHotplugConnectUpdatesDisplay(PRIMARY_DISPLAY);
-}
-
-TEST_F(DisplayTest_2_2, SubsequentHotplugConnectUpdatesExternalDisplay) {
-    Test_SubsequentHotplugConnectUpdatesDisplay(EXTERNAL_DISPLAY);
-}
-
 using DisplayTest_2_3 = DisplayTest<FakeComposerService_2_3>;
 
 TEST_F(DisplayTest_2_3, HotplugOneConfig) {
@@ -1089,14 +925,6 @@ TEST_F(DisplayTest_2_3, HotplugPrimaryOneConfig) {
     Test_HotplugPrimaryDisplay();
 }
 
-TEST_F(DisplayTest_2_3, SubsequentHotplugConnectUpdatesPrimaryDisplay) {
-    Test_SubsequentHotplugConnectUpdatesDisplay(PRIMARY_DISPLAY);
-}
-
-TEST_F(DisplayTest_2_3, SubsequentHotplugConnectUpdatesExternalDisplay) {
-    Test_SubsequentHotplugConnectUpdatesDisplay(EXTERNAL_DISPLAY);
-}
-
 using DisplayTest_2_4 = DisplayTest<FakeComposerService_2_4>;
 
 TEST_F(DisplayTest_2_4, HotplugOneConfig) {
@@ -1117,14 +945,6 @@ TEST_F(DisplayTest_2_4, HotplugThreeConfigsMixedGroups) {
 
 TEST_F(DisplayTest_2_4, HotplugPrimaryOneConfig) {
     Test_HotplugPrimaryDisplay();
-}
-
-TEST_F(DisplayTest_2_4, SubsequentHotplugConnectUpdatesPrimaryDisplay) {
-    Test_SubsequentHotplugConnectUpdatesDisplay(PRIMARY_DISPLAY);
-}
-
-TEST_F(DisplayTest_2_4, SubsequentHotplugConnectUpdatesExternalDisplay) {
-    Test_SubsequentHotplugConnectUpdatesDisplay(EXTERNAL_DISPLAY);
 }
 
 ////////////////////////////////////////////////
@@ -1168,13 +988,13 @@ protected:
         ASSERT_EQ(NO_ERROR, mComposerClient->initCheck());
 
         ALOGI("TransactionTest::SetUp - display");
-        const auto display = SurfaceComposerClient::getPhysicalDisplayToken(kPrimaryDisplayId);
+        const auto display = SurfaceComposerClient::getPhysicalDisplayToken(PRIMARY_DISPLAY);
         ASSERT_FALSE(display == nullptr);
 
-        ui::DisplayMode mode;
-        ASSERT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayMode(display, &mode));
+        DisplayConfig config;
+        ASSERT_EQ(NO_ERROR, SurfaceComposerClient::getActiveDisplayConfig(display, &config));
 
-        const ui::Size& resolution = mode.resolution;
+        const ui::Size& resolution = config.resolution;
         mDisplayWidth = resolution.getWidth();
         mDisplayHeight = resolution.getHeight();
 
@@ -1293,12 +1113,37 @@ protected:
         EXPECT_TRUE(framesAreSame(frame2Ref, sFakeComposer->getFrameRects(2)));
     }
 
+    void Test_LayerResize() {
+        ALOGD("TransactionTest::LayerResize");
+        {
+            TransactionScope ts(*sFakeComposer);
+            ts.setSize(mFGSurfaceControl, 128, 128);
+        }
+
+        fillSurfaceRGBA8(mFGSurfaceControl, GREEN);
+        sFakeComposer->runVSyncAndWait();
+
+        ASSERT_EQ(3, sFakeComposer->getFrameCount()); // Make sure the waits didn't time out and
+                                                      // there's no extra frames.
+
+        auto frame1Ref = mBaseFrame;
+        // NOTE: The resize should not be visible for frame 1 as there's no buffer with new size
+        // posted.
+        EXPECT_TRUE(framesAreSame(frame1Ref, sFakeComposer->getFrameRects(1)));
+
+        auto frame2Ref = frame1Ref;
+        frame2Ref[FG_LAYER].mSwapCount++;
+        frame2Ref[FG_LAYER].mDisplayFrame = hwc_rect_t{64, 64, 64 + 128, 64 + 128};
+        frame2Ref[FG_LAYER].mSourceCrop = hwc_frect_t{0.f, 0.f, 128.f, 128.f};
+        EXPECT_TRUE(framesAreSame(frame2Ref, sFakeComposer->getFrameRects(2)));
+    }
+
     void Test_LayerCrop() {
         // TODO: Add scaling to confirm that crop happens in buffer space?
         {
             TransactionScope ts(*sFakeComposer);
             Rect cropRect(16, 16, 32, 32);
-            ts.setCrop(mFGSurfaceControl, cropRect);
+            ts.setCrop_legacy(mFGSurfaceControl, cropRect);
         }
         ASSERT_EQ(2, sFakeComposer->getFrameCount());
 
@@ -1443,6 +1288,77 @@ protected:
         }
     }
 
+    void Test_DeferredTransaction() {
+        // Synchronization surface
+        constexpr static int SYNC_LAYER = 2;
+        auto syncSurfaceControl = mComposerClient->createSurface(String8("Sync Test Surface"), 1, 1,
+                                                                 PIXEL_FORMAT_RGBA_8888, 0);
+        ASSERT_TRUE(syncSurfaceControl != nullptr);
+        ASSERT_TRUE(syncSurfaceControl->isValid());
+
+        fillSurfaceRGBA8(syncSurfaceControl, DARK_GRAY);
+
+        {
+            TransactionScope ts(*sFakeComposer);
+            ts.setLayer(syncSurfaceControl, INT32_MAX - 1);
+            ts.setPosition(syncSurfaceControl, mDisplayWidth - 2, mDisplayHeight - 2);
+            ts.show(syncSurfaceControl);
+        }
+        auto referenceFrame = mBaseFrame;
+        referenceFrame.push_back(makeSimpleRect(mDisplayWidth - 2, mDisplayHeight - 2,
+                                                mDisplayWidth - 1, mDisplayHeight - 1));
+        referenceFrame[SYNC_LAYER].mSwapCount = 1;
+        EXPECT_EQ(2, sFakeComposer->getFrameCount());
+        EXPECT_TRUE(framesAreSame(referenceFrame, sFakeComposer->getLatestFrame()));
+
+        // set up two deferred transactions on different frames - these should not yield composited
+        // frames
+        {
+            TransactionScope ts(*sFakeComposer);
+            ts.setAlpha(mFGSurfaceControl, 0.75);
+            ts.deferTransactionUntil_legacy(mFGSurfaceControl, syncSurfaceControl->getHandle(),
+                                            syncSurfaceControl->getSurface()->getNextFrameNumber());
+        }
+        EXPECT_TRUE(framesAreSame(referenceFrame, sFakeComposer->getLatestFrame()));
+
+        {
+            TransactionScope ts(*sFakeComposer);
+            ts.setPosition(mFGSurfaceControl, 128, 128);
+            ts.deferTransactionUntil_legacy(mFGSurfaceControl, syncSurfaceControl->getHandle(),
+                                            syncSurfaceControl->getSurface()->getNextFrameNumber() +
+                                                    1);
+        }
+        EXPECT_EQ(4, sFakeComposer->getFrameCount());
+        EXPECT_TRUE(framesAreSame(referenceFrame, sFakeComposer->getLatestFrame()));
+
+        // should trigger the first deferred transaction, but not the second one
+        fillSurfaceRGBA8(syncSurfaceControl, DARK_GRAY);
+        sFakeComposer->runVSyncAndWait();
+        EXPECT_EQ(5, sFakeComposer->getFrameCount());
+
+        referenceFrame[FG_LAYER].mPlaneAlpha = 0.75f;
+        referenceFrame[SYNC_LAYER].mSwapCount++;
+        EXPECT_TRUE(framesAreSame(referenceFrame, sFakeComposer->getLatestFrame()));
+
+        // should show up immediately since it's not deferred
+        {
+            TransactionScope ts(*sFakeComposer);
+            ts.setAlpha(mFGSurfaceControl, 1.0);
+        }
+        referenceFrame[FG_LAYER].mPlaneAlpha = 1.f;
+        EXPECT_EQ(6, sFakeComposer->getFrameCount());
+        EXPECT_TRUE(framesAreSame(referenceFrame, sFakeComposer->getLatestFrame()));
+
+        // trigger the second deferred transaction
+        fillSurfaceRGBA8(syncSurfaceControl, DARK_GRAY);
+        sFakeComposer->runVSyncAndWait();
+        // TODO: Compute from layer size?
+        referenceFrame[FG_LAYER].mDisplayFrame = hwc_rect_t{128, 128, 128 + 64, 128 + 64};
+        referenceFrame[SYNC_LAYER].mSwapCount++;
+        EXPECT_EQ(7, sFakeComposer->getFrameCount());
+        EXPECT_TRUE(framesAreSame(referenceFrame, sFakeComposer->getLatestFrame()));
+    }
+
     void Test_SetRelativeLayer() {
         constexpr int RELATIVE_LAYER = 2;
         auto relativeSurfaceControl = mComposerClient->createSurface(String8("Test Surface"), 64,
@@ -1454,7 +1370,7 @@ protected:
             TransactionScope ts(*sFakeComposer);
             ts.setPosition(relativeSurfaceControl, 64, 64);
             ts.show(relativeSurfaceControl);
-            ts.setRelativeLayer(relativeSurfaceControl, mFGSurfaceControl, 1);
+            ts.setRelativeLayer(relativeSurfaceControl, mFGSurfaceControl->getHandle(), 1);
         }
         auto referenceFrame = mBaseFrame;
         // NOTE: All three layers will be visible as the surfaces are
@@ -1492,6 +1408,10 @@ TEST_F(TransactionTest_2_1, DISABLED_LayerMove) {
     Test_LayerMove();
 }
 
+TEST_F(TransactionTest_2_1, DISABLED_LayerResize) {
+    Test_LayerResize();
+}
+
 TEST_F(TransactionTest_2_1, DISABLED_LayerCrop) {
     Test_LayerCrop();
 }
@@ -1524,6 +1444,10 @@ TEST_F(TransactionTest_2_1, DISABLED_LayerSetMatrix) {
     Test_LayerSetMatrix();
 }
 
+TEST_F(TransactionTest_2_1, DISABLED_DeferredTransaction) {
+    Test_DeferredTransaction();
+}
+
 TEST_F(TransactionTest_2_1, DISABLED_SetRelativeLayer) {
     Test_SetRelativeLayer();
 }
@@ -1539,7 +1463,7 @@ protected:
         Base::SetUp();
         mChild = Base::mComposerClient->createSurface(String8("Child surface"), 10, 10,
                                                       PIXEL_FORMAT_RGBA_8888, 0,
-                                                      Base::mFGSurfaceControl->getHandle());
+                                                      Base::mFGSurfaceControl.get());
         fillSurfaceRGBA8(mChild, LIGHT_GRAY);
 
         Base::sFakeComposer->runVSyncAndWait();
@@ -1587,7 +1511,7 @@ protected:
             ts.show(mChild);
             ts.setPosition(mChild, 0, 0);
             ts.setPosition(Base::mFGSurfaceControl, 0, 0);
-            ts.setCrop(Base::mFGSurfaceControl, Rect(0, 0, 5, 5));
+            ts.setCrop_legacy(Base::mFGSurfaceControl, Rect(0, 0, 5, 5));
         }
         // NOTE: The foreground surface would be occluded by the child
         // now, but is included in the stack because the child is
@@ -1661,6 +1585,201 @@ protected:
         EXPECT_TRUE(framesAreSame(referenceFrame2, Base::sFakeComposer->getLatestFrame()));
     }
 
+    void Test_ReparentChildren() {
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.show(mChild);
+            ts.setPosition(mChild, 10, 10);
+            ts.setPosition(Base::mFGSurfaceControl, 64, 64);
+        }
+        auto referenceFrame = Base::mBaseFrame;
+        referenceFrame[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{64, 64, 64 + 64, 64 + 64};
+        referenceFrame[CHILD_LAYER].mDisplayFrame =
+                hwc_rect_t{64 + 10, 64 + 10, 64 + 10 + 10, 64 + 10 + 10};
+        EXPECT_TRUE(framesAreSame(referenceFrame, Base::sFakeComposer->getLatestFrame()));
+
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.reparentChildren(Base::mFGSurfaceControl, Base::mBGSurfaceControl->getHandle());
+        }
+
+        auto referenceFrame2 = referenceFrame;
+        referenceFrame2[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{64, 64, 64 + 64, 64 + 64};
+        referenceFrame2[CHILD_LAYER].mDisplayFrame = hwc_rect_t{10, 10, 10 + 10, 10 + 10};
+        EXPECT_TRUE(framesAreSame(referenceFrame2, Base::sFakeComposer->getLatestFrame()));
+    }
+
+    void Test_DetachChildrenSameClient() {
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.show(mChild);
+            ts.setPosition(mChild, 10, 10);
+            ts.setPosition(Base::mFGSurfaceControl, 64, 64);
+        }
+
+        auto referenceFrame = Base::mBaseFrame;
+        referenceFrame[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{64, 64, 64 + 64, 64 + 64};
+        referenceFrame[CHILD_LAYER].mDisplayFrame =
+                hwc_rect_t{64 + 10, 64 + 10, 64 + 10 + 10, 64 + 10 + 10};
+        EXPECT_TRUE(framesAreSame(referenceFrame, Base::sFakeComposer->getLatestFrame()));
+
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.setPosition(Base::mFGSurfaceControl, 0, 0);
+            ts.detachChildren(Base::mFGSurfaceControl);
+        }
+
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.setPosition(Base::mFGSurfaceControl, 64, 64);
+            ts.hide(mChild);
+        }
+
+        std::vector<RenderState> refFrame(2);
+        refFrame[Base::BG_LAYER] = Base::mBaseFrame[Base::BG_LAYER];
+        refFrame[Base::FG_LAYER] = Base::mBaseFrame[Base::FG_LAYER];
+
+        EXPECT_TRUE(framesAreSame(refFrame, Base::sFakeComposer->getLatestFrame()));
+    }
+
+    void Test_DetachChildrenDifferentClient() {
+        sp<SurfaceComposerClient> newComposerClient = new SurfaceComposerClient;
+        sp<SurfaceControl> childNewClient =
+                newComposerClient->createSurface(String8("New Child Test Surface"), 10, 10,
+                                                 PIXEL_FORMAT_RGBA_8888, 0,
+                                                 Base::mFGSurfaceControl.get());
+        ASSERT_TRUE(childNewClient != nullptr);
+        ASSERT_TRUE(childNewClient->isValid());
+        fillSurfaceRGBA8(childNewClient, LIGHT_GRAY);
+
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.hide(mChild);
+            ts.show(childNewClient);
+            ts.setPosition(childNewClient, 10, 10);
+            ts.setPosition(Base::mFGSurfaceControl, 64, 64);
+        }
+
+        auto referenceFrame = Base::mBaseFrame;
+        referenceFrame[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{64, 64, 64 + 64, 64 + 64};
+        referenceFrame[CHILD_LAYER].mDisplayFrame =
+                hwc_rect_t{64 + 10, 64 + 10, 64 + 10 + 10, 64 + 10 + 10};
+        EXPECT_TRUE(framesAreSame(referenceFrame, Base::sFakeComposer->getLatestFrame()));
+
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.detachChildren(Base::mFGSurfaceControl);
+            ts.setPosition(Base::mFGSurfaceControl, 0, 0);
+        }
+
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.setPosition(Base::mFGSurfaceControl, 64, 64);
+            ts.setPosition(childNewClient, 0, 0);
+            ts.hide(childNewClient);
+        }
+
+        // Nothing should have changed. The child control becomes a no-op
+        // zombie on detach. See comments for detachChildren in the
+        // SurfaceControl.h file.
+        EXPECT_TRUE(framesAreSame(referenceFrame, Base::sFakeComposer->getLatestFrame()));
+    }
+
+    void Test_InheritNonTransformScalingFromParent() {
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.show(mChild);
+            ts.setPosition(mChild, 0, 0);
+            ts.setPosition(Base::mFGSurfaceControl, 0, 0);
+        }
+
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.setOverrideScalingMode(Base::mFGSurfaceControl,
+                                      NATIVE_WINDOW_SCALING_MODE_SCALE_TO_WINDOW);
+            // We cause scaling by 2.
+            ts.setSize(Base::mFGSurfaceControl, 128, 128);
+        }
+
+        auto referenceFrame = Base::mBaseFrame;
+        referenceFrame[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{0, 0, 128, 128};
+        referenceFrame[Base::FG_LAYER].mSourceCrop = hwc_frect_t{0.f, 0.f, 64.f, 64.f};
+        referenceFrame[CHILD_LAYER].mDisplayFrame = hwc_rect_t{0, 0, 20, 20};
+        referenceFrame[CHILD_LAYER].mSourceCrop = hwc_frect_t{0.f, 0.f, 10.f, 10.f};
+        EXPECT_TRUE(framesAreSame(referenceFrame, Base::sFakeComposer->getLatestFrame()));
+    }
+
+    // Regression test for b/37673612
+    void Test_ChildrenWithParentBufferTransform() {
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.show(mChild);
+            ts.setPosition(mChild, 0, 0);
+            ts.setPosition(Base::mFGSurfaceControl, 0, 0);
+        }
+
+        // We set things up as in b/37673612 so that there is a mismatch between the buffer size and
+        // the WM specified state size.
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.setSize(Base::mFGSurfaceControl, 128, 64);
+        }
+
+        sp<Surface> s = Base::mFGSurfaceControl->getSurface();
+        auto anw = static_cast<ANativeWindow*>(s.get());
+        native_window_set_buffers_transform(anw, NATIVE_WINDOW_TRANSFORM_ROT_90);
+        native_window_set_buffers_dimensions(anw, 64, 128);
+        fillSurfaceRGBA8(Base::mFGSurfaceControl, RED);
+        Base::sFakeComposer->runVSyncAndWait();
+
+        // The child should still be in the same place and not have any strange scaling as in
+        // b/37673612.
+        auto referenceFrame = Base::mBaseFrame;
+        referenceFrame[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{0, 0, 128, 64};
+        referenceFrame[Base::FG_LAYER].mSourceCrop = hwc_frect_t{0.f, 0.f, 64.f, 128.f};
+        referenceFrame[Base::FG_LAYER].mSwapCount++;
+        referenceFrame[CHILD_LAYER].mDisplayFrame = hwc_rect_t{0, 0, 10, 10};
+        EXPECT_TRUE(framesAreSame(referenceFrame, Base::sFakeComposer->getLatestFrame()));
+    }
+
+    void Test_Bug36858924() {
+        // Destroy the child layer
+        mChild.clear();
+
+        // Now recreate it as hidden
+        mChild = Base::mComposerClient->createSurface(String8("Child surface"), 10, 10,
+                                                      PIXEL_FORMAT_RGBA_8888,
+                                                      ISurfaceComposerClient::eHidden,
+                                                      Base::mFGSurfaceControl.get());
+
+        // Show the child layer in a deferred transaction
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.deferTransactionUntil_legacy(mChild, Base::mFGSurfaceControl->getHandle(),
+                                            Base::mFGSurfaceControl->getSurface()
+                                                    ->getNextFrameNumber());
+            ts.show(mChild);
+        }
+
+        // Render the foreground surface a few times
+        //
+        // Prior to the bugfix for b/36858924, this would usually hang while trying to fill the
+        // third frame because SurfaceFlinger would never process the deferred transaction and would
+        // therefore never acquire/release the first buffer
+        ALOGI("Filling 1");
+        fillSurfaceRGBA8(Base::mFGSurfaceControl, GREEN);
+        Base::sFakeComposer->runVSyncAndWait();
+        ALOGI("Filling 2");
+        fillSurfaceRGBA8(Base::mFGSurfaceControl, BLUE);
+        Base::sFakeComposer->runVSyncAndWait();
+        ALOGI("Filling 3");
+        fillSurfaceRGBA8(Base::mFGSurfaceControl, RED);
+        Base::sFakeComposer->runVSyncAndWait();
+        ALOGI("Filling 4");
+        fillSurfaceRGBA8(Base::mFGSurfaceControl, GREEN);
+        Base::sFakeComposer->runVSyncAndWait();
+    }
+
     sp<SurfaceControl> mChild;
 };
 
@@ -1686,6 +1805,31 @@ TEST_F(ChildLayerTest_2_1, DISABLED_LayerAlpha) {
     Test_LayerAlpha();
 }
 
+TEST_F(ChildLayerTest_2_1, DISABLED_ReparentChildren) {
+    Test_ReparentChildren();
+}
+
+TEST_F(ChildLayerTest_2_1, DISABLED_DetachChildrenSameClient) {
+    Test_DetachChildrenSameClient();
+}
+
+TEST_F(ChildLayerTest_2_1, DISABLED_DetachChildrenDifferentClient) {
+    Test_DetachChildrenDifferentClient();
+}
+
+TEST_F(ChildLayerTest_2_1, DISABLED_InheritNonTransformScalingFromParent) {
+    Test_InheritNonTransformScalingFromParent();
+}
+
+// Regression test for b/37673612
+TEST_F(ChildLayerTest_2_1, DISABLED_ChildrenWithParentBufferTransform) {
+    Test_ChildrenWithParentBufferTransform();
+}
+
+TEST_F(ChildLayerTest_2_1, DISABLED_Bug36858924) {
+    Test_Bug36858924();
+}
+
 template <typename FakeComposerService>
 class ChildColorLayerTest : public ChildLayerTest<FakeComposerService> {
     using Base = ChildLayerTest<FakeComposerService>;
@@ -1697,12 +1841,12 @@ protected:
                 Base::mComposerClient->createSurface(String8("Child surface"), 0, 0,
                                                      PIXEL_FORMAT_RGBA_8888,
                                                      ISurfaceComposerClient::eFXSurfaceEffect,
-                                                     Base::mFGSurfaceControl->getHandle());
+                                                     Base::mFGSurfaceControl.get());
         {
             TransactionScope ts(*Base::sFakeComposer);
             ts.setColor(Base::mChild,
                         {LIGHT_GRAY.r / 255.0f, LIGHT_GRAY.g / 255.0f, LIGHT_GRAY.b / 255.0f});
-            ts.setCrop(Base::mChild, Rect(0, 0, 10, 10));
+            ts.setCrop_legacy(Base::mChild, Rect(0, 0, 10, 10));
         }
 
         Base::sFakeComposer->runVSyncAndWait();
@@ -1775,6 +1919,91 @@ TEST_F(ChildColorLayerTest_2_1, DISABLED_LayerAlpha) {
 TEST_F(ChildColorLayerTest_2_1, DISABLED_LayerZeroAlpha) {
     Test_LayerZeroAlpha();
 }
+
+template <typename FakeComposerService>
+class LatchingTest : public TransactionTest<FakeComposerService> {
+    using Base = TransactionTest<FakeComposerService>;
+
+protected:
+    void lockAndFillFGBuffer() { fillSurfaceRGBA8(Base::mFGSurfaceControl, RED, false); }
+
+    void unlockFGBuffer() {
+        sp<Surface> s = Base::mFGSurfaceControl->getSurface();
+        ASSERT_EQ(NO_ERROR, s->unlockAndPost());
+        Base::sFakeComposer->runVSyncAndWait();
+    }
+
+    void completeFGResize() {
+        fillSurfaceRGBA8(Base::mFGSurfaceControl, RED);
+        Base::sFakeComposer->runVSyncAndWait();
+    }
+    void restoreInitialState() {
+        TransactionScope ts(*Base::sFakeComposer);
+        ts.setSize(Base::mFGSurfaceControl, 64, 64);
+        ts.setPosition(Base::mFGSurfaceControl, 64, 64);
+        ts.setCrop_legacy(Base::mFGSurfaceControl, Rect(0, 0, 64, 64));
+    }
+
+    void Test_SurfacePositionLatching() {
+        // By default position can be updated even while
+        // a resize is pending.
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.setSize(Base::mFGSurfaceControl, 32, 32);
+            ts.setPosition(Base::mFGSurfaceControl, 100, 100);
+        }
+
+        // The size should not have updated as we have not provided a new buffer.
+        auto referenceFrame1 = Base::mBaseFrame;
+        referenceFrame1[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{100, 100, 100 + 64, 100 + 64};
+        EXPECT_TRUE(framesAreSame(referenceFrame1, Base::sFakeComposer->getLatestFrame()));
+
+        restoreInitialState();
+
+        completeFGResize();
+
+        auto referenceFrame2 = Base::mBaseFrame;
+        referenceFrame2[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{100, 100, 100 + 32, 100 + 32};
+        referenceFrame2[Base::FG_LAYER].mSourceCrop = hwc_frect_t{0.f, 0.f, 32.f, 32.f};
+        referenceFrame2[Base::FG_LAYER].mSwapCount++;
+        EXPECT_TRUE(framesAreSame(referenceFrame2, Base::sFakeComposer->getLatestFrame()));
+    }
+
+    void Test_CropLatching() {
+        // Normally the crop applies immediately even while a resize is pending.
+        {
+            TransactionScope ts(*Base::sFakeComposer);
+            ts.setSize(Base::mFGSurfaceControl, 128, 128);
+            ts.setCrop_legacy(Base::mFGSurfaceControl, Rect(0, 0, 63, 63));
+        }
+
+        auto referenceFrame1 = Base::mBaseFrame;
+        referenceFrame1[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{64, 64, 64 + 63, 64 + 63};
+        referenceFrame1[Base::FG_LAYER].mSourceCrop = hwc_frect_t{0.f, 0.f, 63.f, 63.f};
+        EXPECT_TRUE(framesAreSame(referenceFrame1, Base::sFakeComposer->getLatestFrame()));
+
+        restoreInitialState();
+
+        completeFGResize();
+
+        auto referenceFrame2 = Base::mBaseFrame;
+        referenceFrame2[Base::FG_LAYER].mDisplayFrame = hwc_rect_t{64, 64, 64 + 63, 64 + 63};
+        referenceFrame2[Base::FG_LAYER].mSourceCrop = hwc_frect_t{0.f, 0.f, 63.f, 63.f};
+        referenceFrame2[Base::FG_LAYER].mSwapCount++;
+        EXPECT_TRUE(framesAreSame(referenceFrame2, Base::sFakeComposer->getLatestFrame()));
+    }
+};
+
+using LatchingTest_2_1 = LatchingTest<FakeComposerService_2_1>;
+
+TEST_F(LatchingTest_2_1, DISABLED_SurfacePositionLatching) {
+    Test_SurfacePositionLatching();
+}
+
+TEST_F(LatchingTest_2_1, DISABLED_CropLatching) {
+    Test_CropLatching();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1787,4 +2016,4 @@ int main(int argc, char** argv) {
 }
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
-#pragma clang diagnostic pop // ignored "-Wconversion -Wextra"
+#pragma clang diagnostic pop // ignored "-Wconversion"

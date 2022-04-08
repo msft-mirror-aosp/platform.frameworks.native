@@ -17,13 +17,11 @@
 #include "FileBlobCache.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <inttypes.h>
+#include <log/log.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
-#include <log/log.h>
 
 // Cache file header
 static const char* cacheFileMagic = "EGL$";
@@ -70,7 +68,7 @@ FileBlobCache::FileBlobCache(size_t maxKeySize, size_t maxValueSize, size_t maxT
             return;
         }
 
-        // Check the size before trying to mmap it.
+        // Sanity check the size before trying to mmap it.
         size_t fileSize = statBuf.st_size;
         if (fileSize > mMaxTotalSize * 2) {
             ALOGE("cache file is too large: %#" PRIx64,

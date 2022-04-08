@@ -17,14 +17,11 @@
 #ifndef _LIBINPUT_KEY_LAYOUT_MAP_H
 #define _LIBINPUT_KEY_LAYOUT_MAP_H
 
-#include <android-base/result.h>
 #include <stdint.h>
 #include <utils/Errors.h>
 #include <utils/KeyedVector.h>
-#include <utils/RefBase.h>
 #include <utils/Tokenizer.h>
-
-#include <input/InputDevice.h>
+#include <utils/RefBase.h>
 
 namespace android {
 
@@ -63,12 +60,9 @@ struct AxisInfo {
  *
  * This object is immutable after it has been loaded.
  */
-class KeyLayoutMap {
+class KeyLayoutMap : public RefBase {
 public:
-    static base::Result<std::shared_ptr<KeyLayoutMap>> load(const std::string& filename);
-    static base::Result<std::shared_ptr<KeyLayoutMap>> load(Tokenizer* tokenizer);
-    static base::Result<std::shared_ptr<KeyLayoutMap>> loadContents(const std::string& filename,
-                                                                    const char* contents);
+    static status_t load(const std::string& filename, sp<KeyLayoutMap>* outMap);
 
     status_t mapKey(int32_t scanCode, int32_t usageCode,
             int32_t* outKeyCode, uint32_t* outFlags) const;
@@ -77,10 +71,8 @@ public:
     status_t findUsageCodeForLed(int32_t ledCode, int32_t* outUsageCode) const;
 
     status_t mapAxis(int32_t scanCode, AxisInfo* outAxisInfo) const;
-    const std::string getLoadFileName() const;
-    // Return pair of sensor type and sensor data index, for the input device abs code
-    base::Result<std::pair<InputDeviceSensorType, int32_t>> mapSensor(int32_t absCode);
 
+protected:
     virtual ~KeyLayoutMap();
 
 private:
@@ -93,18 +85,12 @@ private:
         int32_t ledCode;
     };
 
-    struct Sensor {
-        InputDeviceSensorType sensorType;
-        int32_t sensorDataIndex;
-    };
 
     KeyedVector<int32_t, Key> mKeysByScanCode;
     KeyedVector<int32_t, Key> mKeysByUsageCode;
     KeyedVector<int32_t, AxisInfo> mAxes;
     KeyedVector<int32_t, Led> mLedsByScanCode;
     KeyedVector<int32_t, Led> mLedsByUsageCode;
-    std::unordered_map<int32_t, Sensor> mSensorsByAbsCode;
-    std::string mLoadFileName;
 
     KeyLayoutMap();
 
@@ -123,7 +109,6 @@ private:
         status_t parseKey();
         status_t parseAxis();
         status_t parseLed();
-        status_t parseSensor();
     };
 };
 

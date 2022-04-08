@@ -26,14 +26,13 @@
 
 #include "bugreportz.h"
 
-static constexpr char VERSION[] = "1.2";
+static constexpr char VERSION[] = "1.1";
 
 static void show_usage() {
     fprintf(stderr,
-            "usage: bugreportz [-hpsv]\n"
+            "usage: bugreportz [-h | -v]\n"
             "  -h: to display this help message\n"
             "  -p: display progress\n"
-            "  -s: stream content to standard output\n"
             "  -v: to display the version\n"
             "  or no arguments to generate a zipped bugreport\n");
 }
@@ -44,20 +43,16 @@ static void show_version() {
 
 int main(int argc, char* argv[]) {
     bool show_progress = false;
-    bool stream_data = false;
     if (argc > 1) {
         /* parse arguments */
         int c;
-        while ((c = getopt(argc, argv, "hpsv")) != -1) {
+        while ((c = getopt(argc, argv, "hpv")) != -1) {
             switch (c) {
                 case 'h':
                     show_usage();
                     return EXIT_SUCCESS;
                 case 'p':
                     show_progress = true;
-                    break;
-                case 's':
-                    stream_data = true;
                     break;
                 case 'v':
                     show_version();
@@ -69,22 +64,12 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // We don't support any non-option arguments.
-    if (optind != argc) {
-        show_usage();
-        return EXIT_FAILURE;
-    }
-
     // TODO: code below was copy-and-pasted from bugreport.cpp (except by the
     // timeout value);
     // should be reused instead.
 
     // Start the dumpstatez service.
-    if (stream_data) {
-        property_set("ctl.start", "dumpstate");
-    } else {
-        property_set("ctl.start", "dumpstatez");
-    }
+    property_set("ctl.start", "dumpstatez");
 
     // Socket will not be available until service starts.
     int s = -1;
@@ -112,12 +97,7 @@ int main(int argc, char* argv[]) {
                 strerror(errno));
     }
 
-    int ret;
-    if (stream_data) {
-        ret = bugreportz_stream(s);
-    } else {
-        ret = bugreportz(s, show_progress);
-    }
+    int ret = bugreportz(s, show_progress);
 
     if (close(s) == -1) {
         fprintf(stderr, "WARNING: error closing socket: %s\n", strerror(errno));

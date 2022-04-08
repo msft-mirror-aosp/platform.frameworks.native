@@ -12,19 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package {
-    // See: http://go/android-license-faq
-    // A large-scale-change added 'default_applicable_licenses' to import
-    // all of the 'license_kinds' from "frameworks_native_license"
-    // to get the below license kinds:
-    //   SPDX-license-identifier-Apache-2.0
-    default_applicable_licenses: ["frameworks_native_license"],
-}
-
-cc_library {
+cc_library_shared {
     name: "libvibrator",
-    vendor_available: true,
-    double_loadable: true,
 
     shared_libs: [
         "libbinder",
@@ -56,11 +45,4 @@ cc_library {
     ],
 
     export_include_dirs: ["include"],
-
-    host_supported: true,
-    target: {
-        darwin: {
-            enabled: false,
-        },
-    },
 }

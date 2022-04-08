@@ -179,11 +179,6 @@ void UinputTouchScreen::sendMove(const Point& point) {
     injectEvent(EV_SYN, SYN_REPORT, 0);
 }
 
-void UinputTouchScreen::sendPointerUp() {
-    sendTrackingId(0xffffffff);
-    injectEvent(EV_SYN, SYN_REPORT, 0);
-}
-
 void UinputTouchScreen::sendUp() {
     sendTrackingId(0xffffffff);
     injectEvent(EV_KEY, BTN_TOUCH, 0);

@@ -17,7 +17,7 @@
 #define LOG_TAG "BufferQueue_test"
 //#define LOG_NDEBUG 0
 
-#include "MockConsumer.h"
+#include "DummyConsumer.h"
 
 #include <gui/BufferItem.h>
 #include <gui/BufferQueue.h>
@@ -134,8 +134,8 @@ TEST_F(BufferQueueTest, DISABLED_BufferQueueInAnotherProcess) {
     mConsumer = interface_cast<IGraphicBufferConsumer>(binderConsumer);
     EXPECT_TRUE(mConsumer != nullptr);
 
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, false));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, false));
     IGraphicBufferProducer::QueueBufferOutput output;
     ASSERT_EQ(OK,
             mProducer->connect(nullptr, NATIVE_WINDOW_API_CPU, false, &output));
@@ -171,22 +171,23 @@ TEST_F(BufferQueueTest, DISABLED_BufferQueueInAnotherProcess) {
 
 TEST_F(BufferQueueTest, GetMaxBufferCountInQueueBufferOutput_Succeeds) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    mConsumer->consumerConnect(mc, false);
+    sp<DummyConsumer> dc(new DummyConsumer);
+    mConsumer->consumerConnect(dc, false);
     int bufferCount = 50;
     mConsumer->setMaxBufferCount(bufferCount);
 
     IGraphicBufferProducer::QueueBufferOutput output;
-    mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &output);
+    mProducer->connect(new DummyProducerListener, NATIVE_WINDOW_API_CPU, false, &output);
     ASSERT_EQ(output.maxBufferCount, bufferCount);
 }
 
 TEST_F(BufferQueueTest, AcquireBuffer_ExceedsMaxAcquireCount_Fails) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    mConsumer->consumerConnect(mc, false);
+    sp<DummyConsumer> dc(new DummyConsumer);
+    mConsumer->consumerConnect(dc, false);
     IGraphicBufferProducer::QueueBufferOutput qbo;
-    mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &qbo);
+    mProducer->connect(new DummyProducerListener, NATIVE_WINDOW_API_CPU, false,
+            &qbo);
     mProducer->setMaxDequeuedBufferCount(3);
 
     int slot;
@@ -218,14 +219,15 @@ TEST_F(BufferQueueTest, AcquireBuffer_ExceedsMaxAcquireCount_Fails) {
 
 TEST_F(BufferQueueTest, SetMaxAcquiredBufferCountWithIllegalValues_ReturnsError) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    mConsumer->consumerConnect(mc, false);
+    sp<DummyConsumer> dc(new DummyConsumer);
+    mConsumer->consumerConnect(dc, false);
 
     EXPECT_EQ(OK, mConsumer->setMaxBufferCount(10));
     EXPECT_EQ(BAD_VALUE, mConsumer->setMaxAcquiredBufferCount(10));
 
     IGraphicBufferProducer::QueueBufferOutput qbo;
-    mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &qbo);
+    mProducer->connect(new DummyProducerListener, NATIVE_WINDOW_API_CPU, false,
+            &qbo);
     mProducer->setMaxDequeuedBufferCount(3);
 
     int minBufferCount;
@@ -261,11 +263,12 @@ TEST_F(BufferQueueTest, SetMaxAcquiredBufferCountWithIllegalValues_ReturnsError)
 
 TEST_F(BufferQueueTest, SetMaxAcquiredBufferCountWithLegalValues_Succeeds) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    mConsumer->consumerConnect(mc, false);
+    sp<DummyConsumer> dc(new DummyConsumer);
+    mConsumer->consumerConnect(dc, false);
 
     IGraphicBufferProducer::QueueBufferOutput qbo;
-    mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &qbo);
+    mProducer->connect(new DummyProducerListener, NATIVE_WINDOW_API_CPU, false,
+            &qbo);
     mProducer->setMaxDequeuedBufferCount(2);
 
     int minBufferCount;
@@ -307,8 +310,8 @@ TEST_F(BufferQueueTest, SetMaxAcquiredBufferCountWithLegalValues_Succeeds) {
 
 TEST_F(BufferQueueTest, SetMaxBufferCountWithLegalValues_Succeeds) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    mConsumer->consumerConnect(mc, false);
+    sp<DummyConsumer> dc(new DummyConsumer);
+    mConsumer->consumerConnect(dc, false);
 
     // Test shared buffer mode
     EXPECT_EQ(OK, mConsumer->setMaxAcquiredBufferCount(1));
@@ -316,8 +319,8 @@ TEST_F(BufferQueueTest, SetMaxBufferCountWithLegalValues_Succeeds) {
 
 TEST_F(BufferQueueTest, SetMaxBufferCountWithIllegalValues_ReturnsError) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    mConsumer->consumerConnect(mc, false);
+    sp<DummyConsumer> dc(new DummyConsumer);
+    mConsumer->consumerConnect(dc, false);
 
     EXPECT_EQ(BAD_VALUE, mConsumer->setMaxBufferCount(0));
     EXPECT_EQ(BAD_VALUE, mConsumer->setMaxBufferCount(
@@ -329,11 +332,11 @@ TEST_F(BufferQueueTest, SetMaxBufferCountWithIllegalValues_ReturnsError) {
 
 TEST_F(BufferQueueTest, DetachAndReattachOnProducerSide) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, false));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, false));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, false, &output));
 
     ASSERT_EQ(BAD_VALUE, mProducer->detachBuffer(-1)); // Index too low
     ASSERT_EQ(BAD_VALUE, mProducer->detachBuffer(
@@ -383,11 +386,11 @@ TEST_F(BufferQueueTest, DetachAndReattachOnProducerSide) {
 
 TEST_F(BufferQueueTest, DetachAndReattachOnConsumerSide) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, false));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, false));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, false, &output));
 
     int slot;
     sp<Fence> fence;
@@ -442,11 +445,11 @@ TEST_F(BufferQueueTest, DetachAndReattachOnConsumerSide) {
 
 TEST_F(BufferQueueTest, MoveFromConsumerToProducer) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, false));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, false));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, false, &output));
 
     int slot;
     sp<Fence> fence;
@@ -485,11 +488,11 @@ TEST_F(BufferQueueTest, MoveFromConsumerToProducer) {
 
 TEST_F(BufferQueueTest, TestDisallowingAllocation) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, true, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, true, &output));
 
     static const uint32_t WIDTH = 320;
     static const uint32_t HEIGHT = 240;
@@ -523,11 +526,11 @@ TEST_F(BufferQueueTest, TestDisallowingAllocation) {
 
 TEST_F(BufferQueueTest, TestGenerationNumbers) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, true, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, true, &output));
 
     ASSERT_EQ(OK, mProducer->setGenerationNumber(1));
 
@@ -565,11 +568,11 @@ TEST_F(BufferQueueTest, TestGenerationNumbers) {
 
 TEST_F(BufferQueueTest, TestSharedBufferModeWithoutAutoRefresh) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, true, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, true, &output));
 
     ASSERT_EQ(OK, mProducer->setSharedBufferMode(true));
 
@@ -615,11 +618,11 @@ TEST_F(BufferQueueTest, TestSharedBufferModeWithoutAutoRefresh) {
 
 TEST_F(BufferQueueTest, TestSharedBufferModeWithAutoRefresh) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, true, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, true, &output));
 
     ASSERT_EQ(OK, mProducer->setSharedBufferMode(true));
     ASSERT_EQ(OK, mProducer->setAutoRefresh(true));
@@ -684,11 +687,11 @@ TEST_F(BufferQueueTest, TestSharedBufferModeWithAutoRefresh) {
 
 TEST_F(BufferQueueTest, TestSharedBufferModeUsingAlreadyDequeuedBuffer) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, true, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, true, &output));
 
     // Dequeue a buffer
     int sharedSlot;
@@ -735,11 +738,11 @@ TEST_F(BufferQueueTest, TestSharedBufferModeUsingAlreadyDequeuedBuffer) {
 
 TEST_F(BufferQueueTest, TestTimeouts) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, true, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, true, &output));
 
     // Fill up the queue. Since the controlledByApp flags are set to true, this
     // queue should be in non-blocking mode, and we should be recycling the same
@@ -797,11 +800,11 @@ TEST_F(BufferQueueTest, TestTimeouts) {
 
 TEST_F(BufferQueueTest, CanAttachWhileDisallowingAllocation) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, true, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, true, &output));
 
     int slot = BufferQueue::INVALID_BUFFER_SLOT;
     sp<Fence> sourceFence;
@@ -819,11 +822,11 @@ TEST_F(BufferQueueTest, CanAttachWhileDisallowingAllocation) {
 
 TEST_F(BufferQueueTest, CanRetrieveLastQueuedBuffer) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, false));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, false));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, false, &output));
 
     // Dequeue and queue the first buffer, storing the handle
     int slot = BufferQueue::INVALID_BUFFER_SLOT;
@@ -873,11 +876,11 @@ TEST_F(BufferQueueTest, CanRetrieveLastQueuedBuffer) {
 
 TEST_F(BufferQueueTest, TestOccupancyHistory) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, false));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, false));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, false, &output));
 
     int slot = BufferQueue::INVALID_BUFFER_SLOT;
     sp<Fence> fence = Fence::NO_FENCE;
@@ -1027,8 +1030,8 @@ private:
 
 TEST_F(BufferQueueTest, TestDiscardFreeBuffers) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, false));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, false));
     IGraphicBufferProducer::QueueBufferOutput output;
     sp<BufferDiscardedListener> pl(new BufferDiscardedListener);
     ASSERT_EQ(OK, mProducer->connect(pl,
@@ -1112,11 +1115,11 @@ TEST_F(BufferQueueTest, TestDiscardFreeBuffers) {
 
 TEST_F(BufferQueueTest, TestBufferReplacedInQueueBuffer) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    ASSERT_EQ(OK,
-              mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, true, &output));
+    ASSERT_EQ(OK, mProducer->connect(new DummyProducerListener,
+            NATIVE_WINDOW_API_CPU, true, &output));
     ASSERT_EQ(OK, mConsumer->setMaxAcquiredBufferCount(1));
 
     int slot = BufferQueue::INVALID_BUFFER_SLOT;
@@ -1153,11 +1156,12 @@ TEST_F(BufferQueueTest, TestBufferReplacedInQueueBuffer) {
 
 TEST_F(BufferQueueTest, TestStaleBufferHandleSentAfterDisconnect) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    sp<IProducerListener> fakeListener(new StubProducerListener);
-    ASSERT_EQ(OK, mProducer->connect(fakeListener, NATIVE_WINDOW_API_CPU, true, &output));
+    sp<IProducerListener> dummyListener(new DummyProducerListener);
+    ASSERT_EQ(OK, mProducer->connect(dummyListener, NATIVE_WINDOW_API_CPU,
+            true, &output));
 
     int slot = BufferQueue::INVALID_BUFFER_SLOT;
     sp<Fence> fence = Fence::NO_FENCE;
@@ -1211,13 +1215,15 @@ TEST_F(BufferQueueTest, TestStaleBufferHandleSentAfterDisconnect) {
 
 TEST_F(BufferQueueTest, TestProducerConnectDisconnect) {
     createBufferQueue();
-    sp<MockConsumer> mc(new MockConsumer);
-    ASSERT_EQ(OK, mConsumer->consumerConnect(mc, true));
+    sp<DummyConsumer> dc(new DummyConsumer);
+    ASSERT_EQ(OK, mConsumer->consumerConnect(dc, true));
     IGraphicBufferProducer::QueueBufferOutput output;
-    sp<IProducerListener> fakeListener(new StubProducerListener);
+    sp<IProducerListener> dummyListener(new DummyProducerListener);
     ASSERT_EQ(NO_INIT, mProducer->disconnect(NATIVE_WINDOW_API_CPU));
-    ASSERT_EQ(OK, mProducer->connect(fakeListener, NATIVE_WINDOW_API_CPU, true, &output));
-    ASSERT_EQ(BAD_VALUE, mProducer->connect(fakeListener, NATIVE_WINDOW_API_MEDIA, true, &output));
+    ASSERT_EQ(OK, mProducer->connect(
+            dummyListener, NATIVE_WINDOW_API_CPU, true, &output));
+    ASSERT_EQ(BAD_VALUE, mProducer->connect(
+            dummyListener, NATIVE_WINDOW_API_MEDIA, true, &output));
 
     ASSERT_EQ(BAD_VALUE, mProducer->disconnect(NATIVE_WINDOW_API_MEDIA));
     ASSERT_EQ(OK, mProducer->disconnect(NATIVE_WINDOW_API_CPU));

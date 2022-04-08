@@ -80,9 +80,10 @@ class IProducerListener : public ProducerListener {
 class BnProducerListener : public IProducerListener {
 };
 #endif
-class StubProducerListener : public BnProducerListener {
+class DummyProducerListener : public BnProducerListener
+{
 public:
-    virtual ~StubProducerListener();
+    virtual ~DummyProducerListener();
     virtual void onBufferReleased() {}
     virtual bool needsReleaseNotify() { return false; }
 };

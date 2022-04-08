@@ -173,9 +173,12 @@ class DumpstateListener : public BnDumpstateListener {
         return binder::Status::ok();
     }
 
-    binder::Status onUiIntensiveBugreportDumpsFinished() override {
+    binder::Status onUiIntensiveBugreportDumpsFinished(const android::String16& callingpackage)
+        override {
         std::lock_guard <std::mutex> lock(lock_);
-        dprintf(out_fd_, "\rUi intensive bugreport dumps finished");
+        std::string callingpackageUtf8 = std::string(String8(callingpackage).string());
+        dprintf(out_fd_, "\rCalling package of ui intensive bugreport dumps finished: %s",
+                callingpackageUtf8.c_str());
         return binder::Status::ok();
     }
 
@@ -206,10 +209,13 @@ class ZippedBugreportGenerationTest : public Test {
     static std::shared_ptr<std::vector<SectionInfo>> sections;
     static Dumpstate& ds;
     static std::chrono::milliseconds duration;
-    static void GenerateBugreport() {
+    static void SetUpTestCase() {
         // clang-format off
         char* argv[] = {
-            (char*)"dumpstate"
+            (char*)"dumpstate",
+            (char*)"-d",
+            (char*)"-z",
+            (char*)"-B"
         };
         // clang-format on
         sp<DumpstateListener> listener(new DumpstateListener(dup(fileno(stdout)), sections));
@@ -230,20 +236,20 @@ Dumpstate& ZippedBugreportGenerationTest::ds = Dumpstate::GetInstance();
 std::chrono::milliseconds ZippedBugreportGenerationTest::duration = 0s;
 
 TEST_F(ZippedBugreportGenerationTest, IsGeneratedWithoutErrors) {
-    GenerateBugreport();
     EXPECT_EQ(access(getZipFilePath().c_str(), F_OK), 0);
 }
 
-TEST_F(ZippedBugreportGenerationTest, Is1MBMBinSize) {
+TEST_F(ZippedBugreportGenerationTest, Is3MBto30MBinSize) {
     struct stat st;
     EXPECT_EQ(stat(getZipFilePath().c_str(), &st), 0);
-    EXPECT_GE(st.st_size, 1000000 /* 1MB */);
+    EXPECT_GE(st.st_size, 3000000 /* 3MB */);
+    EXPECT_LE(st.st_size, 30000000 /* 30MB */);
 }
 
-TEST_F(ZippedBugreportGenerationTest, TakesBetween30And300Seconds) {
+TEST_F(ZippedBugreportGenerationTest, TakesBetween30And150Seconds) {
     EXPECT_GE(duration, 30s) << "Expected completion in more than 30s. Actual time "
                              << duration.count() << " s.";
-    EXPECT_LE(duration, 300s) << "Expected completion in less than 300s. Actual time "
+    EXPECT_LE(duration, 150s) << "Expected completion in less than 150s. Actual time "
                               << duration.count() << " s.";
 }
 
@@ -260,8 +266,7 @@ class ZippedBugReportContentsTest : public Test {
         CloseArchive(handle);
     }
 
-    void FileExists(const char* filename, uint32_t minsize,
-                    uint32_t maxsize = std::numeric_limits<uint32_t>::max()) {
+    void FileExists(const char* filename, uint32_t minsize, uint32_t maxsize) {
         ZipEntry entry;
         GetEntry(handle, filename, &entry);
         EXPECT_GT(entry.uncompressed_length, minsize);
@@ -280,7 +285,7 @@ TEST_F(ZippedBugReportContentsTest, ContainsMainEntry) {
                     main_entry.uncompressed_length);
 
     // contains main entry file
-    FileExists(bugreport_txt_name.c_str(), 1000000U);
+    FileExists(bugreport_txt_name.c_str(), 1000000U, 50000000U);
 }
 
 TEST_F(ZippedBugReportContentsTest, ContainsVersion) {
@@ -296,9 +301,8 @@ TEST_F(ZippedBugReportContentsTest, ContainsVersion) {
 }
 
 TEST_F(ZippedBugReportContentsTest, ContainsBoardSpecificFiles) {
-    // TODO(b/160109027): cf_x86_phone-userdebug does not dump them.
-    // FileExists("dumpstate_board.bin", 1000000U, 80000000U);
-    // FileExists("dumpstate_board.txt", 100000U, 1000000U);
+    FileExists("dumpstate_board.bin", 1000000U, 80000000U);
+    FileExists("dumpstate_board.txt", 100000U, 1000000U);
 }
 
 TEST_F(ZippedBugReportContentsTest, ContainsProtoFile) {
@@ -310,12 +314,8 @@ TEST_F(ZippedBugReportContentsTest, ContainsSomeFileSystemFiles) {
     // FS/proc/*/mountinfo size > 0
     FileExists("FS/proc/1/mountinfo", 0U, 100000U);
 
-    // FS/data/misc/profiles/cur/0/*/primary.prof should exist. Also, since dumpstate only adds
-    // profiles to the zip in the non-user build, a build checking is necessary here.
-    if (!PropertiesHelper::IsUserBuild()) {
-        ZipEntry entry;
-        GetEntry(handle, "FS/data/misc/profiles/cur/0/com.android.phone/primary.prof", &entry);
-    }
+    // FS/data/misc/profiles/cur/0/*/primary.prof size > 0
+    FileExists("FS/data/misc/profiles/cur/0/com.android.phone/primary.prof", 0U, 100000U);
 }
 
 /**
@@ -323,16 +323,6 @@ TEST_F(ZippedBugReportContentsTest, ContainsSomeFileSystemFiles) {
  */
 class BugreportSectionTest : public Test {
   public:
-    ZipArchiveHandle handle;
-
-    void SetUp() {
-        ASSERT_EQ(OpenArchive(ZippedBugreportGenerationTest::getZipFilePath().c_str(), &handle), 0);
-    }
-
-    void TearDown() {
-        CloseArchive(handle);
-    }
-
     static void SetUpTestCase() {
         ParseSections(ZippedBugreportGenerationTest::getZipFilePath().c_str(),
                       ZippedBugreportGenerationTest::sections.get());
@@ -356,19 +346,6 @@ class BugreportSectionTest : public Test {
             }
         }
         FAIL() << sectionName << " not found.";
-    }
-
-    /**
-     * Whether or not the content of the section is injected by other commands.
-     */
-    bool IsContentInjectedByOthers(const std::string& line) {
-        // Command header such as `------ APP ACTIVITIES (/system/bin/dumpsys activity -v) ------`.
-        static const std::regex kCommandHeader = std::regex{"------ .+ \\(.+\\) ------"};
-        std::smatch match;
-        if (std::regex_match(line, match, kCommandHeader)) {
-          return true;
-        }
-        return false;
     }
 };
 
@@ -411,6 +388,7 @@ TEST_F(BugreportSectionTest, WindowSectionGenerated) {
 }
 
 TEST_F(BugreportSectionTest, ConnectivitySectionsGenerated) {
+    SectionExists("HIGH connectivity", /* bytes= */ 3000);
     SectionExists("connectivity", /* bytes= */ 5000);
 }
 
@@ -422,30 +400,8 @@ TEST_F(BugreportSectionTest, BatteryStatsSectionGenerated) {
     SectionExists("batterystats", /* bytes= */ 1000);
 }
 
-TEST_F(BugreportSectionTest, DISABLED_WifiSectionGenerated) {
+TEST_F(BugreportSectionTest, WifiSectionGenerated) {
     SectionExists("wifi", /* bytes= */ 100000);
-}
-
-TEST_F(BugreportSectionTest, NoInjectedContentByOtherCommand) {
-    // Extract the main entry to a temp file
-    TemporaryFile tmp_binary;
-    ASSERT_NE(-1, tmp_binary.fd);
-    ExtractBugreport(&handle, tmp_binary.fd);
-
-    // Read line by line and identify sections
-    std::ifstream ifs(tmp_binary.path, std::ifstream::in);
-    std::string line;
-    std::string current_section_name;
-    while (std::getline(ifs, line)) {
-        std::string section_name;
-        if (IsSectionStart(line, &section_name)) {
-            current_section_name = section_name;
-        } else if (IsSectionEnd(line)) {
-            current_section_name = "";
-        } else if (!current_section_name.empty()) {
-            EXPECT_FALSE(IsContentInjectedByOthers(line));
-        }
-    }
 }
 
 class DumpstateBinderTest : public Test {

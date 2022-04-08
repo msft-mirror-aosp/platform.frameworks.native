@@ -28,9 +28,7 @@
 
 namespace android {
 
-class GpuMem;
 class GpuStats;
-class GpuMemTracer;
 
 class GpuService : public BnGpuService, public PriorityDumper {
 public:
@@ -76,9 +74,7 @@ private:
     /*
      * Attributes
      */
-    std::shared_ptr<GpuMem> mGpuMem;
     std::unique_ptr<GpuStats> mGpuStats;
-    std::unique_ptr<GpuMemTracer> mGpuMemTracer;
     std::mutex mLock;
     std::string mDeveloperDriverPath;
 };

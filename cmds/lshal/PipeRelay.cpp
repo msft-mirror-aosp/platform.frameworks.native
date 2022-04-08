@@ -23,6 +23,7 @@
 
 #include <atomic>
 
+#include <android-base/logging.h>
 #include <utils/Thread.h>
 
 namespace android {
@@ -30,15 +31,8 @@ namespace lshal {
 
 static constexpr struct timeval READ_TIMEOUT { .tv_sec = 1, .tv_usec = 0 };
 
-static std::string getThreadName(std::string interfaceName, const std::string &instanceName) {
-    auto dot = interfaceName.rfind(".");
-    if (dot != std::string::npos) interfaceName = interfaceName.substr(dot + 1);
-    return "RelayThread_" + interfaceName + "_" + instanceName;
-}
-
 struct PipeRelay::RelayThread : public Thread {
-    explicit RelayThread(int fd, std::ostream &os, const NullableOStream<std::ostream> &err,
-                         const std::string &fqName);
+    explicit RelayThread(int fd, std::ostream &os);
 
     bool threadLoop() override;
     void setFinished();
@@ -46,7 +40,6 @@ struct PipeRelay::RelayThread : public Thread {
 private:
     int mFd;
     std::ostream &mOutStream;
-    NullableOStream<std::ostream> mErrStream;
 
     // If we were to use requestExit() and exitPending() instead, threadLoop()
     // may not run at all by the time ~PipeRelay is called (i.e. debug() has
@@ -54,17 +47,13 @@ private:
     // read() are executed until data are drained.
     std::atomic_bool mFinished;
 
-    std::string mFqName;
-
     DISALLOW_COPY_AND_ASSIGN(RelayThread);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 
-PipeRelay::RelayThread::RelayThread(int fd, std::ostream &os,
-                                    const NullableOStream<std::ostream> &err,
-                                    const std::string &fqName)
-      : mFd(fd), mOutStream(os), mErrStream(err), mFinished(false), mFqName(fqName) {}
+PipeRelay::RelayThread::RelayThread(int fd, std::ostream &os)
+      : mFd(fd), mOutStream(os), mFinished(false) {}
 
 bool PipeRelay::RelayThread::threadLoop() {
     char buffer[1024];
@@ -77,14 +66,13 @@ bool PipeRelay::RelayThread::threadLoop() {
 
     int res = TEMP_FAILURE_RETRY(select(mFd + 1, &set, nullptr, nullptr, &timeout));
     if (res < 0) {
-        mErrStream << "debug " << mFqName << ": select() failed";
+        PLOG(INFO) << "select() failed";
         return false;
     }
 
     if (res == 0 || !FD_ISSET(mFd, &set)) {
         if (mFinished) {
-            mErrStream << "debug " << mFqName
-                       << ": timeout reading from pipe, output may be truncated.";
+            LOG(WARNING) << "debug: timeout reading from pipe, output may be truncated.";
             return false;
         }
         // timeout, but debug() has not returned, so wait for HAL to finish.
@@ -95,7 +83,7 @@ bool PipeRelay::RelayThread::threadLoop() {
     ssize_t n = TEMP_FAILURE_RETRY(read(mFd, buffer, sizeof(buffer)));
 
     if (n < 0) {
-        mErrStream << "debug " << mFqName << ": read() failed";
+        PLOG(ERROR) << "read() failed";
     }
 
     if (n <= 0) {
@@ -113,9 +101,8 @@ void PipeRelay::RelayThread::setFinished() {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-PipeRelay::PipeRelay(std::ostream &os, const NullableOStream<std::ostream> &err,
-                     const std::string &interfaceName, const std::string &instanceName)
-      : mInitCheck(NO_INIT) {
+PipeRelay::PipeRelay(std::ostream &os)
+    : mInitCheck(NO_INIT) {
     int res = pipe(mFds);
 
     if (res < 0) {
@@ -123,8 +110,8 @@ PipeRelay::PipeRelay(std::ostream &os, const NullableOStream<std::ostream> &err,
         return;
     }
 
-    mThread = new RelayThread(mFds[0], os, err, interfaceName + "/" + instanceName);
-    mInitCheck = mThread->run(getThreadName(interfaceName, instanceName).c_str());
+    mThread = new RelayThread(mFds[0], os);
+    mInitCheck = mThread->run("RelayThread");
 }
 
 void PipeRelay::CloseFd(int *fd) {

@@ -114,14 +114,15 @@ static void setxattr(const char* path, const char* key) {
 class CacheTest : public testing::Test {
 protected:
     InstalldNativeService* service;
-    std::optional<std::string> testUuid;
+    std::unique_ptr<std::string> testUuid;
 
     virtual void SetUp() {
         setenv("ANDROID_LOG_TAGS", "*:v", 1);
         android::base::InitLogging(nullptr);
 
         service = new InstalldNativeService();
-        testUuid = kTestUuid;
+        testUuid = std::make_unique<std::string>();
+        *testUuid = std::string(kTestUuid);
         system("mkdir -p /data/local/tmp/user/0");
     }
 

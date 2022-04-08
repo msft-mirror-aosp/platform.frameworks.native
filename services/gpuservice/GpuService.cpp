@@ -24,15 +24,12 @@
 #include <binder/Parcel.h>
 #include <binder/PermissionCache.h>
 #include <cutils/properties.h>
-#include <gpumem/GpuMem.h>
 #include <gpustats/GpuStats.h>
 #include <private/android_filesystem_config.h>
-#include <tracing/GpuMemTracer.h>
 #include <utils/String8.h>
 #include <utils/Trace.h>
-#include <vkjson.h>
 
-#include <thread>
+#include <vkjson.h>
 
 namespace android {
 
@@ -48,16 +45,7 @@ const String16 sDump("android.permission.DUMP");
 
 const char* const GpuService::SERVICE_NAME = "gpu";
 
-GpuService::GpuService()
-      : mGpuMem(std::make_shared<GpuMem>()),
-        mGpuStats(std::make_unique<GpuStats>()),
-        mGpuMemTracer(std::make_unique<GpuMemTracer>()) {
-    std::thread asyncInitThread([this]() {
-        mGpuMem->initialize();
-        mGpuMemTracer->initialize(mGpuMem);
-    });
-    asyncInitThread.detach();
-};
+GpuService::GpuService() : mGpuStats(std::make_unique<GpuStats>()){};
 
 void GpuService::setGpuStats(const std::string& driverPackageName,
                              const std::string& driverVersionName, uint64_t driverVersionCode,
@@ -122,7 +110,6 @@ status_t GpuService::doDump(int fd, const Vector<String16>& args, bool /*asProto
     } else {
         bool dumpAll = true;
         bool dumpDriverInfo = false;
-        bool dumpMem = false;
         bool dumpStats = false;
         size_t numArgs = args.size();
 
@@ -132,19 +119,13 @@ status_t GpuService::doDump(int fd, const Vector<String16>& args, bool /*asProto
                     dumpStats = true;
                 } else if (args[index] == String16("--gpudriverinfo")) {
                     dumpDriverInfo = true;
-                } else if (args[index] == String16("--gpumem")) {
-                    dumpMem = true;
                 }
             }
-            dumpAll = !(dumpDriverInfo || dumpMem || dumpStats);
+            dumpAll = !(dumpDriverInfo || dumpStats);
         }
 
         if (dumpAll || dumpDriverInfo) {
             dumpGameDriverInfo(&result);
-            result.append("\n");
-        }
-        if (dumpAll || dumpMem) {
-            mGpuMem->dump(args, &result);
             result.append("\n");
         }
         if (dumpAll || dumpStats) {

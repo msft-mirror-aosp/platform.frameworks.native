@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-#include <type_traits>
 #define LOG_TAG "InputWindow"
 #define LOG_NDEBUG 0
 
-#include <android-base/stringprintf.h>
 #include <binder/Parcel.h>
-#include <input/InputTransport.h>
 #include <input/InputWindow.h>
+#include <input/InputTransport.h>
 
 #include <log/log.h>
 
-namespace android {
+#include <ui/Rect.h>
+#include <ui/Region.h>
 
+namespace android {
 
 // --- InputWindowInfo ---
 void InputWindowInfo::addTouchableRegion(const Rect& region) {
@@ -43,7 +43,7 @@ bool InputWindowInfo::frameContainsPoint(int32_t x, int32_t y) const {
 }
 
 bool InputWindowInfo::supportsSplitTouch() const {
-    return flags.test(Flag::SPLIT_TOUCH);
+    return layoutParamsFlags & FLAG_SPLIT_TOUCH;
 }
 
 bool InputWindowInfo::overlaps(const InputWindowInfo* other) const {
@@ -51,163 +51,96 @@ bool InputWindowInfo::overlaps(const InputWindowInfo* other) const {
             && frameTop < other->frameBottom && frameBottom > other->frameTop;
 }
 
-bool InputWindowInfo::operator==(const InputWindowInfo& info) const {
-    return info.token == token && info.id == id && info.name == name && info.flags == flags &&
-            info.type == type && info.dispatchingTimeout == dispatchingTimeout &&
-            info.frameLeft == frameLeft && info.frameTop == frameTop &&
-            info.frameRight == frameRight && info.frameBottom == frameBottom &&
-            info.surfaceInset == surfaceInset && info.globalScaleFactor == globalScaleFactor &&
-            info.transform == transform && info.displayWidth == displayWidth &&
-            info.displayHeight == displayHeight &&
-            info.touchableRegion.hasSameRects(touchableRegion) && info.visible == visible &&
-            info.trustedOverlay == trustedOverlay && info.focusable == focusable &&
-            info.touchOcclusionMode == touchOcclusionMode && info.hasWallpaper == hasWallpaper &&
-            info.paused == paused && info.ownerPid == ownerPid && info.ownerUid == ownerUid &&
-            info.packageName == packageName && info.inputFeatures == inputFeatures &&
-            info.displayId == displayId && info.portalToDisplayId == portalToDisplayId &&
-            info.replaceTouchableRegionWithCrop == replaceTouchableRegionWithCrop &&
-            info.applicationInfo == applicationInfo;
-}
-
-status_t InputWindowInfo::writeToParcel(android::Parcel* parcel) const {
-    if (parcel == nullptr) {
-        ALOGE("%s: Null parcel", __func__);
-        return BAD_VALUE;
-    }
+status_t InputWindowInfo::write(Parcel& output) const {
     if (name.empty()) {
-        parcel->writeInt32(0);
+        output.writeInt32(0);
         return OK;
     }
-    parcel->writeInt32(1);
+    output.writeInt32(1);
+    status_t s = output.writeStrongBinder(token);
+    if (s != OK) return s;
 
-    // clang-format off
-    status_t status = parcel->writeStrongBinder(token) ?:
-        parcel->writeInt64(dispatchingTimeout.count()) ?:
-        parcel->writeInt32(id) ?:
-        parcel->writeUtf8AsUtf16(name) ?:
-        parcel->writeInt32(flags.get()) ?:
-        parcel->writeInt32(static_cast<std::underlying_type_t<InputWindowInfo::Type>>(type)) ?:
-        parcel->writeInt32(frameLeft) ?:
-        parcel->writeInt32(frameTop) ?:
-        parcel->writeInt32(frameRight) ?:
-        parcel->writeInt32(frameBottom) ?:
-        parcel->writeInt32(surfaceInset) ?:
-        parcel->writeFloat(globalScaleFactor) ?:
-        parcel->writeFloat(alpha) ?:
-        parcel->writeFloat(transform.dsdx()) ?:
-        parcel->writeFloat(transform.dtdx()) ?:
-        parcel->writeFloat(transform.tx()) ?:
-        parcel->writeFloat(transform.dtdy()) ?:
-        parcel->writeFloat(transform.dsdy()) ?:
-        parcel->writeFloat(transform.ty()) ?:
-        parcel->writeInt32(displayWidth) ?:
-        parcel->writeInt32(displayHeight) ?:
-        parcel->writeBool(visible) ?:
-        parcel->writeBool(focusable) ?:
-        parcel->writeBool(hasWallpaper) ?:
-        parcel->writeBool(paused) ?:
-        parcel->writeBool(trustedOverlay) ?:
-        parcel->writeInt32(static_cast<int32_t>(touchOcclusionMode)) ?:
-        parcel->writeInt32(ownerPid) ?:
-        parcel->writeInt32(ownerUid) ?:
-        parcel->writeUtf8AsUtf16(packageName) ?:
-        parcel->writeInt32(inputFeatures.get()) ?:
-        parcel->writeInt32(displayId) ?:
-        parcel->writeInt32(portalToDisplayId) ?:
-        applicationInfo.writeToParcel(parcel) ?:
-        parcel->write(touchableRegion) ?:
-        parcel->writeBool(replaceTouchableRegionWithCrop) ?:
-        parcel->writeStrongBinder(touchableRegionCropHandle.promote());
-    // clang-format on
-    return status;
+    output.writeInt32(id);
+    output.writeString8(String8(name.c_str()));
+    output.writeInt32(layoutParamsFlags);
+    output.writeInt32(layoutParamsType);
+    output.writeInt64(dispatchingTimeout);
+    output.writeInt32(frameLeft);
+    output.writeInt32(frameTop);
+    output.writeInt32(frameRight);
+    output.writeInt32(frameBottom);
+    output.writeInt32(surfaceInset);
+    output.writeFloat(globalScaleFactor);
+    output.writeFloat(windowXScale);
+    output.writeFloat(windowYScale);
+    output.writeBool(visible);
+    output.writeBool(canReceiveKeys);
+    output.writeBool(hasFocus);
+    output.writeBool(hasWallpaper);
+    output.writeBool(paused);
+    output.writeBool(trustedOverlay);
+    output.writeInt32(ownerPid);
+    output.writeInt32(ownerUid);
+    output.writeInt32(inputFeatures);
+    output.writeInt32(displayId);
+    output.writeInt32(portalToDisplayId);
+    applicationInfo.write(output);
+    output.write(touchableRegion);
+    output.writeBool(replaceTouchableRegionWithCrop);
+    output.writeStrongBinder(touchableRegionCropHandle.promote());
+    return OK;
 }
 
-status_t InputWindowInfo::readFromParcel(const android::Parcel* parcel) {
-    if (parcel == nullptr) {
-        ALOGE("%s: Null parcel", __func__);
-        return BAD_VALUE;
-    }
-    if (parcel->readInt32() == 0) {
-        return OK;
+InputWindowInfo InputWindowInfo::read(const Parcel& from) {
+    InputWindowInfo ret;
+
+    if (from.readInt32() == 0) {
+        return ret;
     }
 
-    token = parcel->readStrongBinder();
-    dispatchingTimeout = static_cast<decltype(dispatchingTimeout)>(parcel->readInt64());
-    status_t status = parcel->readInt32(&id) ?: parcel->readUtf8FromUtf16(&name);
-    if (status != OK) {
-        return status;
-    }
+    ret.token = from.readStrongBinder();
+    ret.id = from.readInt32();
+    ret.name = from.readString8().c_str();
+    ret.layoutParamsFlags = from.readInt32();
+    ret.layoutParamsType = from.readInt32();
+    ret.dispatchingTimeout = from.readInt64();
+    ret.frameLeft = from.readInt32();
+    ret.frameTop = from.readInt32();
+    ret.frameRight = from.readInt32();
+    ret.frameBottom = from.readInt32();
+    ret.surfaceInset = from.readInt32();
+    ret.globalScaleFactor = from.readFloat();
+    ret.windowXScale = from.readFloat();
+    ret.windowYScale = from.readFloat();
+    ret.visible = from.readBool();
+    ret.canReceiveKeys = from.readBool();
+    ret.hasFocus = from.readBool();
+    ret.hasWallpaper = from.readBool();
+    ret.paused = from.readBool();
+    ret.trustedOverlay = from.readBool();
+    ret.ownerPid = from.readInt32();
+    ret.ownerUid = from.readInt32();
+    ret.inputFeatures = from.readInt32();
+    ret.displayId = from.readInt32();
+    ret.portalToDisplayId = from.readInt32();
+    ret.applicationInfo = InputApplicationInfo::read(from);
+    from.read(ret.touchableRegion);
+    ret.replaceTouchableRegionWithCrop = from.readBool();
+    ret.touchableRegionCropHandle = from.readStrongBinder();
 
-    flags = Flags<Flag>(parcel->readInt32());
-    type = static_cast<Type>(parcel->readInt32());
-    float dsdx, dtdx, tx, dtdy, dsdy, ty;
-    int32_t touchOcclusionModeInt;
-    // clang-format off
-    status = parcel->readInt32(&frameLeft) ?:
-        parcel->readInt32(&frameTop) ?:
-        parcel->readInt32(&frameRight) ?:
-        parcel->readInt32(&frameBottom) ?:
-        parcel->readInt32(&surfaceInset) ?:
-        parcel->readFloat(&globalScaleFactor) ?:
-        parcel->readFloat(&alpha) ?:
-        parcel->readFloat(&dsdx) ?:
-        parcel->readFloat(&dtdx) ?:
-        parcel->readFloat(&tx) ?:
-        parcel->readFloat(&dtdy) ?:
-        parcel->readFloat(&dsdy) ?:
-        parcel->readFloat(&ty) ?:
-        parcel->readInt32(&displayWidth) ?:
-        parcel->readInt32(&displayHeight) ?:
-        parcel->readBool(&visible) ?:
-        parcel->readBool(&focusable) ?:
-        parcel->readBool(&hasWallpaper) ?:
-        parcel->readBool(&paused) ?:
-        parcel->readBool(&trustedOverlay) ?:
-        parcel->readInt32(&touchOcclusionModeInt) ?:
-        parcel->readInt32(&ownerPid) ?:
-        parcel->readInt32(&ownerUid) ?:
-        parcel->readUtf8FromUtf16(&packageName);
-    // clang-format on
+    return ret;
+}
 
-    if (status != OK) {
-        return status;
-    }
-
-    touchOcclusionMode = static_cast<TouchOcclusionMode>(touchOcclusionModeInt);
-
-    inputFeatures = Flags<Feature>(parcel->readInt32());
-    status = parcel->readInt32(&displayId) ?:
-        parcel->readInt32(&portalToDisplayId) ?:
-        applicationInfo.readFromParcel(parcel) ?:
-        parcel->read(touchableRegion) ?:
-        parcel->readBool(&replaceTouchableRegionWithCrop);
-
-    if (status != OK) {
-        return status;
-    }
-
-    touchableRegionCropHandle = parcel->readStrongBinder();
-    transform.set({dsdx, dtdx, tx, dtdy, dsdy, ty, 0, 0, 1});
-
-    return OK;
+InputWindowInfo::InputWindowInfo(const Parcel& from) {
+    *this = read(from);
 }
 
 // --- InputWindowHandle ---
 
-InputWindowHandle::InputWindowHandle() {}
-
-InputWindowHandle::~InputWindowHandle() {}
-
-InputWindowHandle::InputWindowHandle(const InputWindowHandle& other) : mInfo(other.mInfo) {}
-
-InputWindowHandle::InputWindowHandle(const InputWindowInfo& other) : mInfo(other) {}
-
-status_t InputWindowHandle::writeToParcel(android::Parcel* parcel) const {
-    return mInfo.writeToParcel(parcel);
+InputWindowHandle::InputWindowHandle() {
 }
 
-status_t InputWindowHandle::readFromParcel(const android::Parcel* parcel) {
-    return mInfo.readFromParcel(parcel);
+InputWindowHandle::~InputWindowHandle() {
 }
 
 void InputWindowHandle::releaseChannel() {
@@ -221,4 +154,5 @@ sp<IBinder> InputWindowHandle::getToken() const {
 void InputWindowHandle::updateFrom(sp<InputWindowHandle> handle) {
     mInfo = handle->mInfo;
 }
+
 } // namespace android

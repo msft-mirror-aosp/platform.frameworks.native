@@ -907,7 +907,6 @@ void FakeComposerClient::onSurfaceFlingerStart() {
 }
 
 void FakeComposerClient::onSurfaceFlingerStop() {
-    mSurfaceComposer->enableVSyncInjections(false);
     mSurfaceComposer->dispose();
     mSurfaceComposer.clear();
 }

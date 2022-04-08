@@ -51,6 +51,8 @@
 
 __BEGIN_DECLS
 
+#if __ANDROID_API__ >= 29
+
 enum {
     /** The minimum value fot the font weight value. */
     AFONT_WEIGHT_MIN = 0,
@@ -189,7 +191,7 @@ const char* _Nonnull AFont_getFontFilePath(const AFont* _Nonnull font) __INTRODU
  * Available since API level 29.
  *
  * \param font a font object. Passing NULL is not allowed.
- * \return a positive integer less than or equal to {@link AFONT_WEIGHT_MAX} is returned.
+ * \return a positive integer less than or equal to {@link ASYSTEM_FONT_MAX_WEIGHT} is returned.
  */
 uint16_t AFont_getWeight(const AFont* _Nonnull font) __INTRODUCED_IN(29);
 
@@ -241,7 +243,7 @@ size_t AFont_getCollectionIndex(const AFont* _Nonnull font) __INTRODUCED_IN(29);
  * In this case, AFont_getAxisCount returns 2 and AFont_getAxisTag
  * and AFont_getAxisValue will return following values.
  * \code{.cpp}
- *     AFont* font = ASystemFontIterator_next(ite);
+ *     AFont* font = AFontIterator_next(ite);
  *
  *     // Returns the number of axes
  *     AFont_getAxisCount(font);  // Returns 2
@@ -289,11 +291,13 @@ uint32_t AFont_getAxisTag(const AFont* _Nonnull font, uint32_t axisIndex)
  *
  * \param font a font object. Passing NULL is not allowed.
  * \param axisIndex an index to the font variation settings. Passing value larger than or
- *         equal to {@link AFont_getAxisCount} is not allowed.
+ *         equal to {@link ASYstemFont_getAxisCount} is not allwed.
  * \return a float value for the given font variation setting.
  */
 float AFont_getAxisValue(const AFont* _Nonnull font, uint32_t axisIndex)
       __INTRODUCED_IN(29);
+
+#endif // __ANDROID_API__ >= 29
 
 __END_DECLS
 

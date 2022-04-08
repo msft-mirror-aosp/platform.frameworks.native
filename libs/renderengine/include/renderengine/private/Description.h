@@ -44,7 +44,6 @@ struct Description {
     bool hasInputTransformMatrix() const;
     bool hasOutputTransformMatrix() const;
     bool hasColorMatrix() const;
-    bool hasDisplayColorMatrix() const;
 
     // whether textures are premultiplied
     bool isPremultipliedAlpha = false;
@@ -80,8 +79,6 @@ struct Description {
 
     // The color matrix will be applied in linear space right before OETF.
     mat4 colorMatrix;
-    // The display color matrix will be applied in gamma space after OETF
-    mat4 displayColorMatrix;
     mat4 inputTransformMatrix;
     mat4 outputTransformMatrix;
 

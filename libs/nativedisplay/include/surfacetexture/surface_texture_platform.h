@@ -19,7 +19,7 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include <jni.h>
+#include <nativehelper/JNIHelp.h>
 #include <system/graphics.h>
 
 // This file provides a facade API on top of SurfaceTexture, which avoids using

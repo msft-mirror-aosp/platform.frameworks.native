@@ -45,9 +45,7 @@ status_t Surface::writeToParcel(Parcel* parcel, bool nameAlreadyWritten) const {
         if (res != OK) return res;
     }
 
-    res = IGraphicBufferProducer::exportToParcel(graphicBufferProducer, parcel);
-    if (res != OK) return res;
-    return parcel->writeStrongBinder(surfaceControlHandle);
+    return IGraphicBufferProducer::exportToParcel(graphicBufferProducer, parcel);
 }
 
 status_t Surface::readFromParcel(const Parcel* parcel) {
@@ -70,14 +68,17 @@ status_t Surface::readFromParcel(const Parcel* parcel, bool nameAlreadyRead) {
     }
 
     graphicBufferProducer = IGraphicBufferProducer::createFromParcel(parcel);
-    surfaceControlHandle = parcel->readStrongBinder();
     return OK;
 }
 
 String16 Surface::readMaybeEmptyString16(const Parcel* parcel) {
-    std::optional<String16> str;
-    parcel->readString16(&str);
-    return str.value_or(String16());
+    size_t len;
+    const char16_t* str = parcel->readString16Inplace(&len);
+    if (str != nullptr) {
+        return String16(str, len);
+    } else {
+        return String16();
+    }
 }
 
 } // namespace view

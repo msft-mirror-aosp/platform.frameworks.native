@@ -1,24 +1,14 @@
 // Build the unit tests.
-package {
-    // See: http://go/android-license-faq
-    // A large-scale-change added 'default_applicable_licenses' to import
-    // all of the 'license_kinds' from "frameworks_native_license"
-    // to get the below license kinds:
-    //   SPDX-license-identifier-Apache-2.0
-    default_applicable_licenses: ["frameworks_native_license"],
-}
-
 cc_test {
     name: "libinput_tests",
     srcs: [
-        "NamedEnum_test.cpp",
-        "Flags_test.cpp",
         "IdGenerator_test.cpp",
         "InputChannel_test.cpp",
         "InputDevice_test.cpp",
         "InputEvent_test.cpp",
         "InputPublisherAndConsumer_test.cpp",
         "InputWindow_test.cpp",
+        "LatencyStatistics_test.cpp",
         "TouchVideoFrame_test.cpp",
         "VelocityTracker_test.cpp",
         "VerifiedInputEvent_test.cpp",
@@ -28,18 +18,14 @@ cc_test {
         "-Wextra",
         "-Werror",
     ],
-    static_libs: [
-        "libinput",
-    ],
     shared_libs: [
-        "libbase",
-        "libbinder",
+        "libinput",
         "libcutils",
-        "liblog",
-        "libui",
         "libutils",
-    ],
-    test_suites: ["device-tests"],
+        "libbinder",
+        "libui",
+        "libbase",
+    ]
 }
 
 // NOTE: This is a compile time test, and does not need to be
@@ -48,8 +34,8 @@ cc_test {
 cc_library_static {
     name: "StructLayout_test",
     srcs: ["StructLayout_test.cpp"],
-    compile_multilib: "both",
     cflags: [
+        "-O0",
         "-Wall",
         "-Werror",
         "-Wextra",

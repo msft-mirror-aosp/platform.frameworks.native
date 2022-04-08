@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+// TODO(b/129481165): remove the #pragma below and fix conversion issues
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wconversion"
+
 #undef LOG_TAG
 #define LOG_TAG "LibSurfaceFlingerUnittests"
 
@@ -27,8 +31,9 @@
 #include "Layer.h"
 #include "TestableSurfaceFlinger.h"
 #include "mock/DisplayHardware/MockComposer.h"
+#include "mock/MockDispSync.h"
+#include "mock/MockEventControlThread.h"
 #include "mock/MockEventThread.h"
-#include "mock/MockVsyncController.h"
 
 namespace android {
 
@@ -60,6 +65,7 @@ protected:
     static constexpr int32_t PRIORITY_UNSET = -1;
 
     void setupScheduler();
+    void setupComposer(int virtualDisplayCount);
     sp<BufferQueueLayer> createBufferQueueLayer();
     sp<BufferStateLayer> createBufferStateLayer();
     sp<EffectLayer> createEffectLayer();
@@ -68,6 +74,7 @@ protected:
     void commitTransaction(Layer* layer);
 
     TestableSurfaceFlinger mFlinger;
+    Hwc2::mock::Composer* mComposer = nullptr;
 
     sp<Client> mClient;
     sp<Layer> mParent;
@@ -81,7 +88,7 @@ RefreshRateSelectionTest::RefreshRateSelectionTest() {
     ALOGD("**** Setting up for %s.%s\n", test_info->test_case_name(), test_info->name());
 
     setupScheduler();
-    mFlinger.setupComposer(std::make_unique<Hwc2::mock::Composer>());
+    setupComposer(0);
 }
 
 RefreshRateSelectionTest::~RefreshRateSelectionTest() {
@@ -116,8 +123,7 @@ void RefreshRateSelectionTest::setParent(Layer* child, Layer* parent) {
 }
 
 void RefreshRateSelectionTest::commitTransaction(Layer* layer) {
-    auto c = layer->getDrawingState();
-    layer->commitTransaction(c);
+    layer->commitTransaction(layer->getCurrentState());
 }
 
 void RefreshRateSelectionTest::setupScheduler() {
@@ -126,23 +132,31 @@ void RefreshRateSelectionTest::setupScheduler() {
 
     EXPECT_CALL(*eventThread, registerDisplayEventConnection(_));
     EXPECT_CALL(*eventThread, createEventConnection(_, _))
-            .WillOnce(Return(new EventThreadConnection(eventThread.get(), /*callingUid=*/0,
-                                                       ResyncCallback())));
+            .WillOnce(Return(new EventThreadConnection(eventThread.get(), ResyncCallback(),
+                                                       ISurfaceComposer::eConfigChangedSuppress)));
 
     EXPECT_CALL(*sfEventThread, registerDisplayEventConnection(_));
     EXPECT_CALL(*sfEventThread, createEventConnection(_, _))
-            .WillOnce(Return(new EventThreadConnection(sfEventThread.get(), /*callingUid=*/0,
-                                                       ResyncCallback())));
+            .WillOnce(Return(new EventThreadConnection(sfEventThread.get(), ResyncCallback(),
+                                                       ISurfaceComposer::eConfigChangedSuppress)));
 
-    auto vsyncController = std::make_unique<mock::VsyncController>();
-    auto vsyncTracker = std::make_unique<mock::VSyncTracker>();
+    auto primaryDispSync = std::make_unique<mock::DispSync>();
 
-    EXPECT_CALL(*vsyncTracker, nextAnticipatedVSyncTimeFrom(_)).WillRepeatedly(Return(0));
-    EXPECT_CALL(*vsyncTracker, currentPeriod())
-            .WillRepeatedly(Return(FakeHwcDisplayInjector::DEFAULT_VSYNC_PERIOD));
-    EXPECT_CALL(*vsyncTracker, nextAnticipatedVSyncTimeFrom(_)).WillRepeatedly(Return(0));
-    mFlinger.setupScheduler(std::move(vsyncController), std::move(vsyncTracker),
-                            std::move(eventThread), std::move(sfEventThread));
+    EXPECT_CALL(*primaryDispSync, computeNextRefresh(0, _)).WillRepeatedly(Return(0));
+    EXPECT_CALL(*primaryDispSync, getPeriod())
+            .WillRepeatedly(Return(FakeHwcDisplayInjector::DEFAULT_REFRESH_RATE));
+    EXPECT_CALL(*primaryDispSync, expectedPresentTime(_)).WillRepeatedly(Return(0));
+    mFlinger.setupScheduler(std::move(primaryDispSync),
+                            std::make_unique<mock::EventControlThread>(), std::move(eventThread),
+                            std::move(sfEventThread));
+}
+
+void RefreshRateSelectionTest::setupComposer(int virtualDisplayCount) {
+    mComposer = new Hwc2::mock::Composer();
+    EXPECT_CALL(*mComposer, getMaxVirtualDisplayCount()).WillOnce(Return(virtualDisplayCount));
+    mFlinger.setupComposer(std::unique_ptr<Hwc2::Composer>(mComposer));
+
+    Mock::VerifyAndClear(mComposer);
 }
 
 namespace {
@@ -269,3 +283,6 @@ TEST_F(RefreshRateSelectionTest, testPriorityOnEffectLayers) {
 
 } // namespace
 } // namespace android
+
+// TODO(b/129481165): remove the #pragma below and fix conversion issues
+#pragma clang diagnostic pop // ignored "-Wconversion"

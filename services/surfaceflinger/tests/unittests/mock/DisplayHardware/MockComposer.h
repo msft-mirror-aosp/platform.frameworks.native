@@ -24,7 +24,8 @@ namespace android {
 
 class GraphicBuffer;
 
-namespace Hwc2::mock {
+namespace Hwc2 {
+namespace mock {
 
 using android::hardware::graphics::common::V1_0::ColorTransform;
 using android::hardware::graphics::common::V1_0::Transform;
@@ -51,11 +52,12 @@ public:
     MOCK_METHOD0(getCapabilities, std::vector<IComposer::Capability>());
     MOCK_METHOD0(dumpDebugInfo, std::string());
     MOCK_METHOD1(registerCallback, void(const sp<IComposerCallback>&));
+    MOCK_METHOD0(isRemote, bool());
     MOCK_METHOD0(resetCommands, void());
     MOCK_METHOD0(executeCommands, Error());
     MOCK_METHOD0(getMaxVirtualDisplayCount, uint32_t());
-    MOCK_METHOD5(createVirtualDisplay,
-                 Error(uint32_t, uint32_t, PixelFormat*, std::optional<Display>, Display*));
+    MOCK_CONST_METHOD0(isUsingVrComposer, bool());
+    MOCK_METHOD4(createVirtualDisplay, Error(uint32_t, uint32_t, PixelFormat*, Display*));
     MOCK_METHOD1(destroyVirtualDisplay, Error(Display));
     MOCK_METHOD1(acceptDisplayChanges, Error(Display));
     MOCK_METHOD2(createLayer, Error(Display, Layer* outLayer));
@@ -108,6 +110,7 @@ public:
     MOCK_METHOD3(setLayerVisibleRegion,
                  Error(Display, Layer, const std::vector<IComposerClient::Rect>&));
     MOCK_METHOD3(setLayerZOrder, Error(Display, Layer, uint32_t));
+    MOCK_METHOD4(setLayerInfo, Error(Display, Layer, uint32_t, uint32_t));
     MOCK_METHOD3(getRenderIntents, Error(Display, ColorMode, std::vector<RenderIntent>*));
     MOCK_METHOD3(setLayerColorTransform, Error(Display, Layer, const float*));
     MOCK_METHOD4(getDisplayedContentSamplingAttributes,
@@ -140,5 +143,6 @@ public:
     MOCK_METHOD2(getClientTargetProperty, Error(Display, IComposerClient::ClientTargetProperty*));
 };
 
-} // namespace Hwc2::mock
+} // namespace mock
+} // namespace Hwc2
 } // namespace android

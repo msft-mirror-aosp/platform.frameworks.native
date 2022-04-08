@@ -102,7 +102,7 @@ private:
      * How many buffers to keep for the internal queue. When the internal buffer
      * exceeds this capacity, oldest frames will be dropped.
      */
-    static constexpr size_t MAX_QUEUE_SIZE = 20;
+    static constexpr size_t MAX_QUEUE_SIZE = 10;
     std::vector<TouchVideoFrame> mFrames;
 
     /**

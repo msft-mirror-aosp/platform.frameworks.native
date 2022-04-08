@@ -97,14 +97,11 @@ public:
     // in the search path must have a '!' after the zip filename, e.g.
     //     /system/app/ANGLEPrebuilt/ANGLEPrebuilt.apk!/lib/arm64-v8a
     void setAngleInfo(const std::string path, const std::string appName, std::string devOptIn,
-                      const std::vector<std::string> eglFeatures, const int rulesFd,
-                      const long rulesOffset, const long rulesLength);
+                      const int rulesFd, const long rulesOffset, const long rulesLength);
     // Get the ANGLE driver namespace.
     android_namespace_t* getAngleNamespace();
     // Get the app name for ANGLE debug message.
     std::string& getAngleAppName();
-
-    const std::vector<std::string>& getAngleEglFeatures();
 
     /*
      * Apis for debug layer
@@ -157,8 +154,6 @@ private:
     std::string mAngleAppName;
     // ANGLE developer opt in status.
     std::string mAngleDeveloperOptIn;
-    // ANGLE EGL features;
-    std::vector<std::string> mAngleEglFeatures;
     // ANGLE rules.
     std::vector<char> mRulesBuffer;
     // Use ANGLE flag.

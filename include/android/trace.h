@@ -40,6 +40,8 @@
 extern "C" {
 #endif
 
+#if __ANDROID_API__ >= 23
+
 /**
  * Returns true if tracing is enabled. Use this to avoid expensive computation only necessary
  * when tracing is enabled.
@@ -70,6 +72,10 @@ void ATrace_beginSection(const char* sectionName) __INTRODUCED_IN(23);
  */
 void ATrace_endSection() __INTRODUCED_IN(23);
 
+#endif /* __ANDROID_API__ >= 23 */
+
+#if __ANDROID_API__ >= 29
+
 /**
  * Writes a trace message to indicate that a given section of code has
  * begun. Must be followed by a call to {@link ATrace_endAsyncSection} with the same
@@ -91,7 +97,7 @@ void ATrace_beginAsyncSection(const char* sectionName, int32_t cookie) __INTRODU
  *
  * Available since API level 29.
  *
- * \param sectionName The method name to appear in the trace.
+ * \param methodName The method name to appear in the trace.
  * \param cookie Unique identifier for distinguishing simultaneous events
  */
 void ATrace_endAsyncSection(const char* sectionName, int32_t cookie) __INTRODUCED_IN(29);
@@ -106,8 +112,10 @@ void ATrace_endAsyncSection(const char* sectionName, int32_t cookie) __INTRODUCE
  */
 void ATrace_setCounter(const char* counterName, int64_t counterValue) __INTRODUCED_IN(29);
 
+#endif /* __ANDROID_API__ >= 29 */
+
 #ifdef __cplusplus
-}
+};
 #endif
 
 #endif // ANDROID_NATIVE_TRACE_H

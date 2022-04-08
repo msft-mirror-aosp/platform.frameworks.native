@@ -51,8 +51,6 @@ public:
 
     void setPeriod(nsecs_t) final {}
     void resetModel() final {}
-    bool needsMoreSamples() const final { return false; }
-    bool isVSyncInPhase(nsecs_t, Fps) const final { return false; }
     void dump(std::string&) const final {}
 
 private:
@@ -66,7 +64,7 @@ public:
     bool addVsyncTimestamp(nsecs_t) final { return true; }
 
     nsecs_t nextAnticipatedVSyncTimeFrom(nsecs_t time_point) const final {
-        std::lock_guard lock(mMutex);
+        std::lock_guard<decltype(mMutex)> lk(mMutex);
         auto const normalized_to_base = time_point - mBase;
         auto const floor = (normalized_to_base) % mPeriod;
         if (floor == 0) {
@@ -76,20 +74,18 @@ public:
     }
 
     void set_interval(nsecs_t interval, nsecs_t last_known) {
-        std::lock_guard lock(mMutex);
+        std::lock_guard<decltype(mMutex)> lk(mMutex);
         mPeriod = interval;
         mBase = last_known;
     }
 
     nsecs_t currentPeriod() const final {
-        std::lock_guard lock(mMutex);
+        std::lock_guard<decltype(mMutex)> lk(mMutex);
         return mPeriod;
     }
 
     void setPeriod(nsecs_t) final {}
     void resetModel() final {}
-    bool needsMoreSamples() const final { return false; }
-    bool isVSyncInPhase(nsecs_t, Fps) const final { return false; }
     void dump(std::string&) const final {}
 
 private:
@@ -106,36 +102,30 @@ struct VSyncDispatchRealtimeTest : testing::Test {
 
 class RepeatingCallbackReceiver {
 public:
-    RepeatingCallbackReceiver(VSyncDispatch& dispatch, nsecs_t workload, nsecs_t readyDuration)
-          : mWorkload(workload),
-            mReadyDuration(readyDuration),
+    RepeatingCallbackReceiver(VSyncDispatch& dispatch, nsecs_t wl)
+          : mWorkload(wl),
             mCallback(
-                    dispatch, [&](auto time, auto, auto) { callback_called(time); }, "repeat0") {}
+                    dispatch, [&](auto time, auto) { callback_called(time); }, "repeat0") {}
 
     void repeatedly_schedule(size_t iterations, std::function<void(nsecs_t)> const& onEachFrame) {
         mCallbackTimes.reserve(iterations);
-        mCallback.schedule(
-                {.workDuration = mWorkload,
-                 .readyDuration = mReadyDuration,
-                 .earliestVsync = systemTime(SYSTEM_TIME_MONOTONIC) + mWorkload + mReadyDuration});
+        mCallback.schedule(mWorkload, systemTime(SYSTEM_TIME_MONOTONIC) + mWorkload);
 
         for (auto i = 0u; i < iterations - 1; i++) {
-            std::unique_lock lock(mMutex);
-            mCv.wait(lock, [&] { return mCalled; });
+            std::unique_lock<decltype(mMutex)> lk(mMutex);
+            mCv.wait(lk, [&] { return mCalled; });
             mCalled = false;
             auto last = mLastTarget;
-            lock.unlock();
+            lk.unlock();
 
             onEachFrame(last);
 
-            mCallback.schedule({.workDuration = mWorkload,
-                                .readyDuration = mReadyDuration,
-                                .earliestVsync = last + mWorkload + mReadyDuration});
+            mCallback.schedule(mWorkload, last + mWorkload);
         }
 
         // wait for the last callback.
-        std::unique_lock lock(mMutex);
-        mCv.wait(lock, [&] { return mCalled; });
+        std::unique_lock<decltype(mMutex)> lk(mMutex);
+        mCv.wait(lk, [&] { return mCalled; });
     }
 
     void with_callback_times(std::function<void(std::vector<nsecs_t> const&)> const& fn) const {
@@ -144,7 +134,7 @@ public:
 
 private:
     void callback_called(nsecs_t time) {
-        std::lock_guard lock(mMutex);
+        std::lock_guard<decltype(mMutex)> lk(mMutex);
         mCallbackTimes.push_back(time);
         mCalled = true;
         mLastTarget = time;
@@ -152,7 +142,6 @@ private:
     }
 
     nsecs_t const mWorkload;
-    nsecs_t const mReadyDuration;
     VSyncCallbackRegistration mCallback;
 
     std::mutex mMutex;
@@ -169,9 +158,9 @@ TEST_F(VSyncDispatchRealtimeTest, triple_alarm) {
 
     static size_t constexpr num_clients = 3;
     std::array<RepeatingCallbackReceiver, num_clients>
-            cb_receiver{RepeatingCallbackReceiver(dispatch, toNs(1500us), toNs(2500us)),
-                        RepeatingCallbackReceiver(dispatch, toNs(0h), toNs(0h)),
-                        RepeatingCallbackReceiver(dispatch, toNs(1ms), toNs(3ms))};
+            cb_receiver{RepeatingCallbackReceiver(dispatch, toNs(1500us)),
+                        RepeatingCallbackReceiver(dispatch, toNs(0h)),
+                        RepeatingCallbackReceiver(dispatch, toNs(1ms))};
 
     auto const on_each_frame = [](nsecs_t) {};
     std::array<std::thread, num_clients> threads{
@@ -196,7 +185,7 @@ TEST_F(VSyncDispatchRealtimeTest, vascillating_vrr) {
     VSyncDispatchTimerQueue dispatch(std::make_unique<Timer>(), tracker, mDispatchGroupThreshold,
                                      mVsyncMoveThreshold);
 
-    RepeatingCallbackReceiver cb_receiver(dispatch, toNs(1ms), toNs(5ms));
+    RepeatingCallbackReceiver cb_receiver(dispatch, toNs(1ms));
 
     auto const on_each_frame = [&](nsecs_t last_known) {
         tracker.set_interval(next_vsync_interval += toNs(1ms), last_known);
@@ -214,7 +203,7 @@ TEST_F(VSyncDispatchRealtimeTest, fixed_jump) {
     VSyncDispatchTimerQueue dispatch(std::make_unique<Timer>(), tracker, mDispatchGroupThreshold,
                                      mVsyncMoveThreshold);
 
-    RepeatingCallbackReceiver cb_receiver(dispatch, toNs(1ms), toNs(5ms));
+    RepeatingCallbackReceiver cb_receiver(dispatch, toNs(1ms));
 
     auto jump_frame_counter = 0u;
     auto constexpr jump_frame_at = 10u;

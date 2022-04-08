@@ -282,8 +282,9 @@ public:
             LOG(FATAL) << "adbd_auth: unhandled packet type?";
         }
 
-        ssize_t rc = writev(framework_fd_.get(), iovs, iovcnt);
         output_queue_.pop_front();
+
+        ssize_t rc = writev(framework_fd_.get(), iovs, iovcnt);
         if (rc == -1 && errno != EAGAIN && errno != EWOULDBLOCK) {
             PLOG(ERROR) << "adbd_auth: failed to write to framework fd";
             ReplaceFrameworkFd(unique_fd());

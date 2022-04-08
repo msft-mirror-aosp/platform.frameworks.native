@@ -18,11 +18,26 @@
 #define _UI_INPUT_INPUTDISPATCHER_INPUTTARGET_H
 
 #include <input/InputTransport.h>
-#include <ui/Transform.h>
 #include <utils/BitSet.h>
 #include <utils/RefBase.h>
 
 namespace android::inputdispatcher {
+
+/*
+ * Information about each pointer for an InputTarget. This includes offset and scale so
+ * all pointers can be normalized to a single offset and scale.
+ *
+ * These values are ignored for KeyEvents
+ */
+struct PointerInfo {
+    // The x and y offset to add to a MotionEvent as it is delivered.
+    float xOffset = 0.0f;
+    float yOffset = 0.0f;
+
+    // Scaling factor to apply to MotionEvent as it is delivered.
+    float windowXScale = 1.0f;
+    float windowYScale = 1.0f;
+};
 
 /*
  * An input target specifies how an input event is to be dispatched to a particular window
@@ -91,7 +106,7 @@ struct InputTarget {
     };
 
     // The input channel to be targeted.
-    std::shared_ptr<InputChannel> inputChannel;
+    sp<InputChannel> inputChannel;
 
     // Flags for the input target.
     int32_t flags = 0;
@@ -100,18 +115,17 @@ struct InputTarget {
     // (ignored for KeyEvents)
     float globalScaleFactor = 1.0f;
 
-    // Display-size in its natural rotation. Used for compatibility transform of raw coordinates.
-    int2 displaySize = {AMOTION_EVENT_INVALID_DISPLAY_SIZE, AMOTION_EVENT_INVALID_DISPLAY_SIZE};
-
     // The subset of pointer ids to include in motion events dispatched to this input target
     // if FLAG_SPLIT is set.
     BitSet32 pointerIds;
     // The data is stored by the pointerId. Use the bit position of pointerIds to look up
-    // Transform per pointerId.
-    ui::Transform pointerTransforms[MAX_POINTERS];
+    // PointerInfo per pointerId.
+    PointerInfo pointerInfos[MAX_POINTERS];
 
-    void addPointers(BitSet32 pointerIds, const ui::Transform& transform);
-    void setDefaultPointerTransform(const ui::Transform& transform);
+    void addPointers(BitSet32 pointerIds, float xOffset, float yOffset, float windowXScale,
+                     float windowYScale);
+    void setDefaultPointerInfo(float xOffset, float yOffset, float windowXScale,
+                               float windowYScale);
 
     /**
      * Returns whether the default pointer information should be used. This will be true when the
@@ -119,13 +133,13 @@ struct InputTarget {
      * and non splittable windows since we want all pointers for the EventEntry to go to this
      * target.
      */
-    bool useDefaultPointerTransform() const;
+    bool useDefaultPointerInfo() const;
 
     /**
-     * Returns the default Transform object. This should be used when useDefaultPointerTransform is
+     * Returns the default PointerInfo object. This should be used when useDefaultPointerInfo is
      * true.
      */
-    const ui::Transform& getDefaultPointerTransform() const;
+    const PointerInfo& getDefaultPointerInfo() const;
 
     std::string getPointerInfoString() const;
 };

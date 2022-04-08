@@ -25,7 +25,6 @@
 
 #include "Command.h"
 #include "NullableOStream.h"
-#include "ParentDebugInfoLevel.h"
 #include "utils.h"
 
 namespace android {
@@ -50,7 +49,7 @@ public:
             const std::string &interfaceName,
             const std::string &instanceName,
             const std::vector<std::string> &options,
-            ParentDebugInfoLevel parentDebugInfoLevel,
+            bool excludesParentInstances,
             std::ostream &out,
             NullableOStream<std::ostream> err) const;
 

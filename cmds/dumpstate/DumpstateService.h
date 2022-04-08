@@ -44,7 +44,8 @@ class DumpstateService : public BinderService<DumpstateService>, public BnDumpst
                                   const sp<IDumpstateListener>& listener,
                                   bool is_screenshot_requested) override;
 
-    binder::Status cancelBugreport(int32_t calling_uid, const std::string& calling_package);
+    // No-op
+    binder::Status cancelBugreport();
 
   private:
     // Dumpstate object which contains all the bugreporting logic.
@@ -52,8 +53,6 @@ class DumpstateService : public BinderService<DumpstateService>, public BnDumpst
     // one bugreport.
     // This service does not own this object.
     Dumpstate* ds_;
-    int32_t calling_uid_;
-    std::string calling_package_;
     std::mutex lock_;
 };
 

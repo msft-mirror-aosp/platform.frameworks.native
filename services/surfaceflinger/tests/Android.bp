@@ -12,15 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package {
-    // See: http://go/android-license-faq
-    // A large-scale-change added 'default_applicable_licenses' to import
-    // all of the 'license_kinds' from "frameworks_native_license"
-    // to get the below license kinds:
-    //   SPDX-license-identifier-Apache-2.0
-    default_applicable_licenses: ["frameworks_native_license"],
-}
-
 cc_test {
     name: "SurfaceFlinger_test",
     defaults: ["surfaceflinger_defaults"],
@@ -35,17 +26,13 @@ cc_test {
         "InvalidHandles_test.cpp",
         "LayerCallback_test.cpp",
         "LayerRenderTypeTransaction_test.cpp",
-        "LayerState_test.cpp",
         "LayerTransaction_test.cpp",
         "LayerTypeAndRenderTypeTransaction_test.cpp",
         "LayerTypeTransaction_test.cpp",
         "LayerUpdate_test.cpp",
         "MirrorLayer_test.cpp",
         "MultiDisplayLayerBounds_test.cpp",
-        "RefreshRateOverlay_test.cpp",
         "RelativeZ_test.cpp",
-        "ReleaseBufferCallback_test.cpp",
-        "ScreenCapture_test.cpp",
         "SetFrameRate_test.cpp",
         "SetGeometry_test.cpp",
         "Stress_test.cpp",
@@ -55,19 +42,18 @@ cc_test {
     data: ["SurfaceFlinger_test.filter"],
     static_libs: [
         "libtrace_proto",
-        "liblayers_proto",
-        "android.hardware.graphics.composer@2.1",
     ],
     shared_libs: [
-        "android.hardware.graphics.common-V2-ndk_platform",
+        "android.hardware.graphics.common-ndk_platform",
         "android.hardware.graphics.common@1.2",
+        "android.hardware.graphics.composer@2.1",
         "libandroid",
-        "libbase",
         "libbinder",
         "libcutils",
         "libEGL",
         "libGLESv2",
         "libgui",
+        "liblayers_proto",
         "liblog",
         "libnativewindow",
         "libprotobuf-cpp-full",
