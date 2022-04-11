@@ -224,28 +224,17 @@ std::string create_data_misc_sdk_sandbox_package_path(const char* volume_uuid, b
 }
 
 /**
- * Create the path name where shared code data for a particular app will be stored.
- * E.g. /data/misc_ce/0/sdksandbox/<package-name>/shared
- */
-std::string create_data_misc_sdk_sandbox_shared_path(const char* volume_uuid, bool isCeData,
-                                                     userid_t user, const char* package_name) {
-    return StringPrintf("%s/shared",
-                        create_data_misc_sdk_sandbox_package_path(volume_uuid, isCeData, user,
-                                                                  package_name)
-                                .c_str());
-}
-
-/**
- * Create the path name where per-code level data for a particular app will be stored.
- * E.g. /data/misc_ce/0/sdksandbox/<package-name>/<sdk-name>-<random-suffix>
+ * Create the path name where sdk data for a particular sdk will be stored.
+ * E.g. /data/misc_ce/0/sdksandbox/<package-name>/com.foo@randomstrings
  */
 std::string create_data_misc_sdk_sandbox_sdk_path(const char* volume_uuid, bool isCeData,
                                                   userid_t user, const char* package_name,
-                                                  const char* sdk_name, const char* randomSuffix) {
-    check_package_name(sdk_name);
-    auto package_path =
-            create_data_misc_sdk_sandbox_package_path(volume_uuid, isCeData, user, package_name);
-    return StringPrintf("%s/%s@%s", package_path.c_str(), sdk_name, randomSuffix);
+                                                  const char* sub_dir_name) {
+    return StringPrintf("%s/%s",
+                        create_data_misc_sdk_sandbox_package_path(volume_uuid, isCeData, user,
+                                                                  package_name)
+                                .c_str(),
+                        sub_dir_name);
 }
 
 std::string create_data_misc_ce_rollback_base_path(const char* volume_uuid, userid_t user) {
@@ -716,16 +705,16 @@ static int rename_delete_dir_contents(const std::string& pathname,
     auto temp_dir_path =
             base::StringPrintf("%s/%s", Dirname(pathname).c_str(), temp_dir_name.c_str());
 
-    if (::rename(pathname.c_str(), temp_dir_path.c_str())) {
+    auto dir_to_delete = temp_dir_path.c_str();
+    if (::rename(pathname.c_str(), dir_to_delete)) {
         if (ignore_if_missing && (errno == ENOENT)) {
             return 0;
         }
-        ALOGE("Couldn't rename %s -> %s: %s \n", pathname.c_str(), temp_dir_path.c_str(),
-              strerror(errno));
-        return -errno;
+        ALOGE("Couldn't rename %s -> %s: %s \n", pathname.c_str(), dir_to_delete, strerror(errno));
+        dir_to_delete = pathname.c_str();
     }
 
-    return delete_dir_contents(temp_dir_path.c_str(), 1, exclusion_predicate, ignore_if_missing);
+    return delete_dir_contents(dir_to_delete, 1, exclusion_predicate, ignore_if_missing);
 }
 
 bool is_renamed_deleted_dir(const std::string& path) {
