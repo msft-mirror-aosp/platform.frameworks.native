@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include "aidl/android/hardware/graphics/composer3/DimmingStage.h"
 
 #include <math/mat4.h>
 #include <ui/FenceTime.h>
@@ -118,6 +119,8 @@ struct OutputCompositionState {
 
     std::optional<android::HWComposer::DeviceRequestedChanges> previousDeviceRequestedChanges{};
 
+    bool previousDeviceRequestedSuccess = false;
+
     // The earliest time to send the present command to the HAL
     std::chrono::steady_clock::time_point earliestPresentTime;
 
@@ -137,6 +140,10 @@ struct OutputCompositionState {
     // Brightness of the client target, normalized to display brightness
     float clientTargetBrightness{1.f};
 
+    // Stage in which the client target should apply dimming
+    aidl::android::hardware::graphics::composer3::DimmingStage clientTargetDimmingStage{
+            aidl::android::hardware::graphics::composer3::DimmingStage::NONE};
+
     // Display brightness that will take effect this frame.
     // This is slightly distinct from nits, in that nits cannot be passed to hw composer.
     std::optional<float> displayBrightness = std::nullopt;
@@ -148,6 +155,8 @@ struct OutputCompositionState {
         SUCCESS = 1,
         // Composition strategy prediction failed for this frame.
         FAIL = 2,
+
+        ftl_last = FAIL
     };
 
     CompositionStrategyPredictionState strategyPrediction =

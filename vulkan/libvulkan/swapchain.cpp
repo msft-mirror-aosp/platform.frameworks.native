@@ -299,6 +299,7 @@ static bool IsFencePending(int fd) {
 }
 
 void ReleaseSwapchainImage(VkDevice device,
+                           bool shared_present,
                            ANativeWindow* window,
                            int release_fence,
                            Swapchain::Image& image,
@@ -330,7 +331,8 @@ void ReleaseSwapchainImage(VkDevice device,
         }
         image.dequeue_fence = -1;
 
-        if (window) {
+        // It's invalid to call cancelBuffer on a shared buffer
+        if (window && !shared_present) {
             window->cancelBuffer(window, image.buffer.get(), release_fence);
         } else {
             if (release_fence >= 0) {
@@ -364,9 +366,10 @@ void OrphanSwapchain(VkDevice device, Swapchain* swapchain) {
     if (swapchain->surface.swapchain_handle != HandleFromSwapchain(swapchain))
         return;
     for (uint32_t i = 0; i < swapchain->num_images; i++) {
-        if (!swapchain->images[i].dequeued)
-            ReleaseSwapchainImage(device, nullptr, -1, swapchain->images[i],
-                                  true);
+        if (!swapchain->images[i].dequeued) {
+            ReleaseSwapchainImage(device, swapchain->shared, nullptr, -1,
+                                  swapchain->images[i], true);
+        }
     }
     swapchain->surface.swapchain_handle = VK_NULL_HANDLE;
     swapchain->timing.clear();
@@ -719,7 +722,7 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
 
     bool wide_color_support = false;
     uint64_t consumer_usage = 0;
-    bool swapchain_ext =
+    bool colorspace_ext =
         instance_data.hook_extensions.test(ProcHook::EXT_swapchain_colorspace);
     if (surface_handle == VK_NULL_HANDLE) {
         ProcHook::Extension surfaceless = ProcHook::GOOGLE_surfaceless_query;
@@ -748,7 +751,7 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
 
         consumer_usage = surface.consumer_usage;
     }
-    wide_color_support = wide_color_support && swapchain_ext;
+    wide_color_support = wide_color_support && colorspace_ext;
 
     AHardwareBuffer_Desc desc = {};
     desc.width = 1;
@@ -762,7 +765,7 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
         {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
         {VK_FORMAT_R8G8B8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
 
-    if (swapchain_ext) {
+    if (colorspace_ext) {
         all_formats.emplace_back(VkSurfaceFormatKHR{
             VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_BT709_LINEAR_EXT});
     }
@@ -1084,7 +1087,8 @@ static void DestroySwapchainInternal(VkDevice device,
     }
 
     for (uint32_t i = 0; i < swapchain->num_images; i++) {
-        ReleaseSwapchainImage(device, window, -1, swapchain->images[i], false);
+        ReleaseSwapchainImage(device, swapchain->shared, window, -1,
+                              swapchain->images[i], false);
     }
 
     if (active) {
@@ -1854,7 +1858,8 @@ VkResult QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* present_info) {
                     WorstPresentResult(swapchain_result, VK_SUBOPTIMAL_KHR);
             }
         } else {
-            ReleaseSwapchainImage(device, nullptr, fence, img, true);
+            ReleaseSwapchainImage(device, swapchain.shared, nullptr, fence,
+                                  img, true);
             swapchain_result = VK_ERROR_OUT_OF_DATE_KHR;
         }
 
