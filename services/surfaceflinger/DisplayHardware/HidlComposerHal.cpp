@@ -37,6 +37,8 @@
 #include <cinttypes>
 
 using aidl::android::hardware::graphics::composer3::Capability;
+using aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness;
+using aidl::android::hardware::graphics::composer3::DimmingStage;
 using aidl::android::hardware::graphics::composer3::DisplayCapability;
 
 namespace android {
@@ -235,7 +237,6 @@ bool HidlComposer::isSupported(OptionalFeature feature) const {
             return mClient_2_4 != nullptr;
         case OptionalFeature::ExpectedPresentTime:
         case OptionalFeature::DisplayBrightnessCommand:
-        case OptionalFeature::BootDisplayConfig:
         case OptionalFeature::KernelIdleTimer:
         case OptionalFeature::PhysicalDisplayOrientation:
             return false;
@@ -1114,7 +1115,7 @@ Error HidlComposer::setLayerPerFrameMetadataBlobs(
     return Error::NONE;
 }
 
-Error HidlComposer::setDisplayBrightness(Display display, float brightness,
+Error HidlComposer::setDisplayBrightness(Display display, float brightness, float,
                                          const DisplayBrightnessOptions&) {
     if (!mClient_2_3) {
         return Error::UNSUPPORTED;
@@ -1303,10 +1304,17 @@ Error HidlComposer::getPreferredBootDisplayConfig(Display /*displayId*/, Config*
 }
 
 Error HidlComposer::getClientTargetProperty(
-        Display display, IComposerClient::ClientTargetProperty* outClientTargetProperty,
-        float* outBrightness) {
-    mReader.takeClientTargetProperty(display, outClientTargetProperty);
-    *outBrightness = 1.f;
+        Display display, ClientTargetPropertyWithBrightness* outClientTargetProperty) {
+    IComposerClient::ClientTargetProperty property;
+    mReader.takeClientTargetProperty(display, &property);
+    outClientTargetProperty->display = display;
+    outClientTargetProperty->clientTargetProperty.dataspace =
+            static_cast<::aidl::android::hardware::graphics::common::Dataspace>(property.dataspace);
+    outClientTargetProperty->clientTargetProperty.pixelFormat =
+            static_cast<::aidl::android::hardware::graphics::common::PixelFormat>(
+                    property.pixelFormat);
+    outClientTargetProperty->brightness = 1.f;
+    outClientTargetProperty->dimmingStage = DimmingStage::NONE;
     return Error::NONE;
 }
 

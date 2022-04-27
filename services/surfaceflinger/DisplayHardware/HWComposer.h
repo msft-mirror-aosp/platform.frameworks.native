@@ -45,6 +45,7 @@
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
 #include <aidl/android/hardware/graphics/composer3/Capability.h>
+#include <aidl/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.h>
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
 
@@ -78,7 +79,8 @@ public:
         using ChangedTypes =
                 std::unordered_map<HWC2::Layer*,
                                    aidl::android::hardware::graphics::composer3::Composition>;
-        using ClientTargetProperty = hal::ClientTargetProperty;
+        using ClientTargetProperty =
+                aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness;
         using DisplayRequests = hal::DisplayRequest;
         using LayerRequests = std::unordered_map<HWC2::Layer*, hal::LayerRequest>;
 
@@ -86,7 +88,6 @@ public:
         DisplayRequests displayRequests;
         LayerRequests layerRequests;
         ClientTargetProperty clientTargetProperty;
-        float clientTargetBrightness;
     };
 
     struct HWCDisplayMode {
@@ -195,7 +196,7 @@ public:
 
     // Sets the brightness of a display.
     virtual std::future<status_t> setDisplayBrightness(
-            PhysicalDisplayId, float brightness,
+            PhysicalDisplayId, float brightness, float brightnessNits,
             const Hwc2::Composer::DisplayBrightnessOptions&) = 0;
 
     // Events handling ---------------------------------------------------------
@@ -267,7 +268,6 @@ public:
     virtual std::optional<hal::HWDisplayId> fromPhysicalDisplayId(PhysicalDisplayId) const = 0;
 
     // Composer 3.0
-    virtual bool getBootDisplayModeSupport() = 0;
     virtual status_t setBootDisplayMode(PhysicalDisplayId, hal::HWConfigId) = 0;
     virtual status_t clearBootDisplayMode(PhysicalDisplayId) = 0;
     virtual std::optional<hal::HWConfigId> getPreferredBootDisplayMode(PhysicalDisplayId) = 0;
@@ -279,6 +279,13 @@ public:
     virtual bool hasDisplayIdleTimerCapability(PhysicalDisplayId) const = 0;
     virtual Hwc2::AidlTransform getPhysicalDisplayOrientation(PhysicalDisplayId) const = 0;
 };
+
+static inline bool operator==(const android::HWComposer::DeviceRequestedChanges& lhs,
+                              const android::HWComposer::DeviceRequestedChanges& rhs) {
+    return lhs.changedTypes == rhs.changedTypes && lhs.displayRequests == rhs.displayRequests &&
+            lhs.layerRequests == rhs.layerRequests &&
+            lhs.clientTargetProperty == rhs.clientTargetProperty;
+}
 
 namespace impl {
 
@@ -366,7 +373,7 @@ public:
     status_t getDisplayedContentSample(HalDisplayId, uint64_t maxFrames, uint64_t timestamp,
                                        DisplayedFrameStats* outStats) override;
     std::future<status_t> setDisplayBrightness(
-            PhysicalDisplayId, float brightness,
+            PhysicalDisplayId, float brightness, float brightnessNits,
             const Hwc2::Composer::DisplayBrightnessOptions&) override;
 
     // Events handling ---------------------------------------------------------
@@ -406,7 +413,6 @@ public:
     const std::unordered_map<std::string, bool>& getSupportedLayerGenericMetadata() const override;
 
     // Composer 3.0
-    bool getBootDisplayModeSupport() override;
     status_t setBootDisplayMode(PhysicalDisplayId, hal::HWConfigId) override;
     status_t clearBootDisplayMode(PhysicalDisplayId) override;
     std::optional<hal::HWConfigId> getPreferredBootDisplayMode(PhysicalDisplayId) override;
