@@ -2185,7 +2185,7 @@ void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet
 
     layerInfo->set_owner_uid(mOwnerUid);
 
-    if (traceFlags & LayerTracing::TRACE_INPUT) {
+    if ((traceFlags & LayerTracing::TRACE_INPUT) && needsInputInfo()) {
         WindowInfo info;
         if (useDrawing) {
             info = fillInputInfo(ui::Transform(), /* displayIsSecure */ true);
@@ -2596,6 +2596,8 @@ Layer::FrameRateCompatibility Layer::FrameRate::convertCompatibility(int8_t comp
             return FrameRateCompatibility::ExactOrMultiple;
         case ANATIVEWINDOW_FRAME_RATE_EXACT:
             return FrameRateCompatibility::Exact;
+        case ANATIVEWINDOW_FRAME_RATE_NO_VOTE:
+            return FrameRateCompatibility::NoVote;
         default:
             LOG_ALWAYS_FATAL("Invalid frame rate compatibility value %d", compatibility);
             return FrameRateCompatibility::Default;
@@ -2660,6 +2662,18 @@ void Layer::cloneDrawingState(const Layer* from) {
     // Skip callback info since they are not applicable for cloned layers.
     mDrawingState.releaseBufferListener = nullptr;
     mDrawingState.callbackHandles = {};
+}
+
+bool Layer::setTransactionCompletedListeners(const std::vector<sp<CallbackHandle>>& handles) {
+    if (handles.empty()) {
+        return false;
+    }
+
+    for (const auto& handle : handles) {
+        mFlinger->getTransactionCallbackInvoker().registerUnpresentedCallbackHandle(handle);
+    }
+
+    return true;
 }
 
 // ---------------------------------------------------------------------------
