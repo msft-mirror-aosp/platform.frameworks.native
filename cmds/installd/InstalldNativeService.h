@@ -134,12 +134,15 @@ public:
     binder::Status mergeProfiles(int32_t uid, const std::string& packageName,
             const std::string& profileName, int* _aidl_return);
     binder::Status dumpProfiles(int32_t uid, const std::string& packageName,
-            const std::string& profileName, const std::string& codePath, bool* _aidl_return);
+                                const std::string& profileName, const std::string& codePath,
+                                bool dumpClassesAndMethods, bool* _aidl_return);
     binder::Status copySystemProfile(const std::string& systemProfile,
             int32_t uid, const std::string& packageName, const std::string& profileName,
             bool* _aidl_return);
     binder::Status clearAppProfiles(const std::string& packageName, const std::string& profileName);
     binder::Status destroyAppProfiles(const std::string& packageName);
+    binder::Status deleteReferenceProfile(const std::string& packageName,
+                                          const std::string& profileName);
 
     binder::Status createProfileSnapshot(int32_t appId, const std::string& packageName,
             const std::string& profileName, const std::string& classpath, bool* _aidl_return);
