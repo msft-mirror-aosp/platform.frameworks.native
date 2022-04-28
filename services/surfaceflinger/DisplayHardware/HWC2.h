@@ -39,6 +39,7 @@
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
 #include <aidl/android/hardware/graphics/composer3/Capability.h>
+#include <aidl/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.h>
 #include <aidl/android/hardware/graphics/composer3/Color.h>
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
@@ -147,7 +148,8 @@ public:
                                                        android::sp<android::Fence>* outPresentFence,
                                                        uint32_t* state) = 0;
     [[nodiscard]] virtual std::future<hal::Error> setDisplayBrightness(
-            float brightness, const Hwc2::Composer::DisplayBrightnessOptions& options) = 0;
+            float brightness, float brightnessNits,
+            const Hwc2::Composer::DisplayBrightnessOptions& options) = 0;
     [[nodiscard]] virtual hal::Error setActiveConfigWithConstraints(
             hal::HWConfigId configId, const hal::VsyncPeriodChangeConstraints& constraints,
             hal::VsyncPeriodChangeTimeline* outTimeline) = 0;
@@ -160,7 +162,8 @@ public:
             std::vector<hal::ContentType>*) const = 0;
     [[nodiscard]] virtual hal::Error setContentType(hal::ContentType) = 0;
     [[nodiscard]] virtual hal::Error getClientTargetProperty(
-            hal::ClientTargetProperty* outClientTargetProperty, float* outWhitePointNits) = 0;
+            aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness*
+                    outClientTargetProperty) = 0;
     [[nodiscard]] virtual hal::Error getDisplayDecorationSupport(
             std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>*
                     support) = 0;
@@ -227,7 +230,8 @@ public:
                                  android::sp<android::Fence>* outPresentFence,
                                  uint32_t* state) override;
     std::future<hal::Error> setDisplayBrightness(
-            float brightness, const Hwc2::Composer::DisplayBrightnessOptions& options) override;
+            float brightness, float brightnessNits,
+            const Hwc2::Composer::DisplayBrightnessOptions& options) override;
     hal::Error setActiveConfigWithConstraints(hal::HWConfigId configId,
                                               const hal::VsyncPeriodChangeConstraints& constraints,
                                               hal::VsyncPeriodChangeTimeline* outTimeline) override;
@@ -238,8 +242,9 @@ public:
     hal::Error getSupportedContentTypes(
             std::vector<hal::ContentType>* outSupportedContentTypes) const override;
     hal::Error setContentType(hal::ContentType) override;
-    hal::Error getClientTargetProperty(hal::ClientTargetProperty* outClientTargetProperty,
-                                       float* outWhitePointNits) override;
+    hal::Error getClientTargetProperty(
+            aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness*
+                    outClientTargetProperty) override;
     hal::Error getDisplayDecorationSupport(
             std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>*
                     support) override;
