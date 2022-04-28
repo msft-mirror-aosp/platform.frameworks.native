@@ -84,6 +84,8 @@ public:
     static constexpr bool kDefaultInTouchMode = true;
 
     explicit InputDispatcher(const sp<InputDispatcherPolicyInterface>& policy);
+    explicit InputDispatcher(const sp<InputDispatcherPolicyInterface>& policy,
+                             std::chrono::nanoseconds staleEventTimeout);
     ~InputDispatcher() override;
 
     void dump(std::string& dump) override;
@@ -123,7 +125,7 @@ public:
 
     bool transferTouchFocus(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
                             bool isDragDrop = false) override;
-    bool transferTouch(const sp<IBinder>& destChannelToken) override;
+    bool transferTouch(const sp<IBinder>& destChannelToken, int32_t displayId) override;
 
     base::Result<std::unique_ptr<InputChannel>> createInputChannel(
             const std::string& name) override;
@@ -242,6 +244,9 @@ private:
 
     std::vector<sp<android::gui::WindowInfoHandle>> findTouchedSpyWindowsAtLocked(
             int32_t displayId, int32_t x, int32_t y, bool isStylus) const REQUIRES(mLock);
+
+    sp<android::gui::WindowInfoHandle> findTouchedForegroundWindowLocked(int32_t displayId) const
+            REQUIRES(mLock);
 
     sp<Connection> getConnectionLocked(const sp<IBinder>& inputConnectionToken) const
             REQUIRES(mLock);
@@ -431,7 +436,8 @@ private:
     // Dispatcher state at time of last ANR.
     std::string mLastAnrState GUARDED_BY(mLock);
 
-    // The connection tokens of the channels that the user last interacted, for debugging
+    // The connection tokens of the channels that the user last interacted (used for debugging and
+    // when switching touch mode state).
     std::unordered_set<sp<IBinder>, StrongPointerHash<IBinder>> mInteractionConnectionTokens
             GUARDED_BY(mLock);
     void updateInteractionTokensLocked(const EventEntry& entry,
@@ -470,6 +476,11 @@ private:
      * This is useful if an application is slow to add a focused window.
      */
     std::optional<nsecs_t> mNoFocusedWindowTimeoutTime GUARDED_BY(mLock);
+
+    // Amount of time to allow for an event to be dispatched (measured since its eventTime)
+    // before considering it stale and dropping it.
+    const std::chrono::nanoseconds mStaleEventTimeout;
+    bool isStaleEvent(nsecs_t currentTime, const EventEntry& entry);
 
     bool shouldPruneInboundQueueLocked(const MotionEntry& motionEntry) REQUIRES(mLock);
 
@@ -669,6 +680,10 @@ private:
     void traceInboundQueueLengthLocked() REQUIRES(mLock);
     void traceOutboundQueueLength(const Connection& connection);
     void traceWaitQueueLength(const Connection& connection);
+
+    // Check window ownership
+    bool focusedWindowIsOwnedByLocked(int32_t pid, int32_t uid) REQUIRES(mLock);
+    bool recentWindowsAreOwnedByLocked(int32_t pid, int32_t uid) REQUIRES(mLock);
 
     sp<InputReporterInterface> mReporter;
 };

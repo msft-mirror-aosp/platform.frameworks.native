@@ -101,8 +101,10 @@ public:
 
     MOCK_METHOD0(prepareFrame, void());
     MOCK_METHOD1(prepareFrameAsync, GpuCompositionResult(const CompositionRefreshArgs&));
-    MOCK_METHOD0(chooseCompositionStrategy,
-                 std::optional<android::HWComposer::DeviceRequestedChanges>());
+    MOCK_METHOD1(chooseCompositionStrategy,
+                 bool(std::optional<android::HWComposer::DeviceRequestedChanges>*));
+    MOCK_METHOD1(chooseCompositionStrategyAsync,
+                 std::future<bool>(std::optional<android::HWComposer::DeviceRequestedChanges>*));
     MOCK_METHOD1(applyCompositionStrategy,
                  void(const std::optional<android::HWComposer::DeviceRequestedChanges>&));
 
@@ -130,6 +132,7 @@ public:
     MOCK_METHOD1(cacheClientCompositionRequests, void(uint32_t));
     MOCK_METHOD1(canPredictCompositionStrategy, bool(const CompositionRefreshArgs&));
     MOCK_METHOD1(setPredictCompositionStrategy, void(bool));
+    MOCK_METHOD1(setTreat170mAsSrgb, void(bool));
 };
 
 } // namespace android::compositionengine::mock

@@ -108,6 +108,7 @@ public:
     void cacheClientCompositionRequests(uint32_t) override;
     bool canPredictCompositionStrategy(const CompositionRefreshArgs&) override;
     void setPredictCompositionStrategy(bool) override;
+    void setTreat170mAsSrgb(bool) override;
 
     // Testing
     const ReleasedLayers& getReleasedLayersForTest() const;
@@ -118,15 +119,19 @@ public:
     virtual void updateProtectedContentState();
     virtual bool dequeueRenderBuffer(base::unique_fd*,
                                      std::shared_ptr<renderengine::ExternalTexture>*);
-    virtual std::future<std::optional<android::HWComposer::DeviceRequestedChanges>>
-    chooseCompositionStrategyAsync();
+    virtual std::future<bool> chooseCompositionStrategyAsync(
+            std::optional<android::HWComposer::DeviceRequestedChanges>*);
+    virtual void resetCompositionStrategy();
 
 protected:
     std::unique_ptr<compositionengine::OutputLayer> createOutputLayer(const sp<LayerFE>&) const;
     std::optional<size_t> findCurrentOutputLayerForLayer(
             const sp<compositionengine::LayerFE>&) const;
     using DeviceRequestedChanges = android::HWComposer::DeviceRequestedChanges;
-    std::optional<DeviceRequestedChanges> chooseCompositionStrategy() override;
+    bool chooseCompositionStrategy(
+            std::optional<android::HWComposer::DeviceRequestedChanges>*) override {
+        return true;
+    };
     void applyCompositionStrategy(const std::optional<DeviceRequestedChanges>&) override{};
     bool getSkipColorTransform() const override;
     compositionengine::Output::FrameFences presentAndGetFrameFences() override;
