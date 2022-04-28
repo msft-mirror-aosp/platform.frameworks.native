@@ -20,6 +20,7 @@
 
 #include "AidlComposerHal.h"
 
+#include <android-base/file.h>
 #include <android/binder_ibinder_platform.h>
 #include <android/binder_manager.h>
 #include <log/log.h>
@@ -40,6 +41,7 @@ using hardware::Return;
 
 using aidl::android::hardware::graphics::composer3::BnComposerCallback;
 using aidl::android::hardware::graphics::composer3::Capability;
+using aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness;
 using aidl::android::hardware::graphics::composer3::PowerMode;
 using aidl::android::hardware::graphics::composer3::VirtualDisplay;
 
@@ -115,7 +117,7 @@ template <>
 AidlPerFrameMetadataBlob translate(IComposerClient::PerFrameMetadataBlob x) {
     AidlPerFrameMetadataBlob blob;
     blob.key = translate<AidlPerFrameMetadataKey>(x.key),
-    std::copy(blob.blob.begin(), blob.blob.end(), x.blob.begin());
+    std::copy(x.blob.begin(), x.blob.end(), std::inserter(blob.blob, blob.blob.end()));
     return blob;
 }
 
@@ -154,15 +156,6 @@ VsyncPeriodChangeTimeline translate(AidlVsyncPeriodChangeTimeline x) {
             .refreshTimeNanos = x.refreshTimeNanos,
     };
 }
-
-template <>
-IComposerClient::ClientTargetProperty translate(ClientTargetProperty x) {
-    return IComposerClient::ClientTargetProperty{
-            .pixelFormat = translate<PixelFormat>(x.pixelFormat),
-            .dataspace = translate<Dataspace>(x.dataspace),
-    };
-}
-
 mat4 makeMat4(std::vector<float> in) {
     return mat4(static_cast<const float*>(in.data()));
 }
@@ -246,7 +239,8 @@ bool AidlComposer::isSupported(OptionalFeature feature) const {
         case OptionalFeature::RefreshRateSwitching:
         case OptionalFeature::ExpectedPresentTime:
         case OptionalFeature::DisplayBrightnessCommand:
-        case OptionalFeature::BootDisplayConfig:
+        case OptionalFeature::KernelIdleTimer:
+        case OptionalFeature::PhysicalDisplayOrientation:
             return true;
     }
 }
@@ -262,13 +256,27 @@ std::vector<Capability> AidlComposer::getCapabilities() {
 }
 
 std::string AidlComposer::dumpDebugInfo() {
-    std::string info;
-    const auto status = mAidlComposer->dumpDebugInfo(&info);
-    if (!status.isOk()) {
-        ALOGE("dumpDebugInfo failed %s", status.getDescription().c_str());
+    int pipefds[2];
+    int result = pipe(pipefds);
+    if (result < 0) {
+        ALOGE("dumpDebugInfo: pipe failed: %s", strerror(errno));
         return {};
     }
-    return info;
+
+    std::string str;
+    const auto status = mAidlComposer->dump(pipefds[1], /*args*/ nullptr, /*numArgs*/ 0);
+    // Close the write-end of the pipe to make sure that when reading from the
+    // read-end we will get eof instead of blocking forever
+    close(pipefds[1]);
+
+    if (status == STATUS_OK) {
+        base::ReadFdToString(pipefds[0], &str);
+    } else {
+        ALOGE("dumpDebugInfo: dump failed: %d", status);
+    }
+
+    close(pipefds[0]);
+    return str;
 }
 
 void AidlComposer::registerCallback(HWC2::ComposerCallback& callback) {
@@ -457,6 +465,19 @@ Error AidlComposer::getDozeSupport(Display display, bool* outSupport) {
     }
     *outSupport = std::find(capabilities.begin(), capabilities.end(),
                             AidlDisplayCapability::DOZE) != capabilities.end();
+    return Error::NONE;
+}
+
+Error AidlComposer::hasDisplayIdleTimerCapability(Display display, bool* outSupport) {
+    std::vector<AidlDisplayCapability> capabilities;
+    const auto status =
+            mAidlComposerClient->getDisplayCapabilities(translate<int64_t>(display), &capabilities);
+    if (!status.isOk()) {
+        ALOGE("getDisplayCapabilities failed %s", status.getDescription().c_str());
+        return static_cast<Error>(status.getServiceSpecificError());
+    }
+    *outSupport = std::find(capabilities.begin(), capabilities.end(),
+                            AidlDisplayCapability::DISPLAY_IDLE_TIMER) != capabilities.end();
     return Error::NONE;
 }
 
@@ -906,9 +927,9 @@ Error AidlComposer::setLayerPerFrameMetadataBlobs(
     return Error::NONE;
 }
 
-Error AidlComposer::setDisplayBrightness(Display display, float brightness,
+Error AidlComposer::setDisplayBrightness(Display display, float brightness, float brightnessNits,
                                          const DisplayBrightnessOptions& options) {
-    mWriter.setDisplayBrightness(translate<int64_t>(display), brightness);
+    mWriter.setDisplayBrightness(translate<int64_t>(display), brightness, brightnessNits);
 
     if (options.applyImmediately) {
         return execute();
@@ -1053,12 +1074,8 @@ Error AidlComposer::getPreferredBootDisplayConfig(Display display, Config* confi
 }
 
 Error AidlComposer::getClientTargetProperty(
-        Display display, IComposerClient::ClientTargetProperty* outClientTargetProperty,
-        float* whitePointNits) {
-    const auto property = mReader.takeClientTargetProperty(translate<int64_t>(display));
-    *outClientTargetProperty =
-            translate<IComposerClient::ClientTargetProperty>(property.clientTargetProperty);
-    *whitePointNits = property.whitePointNits;
+        Display display, ClientTargetPropertyWithBrightness* outClientTargetProperty) {
+    *outClientTargetProperty = mReader.takeClientTargetProperty(translate<int64_t>(display));
     return Error::NONE;
 }
 
@@ -1085,5 +1102,29 @@ Error AidlComposer::getDisplayDecorationSupport(Display display,
     }
     return Error::NONE;
 }
+
+Error AidlComposer::setIdleTimerEnabled(Display displayId, std::chrono::milliseconds timeout) {
+    const auto status =
+            mAidlComposerClient->setIdleTimerEnabled(translate<int64_t>(displayId),
+                                                     translate<int32_t>(timeout.count()));
+    if (!status.isOk()) {
+        ALOGE("setIdleTimerEnabled failed %s", status.getDescription().c_str());
+        return static_cast<Error>(status.getServiceSpecificError());
+    }
+    return Error::NONE;
+}
+
+Error AidlComposer::getPhysicalDisplayOrientation(Display displayId,
+                                                  AidlTransform* outDisplayOrientation) {
+    const auto status =
+            mAidlComposerClient->getDisplayPhysicalOrientation(translate<int64_t>(displayId),
+                                                               outDisplayOrientation);
+    if (!status.isOk()) {
+        ALOGE("getPhysicalDisplayOrientation failed %s", status.getDescription().c_str());
+        return static_cast<Error>(status.getServiceSpecificError());
+    }
+    return Error::NONE;
+}
+
 } // namespace Hwc2
 } // namespace android
