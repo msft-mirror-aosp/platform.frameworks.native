@@ -66,9 +66,10 @@ public:
     }
 
     void SetUp() override {
+        constexpr bool kUseBootTimeClock = true;
         mTimeStats = std::make_shared<mock::TimeStats>();
         mFrameTimeline = std::make_unique<impl::FrameTimeline>(mTimeStats, kSurfaceFlingerPid,
-                                                               kTestThresholds);
+                                                               kTestThresholds, !kUseBootTimeClock);
         mFrameTimeline->registerDataSource();
         mTokenManager = &mFrameTimeline->mTokenManager;
         mTraceCookieCounter = &mFrameTimeline->mTraceCookieCounter;
@@ -1279,7 +1280,7 @@ TEST_F(FrameTimelineTest, traceSurfaceFrame_emitsValidTracePacket) {
     validateTraceEvent(actualSurfaceFrameEnd2, protoPresentedSurfaceFrameActualEnd);
 }
 
-TEST_F(FrameTimelineTest, traceSurfaceFrame_predictionExpiredDoesNotTraceExpectedTimeline) {
+TEST_F(FrameTimelineTest, traceSurfaceFrame_predictionExpiredIsAppMissedDeadline) {
     auto tracingSession = getTracingSessionForTest();
     auto presentFence1 = fenceFactory.createFenceTimeForTest(Fence::NO_FENCE);
 
@@ -1312,7 +1313,7 @@ TEST_F(FrameTimelineTest, traceSurfaceFrame_predictionExpiredDoesNotTraceExpecte
             createProtoActualSurfaceFrameStart(traceCookie + 1, surfaceFrameToken,
                                                displayFrameToken, sPidOne, sLayerNameOne,
                                                FrameTimelineEvent::PRESENT_UNSPECIFIED, false,
-                                               false, FrameTimelineEvent::JANK_UNKNOWN,
+                                               false, FrameTimelineEvent::JANK_APP_DEADLINE_MISSED,
                                                FrameTimelineEvent::PREDICTION_EXPIRED, true);
     auto protoActualSurfaceFrameEnd = createProtoFrameEnd(traceCookie + 1);
 

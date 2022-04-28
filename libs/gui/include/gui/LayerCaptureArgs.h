@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 The Android Open Source Project
+ * Copyright (C) 2022 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,24 @@
  * limitations under the License.
  */
 
-package android.gui;
+#pragma once
 
-parcelable VsyncEventData cpp_header "gui/VsyncEventData.h";
+#include <stdint.h>
+#include <sys/types.h>
+
+#include <gui/DisplayCaptureArgs.h>
+#include <gui/SpHash.h>
+#include <unordered_set>
+
+namespace android::gui {
+
+struct LayerCaptureArgs : CaptureArgs {
+    sp<IBinder> layerHandle;
+    std::unordered_set<sp<IBinder>, SpHash<IBinder>> excludeHandles;
+    bool childrenOnly{false};
+
+    status_t writeToParcel(Parcel* output) const override;
+    status_t readFromParcel(const Parcel* input) override;
+};
+
+}; // namespace android::gui
