@@ -213,6 +213,13 @@ enum {
      */
     ASENSOR_TYPE_HEART_BEAT = 31,
     /**
+     * A constant describing a dynamic sensor meta event sensor.
+     *
+     * A sensor event of this type is received when a dynamic sensor is added to or removed from
+     * the system. This sensor type should always use special trigger report mode.
+     */
+    ASENSOR_TYPE_DYNAMIC_SENSOR_META = 32,
+    /**
      * This sensor type is for delivering additional sensor information aside
      * from sensor event data.
      *
@@ -743,9 +750,38 @@ ASensorManager* ASensorManager_getInstance() __DEPRECATED_IN(26);
 ASensorManager* ASensorManager_getInstanceForPackage(const char* packageName) __INTRODUCED_IN(26);
 
 /**
- * Returns the list of available sensors.
+ * Returns the list of available sensors. The returned list is owned by the
+ * sensor manager and will not change between calls to this function.
+ *
+ * \param manager the {@link ASensorManager} instance obtained from
+ *                {@link ASensorManager_getInstanceForPackage}.
+ * \param list    the returned list of sensors.
+ * \return positive number of returned sensors or negative error code.
+ *         BAD_VALUE: manager is NULL.
  */
 int ASensorManager_getSensorList(ASensorManager* manager, ASensorList* list);
+
+/**
+ * Returns the list of available dynamic sensors. If there are no dynamic
+ * sensors available, returns nullptr in list.
+ *
+ * Each time this is called, the previously returned list is deallocated and
+ * must no longer be used.
+ *
+ * Clients should call this if they receive a sensor update from
+ * {@link ASENSOR_TYPE_DYNAMIC_SENSOR_META} indicating the sensors have changed.
+ * If this happens, previously received lists from this method will be stale.
+ *
+ * Available since API level 33.
+ *
+ * \param manager the {@link ASensorManager} instance obtained from
+ *                {@link ASensorManager_getInstanceForPackage}.
+ * \param list    the returned list of dynamic sensors.
+ * \return positive number of returned sensors or negative error code.
+ *         BAD_VALUE: manager is NULL.
+ */
+ssize_t ASensorManager_getDynamicSensorList(
+        ASensorManager* manager, ASensorList* list) __INTRODUCED_IN(33);
 
 /**
  * Returns the default sensor for the given type, or NULL if no sensor

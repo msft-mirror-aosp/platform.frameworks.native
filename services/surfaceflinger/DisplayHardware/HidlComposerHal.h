@@ -169,7 +169,8 @@ public:
 
     bool isSupported(OptionalFeature) const;
 
-    std::vector<IComposer::Capability> getCapabilities() override;
+    std::vector<aidl::android::hardware::graphics::composer3::Capability> getCapabilities()
+            override;
     std::string dumpDebugInfo() override;
 
     void registerCallback(HWC2::ComposerCallback& callback) override;
@@ -207,6 +208,7 @@ public:
                              std::vector<uint32_t>* outLayerRequestMasks) override;
 
     Error getDozeSupport(Display display, bool* outSupport) override;
+    Error hasDisplayIdleTimerCapability(Display display, bool* outSupport) override;
     Error getHdrCapabilities(Display display, std::vector<Hdr>* outTypes, float* outMaxLuminance,
                              float* outMaxAverageLuminance, float* outMinLuminance) override;
 
@@ -290,7 +292,7 @@ public:
     Error setLayerPerFrameMetadataBlobs(
             Display display, Layer layer,
             const std::vector<IComposerClient::PerFrameMetadataBlob>& metadata) override;
-    Error setDisplayBrightness(Display display, float brightness,
+    Error setDisplayBrightness(Display display, float brightness, float brightnessNits,
                                const DisplayBrightnessOptions& options) override;
 
     // Composer HAL 2.4
@@ -315,17 +317,26 @@ public:
                                         bool mandatory, const std::vector<uint8_t>& value) override;
     V2_4::Error getLayerGenericMetadataKeys(
             std::vector<IComposerClient::LayerGenericMetadataKey>* outKeys) override;
-    Error getClientTargetProperty(Display display,
-                                  IComposerClient::ClientTargetProperty* outClientTargetProperty,
-                                  float* outWhitePointNits) override;
+    Error getClientTargetProperty(
+            Display display,
+            aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness*
+                    outClientTargetProperty) override;
 
     // AIDL Composer HAL
-    Error setLayerWhitePointNits(Display display, Layer layer, float whitePointNits) override;
+    Error setLayerBrightness(Display display, Layer layer, float brightness) override;
     Error setLayerBlockingRegion(Display display, Layer layer,
                                  const std::vector<IComposerClient::Rect>& blocking) override;
     Error setBootDisplayConfig(Display displayId, Config) override;
     Error clearBootDisplayConfig(Display displayId) override;
     Error getPreferredBootDisplayConfig(Display displayId, Config*) override;
+    Error getDisplayDecorationSupport(
+            Display display,
+            std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>*
+                    support) override;
+    Error setIdleTimerEnabled(Display displayId, std::chrono::milliseconds timeout) override;
+
+    Error getPhysicalDisplayOrientation(Display displayId,
+                                        AidlTransform* outDisplayOrientation) override;
 
 private:
     class CommandWriter : public CommandWriterBase {

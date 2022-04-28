@@ -15,22 +15,31 @@
  *
  */
 
-#include "surfaceflinger_scheduler_fuzzer.h"
+#include <ftl/enum.h>
 #include <fuzzer/FuzzedDataProvider.h>
 #include <processgroup/sched_policy.h>
+
 #include "Scheduler/DispSyncSource.h"
 #include "Scheduler/OneShotTimer.h"
 #include "Scheduler/VSyncDispatchTimerQueue.h"
 #include "Scheduler/VSyncPredictor.h"
 #include "Scheduler/VSyncReactor.h"
+
 #include "surfaceflinger_fuzzers_utils.h"
+#include "surfaceflinger_scheduler_fuzzer.h"
 
 namespace android::fuzz {
 
 using hardware::graphics::composer::hal::PowerMode;
 
-static constexpr PowerMode kPowerModes[] = {PowerMode::ON, PowerMode::DOZE, PowerMode::OFF,
-                                            PowerMode::DOZE_SUSPEND, PowerMode::ON_SUSPEND};
+constexpr nsecs_t kVsyncPeriods[] = {(30_Hz).getPeriodNsecs(), (60_Hz).getPeriodNsecs(),
+                                     (72_Hz).getPeriodNsecs(), (90_Hz).getPeriodNsecs(),
+                                     (120_Hz).getPeriodNsecs()};
+
+constexpr auto kLayerVoteTypes = ftl::enum_range<scheduler::RefreshRateConfigs::LayerVoteType>();
+
+constexpr PowerMode kPowerModes[] = {PowerMode::ON, PowerMode::DOZE, PowerMode::OFF,
+                                     PowerMode::DOZE_SUSPEND, PowerMode::ON_SUSPEND};
 
 constexpr uint16_t kRandomStringLength = 256;
 constexpr std::chrono::duration kSyncPeriod(16ms);
@@ -63,8 +72,7 @@ private:
     FuzzedDataProvider mFdp;
 
 protected:
-    void onVSyncEvent(nsecs_t /* when */, nsecs_t /* expectedVSyncTimestamp */,
-                      nsecs_t /* deadlineTimestamp */) {}
+    void onVSyncEvent(nsecs_t /* when */, VSyncSource::VSyncData) {}
 };
 
 PhysicalDisplayId SchedulerFuzzer::getPhysicalDisplayId() {
@@ -101,8 +109,9 @@ void SchedulerFuzzer::fuzzEventThread() {
 void SchedulerFuzzer::fuzzDispSyncSource() {
     std::unique_ptr<FuzzImplVSyncDispatch> vSyncDispatch =
             std::make_unique<FuzzImplVSyncDispatch>();
+    std::unique_ptr<FuzzImplVSyncTracker> vSyncTracker = std::make_unique<FuzzImplVSyncTracker>();
     std::unique_ptr<scheduler::DispSyncSource> dispSyncSource = std::make_unique<
-            scheduler::DispSyncSource>(*vSyncDispatch,
+            scheduler::DispSyncSource>(*vSyncDispatch, *vSyncTracker,
                                        (std::chrono::nanoseconds)
                                                mFdp.ConsumeIntegral<uint64_t>() /*workDuration*/,
                                        (std::chrono::nanoseconds)mFdp.ConsumeIntegral<uint64_t>()
@@ -319,55 +328,58 @@ void SchedulerFuzzer::fuzzRefreshRateConfigs() {
     using RefreshRateConfigs = scheduler::RefreshRateConfigs;
     using LayerRequirement = RefreshRateConfigs::LayerRequirement;
     using RefreshRateStats = scheduler::RefreshRateStats;
-    uint16_t minRefreshRate = mFdp.ConsumeIntegralInRange<uint16_t>(1, UINT16_MAX >> 1);
-    uint16_t maxRefreshRate = mFdp.ConsumeIntegralInRange<uint16_t>(minRefreshRate + 1, UINT16_MAX);
 
-    DisplayModeId hwcConfigIndexType = DisplayModeId(mFdp.ConsumeIntegralInRange<uint8_t>(0, 10));
+    const uint16_t minRefreshRate = mFdp.ConsumeIntegralInRange<uint16_t>(1, UINT16_MAX >> 1);
+    const uint16_t maxRefreshRate =
+            mFdp.ConsumeIntegralInRange<uint16_t>(minRefreshRate + 1, UINT16_MAX);
+
+    const DisplayModeId modeId{mFdp.ConsumeIntegralInRange<uint8_t>(0, 10)};
 
     DisplayModes displayModes;
     for (uint16_t fps = minRefreshRate; fps < maxRefreshRate; ++fps) {
-        constexpr int32_t kGroup = 0;
-        const auto refreshRate = Fps::fromValue(static_cast<float>(fps));
-        displayModes.push_back(scheduler::createDisplayMode(hwcConfigIndexType, kGroup,
-                                                            refreshRate.getPeriodNsecs()));
+        displayModes.try_emplace(modeId,
+                                 mock::createDisplayMode(modeId,
+                                                         Fps::fromValue(static_cast<float>(fps))));
     }
-    auto refreshRateConfigs =
-            std::make_unique<RefreshRateConfigs>(displayModes, hwcConfigIndexType);
+
+    RefreshRateConfigs refreshRateConfigs(displayModes, modeId);
+
     const RefreshRateConfigs::GlobalSignals globalSignals = {.touch = false, .idle = false};
-    auto layers = std::vector<LayerRequirement>{
-            LayerRequirement{.weight = mFdp.ConsumeFloatingPoint<float>()}};
-    refreshRateConfigs->getBestRefreshRate(layers, globalSignals);
+    std::vector<LayerRequirement> layers = {{.weight = mFdp.ConsumeFloatingPoint<float>()}};
+
+    refreshRateConfigs.getBestRefreshRate(layers, globalSignals);
+
     layers[0].name = mFdp.ConsumeRandomLengthString(kRandomStringLength);
     layers[0].ownerUid = mFdp.ConsumeIntegral<uint16_t>();
     layers[0].desiredRefreshRate = Fps::fromValue(mFdp.ConsumeFloatingPoint<float>());
-    layers[0].vote = mFdp.PickValueInArray(kLayerVoteTypes);
+    layers[0].vote = mFdp.PickValueInArray(kLayerVoteTypes.values);
     auto frameRateOverrides =
-            refreshRateConfigs->getFrameRateOverrides(layers,
-                                                      Fps::fromValue(
-                                                              mFdp.ConsumeFloatingPoint<float>()),
-                                                      globalSignals);
+            refreshRateConfigs.getFrameRateOverrides(layers,
+                                                     Fps::fromValue(
+                                                             mFdp.ConsumeFloatingPoint<float>()),
+                                                     globalSignals);
 
-    refreshRateConfigs->setDisplayManagerPolicy(
-            {hwcConfigIndexType,
+    refreshRateConfigs.setDisplayManagerPolicy(
+            {modeId,
              {Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
               Fps::fromValue(mFdp.ConsumeFloatingPoint<float>())}});
-    refreshRateConfigs->setCurrentModeId(hwcConfigIndexType);
+    refreshRateConfigs.setActiveModeId(modeId);
 
     RefreshRateConfigs::isFractionalPairOrMultiple(Fps::fromValue(
                                                            mFdp.ConsumeFloatingPoint<float>()),
                                                    Fps::fromValue(
                                                            mFdp.ConsumeFloatingPoint<float>()));
-    RefreshRateConfigs::getFrameRateDivider(Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
+    RefreshRateConfigs::getFrameRateDivisor(Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
                                             Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()));
 
     android::mock::TimeStats timeStats;
-    std::unique_ptr<RefreshRateStats> refreshRateStats =
-            std::make_unique<RefreshRateStats>(timeStats,
-                                               Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
-                                               PowerMode::OFF);
-    refreshRateStats->setRefreshRate(
-            refreshRateConfigs->getRefreshRateFromModeId(hwcConfigIndexType).getFps());
-    refreshRateStats->setPowerMode(mFdp.PickValueInArray(kPowerModes));
+    RefreshRateStats refreshRateStats(timeStats, Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
+                                      PowerMode::OFF);
+
+    const auto fpsOpt = displayModes.get(modeId, [](const auto& mode) { return mode->getFps(); });
+    refreshRateStats.setRefreshRate(*fpsOpt);
+
+    refreshRateStats.setPowerMode(mFdp.PickValueInArray(kPowerModes));
 }
 
 void SchedulerFuzzer::process() {

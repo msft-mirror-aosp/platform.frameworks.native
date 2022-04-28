@@ -42,7 +42,8 @@ public:
     MOCK_METHOD1(setCallback, void(HWC2::ComposerCallback&));
     MOCK_CONST_METHOD3(getDisplayIdentificationData,
                        bool(hal::HWDisplayId, uint8_t*, DisplayIdentificationData*));
-    MOCK_CONST_METHOD1(hasCapability, bool(hal::Capability));
+    MOCK_CONST_METHOD1(hasCapability,
+                       bool(aidl::android::hardware::graphics::composer3::Capability));
     MOCK_CONST_METHOD2(hasDisplayCapability,
                        bool(HalDisplayId,
                             aidl::android::hardware::graphics::composer3::DisplayCapability));
@@ -83,8 +84,8 @@ public:
     MOCK_METHOD4(setDisplayContentSamplingEnabled, status_t(HalDisplayId, bool, uint8_t, uint64_t));
     MOCK_METHOD4(getDisplayedContentSample,
                  status_t(HalDisplayId, uint64_t, uint64_t, DisplayedFrameStats*));
-    MOCK_METHOD3(setDisplayBrightness,
-                 std::future<status_t>(PhysicalDisplayId, float,
+    MOCK_METHOD4(setDisplayBrightness,
+                 std::future<status_t>(PhysicalDisplayId, float, float,
                                        const Hwc2::Composer::DisplayBrightnessOptions&));
     MOCK_METHOD2(getDisplayBrightnessSupport, status_t(PhysicalDisplayId, bool*));
 
@@ -111,8 +112,8 @@ public:
     MOCK_METHOD1(getPreferredBootDisplayMode, std::optional<hal::HWConfigId>(PhysicalDisplayId));
     MOCK_METHOD0(getBootDisplayModeSupport, bool());
     MOCK_METHOD2(setAutoLowLatencyMode, status_t(PhysicalDisplayId, bool));
-    MOCK_METHOD2(getSupportedContentTypes,
-                 status_t(PhysicalDisplayId, std::vector<hal::ContentType>*));
+    MOCK_METHOD(status_t, getSupportedContentTypes,
+                (PhysicalDisplayId, std::vector<hal::ContentType>*), (const, override));
     MOCK_METHOD2(setContentType, status_t(PhysicalDisplayId, hal::ContentType));
     MOCK_CONST_METHOD0(getSupportedLayerGenericMetadata,
                        const std::unordered_map<std::string, bool>&());
@@ -127,6 +128,14 @@ public:
     MOCK_METHOD(std::optional<PhysicalDisplayId>, toPhysicalDisplayId, (hal::HWDisplayId),
                 (const, override));
     MOCK_METHOD(std::optional<hal::HWDisplayId>, fromPhysicalDisplayId, (PhysicalDisplayId),
+                (const, override));
+    MOCK_METHOD2(getDisplayDecorationSupport,
+                 status_t(PhysicalDisplayId,
+                          std::optional<aidl::android::hardware::graphics::common::
+                                                DisplayDecorationSupport>* support));
+    MOCK_METHOD2(setIdleTimerEnabled, status_t(PhysicalDisplayId, std::chrono::milliseconds));
+    MOCK_METHOD(bool, hasDisplayIdleTimerCapability, (PhysicalDisplayId), (const, override));
+    MOCK_METHOD(Hwc2::AidlTransform, getPhysicalDisplayOrientation, (PhysicalDisplayId),
                 (const, override));
 };
 

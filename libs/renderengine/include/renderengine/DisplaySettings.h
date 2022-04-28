@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <aidl/android/hardware/graphics/composer3/DimmingStage.h>
+#include <aidl/android/hardware/graphics/composer3/RenderIntent.h>
 #include <iosfwd>
 
 #include <math/mat4.h>
@@ -54,6 +56,10 @@ struct DisplaySettings {
     // dataspace, in non-linear space.
     mat4 colorTransform = mat4();
 
+    // If true, and colorTransform is non-identity, most client draw calls can
+    // ignore it. Some draws (e.g. screen decorations) may need it, though.
+    bool deviceHandlesColorTransform = false;
+
     // An additional orientation flag to be applied after clipping the output.
     // By way of example, this may be used for supporting fullscreen screenshot
     // capture of a device in landscape while the buffer is in portrait
@@ -64,6 +70,14 @@ struct DisplaySettings {
     // All layers will be dimmed by (max(layer white points) / targetLuminanceNits).
     // If the target luminance is unknown, then no display-level dimming occurs.
     float targetLuminanceNits = -1.f;
+
+    // Configures when dimming should be applied for each layer.
+    aidl::android::hardware::graphics::composer3::DimmingStage dimmingStage =
+            aidl::android::hardware::graphics::composer3::DimmingStage::NONE;
+
+    // Configures the rendering intent of the output display. This is used for tonemapping.
+    aidl::android::hardware::graphics::composer3::RenderIntent renderIntent =
+            aidl::android::hardware::graphics::composer3::RenderIntent::TONE_MAP_COLORIMETRIC;
 };
 
 static inline bool operator==(const DisplaySettings& lhs, const DisplaySettings& rhs) {

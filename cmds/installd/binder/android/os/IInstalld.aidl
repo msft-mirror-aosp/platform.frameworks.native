@@ -20,9 +20,11 @@ package android.os;
 interface IInstalld {
     void createUserData(@nullable @utf8InCpp String uuid, int userId, int userSerial, int flags);
     void destroyUserData(@nullable @utf8InCpp String uuid, int userId, int flags);
-
+    void setFirstBoot();
     android.os.CreateAppDataResult createAppData(in android.os.CreateAppDataArgs args);
     android.os.CreateAppDataResult[] createAppDataBatched(in android.os.CreateAppDataArgs[] args);
+
+    void reconcileSdkData(in android.os.ReconcileSdkDataArgs args);
 
     void restoreconAppData(@nullable @utf8InCpp String uuid, @utf8InCpp String packageName,
             int userId, int flags, int appId, @utf8InCpp String seInfo);
@@ -75,11 +77,12 @@ interface IInstalld {
 
     int mergeProfiles(int uid, @utf8InCpp String packageName, @utf8InCpp String profileName);
     boolean dumpProfiles(int uid, @utf8InCpp String packageName, @utf8InCpp String  profileName,
-            @utf8InCpp String codePath);
+            @utf8InCpp String codePath, boolean dumpClassesAndMethods);
     boolean copySystemProfile(@utf8InCpp String systemProfile, int uid,
             @utf8InCpp String packageName, @utf8InCpp String profileName);
     void clearAppProfiles(@utf8InCpp String packageName, @utf8InCpp String profileName);
     void destroyAppProfiles(@utf8InCpp String packageName);
+    void deleteReferenceProfile(@utf8InCpp String packageName, @utf8InCpp String profileName);
 
     boolean createProfileSnapshot(int appId, @utf8InCpp String packageName,
             @utf8InCpp String profileName, @utf8InCpp String classpath);
@@ -97,10 +100,6 @@ interface IInstalld {
             @utf8InCpp String instructionSet, @utf8InCpp String outputPath);
     long deleteOdex(@utf8InCpp String packageName, @utf8InCpp String apkPath,
             @utf8InCpp String instructionSet, @nullable @utf8InCpp String outputPath);
-    void installApkVerity(@utf8InCpp String packageName, @utf8InCpp String filePath,
-            in FileDescriptor verityInput, int contentSize);
-    void assertFsverityRootHashMatches(@utf8InCpp String packageName, @utf8InCpp String filePath,
-            in byte[] expectedHash);
 
     boolean reconcileSecondaryDexFile(@utf8InCpp String dexPath, @utf8InCpp String pkgName,
         int uid, in @utf8InCpp String[] isas, @nullable @utf8InCpp String volume_uuid,
@@ -130,9 +129,15 @@ interface IInstalld {
 
     void migrateLegacyObbData();
 
+    void cleanupInvalidPackageDirs(@nullable @utf8InCpp String uuid, int userId, int flags);
+
+    int getOdexVisibility(@utf8InCpp String packageName, @utf8InCpp String apkPath,
+            @utf8InCpp String instructionSet, @nullable @utf8InCpp String outputPath);
+
     const int FLAG_STORAGE_DE = 0x1;
     const int FLAG_STORAGE_CE = 0x2;
     const int FLAG_STORAGE_EXTERNAL = 0x4;
+    const int FLAG_STORAGE_SDK = 0x8;
 
     const int FLAG_CLEAR_CACHE_ONLY = 0x10;
     const int FLAG_CLEAR_CODE_CACHE_ONLY = 0x20;

@@ -40,11 +40,15 @@ sk_sp<SkRuntimeEffect> buildRuntimeEffect(const shaders::LinearEffect& linearEff
 // * The current luminance of the physical display in nits
 // * The max luminance is provided as the max luminance for the buffer, either from the SMPTE 2086
 // or as the max light level from the CTA 861.3 standard.
-sk_sp<SkShader> createLinearEffectShader(sk_sp<SkShader> inputShader,
-                                         const shaders::LinearEffect& linearEffect,
-                                         sk_sp<SkRuntimeEffect> runtimeEffect,
-                                         const mat4& colorTransform, float maxDisplayLuminance,
-                                         float currentDisplayLuminanceNits, float maxLuminance);
+// * An AHardwareBuffer for implementations that support gralloc4 metadata for
+// communicating any HDR metadata.
+// * A RenderIntent that communicates the downstream renderintent for a physical display, for image
+// quality compensation.
+sk_sp<SkShader> createLinearEffectShader(
+        sk_sp<SkShader> inputShader, const shaders::LinearEffect& linearEffect,
+        sk_sp<SkRuntimeEffect> runtimeEffect, const mat4& colorTransform, float maxDisplayLuminance,
+        float currentDisplayLuminanceNits, float maxLuminance, AHardwareBuffer* buffer,
+        aidl::android::hardware::graphics::composer3::RenderIntent renderIntent);
 } // namespace skia
 } // namespace renderengine
 } // namespace android

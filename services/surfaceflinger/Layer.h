@@ -1,4 +1,3 @@
-
 /*
  * Copyright (C) 2007 The Android Open Source Project
  *
@@ -282,6 +281,8 @@ public:
         gui::DropInputMode dropInputMode;
 
         bool autoRefresh = false;
+
+        bool dimmingEnabled = true;
     };
 
     /*
@@ -412,6 +413,7 @@ public:
     virtual mat4 getColorTransform() const;
     virtual bool hasColorTransform() const;
     virtual bool isColorSpaceAgnostic() const { return mDrawingState.colorSpaceAgnostic; }
+    virtual bool isDimmingEnabled() const { return getDrawingState().dimmingEnabled; };
 
     // Used only to set BufferStateLayer state
     virtual bool setTransform(uint32_t /*transform*/) { return false; };
@@ -429,15 +431,14 @@ public:
     virtual bool setApi(int32_t /*api*/) { return false; };
     virtual bool setSidebandStream(const sp<NativeHandle>& /*sidebandStream*/) { return false; };
     virtual bool setTransactionCompletedListeners(
-            const std::vector<sp<CallbackHandle>>& /*handles*/) {
-        return false;
-    };
+            const std::vector<sp<CallbackHandle>>& /*handles*/);
     virtual bool addFrameEvent(const sp<Fence>& /*acquireFence*/, nsecs_t /*postedTime*/,
                                nsecs_t /*requestedPresentTime*/) {
         return false;
     }
     virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace);
     virtual bool setColorSpaceAgnostic(const bool agnostic);
+    virtual bool setDimmingEnabled(const bool dimmingEnabled);
     virtual bool setFrameRateSelectionPriority(int32_t priority);
     virtual bool setFixedTransformHint(ui::Transform::RotationFlags fixedTransformHint);
     virtual void setAutoRefresh(bool /* autoRefresh */) {}
@@ -686,12 +687,12 @@ public:
 
     bool isRemovedFromCurrentState() const;
 
-    LayerProto* writeToProto(LayersProto& layersProto, uint32_t traceFlags, const DisplayDevice*);
+    LayerProto* writeToProto(LayersProto& layersProto, uint32_t traceFlags);
 
     // Write states that are modified by the main thread. This includes drawing
     // state as well as buffer data. This should be called in the main or tracing
     // thread.
-    void writeToProtoDrawingState(LayerProto* layerInfo, uint32_t traceFlags, const DisplayDevice*);
+    void writeToProtoDrawingState(LayerProto* layerInfo);
     // Write drawing or current state. If writing current state, the caller should hold the
     // external mStateLock. If writing drawing state, this function should be called on the
     // main or tracing thread.
@@ -752,6 +753,7 @@ public:
                                   FrameEventHistoryDelta* outDelta);
 
     ui::Transform getTransform() const;
+    bool isTransformValid() const;
 
     // Returns the Alpha of the Surface, accounting for the Alpha
     // of parent Surfaces in the hierarchy (alpha's will be multiplied
@@ -896,6 +898,8 @@ public:
     virtual std::atomic<int32_t>* getPendingBufferCounter() { return nullptr; }
     virtual std::string getPendingBufferCounterName() { return ""; }
     virtual bool updateGeometry() { return false; }
+
+    virtual bool simpleBufferUpdate(const layer_state_t&) const { return false; }
 
 protected:
     friend class impl::SurfaceInterceptor;
@@ -1046,7 +1050,7 @@ protected:
     mutable bool mDrawingStateModified = false;
 
     sp<Fence> mLastClientCompositionFence;
-    bool mLastClientCompositionDisplayed = false;
+    bool mAlreadyDisplayedThisCompose = false;
 private:
     virtual void setTransformHint(ui::Transform::RotationFlags) {}
 
@@ -1136,6 +1140,7 @@ private:
     bool mIsAtRoot = false;
 
     uint32_t mLayerCreationFlags;
+    bool findInHierarchy(const sp<Layer>&);
 };
 
 std::ostream& operator<<(std::ostream& stream, const Layer::FrameRate& rate);

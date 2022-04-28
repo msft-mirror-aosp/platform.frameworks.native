@@ -81,7 +81,7 @@ public:
                 (nsecs_t, uint32_t *, uint32_t *, android::sp<android::Fence> *, uint32_t *),
                 (override));
     MOCK_METHOD(std::future<hal::Error>, setDisplayBrightness,
-                (float, const Hwc2::Composer::DisplayBrightnessOptions &), (override));
+                (float, float, const Hwc2::Composer::DisplayBrightnessOptions &), (override));
     MOCK_METHOD(hal::Error, setActiveConfigWithConstraints,
                 (hal::HWConfigId, const hal::VsyncPeriodChangeConstraints &,
                  hal::VsyncPeriodChangeTimeline *),
@@ -93,8 +93,18 @@ public:
     MOCK_METHOD(hal::Error, getSupportedContentTypes, (std::vector<hal::ContentType> *),
                 (const, override));
     MOCK_METHOD(hal::Error, setContentType, (hal::ContentType), (override));
-    MOCK_METHOD(hal::Error, getClientTargetProperty, (hal::ClientTargetProperty *, float *),
-                (override));
+    MOCK_METHOD(
+            hal::Error, getClientTargetProperty,
+            (aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness *),
+            (override));
+    MOCK_METHOD(
+            hal::Error, getDisplayDecorationSupport,
+            (std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport> *),
+            (override));
+    MOCK_METHOD(hal::Error, setIdleTimerEnabled, (std::chrono::milliseconds), (override));
+    MOCK_METHOD(bool, hasDisplayIdleTimerCapability, (), (const override));
+    MOCK_METHOD(hal::Error, getPhysicalDisplayOrientation, (Hwc2::AidlTransform *),
+                (const override));
 };
 
 class Layer : public HWC2::Layer {
@@ -127,7 +137,7 @@ public:
     MOCK_METHOD(hal::Error, setColorTransform, (const android::mat4 &), (override));
     MOCK_METHOD(hal::Error, setLayerGenericMetadata,
                 (const std::string &, bool, const std::vector<uint8_t> &), (override));
-    MOCK_METHOD(hal::Error, setWhitePointNits, (float whitePointNits), (override));
+    MOCK_METHOD(hal::Error, setBrightness, (float), (override));
     MOCK_METHOD(hal::Error, setBlockingRegion, (const android::Region &), (override));
 };
 

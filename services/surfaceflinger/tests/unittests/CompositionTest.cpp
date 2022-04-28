@@ -61,6 +61,8 @@ using hal::IComposerClient;
 using hal::PowerMode;
 using hal::Transform;
 
+using aidl::android::hardware::graphics::composer3::Capability;
+
 using testing::_;
 using testing::AtLeast;
 using testing::DoAll;
@@ -111,8 +113,9 @@ public:
         mFlinger.setupTimeStats(std::shared_ptr<TimeStats>(mTimeStats));
 
         mComposer = new Hwc2::mock::Composer();
+        mPowerAdvisor = new Hwc2::mock::PowerAdvisor();
         mFlinger.setupComposer(std::unique_ptr<Hwc2::Composer>(mComposer));
-
+        mFlinger.setupPowerAdvisor(std::unique_ptr<Hwc2::PowerAdvisor>(mPowerAdvisor));
         mFlinger.mutableMaxRenderTargetSize() = 16384;
     }
 
@@ -169,7 +172,7 @@ public:
     template <typename Case>
     void captureScreenComposition();
 
-    std::unordered_set<hal::Capability> mDefaultCapabilities = {hal::Capability::SIDEBAND_STREAM};
+    std::unordered_set<Capability> mDefaultCapabilities = {Capability::SIDEBAND_STREAM};
 
     bool mDisplayOff = false;
     TestableSurfaceFlinger mFlinger;
@@ -186,7 +189,7 @@ public:
     Hwc2::mock::Composer* mComposer = nullptr;
     renderengine::mock::RenderEngine* mRenderEngine = new renderengine::mock::RenderEngine();
     mock::TimeStats* mTimeStats = new mock::TimeStats();
-    Hwc2::mock::PowerAdvisor mPowerAdvisor;
+    Hwc2::mock::PowerAdvisor* mPowerAdvisor = nullptr;
 
     sp<Fence> mClientTargetAcquireFence = Fence::NO_FENCE;
 
@@ -242,8 +245,8 @@ void CompositionTest::captureScreenComposition() {
                                                                       HAL_PIXEL_FORMAT_RGBA_8888, 1,
                                                                       usage);
 
-    auto result = mFlinger.renderScreenImplLocked(*renderArea, traverseLayers, mCaptureScreenBuffer,
-                                                  forSystem, regionSampling);
+    auto result = mFlinger.renderScreenImpl(*renderArea, traverseLayers, mCaptureScreenBuffer,
+                                            forSystem, regionSampling);
     EXPECT_TRUE(result.valid());
 
     auto& [status, drawFence] = result.get();
@@ -298,7 +301,7 @@ struct BaseDisplayVariant {
                                      .setId(DEFAULT_DISPLAY_ID)
                                      .setPixels({DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT})
                                      .setIsSecure(Derived::IS_SECURE)
-                                     .setPowerAdvisor(&test->mPowerAdvisor)
+                                     .setPowerAdvisor(test->mPowerAdvisor)
                                      .setName(std::string("Injected display for ") +
                                               test_info->test_case_name() + "." + test_info->name())
                                      .build();

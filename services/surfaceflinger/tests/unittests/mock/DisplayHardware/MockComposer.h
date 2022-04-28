@@ -43,6 +43,8 @@ using android::hardware::graphics::composer::V2_1::Layer;
 using android::hardware::graphics::composer::V2_4::IComposerCallback;
 using android::hardware::graphics::composer::V2_4::IComposerClient;
 
+using aidl::android::hardware::graphics::common::DisplayDecorationSupport;
+
 class Composer : public Hwc2::Composer {
 public:
     using Display = android::hardware::graphics::composer::V2_1::Display;
@@ -50,7 +52,8 @@ public:
     ~Composer() override;
 
     MOCK_METHOD(bool, isSupported, (OptionalFeature), (const, override));
-    MOCK_METHOD0(getCapabilities, std::vector<IComposer::Capability>());
+    MOCK_METHOD0(getCapabilities,
+                 std::vector<aidl::android::hardware::graphics::composer3::Capability>());
     MOCK_METHOD0(dumpDebugInfo, std::string());
     MOCK_METHOD1(registerCallback, void(HWC2::ComposerCallback&));
     MOCK_METHOD0(resetCommands, void());
@@ -73,6 +76,7 @@ public:
     MOCK_METHOD4(getDisplayRequests,
                  Error(Display, uint32_t*, std::vector<Layer>*, std::vector<uint32_t>*));
     MOCK_METHOD2(getDozeSupport, Error(Display, bool*));
+    MOCK_METHOD2(getKernelIdleTimerSupport, Error(Display, bool*));
     MOCK_METHOD5(getHdrCapabilities, Error(Display, std::vector<Hdr>*, float*, float*, float*));
     MOCK_METHOD1(getPerFrameMetadataKeys,
                  std::vector<IComposerClient::PerFrameMetadataKey>(Display));
@@ -122,7 +126,8 @@ public:
                  Error(Display, uint64_t, uint64_t, DisplayedFrameStats*));
     MOCK_METHOD3(setLayerPerFrameMetadataBlobs,
                  Error(Display, Layer, const std::vector<IComposerClient::PerFrameMetadataBlob>&));
-    MOCK_METHOD3(setDisplayBrightness, Error(Display, float, const DisplayBrightnessOptions&));
+    MOCK_METHOD4(setDisplayBrightness,
+                 Error(Display, float, float, const DisplayBrightnessOptions&));
     MOCK_METHOD2(
             getDisplayCapabilities,
             Error(Display,
@@ -147,11 +152,18 @@ public:
                              const std::vector<uint8_t>&));
     MOCK_METHOD1(getLayerGenericMetadataKeys,
                  V2_4::Error(std::vector<IComposerClient::LayerGenericMetadataKey>*));
-    MOCK_METHOD3(getClientTargetProperty,
-                 Error(Display, IComposerClient::ClientTargetProperty*, float*));
-    MOCK_METHOD3(setLayerWhitePointNits, Error(Display, Layer, float));
+    MOCK_METHOD2(getClientTargetProperty,
+                 Error(Display,
+                       aidl::android::hardware::graphics::composer3::
+                               ClientTargetPropertyWithBrightness*));
+    MOCK_METHOD3(setLayerBrightness, Error(Display, Layer, float));
     MOCK_METHOD3(setLayerBlockingRegion,
                  Error(Display, Layer, const std::vector<IComposerClient::Rect>&));
+    MOCK_METHOD2(getDisplayDecorationSupport,
+                 Error(Display, std::optional<DisplayDecorationSupport>*));
+    MOCK_METHOD2(setIdleTimerEnabled, Error(Display, std::chrono::milliseconds));
+    MOCK_METHOD2(hasDisplayIdleTimerCapability, Error(Display, bool*));
+    MOCK_METHOD2(getPhysicalDisplayOrientation, Error(Display, AidlTransform*));
 };
 
 } // namespace Hwc2::mock

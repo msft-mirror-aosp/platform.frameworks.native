@@ -60,9 +60,10 @@
 #define INDENT3 "      "
 
 using android::base::StringPrintf;
-using namespace android::flag_operators;
 
 namespace android {
+
+using namespace ftl::flag_operators;
 
 static const char* DEVICE_INPUT_PATH = "/dev/input";
 // v4l2 devices go directly into /dev
@@ -302,7 +303,8 @@ static std::optional<std::array<LightColor, COLOR_NUM>> getColorIndexArray(
 
 // --- Global Functions ---
 
-Flags<InputDeviceClass> getAbsAxisUsage(int32_t axis, Flags<InputDeviceClass> deviceClasses) {
+ftl::Flags<InputDeviceClass> getAbsAxisUsage(int32_t axis,
+                                             ftl::Flags<InputDeviceClass> deviceClasses) {
     // Touch devices get dibs on touch-related axes.
     if (deviceClasses.test(InputDeviceClass::TOUCH)) {
         switch (axis) {
@@ -685,7 +687,7 @@ EventHub::EventHub(void)
     mEpollFd = epoll_create1(EPOLL_CLOEXEC);
     LOG_ALWAYS_FATAL_IF(mEpollFd < 0, "Could not create epoll instance: %s", strerror(errno));
 
-    mINotifyFd = inotify_init();
+    mINotifyFd = inotify_init1(IN_CLOEXEC);
 
     std::error_code errorCode;
     bool isDeviceInotifyAdded = false;
@@ -713,7 +715,7 @@ EventHub::EventHub(void)
     LOG_ALWAYS_FATAL_IF(result != 0, "Could not add INotify to epoll instance.  errno=%d", errno);
 
     int wakeFds[2];
-    result = pipe(wakeFds);
+    result = pipe2(wakeFds, O_CLOEXEC);
     LOG_ALWAYS_FATAL_IF(result != 0, "Could not create wake pipe.  errno=%d", errno);
 
     mWakeReadPipeFd = wakeFds[0];
@@ -765,10 +767,10 @@ InputDeviceIdentifier EventHub::getDeviceIdentifier(int32_t deviceId) const {
     return device != nullptr ? device->identifier : InputDeviceIdentifier();
 }
 
-Flags<InputDeviceClass> EventHub::getDeviceClasses(int32_t deviceId) const {
+ftl::Flags<InputDeviceClass> EventHub::getDeviceClasses(int32_t deviceId) const {
     std::scoped_lock _l(mLock);
     Device* device = getDeviceLocked(deviceId);
-    return device != nullptr ? device->classes : Flags<InputDeviceClass>(0);
+    return device != nullptr ? device->classes : ftl::Flags<InputDeviceClass>(0);
 }
 
 int32_t EventHub::getDeviceControllerNumber(int32_t deviceId) const {
@@ -1909,7 +1911,7 @@ void EventHub::unregisterVideoDeviceFromEpollLocked(const TouchVideoDevice& vide
 }
 
 void EventHub::reportDeviceAddedForStatisticsLocked(const InputDeviceIdentifier& identifier,
-                                                    Flags<InputDeviceClass> classes) {
+                                                    ftl::Flags<InputDeviceClass> classes) {
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
     SHA256_Update(&ctx, reinterpret_cast<const uint8_t*>(identifier.uniqueId.c_str()),
@@ -2191,7 +2193,7 @@ void EventHub::openDeviceLocked(const std::string& devicePath) {
     }
 
     // If the device isn't recognized as something we handle, don't monitor it.
-    if (device->classes == Flags<InputDeviceClass>(0)) {
+    if (device->classes == ftl::Flags<InputDeviceClass>(0)) {
         ALOGV("Dropping device: id=%d, path='%s', name='%s'", deviceId, devicePath.c_str(),
               device->identifier.name.c_str());
         return;

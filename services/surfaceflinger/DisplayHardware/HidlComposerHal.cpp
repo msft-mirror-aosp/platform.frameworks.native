@@ -36,6 +36,9 @@
 #include <algorithm>
 #include <cinttypes>
 
+using aidl::android::hardware::graphics::composer3::Capability;
+using aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness;
+using aidl::android::hardware::graphics::composer3::DimmingStage;
 using aidl::android::hardware::graphics::composer3::DisplayCapability;
 
 namespace android {
@@ -168,6 +171,20 @@ Error unwrapRet(Return<Error>& ret) {
     return unwrapRet(ret, kDefaultError);
 }
 
+template <typename To, typename From>
+To translate(From x) {
+    return static_cast<To>(x);
+}
+
+template <typename To, typename From>
+std::vector<To> translate(const hidl_vec<From>& in) {
+    std::vector<To> out;
+    out.reserve(in.size());
+    std::transform(in.begin(), in.end(), std::back_inserter(out),
+                   [](From x) { return translate<To>(x); });
+    return out;
+}
+
 } // anonymous namespace
 
 HidlComposer::HidlComposer(const std::string& serviceName) : mWriter(kWriterInitialSize) {
@@ -220,15 +237,17 @@ bool HidlComposer::isSupported(OptionalFeature feature) const {
             return mClient_2_4 != nullptr;
         case OptionalFeature::ExpectedPresentTime:
         case OptionalFeature::DisplayBrightnessCommand:
-        case OptionalFeature::BootDisplayConfig:
+        case OptionalFeature::KernelIdleTimer:
+        case OptionalFeature::PhysicalDisplayOrientation:
             return false;
     }
 }
 
-std::vector<IComposer::Capability> HidlComposer::getCapabilities() {
-    std::vector<IComposer::Capability> capabilities;
-    mComposer->getCapabilities(
-            [&](const auto& tmpCapabilities) { capabilities = tmpCapabilities; });
+std::vector<Capability> HidlComposer::getCapabilities() {
+    std::vector<Capability> capabilities;
+    mComposer->getCapabilities([&](const auto& tmpCapabilities) {
+        capabilities = translate<Capability>(tmpCapabilities);
+    });
     return capabilities;
 }
 
@@ -469,6 +488,11 @@ Error HidlComposer::getDozeSupport(Display display, bool* outSupport) {
     });
 
     return error;
+}
+
+Error HidlComposer::hasDisplayIdleTimerCapability(Display, bool*) {
+    LOG_ALWAYS_FATAL("hasDisplayIdleTimerCapability should have never been called on this as "
+                     "OptionalFeature::KernelIdleTimer is not supported on HIDL");
 }
 
 Error HidlComposer::getHdrCapabilities(Display display, std::vector<Hdr>* outTypes,
@@ -1091,7 +1115,7 @@ Error HidlComposer::setLayerPerFrameMetadataBlobs(
     return Error::NONE;
 }
 
-Error HidlComposer::setDisplayBrightness(Display display, float brightness,
+Error HidlComposer::setDisplayBrightness(Display display, float brightness, float,
                                          const DisplayBrightnessOptions&) {
     if (!mClient_2_3) {
         return Error::UNSUPPORTED;
@@ -1100,15 +1124,6 @@ Error HidlComposer::setDisplayBrightness(Display display, float brightness,
 }
 
 // Composer HAL 2.4
-
-namespace {
-template <typename T>
-void copyCapabilities(const T& tmpCaps, std::vector<DisplayCapability>* outCapabilities) {
-    outCapabilities->resize(tmpCaps.size());
-    std::transform(tmpCaps.begin(), tmpCaps.end(), outCapabilities->begin(),
-                   [](auto cap) { return static_cast<DisplayCapability>(cap); });
-}
-} // anonymous namespace
 
 Error HidlComposer::getDisplayCapabilities(Display display,
                                            std::vector<DisplayCapability>* outCapabilities) {
@@ -1124,7 +1139,8 @@ Error HidlComposer::getDisplayCapabilities(Display display,
                                                     if (error != V2_4::Error::NONE) {
                                                         return;
                                                     }
-                                                    copyCapabilities(tmpCaps, outCapabilities);
+                                                    *outCapabilities =
+                                                            translate<DisplayCapability>(tmpCaps);
                                                 });
     } else {
         mClient_2_3
@@ -1134,7 +1150,7 @@ Error HidlComposer::getDisplayCapabilities(Display display,
                         return;
                     }
 
-                    copyCapabilities(tmpCaps, outCapabilities);
+                    *outCapabilities = translate<DisplayCapability>(tmpCaps);
                 });
     }
 
@@ -1288,20 +1304,45 @@ Error HidlComposer::getPreferredBootDisplayConfig(Display /*displayId*/, Config*
 }
 
 Error HidlComposer::getClientTargetProperty(
-        Display display, IComposerClient::ClientTargetProperty* outClientTargetProperty,
-        float* outWhitePointNits) {
-    mReader.takeClientTargetProperty(display, outClientTargetProperty);
-    *outWhitePointNits = -1.f;
+        Display display, ClientTargetPropertyWithBrightness* outClientTargetProperty) {
+    IComposerClient::ClientTargetProperty property;
+    mReader.takeClientTargetProperty(display, &property);
+    outClientTargetProperty->display = display;
+    outClientTargetProperty->clientTargetProperty.dataspace =
+            static_cast<::aidl::android::hardware::graphics::common::Dataspace>(property.dataspace);
+    outClientTargetProperty->clientTargetProperty.pixelFormat =
+            static_cast<::aidl::android::hardware::graphics::common::PixelFormat>(
+                    property.pixelFormat);
+    outClientTargetProperty->brightness = 1.f;
+    outClientTargetProperty->dimmingStage = DimmingStage::NONE;
     return Error::NONE;
 }
 
-Error HidlComposer::setLayerWhitePointNits(Display, Layer, float) {
+Error HidlComposer::setLayerBrightness(Display, Layer, float) {
     return Error::NONE;
 }
 
 Error HidlComposer::setLayerBlockingRegion(Display, Layer,
                                            const std::vector<IComposerClient::Rect>&) {
     return Error::NONE;
+}
+
+Error HidlComposer::getDisplayDecorationSupport(
+        Display,
+        std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>*
+                support) {
+    support->reset();
+    return Error::UNSUPPORTED;
+}
+
+Error HidlComposer::setIdleTimerEnabled(Display, std::chrono::milliseconds) {
+    LOG_ALWAYS_FATAL("setIdleTimerEnabled should have never been called on this as "
+                     "OptionalFeature::KernelIdleTimer is not supported on HIDL");
+}
+
+Error HidlComposer::getPhysicalDisplayOrientation(Display, AidlTransform*) {
+    LOG_ALWAYS_FATAL("getPhysicalDisplayOrientation should have never been called on this as "
+                     "OptionalFeature::PhysicalDisplayOrientation is not supported on HIDL");
 }
 
 void HidlComposer::registerCallback(ComposerCallback& callback) {

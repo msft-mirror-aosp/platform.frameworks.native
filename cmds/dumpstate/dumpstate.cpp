@@ -120,6 +120,7 @@ using android::os::dumpstate::DumpFileToFd;
 using android::os::dumpstate::DumpPool;
 using android::os::dumpstate::PropertiesHelper;
 using android::os::dumpstate::TaskQueue;
+using android::os::dumpstate::WaitForTask;
 
 // Keep in sync with
 // frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java
@@ -218,9 +219,9 @@ static const std::string ANR_FILE_PREFIX = "anr_";
     RUN_SLOW_FUNCTION_AND_LOG(log_title, func_ptr, __VA_ARGS__);               \
     RETURN_IF_USER_DENIED_CONSENT();
 
-#define WAIT_TASK_WITH_CONSENT_CHECK(task_name, pool_ptr) \
+#define WAIT_TASK_WITH_CONSENT_CHECK(future) \
     RETURN_IF_USER_DENIED_CONSENT();                      \
-    pool_ptr->waitForTask(task_name);                     \
+    WaitForTask(future);                     \
     RETURN_IF_USER_DENIED_CONSENT();
 
 static const char* WAKE_LOCK_NAME = "dumpstate_wakelock";
@@ -1087,7 +1088,7 @@ static void DumpDynamicPartitionInfo() {
     RunCommand("DEVICE-MAPPER", {"gsid", "dump-device-mapper"});
 }
 
-static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_dir) {
+static void AddAnrTraceDir(const std::string& anr_traces_dir) {
     MYLOGD("AddAnrTraceDir(): dump_traces_file=%s, anr_traces_dir=%s\n", dump_traces_path,
            anr_traces_dir.c_str());
 
@@ -1095,13 +1096,9 @@ static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_
     // (created with mkostemp or similar) that contains dumps taken earlier
     // on in the process.
     if (dump_traces_path != nullptr) {
-        if (add_to_zip) {
-            ds.AddZipEntry(ZIP_ROOT_DIR + anr_traces_dir + "/traces-just-now.txt", dump_traces_path);
-        } else {
-            MYLOGD("Dumping current ANR traces (%s) to the main bugreport entry\n",
-                   dump_traces_path);
-            ds.DumpFile("VM TRACES JUST NOW", dump_traces_path);
-        }
+        MYLOGD("Dumping current ANR traces (%s) to the main bugreport entry\n",
+                dump_traces_path);
+        ds.DumpFile("VM TRACES JUST NOW", dump_traces_path);
 
         const int ret = unlink(dump_traces_path);
         if (ret == -1) {
@@ -1112,14 +1109,12 @@ static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_
 
     // Add a specific message for the first ANR Dump.
     if (ds.anr_data_.size() > 0) {
+        // The "last" ANR will always be present in the body of the main entry.
         AddDumps(ds.anr_data_.begin(), ds.anr_data_.begin() + 1,
-                 "VM TRACES AT LAST ANR", add_to_zip);
+                 "VM TRACES AT LAST ANR", false /* add_to_zip */);
 
-        // The "last" ANR will always be included as separate entry in the zip file. In addition,
-        // it will be present in the body of the main entry if |add_to_zip| == false.
-        //
         // Historical ANRs are always included as separate entries in the bugreport zip file.
-        AddDumps(ds.anr_data_.begin() + ((add_to_zip) ? 1 : 0), ds.anr_data_.end(),
+        AddDumps(ds.anr_data_.begin(), ds.anr_data_.end(),
                  "HISTORICAL ANR", true /* add_to_zip */);
     } else {
         printf("*** NO ANRs to dump in %s\n\n", ANR_DIR.c_str());
@@ -1127,11 +1122,9 @@ static void AddAnrTraceDir(const bool add_to_zip, const std::string& anr_traces_
 }
 
 static void AddAnrTraceFiles() {
-    const bool add_to_zip = ds.version_ == VERSION_SPLIT_ANR;
-
     std::string anr_traces_dir = "/data/anr";
 
-    AddAnrTraceDir(add_to_zip, anr_traces_dir);
+    AddAnrTraceDir(anr_traces_dir);
 
     RunCommand("ANR FILES", {"ls", "-lt", ANR_DIR});
 
@@ -1557,15 +1550,18 @@ static Dumpstate::RunStatus dumpstate() {
     DurationReporter duration_reporter("DUMPSTATE");
 
     // Enqueue slow functions into the thread pool, if the parallel run is enabled.
+    std::future<std::string> dump_hals, dump_incident_report, dump_board, dump_checkins;
     if (ds.dump_pool_) {
         // Pool was shutdown in DumpstateDefaultAfterCritical method in order to
         // drop root user. Restarts it with two threads for the parallel run.
         ds.dump_pool_->start(/* thread_counts = */2);
 
-        ds.dump_pool_->enqueueTaskWithFd(DUMP_HALS_TASK, &DumpHals, _1);
-        ds.dump_pool_->enqueueTask(DUMP_INCIDENT_REPORT_TASK, &DumpIncidentReport);
-        ds.dump_pool_->enqueueTaskWithFd(DUMP_BOARD_TASK, &Dumpstate::DumpstateBoard, &ds, _1);
-        ds.dump_pool_->enqueueTaskWithFd(DUMP_CHECKINS_TASK, &DumpCheckins, _1);
+        dump_hals = ds.dump_pool_->enqueueTaskWithFd(DUMP_HALS_TASK, &DumpHals, _1);
+        dump_incident_report = ds.dump_pool_->enqueueTask(
+            DUMP_INCIDENT_REPORT_TASK, &DumpIncidentReport);
+        dump_board = ds.dump_pool_->enqueueTaskWithFd(
+            DUMP_BOARD_TASK, &Dumpstate::DumpstateBoard, &ds, _1);
+        dump_checkins = ds.dump_pool_->enqueueTaskWithFd(DUMP_CHECKINS_TASK, &DumpCheckins, _1);
     }
 
     // Dump various things. Note that anything that takes "long" (i.e. several seconds) should
@@ -1590,7 +1586,6 @@ static Dumpstate::RunStatus dumpstate() {
     DumpFile("BUDDYINFO", "/proc/buddyinfo");
     DumpExternalFragmentationInfo();
 
-    DumpFile("KERNEL WAKE SOURCES", "/d/wakeup_sources");
     DumpFile("KERNEL CPUFREQ", "/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state");
 
     RunCommand("PROCESSES AND THREADS",
@@ -1600,7 +1595,7 @@ static Dumpstate::RunStatus dumpstate() {
                                          CommandOptions::AS_ROOT);
 
     if (ds.dump_pool_) {
-        WAIT_TASK_WITH_CONSENT_CHECK(DUMP_HALS_TASK, ds.dump_pool_);
+        WAIT_TASK_WITH_CONSENT_CHECK(std::move(dump_hals));
     } else {
         RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK_AND_LOG(DUMP_HALS_TASK, DumpHals);
     }
@@ -1697,7 +1692,7 @@ static Dumpstate::RunStatus dumpstate() {
     ds.AddDir(SNAPSHOTCTL_LOG_DIR, false);
 
     if (ds.dump_pool_) {
-        WAIT_TASK_WITH_CONSENT_CHECK(DUMP_BOARD_TASK, ds.dump_pool_);
+        WAIT_TASK_WITH_CONSENT_CHECK(std::move(dump_board));
     } else {
         RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK_AND_LOG(DUMP_BOARD_TASK, ds.DumpstateBoard);
     }
@@ -1726,7 +1721,7 @@ static Dumpstate::RunStatus dumpstate() {
     ds.AddDir("/data/misc/bluetooth/logs", true);
 
     if (ds.dump_pool_) {
-        WAIT_TASK_WITH_CONSENT_CHECK(DUMP_CHECKINS_TASK, ds.dump_pool_);
+        WAIT_TASK_WITH_CONSENT_CHECK(std::move(dump_checkins));
     } else {
         RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK_AND_LOG(DUMP_CHECKINS_TASK, DumpCheckins);
     }
@@ -1760,7 +1755,7 @@ static Dumpstate::RunStatus dumpstate() {
     dump_frozen_cgroupfs();
 
     if (ds.dump_pool_) {
-        WAIT_TASK_WITH_CONSENT_CHECK(DUMP_INCIDENT_REPORT_TASK, ds.dump_pool_);
+        WAIT_TASK_WITH_CONSENT_CHECK(std::move(dump_incident_report));
     } else {
         RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK_AND_LOG(DUMP_INCIDENT_REPORT_TASK,
                 DumpIncidentReport);
@@ -1785,6 +1780,7 @@ Dumpstate::RunStatus Dumpstate::DumpstateDefaultAfterCritical() {
     time_t logcat_ts = time(nullptr);
 
     /* collect stack traces from Dalvik and native processes (needs root) */
+    std::future<std::string> dump_traces;
     if (dump_pool_) {
         RETURN_IF_USER_DENIED_CONSENT();
         // One thread is enough since we only need to enqueue DumpTraces here.
@@ -1792,7 +1788,8 @@ Dumpstate::RunStatus Dumpstate::DumpstateDefaultAfterCritical() {
 
         // DumpTraces takes long time, post it to the another thread in the
         // pool, if pool is available
-        dump_pool_->enqueueTask(DUMP_TRACES_TASK, &Dumpstate::DumpTraces, &ds, &dump_traces_path);
+        dump_traces = dump_pool_->enqueueTask(
+            DUMP_TRACES_TASK, &Dumpstate::DumpTraces, &ds, &dump_traces_path);
     } else {
         RUN_SLOW_FUNCTION_WITH_CONSENT_CHECK_AND_LOG(DUMP_TRACES_TASK, ds.DumpTraces,
                 &dump_traces_path);
@@ -1841,12 +1838,11 @@ Dumpstate::RunStatus Dumpstate::DumpstateDefaultAfterCritical() {
 
     if (dump_pool_) {
         RETURN_IF_USER_DENIED_CONSENT();
-        dump_pool_->waitForTask(DUMP_TRACES_TASK);
+        WaitForTask(std::move(dump_traces));
 
-        // Current running thread in the pool is the root user also. Shutdown
-        // the pool and restart later to ensure all threads in the pool could
-        // drop the root user.
-        dump_pool_->shutdown();
+        // Current running thread in the pool is the root user also. Delete
+        // the pool and make a new one later to ensure none of threads in the pool are root.
+        dump_pool_ = std::make_unique<DumpPool>(bugreport_internal_dir_);
     }
     if (!DropRootUser()) {
         return Dumpstate::RunStatus::ERROR;
@@ -1877,8 +1873,9 @@ static void DumpstateRadioCommon(bool include_sensitive_info = true) {
     } else {
         // DumpHals takes long time, post it to the another thread in the pool,
         // if pool is available.
+        std::future<std::string> dump_hals;
         if (ds.dump_pool_) {
-            ds.dump_pool_->enqueueTaskWithFd(DUMP_HALS_TASK, &DumpHals, _1);
+            dump_hals = ds.dump_pool_->enqueueTaskWithFd(DUMP_HALS_TASK, &DumpHals, _1);
         }
         // Contains various system properties and process startup info.
         do_dmesg();
@@ -1888,7 +1885,7 @@ static void DumpstateRadioCommon(bool include_sensitive_info = true) {
         DoKmsg();
         // DumpHals contains unrelated hardware info (camera, NFC, biometrics, ...).
         if (ds.dump_pool_) {
-            ds.dump_pool_->waitForTask(DUMP_HALS_TASK);
+            WaitForTask(std::move(dump_hals));
         } else {
             RUN_SLOW_FUNCTION_AND_LOG(DUMP_HALS_TASK, DumpHals);
         }
@@ -1922,12 +1919,14 @@ static void DumpstateTelephonyOnly(const std::string& calling_package) {
 
     // Starts thread pool after the root user is dropped, and two additional threads
     // are created for DumpHals in the DumpstateRadioCommon and DumpstateBoard.
+    std::future<std::string> dump_board;
     if (ds.dump_pool_) {
         ds.dump_pool_->start(/*thread_counts =*/2);
 
         // DumpstateBoard takes long time, post it to the another thread in the pool,
         // if pool is available.
-        ds.dump_pool_->enqueueTaskWithFd(DUMP_BOARD_TASK, &Dumpstate::DumpstateBoard, &ds, _1);
+        dump_board = ds.dump_pool_->enqueueTaskWithFd(
+            DUMP_BOARD_TASK, &Dumpstate::DumpstateBoard, &ds, _1);
     }
 
     DumpstateRadioCommon(include_sensitive_info);
@@ -2010,7 +2009,7 @@ static void DumpstateTelephonyOnly(const std::string& calling_package) {
     printf("========================================================\n");
 
     if (ds.dump_pool_) {
-        ds.dump_pool_->waitForTask(DUMP_BOARD_TASK);
+        WaitForTask(std::move(dump_board));
     } else {
         RUN_SLOW_FUNCTION_AND_LOG(DUMP_BOARD_TASK, ds.DumpstateBoard);
     }
@@ -2419,7 +2418,7 @@ void Dumpstate::DumpstateBoard(int out_fd) {
     // Given that bugreport is required to diagnose failures, it's better to set an arbitrary amount
     // of timeout for IDumpstateDevice than to block the rest of bugreport. In the timeout case, we
     // will kill the HAL and grab whatever it dumped in time.
-    constexpr size_t timeout_sec = 30;
+    constexpr size_t timeout_sec = 45;
 
     if (dumpstate_hal_handle_aidl != nullptr) {
         DoDumpstateBoardAidl(dumpstate_hal_handle_aidl, dumpstate_fds, options_->bugreport_mode,
@@ -2734,8 +2733,8 @@ void Dumpstate::DumpOptions::Initialize(BugreportMode bugreport_mode,
                                         const android::base::unique_fd& screenshot_fd_in,
                                         bool is_screenshot_requested) {
     // Duplicate the fds because the passed in fds don't outlive the binder transaction.
-    bugreport_fd.reset(dup(bugreport_fd_in.get()));
-    screenshot_fd.reset(dup(screenshot_fd_in.get()));
+    bugreport_fd.reset(fcntl(bugreport_fd_in.get(), F_DUPFD_CLOEXEC, 0));
+    screenshot_fd.reset(fcntl(screenshot_fd_in.get(), F_DUPFD_CLOEXEC, 0));
 
     SetOptionsFromMode(bugreport_mode, this, is_screenshot_requested);
 }
@@ -2906,10 +2905,9 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
         version_ = VERSION_CURRENT;
     }
 
-    if (version_ != VERSION_CURRENT && version_ != VERSION_SPLIT_ANR) {
-        MYLOGE("invalid version requested ('%s'); suppported values are: ('%s', '%s', '%s')\n",
-               version_.c_str(), VERSION_DEFAULT.c_str(), VERSION_CURRENT.c_str(),
-               VERSION_SPLIT_ANR.c_str());
+    if (version_ != VERSION_CURRENT) {
+        MYLOGE("invalid version requested ('%s'); supported values are: ('%s', '%s')\n",
+               version_.c_str(), VERSION_DEFAULT.c_str(), VERSION_CURRENT.c_str());
         return RunStatus::INVALID_INPUT;
     }
 
@@ -3235,8 +3233,7 @@ void Dumpstate::EnableParallelRunIfNeeded() {
 
 void Dumpstate::ShutdownDumpPool() {
     if (dump_pool_) {
-        dump_pool_->shutdown();
-        dump_pool_ = nullptr;
+        dump_pool_.reset();
     }
     if (zip_entry_tasks_) {
         zip_entry_tasks_->run(/* do_cancel = */true);
