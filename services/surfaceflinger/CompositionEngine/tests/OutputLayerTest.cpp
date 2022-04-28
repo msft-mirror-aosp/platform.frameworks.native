@@ -169,7 +169,7 @@ struct OutputLayerSourceCropTest : public OutputLayerTest {
     FloatRect calculateOutputSourceCrop() {
         mLayerFEState.geomInverseLayerTransform = mLayerFEState.geomLayerTransform.inverse();
 
-        return mOutputLayer.calculateOutputSourceCrop();
+        return mOutputLayer.calculateOutputSourceCrop(ui::Transform::RotationFlags::ROT_0);
     }
 };
 
@@ -533,7 +533,7 @@ struct OutputLayerPartialMockForUpdateCompositionState : public impl::OutputLaye
                                                     sp<compositionengine::LayerFE> layerFE)
           : mOutput(output), mLayerFE(layerFE) {}
     // Mock everything called by updateCompositionState to simplify testing it.
-    MOCK_CONST_METHOD0(calculateOutputSourceCrop, FloatRect());
+    MOCK_CONST_METHOD1(calculateOutputSourceCrop, FloatRect(uint32_t));
     MOCK_CONST_METHOD0(calculateOutputDisplayFrame, Rect());
     MOCK_CONST_METHOD1(calculateOutputRelativeBufferTransform, uint32_t(uint32_t));
 
@@ -563,7 +563,8 @@ public:
     ~OutputLayerUpdateCompositionStateTest() = default;
 
     void setupGeometryChildCallValues(ui::Transform::RotationFlags internalDisplayRotationFlags) {
-        EXPECT_CALL(mOutputLayer, calculateOutputSourceCrop()).WillOnce(Return(kSourceCrop));
+        EXPECT_CALL(mOutputLayer, calculateOutputSourceCrop(internalDisplayRotationFlags))
+                .WillOnce(Return(kSourceCrop));
         EXPECT_CALL(mOutputLayer, calculateOutputDisplayFrame()).WillOnce(Return(kDisplayFrame));
         EXPECT_CALL(mOutputLayer,
                     calculateOutputRelativeBufferTransform(internalDisplayRotationFlags))
@@ -657,6 +658,23 @@ TEST_F(OutputLayerUpdateCompositionStateTest, setsOutputLayerColorspaceCorrectly
     EXPECT_EQ(ui::Dataspace::V0_SCRGB, mOutputLayer.getState().dataspace);
 }
 
+TEST_F(OutputLayerUpdateCompositionStateTest, setsOutputLayerColorspaceWith170mReplacement) {
+    mLayerFEState.dataspace = ui::Dataspace::TRANSFER_SMPTE_170M;
+    mOutputState.targetDataspace = ui::Dataspace::V0_SCRGB;
+    mOutputState.treat170mAsSrgb = false;
+    mLayerFEState.isColorspaceAgnostic = false;
+
+    mOutputLayer.updateCompositionState(false, false, ui::Transform::RotationFlags::ROT_0);
+
+    EXPECT_EQ(ui::Dataspace::TRANSFER_SMPTE_170M, mOutputLayer.getState().dataspace);
+
+    // Rewrite SMPTE 170M as sRGB
+    mOutputState.treat170mAsSrgb = true;
+    mOutputLayer.updateCompositionState(false, false, ui::Transform::RotationFlags::ROT_0);
+
+    EXPECT_EQ(ui::Dataspace::TRANSFER_SRGB, mOutputLayer.getState().dataspace);
+}
+
 TEST_F(OutputLayerUpdateCompositionStateTest, setsWhitePointNitsAndDimmingRatioCorrectly) {
     mOutputState.sdrWhitePointNits = 200.f;
     mOutputState.displayBrightnessNits = 800.f;
@@ -668,6 +686,13 @@ TEST_F(OutputLayerUpdateCompositionStateTest, setsWhitePointNitsAndDimmingRatioC
     EXPECT_EQ(mOutputState.sdrWhitePointNits / mOutputState.displayBrightnessNits,
               mOutputLayer.getState().dimmingRatio);
 
+    mLayerFEState.dimmingEnabled = false;
+    mOutputLayer.updateCompositionState(false, false, ui::Transform::RotationFlags::ROT_0);
+    EXPECT_EQ(mOutputState.displayBrightnessNits, mOutputLayer.getState().whitePointNits);
+    EXPECT_EQ(1.f, mOutputLayer.getState().dimmingRatio);
+
+    // change dimmingEnabled back to true.
+    mLayerFEState.dimmingEnabled = true;
     mLayerFEState.dataspace = ui::Dataspace::BT2020_ITU_PQ;
     mLayerFEState.isColorspaceAgnostic = false;
     mOutputLayer.updateCompositionState(false, false, ui::Transform::RotationFlags::ROT_0);
