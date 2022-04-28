@@ -27,8 +27,13 @@ cc_test {
     srcs: [
         "tonemap_test.cpp",
     ],
+    header_libs: [
+        "libtonemap_headers",
+    ],
     shared_libs: [
         "android.hardware.graphics.common-V3-ndk",
+        "android.hardware.graphics.composer3-V1-ndk",
+        "libnativewindow",
     ],
     static_libs: [
         "libmath",

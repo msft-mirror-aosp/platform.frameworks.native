@@ -42,8 +42,12 @@ cc_test {
         "libshaders",
         "libtonemap",
     ],
+    header_libs: [
+        "libtonemap_headers",
+    ],
 
     shared_libs: [
+        "android.hardware.graphics.composer3-V1-ndk",
         "libbase",
         "libcutils",
         "libEGL",
