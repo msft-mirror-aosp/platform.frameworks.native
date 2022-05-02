@@ -1193,10 +1193,6 @@ std::string Gralloc4Mapper::dumpBuffers(bool less) const {
 
 Gralloc4Allocator::Gralloc4Allocator(const Gralloc4Mapper& mapper) : mMapper(mapper) {
     mAllocator = IAllocator::getService();
-    if (mAllocator == nullptr) {
-        ALOGW("allocator 4.x is not supported");
-        return;
-    }
     if (__builtin_available(android 31, *)) {
         if (hasIAllocatorAidl()) {
             mAidlAllocator = AidlIAllocator::fromBinder(ndk::SpAIBinder(
@@ -1204,10 +1200,14 @@ Gralloc4Allocator::Gralloc4Allocator(const Gralloc4Mapper& mapper) : mMapper(map
             ALOGE_IF(!mAidlAllocator, "AIDL IAllocator declared but failed to get service");
         }
     }
+    if (mAllocator == nullptr && mAidlAllocator == nullptr) {
+        ALOGW("allocator 4.x is not supported");
+        return;
+    }
 }
 
 bool Gralloc4Allocator::isLoaded() const {
-    return mAllocator != nullptr;
+    return mAllocator != nullptr || mAidlAllocator != nullptr;
 }
 
 std::string Gralloc4Allocator::dumpDebugInfo(bool less) const {
@@ -1245,8 +1245,9 @@ status_t Gralloc4Allocator::allocate(std::string requestorName, uint32_t width, 
         } else {
             if (importBuffers) {
                 for (uint32_t i = 0; i < bufferCount; i++) {
-                    error = mMapper.importBuffer(makeFromAidl(result.buffers[i]),
-                                                 &outBufferHandles[i]);
+                    auto handle = makeFromAidl(result.buffers[i]);
+                    error = mMapper.importBuffer(handle, &outBufferHandles[i]);
+                    native_handle_delete(handle);
                     if (error != NO_ERROR) {
                         for (uint32_t j = 0; j < i; j++) {
                             mMapper.freeBuffer(outBufferHandles[j]);

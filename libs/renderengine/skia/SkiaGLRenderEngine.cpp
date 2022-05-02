@@ -292,16 +292,12 @@ sk_sp<SkData> SkiaGLRenderEngine::SkSLCacheMonitor::load(const SkData& key) {
 void SkiaGLRenderEngine::SkSLCacheMonitor::store(const SkData& key, const SkData& data,
                                                  const SkString& description) {
     mShadersCachedSinceLastCall++;
-}
-
-void SkiaGLRenderEngine::assertShadersCompiled(int numShaders) {
-    const int cached = mSkSLCacheMonitor.shadersCachedSinceLastCall();
-    LOG_ALWAYS_FATAL_IF(cached != numShaders, "Attempted to cache %i shaders; cached %i",
-                        numShaders, cached);
+    mTotalShadersCompiled++;
+    ATRACE_FORMAT("SF cache: %i shaders", mTotalShadersCompiled);
 }
 
 int SkiaGLRenderEngine::reportShadersCompiled() {
-    return mSkSLCacheMonitor.shadersCachedSinceLastCall();
+    return mSkSLCacheMonitor.totalShadersCompiled();
 }
 
 SkiaGLRenderEngine::SkiaGLRenderEngine(const RenderEngineCreationArgs& args, EGLDisplay display,
@@ -662,7 +658,7 @@ sk_sp<SkShader> SkiaGLRenderEngine::createRuntimeEffectShader(
                                         parameters.display.maxLuminance,
                                         parameters.display.currentLuminanceNits,
                                         parameters.layer.source.buffer.maxLuminanceNits,
-                                        hardwareBuffer);
+                                        hardwareBuffer, parameters.display.renderIntent);
     }
     return parameters.shader;
 }
@@ -1190,11 +1186,15 @@ void SkiaGLRenderEngine::drawLayersInternal(
                 static constexpr float kInverseGamma22 = 1.f / 2.2f;
                 const auto gammaCorrectedDimmingRatio =
                         std::pow(layerDimmingRatio, kInverseGamma22);
-                const auto dimmingMatrix =
+                auto dimmingMatrix =
                         mat4::scale(vec4(gammaCorrectedDimmingRatio, gammaCorrectedDimmingRatio,
                                          gammaCorrectedDimmingRatio, 1.f));
-                paint.setColorFilter(SkColorFilters::Matrix(
-                        toSkColorMatrix(display.colorTransform * dimmingMatrix)));
+
+                const auto colorFilter =
+                        SkColorFilters::Matrix(toSkColorMatrix(std::move(dimmingMatrix)));
+                paint.setColorFilter(displayColorTransform
+                                             ? displayColorTransform->makeComposed(colorFilter)
+                                             : colorFilter);
             } else {
                 paint.setColorFilter(displayColorTransform);
             }
