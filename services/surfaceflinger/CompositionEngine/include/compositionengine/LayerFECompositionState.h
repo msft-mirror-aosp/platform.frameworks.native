@@ -166,6 +166,7 @@ struct LayerFECompositionState {
     int bufferSlot{BufferQueue::INVALID_BUFFER_SLOT};
     sp<Fence> acquireFence = Fence::NO_FENCE;
     Region surfaceDamage;
+    uint64_t frameNumber = 0;
 
     // The handle to use for a sideband stream for this layer
     sp<NativeHandle> sidebandStream;
@@ -205,6 +206,9 @@ struct LayerFECompositionState {
 
     // framerate of the layer as measured by LayerHistory
     float fps;
+
+    // The dimming flag
+    bool dimmingEnabled{true};
 
     virtual ~LayerFECompositionState();
 

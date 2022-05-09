@@ -106,9 +106,8 @@ Rect OutputLayer::calculateInitialCrop() const {
     return activeCrop;
 }
 
-FloatRect OutputLayer::calculateOutputSourceCrop() const {
+FloatRect OutputLayer::calculateOutputSourceCrop(uint32_t internalDisplayRotationFlags) const {
     const auto& layerState = *getLayerFE().getCompositionState();
-    const auto& outputState = getOutput().getState();
 
     if (!layerState.geomUsesSourceCrop) {
         return {};
@@ -140,8 +139,7 @@ FloatRect OutputLayer::calculateOutputSourceCrop() const {
          * the code below applies the primary display's inverse transform to the
          * buffer
          */
-        uint32_t invTransformOrient =
-                ui::Transform::toRotationFlags(outputState.displaySpace.getOrientation());
+        uint32_t invTransformOrient = internalDisplayRotationFlags;
         // calculate the inverse transform
         if (invTransformOrient & HAL_TRANSFORM_ROT_90) {
             invTransformOrient ^= HAL_TRANSFORM_FLIP_V | HAL_TRANSFORM_FLIP_H;
@@ -304,7 +302,7 @@ void OutputLayer::updateCompositionState(
         state.forceClientComposition = false;
 
         state.displayFrame = calculateOutputDisplayFrame();
-        state.sourceCrop = calculateOutputSourceCrop();
+        state.sourceCrop = calculateOutputSourceCrop(internalDisplayRotationFlags);
         state.bufferTransform = static_cast<Hwc2::Transform>(
                 calculateOutputRelativeBufferTransform(internalDisplayRotationFlags));
 
@@ -322,10 +320,23 @@ void OutputLayer::updateCompositionState(
             ? outputState.targetDataspace
             : layerFEState->dataspace;
 
+    // Override the dataspace transfer from 170M to sRGB if the device configuration requests this.
+    // We do this here instead of in buffer info so that dumpsys can still report layers that are
+    // using the 170M transfer. Also we only do this if the colorspace is not agnostic for the
+    // layer, in case the color profile uses a 170M transfer function.
+    if (outputState.treat170mAsSrgb && !layerFEState->isColorspaceAgnostic &&
+        (state.dataspace & HAL_DATASPACE_TRANSFER_MASK) == HAL_DATASPACE_TRANSFER_SMPTE_170M) {
+        state.dataspace = static_cast<ui::Dataspace>(
+                (state.dataspace & HAL_DATASPACE_STANDARD_MASK) |
+                (state.dataspace & HAL_DATASPACE_RANGE_MASK) | HAL_DATASPACE_TRANSFER_SRGB);
+    }
+
     // For hdr content, treat the white point as the display brightness - HDR content should not be
     // boosted or dimmed.
+    // If the layer explicitly requests to disable dimming, then don't dim either.
     if (isHdrDataspace(state.dataspace) ||
-        getOutput().getState().displayBrightnessNits == getOutput().getState().sdrWhitePointNits) {
+        getOutput().getState().displayBrightnessNits == getOutput().getState().sdrWhitePointNits ||
+        getOutput().getState().displayBrightnessNits == 0.f || !layerFEState->dimmingEnabled) {
         state.dimmingRatio = 1.f;
         state.whitePointNits = getOutput().getState().displayBrightnessNits;
     } else {
@@ -506,9 +517,18 @@ void OutputLayer::writeOutputDependentPerFrameStateToHWC(HWC2::Layer* hwcLayer) 
               to_string(error).c_str(), static_cast<int32_t>(error));
     }
 
-    // Don't dim cached layers
-    const auto dimmingRatio =
-            outputDependentState.overrideInfo.buffer ? 1.f : outputDependentState.dimmingRatio;
+    // Cached layers are not dimmed, which means that composer should attempt to dim.
+    // Note that if the dimming ratio is large, then this may cause the cached layer
+    // to kick back into GPU composition :(
+    // Also note that this assumes that there are no HDR layers that are able to be cached.
+    // Otherwise, this could cause HDR layers to be dimmed twice.
+    const auto dimmingRatio = outputDependentState.overrideInfo.buffer
+            ? (getOutput().getState().displayBrightnessNits != 0.f
+                       ? std::clamp(getOutput().getState().sdrWhitePointNits /
+                                            getOutput().getState().displayBrightnessNits,
+                                    0.f, 1.f)
+                       : 1.f)
+            : outputDependentState.dimmingRatio;
 
     if (auto error = hwcLayer->setBrightness(dimmingRatio); error != hal::Error::NONE) {
         ALOGE("[%s] Failed to set brightness %f: %s (%d)", getLayerFE().getDebugName(),
@@ -788,6 +808,7 @@ std::vector<LayerFE::LayerSettings> OutputLayer::getOverrideCompositionList() co
             }};
     settings.sourceDataspace = getState().overrideInfo.dataspace;
     settings.alpha = 1.0f;
+    settings.whitePointNits = getOutput().getState().sdrWhitePointNits;
 
     return {static_cast<LayerFE::LayerSettings>(settings)};
 }
