@@ -39,6 +39,7 @@
 #include <gui/TraceUtils.h>
 #include <sync/sync.h>
 #include <ui/BlurRegion.h>
+#include <ui/DataspaceUtils.h>
 #include <ui/DebugUtils.h>
 #include <ui/GraphicBuffer.h>
 #include <utils/Trace.h>
@@ -66,7 +67,7 @@
 namespace {
 // Debugging settings
 static const bool kPrintLayerSettings = false;
-static const bool kFlushAfterEveryLayer = false;
+static const bool kFlushAfterEveryLayer = kPrintLayerSettings;
 } // namespace
 
 bool checkGlError(const char* op, int lineNumber);
@@ -291,16 +292,12 @@ sk_sp<SkData> SkiaGLRenderEngine::SkSLCacheMonitor::load(const SkData& key) {
 void SkiaGLRenderEngine::SkSLCacheMonitor::store(const SkData& key, const SkData& data,
                                                  const SkString& description) {
     mShadersCachedSinceLastCall++;
-}
-
-void SkiaGLRenderEngine::assertShadersCompiled(int numShaders) {
-    const int cached = mSkSLCacheMonitor.shadersCachedSinceLastCall();
-    LOG_ALWAYS_FATAL_IF(cached != numShaders, "Attempted to cache %i shaders; cached %i",
-                        numShaders, cached);
+    mTotalShadersCompiled++;
+    ATRACE_FORMAT("SF cache: %i shaders", mTotalShadersCompiled);
 }
 
 int SkiaGLRenderEngine::reportShadersCompiled() {
-    return mSkSLCacheMonitor.shadersCachedSinceLastCall();
+    return mSkSLCacheMonitor.totalShadersCompiled();
 }
 
 SkiaGLRenderEngine::SkiaGLRenderEngine(const RenderEngineCreationArgs& args, EGLDisplay display,
@@ -654,10 +651,14 @@ sk_sp<SkShader> SkiaGLRenderEngine::createRuntimeEffectShader(
         colorTransform *=
                 mat4::scale(vec4(parameters.layerDimmingRatio, parameters.layerDimmingRatio,
                                  parameters.layerDimmingRatio, 1.f));
+        const auto targetBuffer = parameters.layer.source.buffer.buffer;
+        const auto graphicBuffer = targetBuffer ? targetBuffer->getBuffer() : nullptr;
+        const auto hardwareBuffer = graphicBuffer ? graphicBuffer->toAHardwareBuffer() : nullptr;
         return createLinearEffectShader(parameters.shader, effect, runtimeEffect, colorTransform,
                                         parameters.display.maxLuminance,
                                         parameters.display.currentLuminanceNits,
-                                        parameters.layer.source.buffer.maxLuminanceNits);
+                                        parameters.layer.source.buffer.maxLuminanceNits,
+                                        hardwareBuffer, parameters.display.renderIntent);
     }
     return parameters.shader;
 }
@@ -732,10 +733,29 @@ static SkRRect getBlurRRect(const BlurRegion& region) {
     return roundedRect;
 }
 
-static bool equalsWithinMargin(float expected, float value, float margin) {
+// Arbitrary default margin which should be close enough to zero.
+constexpr float kDefaultMargin = 0.0001f;
+static bool equalsWithinMargin(float expected, float value, float margin = kDefaultMargin) {
     LOG_ALWAYS_FATAL_IF(margin < 0.f, "Margin is negative!");
     return std::abs(expected - value) < margin;
 }
+
+namespace {
+template <typename T>
+void logSettings(const T& t) {
+    std::stringstream stream;
+    PrintTo(t, &stream);
+    auto string = stream.str();
+    size_t pos = 0;
+    // Perfetto ignores \n, so split up manually into separate ALOGD statements.
+    const size_t size = string.size();
+    while (pos < size) {
+        const size_t end = std::min(string.find("\n", pos), size);
+        ALOGD("%s", string.substr(pos, end - pos).c_str());
+        pos = end + 1;
+    }
+}
+} // namespace
 
 void SkiaGLRenderEngine::drawLayersInternal(
         const std::shared_ptr<std::promise<RenderEngineResult>>&& resultPromise,
@@ -846,18 +866,14 @@ void SkiaGLRenderEngine::drawLayersInternal(
     canvas->clear(SK_ColorTRANSPARENT);
     initCanvas(canvas, display);
 
+    if (kPrintLayerSettings) {
+        logSettings(display);
+    }
     for (const auto& layer : layers) {
         ATRACE_FORMAT("DrawLayer: %s", layer.name.c_str());
 
         if (kPrintLayerSettings) {
-            std::stringstream ls;
-            PrintTo(layer, &ls);
-            auto debugs = ls.str();
-            int pos = 0;
-            while (pos < debugs.size()) {
-                ALOGD("cache_debug %s", debugs.substr(pos, 1000).c_str());
-                pos += 1000;
-            }
+            logSettings(layer);
         }
 
         sk_sp<SkImage> blurInput;
@@ -868,18 +884,21 @@ void SkiaGLRenderEngine::drawLayersInternal(
             // save a snapshot of the activeSurface to use as input to the blur shaders
             blurInput = activeSurface->makeImageSnapshot();
 
-            // TODO we could skip this step if we know the blur will cover the entire image
-            //  blit the offscreen framebuffer into the destination AHB
-            SkPaint paint;
-            paint.setBlendMode(SkBlendMode::kSrc);
-            if (CC_UNLIKELY(mCapture->isCaptureRunning())) {
-                uint64_t id = mCapture->endOffscreenCapture(&offscreenCaptureState);
-                dstCanvas->drawAnnotation(SkRect::Make(dstCanvas->imageInfo().dimensions()),
-                                          String8::format("SurfaceID|%" PRId64, id).c_str(),
-                                          nullptr);
-                dstCanvas->drawImage(blurInput, 0, 0, SkSamplingOptions(), &paint);
-            } else {
-                activeSurface->draw(dstCanvas, 0, 0, SkSamplingOptions(), &paint);
+            // blit the offscreen framebuffer into the destination AHB, but only
+            // if there are blur regions. backgroundBlurRadius blurs the entire
+            // image below, so it can skip this step.
+            if (layer.blurRegions.size()) {
+                SkPaint paint;
+                paint.setBlendMode(SkBlendMode::kSrc);
+                if (CC_UNLIKELY(mCapture->isCaptureRunning())) {
+                    uint64_t id = mCapture->endOffscreenCapture(&offscreenCaptureState);
+                    dstCanvas->drawAnnotation(SkRect::Make(dstCanvas->imageInfo().dimensions()),
+                                              String8::format("SurfaceID|%" PRId64, id).c_str(),
+                                              nullptr);
+                    dstCanvas->drawImage(blurInput, 0, 0, SkSamplingOptions(), &paint);
+                } else {
+                    activeSurface->draw(dstCanvas, 0, 0, SkSamplingOptions(), &paint);
+                }
             }
 
             // assign dstCanvas to canvas and ensure that the canvas state is up to date
@@ -987,10 +1006,13 @@ void SkiaGLRenderEngine::drawLayersInternal(
                 ? displayDimmingRatio
                 : (layer.whitePointNits / maxLayerWhitePoint) * displayDimmingRatio;
 
+        const bool dimInLinearSpace = display.dimmingStage !=
+                aidl::android::hardware::graphics::composer3::DimmingStage::GAMMA_OETF;
+
         const bool requiresLinearEffect = layer.colorTransform != mat4() ||
                 (mUseColorManagement &&
                  needsToneMapping(layer.sourceDataspace, display.outputDataspace)) ||
-                !equalsWithinMargin(1.f, layerDimmingRatio, 0.001f);
+                (dimInLinearSpace && !equalsWithinMargin(1.f, layerDimmingRatio));
 
         // quick abort from drawing the remaining portion of the layer
         if (layer.skipContentDraw ||
@@ -1096,11 +1118,19 @@ void SkiaGLRenderEngine::drawLayersInternal(
                                                   .undoPremultipliedAlpha = !item.isOpaque &&
                                                           item.usePremultipliedAlpha,
                                                   .requiresLinearEffect = requiresLinearEffect,
-                                                  .layerDimmingRatio = layerDimmingRatio}));
+                                                  .layerDimmingRatio = dimInLinearSpace
+                                                          ? layerDimmingRatio
+                                                          : 1.f}));
 
-            // Turn on dithering when dimming beyond this threshold.
+            // Turn on dithering when dimming beyond this (arbitrary) threshold...
             static constexpr float kDimmingThreshold = 0.2f;
-            if (layerDimmingRatio <= kDimmingThreshold) {
+            // ...or we're rendering an HDR layer down to an 8-bit target
+            // Most HDR standards require at least 10-bits of color depth for source content, so we
+            // can just extract the transfer function rather than dig into precise gralloc layout.
+            // Furthermore, we can assume that the only 8-bit target we support is RGBA8888.
+            const bool requiresDownsample = isHdrDataspace(layer.sourceDataspace) &&
+                    buffer->getPixelFormat() == PIXEL_FORMAT_RGBA_8888;
+            if (layerDimmingRatio <= kDimmingThreshold || requiresDownsample) {
                 paint.setDither(true);
             }
             paint.setAlphaf(layer.alpha);
@@ -1163,7 +1193,24 @@ void SkiaGLRenderEngine::drawLayersInternal(
         // An A8 buffer will already have the proper color filter attached to
         // its paint, including the displayColorTransform as needed.
         if (!paint.getColorFilter()) {
-            paint.setColorFilter(displayColorTransform);
+            if (!dimInLinearSpace && !equalsWithinMargin(1.0, layerDimmingRatio)) {
+                // If we don't dim in linear space, then when we gamma correct the dimming ratio we
+                // can assume a gamma 2.2 transfer function.
+                static constexpr float kInverseGamma22 = 1.f / 2.2f;
+                const auto gammaCorrectedDimmingRatio =
+                        std::pow(layerDimmingRatio, kInverseGamma22);
+                auto dimmingMatrix =
+                        mat4::scale(vec4(gammaCorrectedDimmingRatio, gammaCorrectedDimmingRatio,
+                                         gammaCorrectedDimmingRatio, 1.f));
+
+                const auto colorFilter =
+                        SkColorFilters::Matrix(toSkColorMatrix(std::move(dimmingMatrix)));
+                paint.setColorFilter(displayColorTransform
+                                             ? displayColorTransform->makeComposed(colorFilter)
+                                             : colorFilter);
+            } else {
+                paint.setColorFilter(displayColorTransform);
+            }
         }
 
         if (!roundRectClip.isEmpty()) {

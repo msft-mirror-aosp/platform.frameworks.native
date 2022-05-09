@@ -96,12 +96,12 @@ int64_t FlagManager::demo_flag() const {
 }
 
 bool FlagManager::use_adpf_cpu_hint() const {
-    std::optional<bool> sysPropVal = std::nullopt;
+    std::optional<bool> sysPropVal =
+            doParse<bool>(base::GetProperty("debug.sf.enable_adpf_cpu_hint", "").c_str());
     return getValue("AdpfFeature__adpf_cpu_hint", sysPropVal, false);
 }
 
 bool FlagManager::use_skia_tracing() const {
-    ALOGD("use_skia_tracing ?");
     std::optional<bool> sysPropVal =
             doParse<bool>(base::GetProperty(PROPERTY_SKIA_ATRACE_ENABLED, "").c_str());
     return getValue("SkiaTracingFeature__use_skia_tracing", sysPropVal, false);
