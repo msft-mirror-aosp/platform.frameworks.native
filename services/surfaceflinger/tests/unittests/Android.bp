@@ -26,6 +26,8 @@ filegroup {
     srcs: [
         "mock/DisplayHardware/MockComposer.cpp",
         "mock/DisplayHardware/MockHWC2.cpp",
+        "mock/DisplayHardware/MockIPower.cpp",
+        "mock/DisplayHardware/MockIPowerHintSession.cpp",
         "mock/DisplayHardware/MockPowerAdvisor.cpp",
         "mock/MockEventThread.cpp",
         "mock/MockFrameTimeline.cpp",
@@ -42,6 +44,7 @@ filegroup {
 cc_test {
     name: "libsurfaceflinger_unittest",
     defaults: [
+        "libsurfaceflinger_mocks_defaults",
         "skia_renderengine_deps",
         "surfaceflinger_defaults",
     ],
@@ -66,6 +69,7 @@ cc_test {
         ":libsurfaceflinger_mock_sources",
         ":libsurfaceflinger_sources",
         "libsurfaceflinger_unittest_main.cpp",
+        "AidlPowerHalWrapperTest.cpp",
         "CachingTest.cpp",
         "CompositionTest.cpp",
         "DispSyncSourceTest.cpp",
@@ -88,6 +92,8 @@ cc_test {
         "LayerHistoryTest.cpp",
         "LayerInfoTest.cpp",
         "LayerMetadataTest.cpp",
+        "LayerTest.cpp",
+        "LayerTestUtils.cpp",
         "MessageQueueTest.cpp",
         "SurfaceFlinger_CreateDisplayTest.cpp",
         "SurfaceFlinger_DestroyDisplayTest.cpp",
@@ -97,6 +103,7 @@ cc_test {
         "SurfaceFlinger_HotplugTest.cpp",
         "SurfaceFlinger_NotifyPowerBoostTest.cpp",
         "SurfaceFlinger_OnInitializeDisplaysTest.cpp",
+        "SurfaceFlinger_PowerHintTest.cpp",
         "SurfaceFlinger_SetDisplayStateTest.cpp",
         "SurfaceFlinger_SetPowerModeInternalTest.cpp",
         "SurfaceFlinger_SetupNewDisplayDeviceInternalTest.cpp",
@@ -122,6 +129,10 @@ cc_test {
         "VSyncReactorTest.cpp",
         "VsyncConfigurationTest.cpp",
     ],
+}
+
+cc_defaults {
+    name: "libsurfaceflinger_mocks_defaults",
     static_libs: [
         "android.hardware.common-V2-ndk",
         "android.hardware.common.fmq-V1-ndk",
@@ -192,4 +203,9 @@ cc_test {
         "libscheduler_test_headers",
         "libsurfaceflinger_headers",
     ],
+}
+
+cc_library_headers {
+    name: "libsurfaceflinger_mocks_headers",
+    export_include_dirs: ["."],
 }
