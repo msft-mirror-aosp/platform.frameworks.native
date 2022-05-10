@@ -14,44 +14,22 @@
  * limitations under the License.
  */
 
-#include <input/InputWindow.h>
+#include <gui/WindowInfo.h>
 
 #include "InputTarget.h"
 
 #include "TouchState.h"
 
-using android::InputWindowHandle;
+using android::gui::WindowInfo;
+using android::gui::WindowInfoHandle;
 
 namespace android::inputdispatcher {
 
-TouchState::TouchState()
-      : down(false), split(false), deviceId(-1), source(0), displayId(ADISPLAY_ID_NONE) {}
-
-TouchState::~TouchState() {}
-
 void TouchState::reset() {
-    down = false;
-    split = false;
-    deviceId = -1;
-    source = 0;
-    displayId = ADISPLAY_ID_NONE;
-    windows.clear();
-    portalWindows.clear();
-    gestureMonitors.clear();
+    *this = TouchState();
 }
 
-void TouchState::copyFrom(const TouchState& other) {
-    down = other.down;
-    split = other.split;
-    deviceId = other.deviceId;
-    source = other.source;
-    displayId = other.displayId;
-    windows = other.windows;
-    portalWindows = other.portalWindows;
-    gestureMonitors = other.gestureMonitors;
-}
-
-void TouchState::addOrUpdateWindow(const sp<InputWindowHandle>& windowHandle, int32_t targetFlags,
+void TouchState::addOrUpdateWindow(const sp<WindowInfoHandle>& windowHandle, int32_t targetFlags,
                                    BitSet32 pointerIds) {
     if (targetFlags & InputTarget::FLAG_SPLIT) {
         split = true;
@@ -69,28 +47,13 @@ void TouchState::addOrUpdateWindow(const sp<InputWindowHandle>& windowHandle, in
         }
     }
 
+    if (preventNewTargets) return; // Don't add new TouchedWindows.
+
     TouchedWindow touchedWindow;
     touchedWindow.windowHandle = windowHandle;
     touchedWindow.targetFlags = targetFlags;
     touchedWindow.pointerIds = pointerIds;
     windows.push_back(touchedWindow);
-}
-
-void TouchState::addPortalWindow(const sp<InputWindowHandle>& windowHandle) {
-    size_t numWindows = portalWindows.size();
-    for (size_t i = 0; i < numWindows; i++) {
-        if (portalWindows[i] == windowHandle) {
-            return;
-        }
-    }
-    portalWindows.push_back(windowHandle);
-}
-
-void TouchState::addGestureMonitors(const std::vector<TouchedMonitor>& newMonitors) {
-    const size_t newSize = gestureMonitors.size() + newMonitors.size();
-    gestureMonitors.reserve(newSize);
-    gestureMonitors.insert(std::end(gestureMonitors), std::begin(newMonitors),
-                           std::end(newMonitors));
 }
 
 void TouchState::removeWindowByToken(const sp<IBinder>& token) {
@@ -116,12 +79,12 @@ void TouchState::filterNonAsIsTouchWindows() {
     }
 }
 
-void TouchState::filterNonMonitors() {
-    windows.clear();
-    portalWindows.clear();
+void TouchState::filterWindowsExcept(const sp<IBinder>& token) {
+    std::erase_if(windows,
+                  [&token](const TouchedWindow& w) { return w.windowHandle->getToken() != token; });
 }
 
-sp<InputWindowHandle> TouchState::getFirstForegroundWindowHandle() const {
+sp<WindowInfoHandle> TouchState::getFirstForegroundWindowHandle() const {
     for (size_t i = 0; i < windows.size(); i++) {
         const TouchedWindow& window = windows[i];
         if (window.targetFlags & InputTarget::FLAG_FOREGROUND) {
@@ -137,13 +100,35 @@ bool TouchState::isSlippery() const {
     for (const TouchedWindow& window : windows) {
         if (window.targetFlags & InputTarget::FLAG_FOREGROUND) {
             if (haveSlipperyForegroundWindow ||
-                !window.windowHandle->getInfo()->flags.test(InputWindowInfo::Flag::SLIPPERY)) {
+                !window.windowHandle->getInfo()->inputConfig.test(
+                        WindowInfo::InputConfig::SLIPPERY)) {
                 return false;
             }
             haveSlipperyForegroundWindow = true;
         }
     }
     return haveSlipperyForegroundWindow;
+}
+
+sp<WindowInfoHandle> TouchState::getWallpaperWindow() const {
+    for (size_t i = 0; i < windows.size(); i++) {
+        const TouchedWindow& window = windows[i];
+        if (window.windowHandle->getInfo()->inputConfig.test(
+                    gui::WindowInfo::InputConfig::IS_WALLPAPER)) {
+            return window.windowHandle;
+        }
+    }
+    return nullptr;
+}
+
+sp<WindowInfoHandle> TouchState::getWindow(const sp<IBinder>& token) const {
+    for (const TouchedWindow& touchedWindow : windows) {
+        const auto& windowHandle = touchedWindow.windowHandle;
+        if (windowHandle->getToken() == token) {
+            return windowHandle;
+        }
+    }
+    return nullptr;
 }
 
 } // namespace android::inputdispatcher
