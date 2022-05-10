@@ -32,20 +32,11 @@ license {
     ],
 }
 
-// TODO(b/211908498): remove this
-cc_defaults {
-    name: "libbinder_ndk_host_user",
-    target: {
-        darwin: {
-            enabled: false,
-        },
-    },
-}
-
 cc_library {
     name: "libbinder_ndk",
 
     host_supported: true,
+    recovery_available: true,
 
     llndk: {
         symbol_file: "libbinder_ndk.map.txt",
@@ -109,6 +100,9 @@ cc_library {
             "30",
         ],
     },
+    sanitize: {
+        misc_undefined: ["integer"],
+    },
     tidy: true,
     tidy_flags: [
         // Only check our headers
@@ -144,6 +138,7 @@ cc_library_headers {
     name: "libbinder_headers_platform_shared",
     export_include_dirs: ["include_cpp"],
     vendor_available: true,
+    recovery_available: true,
     host_supported: true,
     // TODO(b/153609531): remove when no longer needed.
     native_bridge_supported: true,
