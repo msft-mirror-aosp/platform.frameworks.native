@@ -30,12 +30,13 @@ filegroup {
         "android/os/IInputConstants.aidl",
         "android/os/InputEventInjectionResult.aidl",
         "android/os/InputEventInjectionSync.aidl",
-        "android/os/TouchOcclusionMode.aidl",
+        "android/os/InputConfig.aidl",
     ],
 }
 
 cc_library {
     name: "libinput",
+    cpp_std: "c++20",
     host_supported: true,
     cflags: [
         "-Wall",
@@ -49,6 +50,7 @@ cc_library {
         "Keyboard.cpp",
         "KeyCharacterMap.cpp",
         "KeyLayoutMap.cpp",
+        "PrintTools.cpp",
         "PropertyMap.cpp",
         "TouchVideoFrame.cpp",
         "VelocityControl.cpp",
@@ -79,16 +81,8 @@ cc_library {
         android: {
             srcs: [
                 "InputTransport.cpp",
-                "InputWindow.cpp",
-                "android/FocusRequest.aidl",
-                "android/InputApplicationInfo.aidl",
-                "android/os/BlockUntrustedTouchesMode.aidl",
-                "android/os/IInputConstants.aidl",
                 "android/os/IInputFlinger.aidl",
-                "android/os/InputEventInjectionResult.aidl",
-                "android/os/InputEventInjectionSync.aidl",
-                "android/os/ISetInputWindowsListener.aidl",
-                "android/os/TouchOcclusionMode.aidl",
+                ":inputconstants_aidl",
             ],
 
             export_shared_lib_headers: ["libbinder"],
@@ -97,6 +91,14 @@ cc_library {
                 "libutils",
                 "libbinder",
                 "libui",
+            ],
+
+            static_libs: [
+                "libgui_window_info_static",
+            ],
+
+            export_static_lib_headers: [
+                "libgui_window_info_static",
             ],
 
             sanitize: {
@@ -111,22 +113,23 @@ cc_library {
                 "frameworks/native/libs/arect/include",
             ],
         },
-        linux_glibc: {
+        host_linux: {
             srcs: [
                 "InputTransport.cpp",
-                "InputWindow.cpp",
-                "android/FocusRequest.aidl",
-                "android/InputApplicationInfo.aidl",
                 "android/os/IInputConstants.aidl",
                 "android/os/IInputFlinger.aidl",
-                "android/os/ISetInputWindowsListener.aidl",
-                "android/os/TouchOcclusionMode.aidl",
+                "android/os/InputConfig.aidl",
             ],
             static_libs: [
                 "libhostgraphics",
+                "libgui_window_info_static",
             ],
             shared_libs: [
                 "libbinder",
+            ],
+
+            export_static_lib_headers: [
+                "libgui_window_info_static",
             ],
         },
     },
@@ -134,6 +137,9 @@ cc_library {
     aidl: {
         local_include_dirs: ["."],
         export_aidl_headers: true,
+        include_dirs: [
+            "frameworks/native/libs/gui",
+        ],
     },
 }
 

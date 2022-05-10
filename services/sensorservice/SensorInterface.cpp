@@ -92,28 +92,12 @@ ProximitySensor::ProximitySensor(const sensor_t& sensor, SensorService& service)
 }
 
 status_t ProximitySensor::activate(void* ident, bool enabled) {
-    bool wasActive = mActive;
     status_t status = HardwareSensor::activate(ident, enabled);
     if (status != NO_ERROR) {
         return status;
     }
-    mActive = enabled;
-    if (wasActive != enabled) {
-        mSensorService.onProximityActiveLocked(enabled);
-    }
+    mSensorService.checkAndReportProxStateChangeLocked();
     return NO_ERROR;
-}
-
-void ProximitySensor::willDisableAllSensors() {
-    if (mSensorDevice.isSensorActive(mSensor.getHandle())) {
-        mSensorService.onProximityActiveLocked(false);
-    }
-}
-
-void ProximitySensor::didEnableAllSensors() {
-    if (mSensorDevice.isSensorActive(mSensor.getHandle())) {
-        mSensorService.onProximityActiveLocked(true);
-    }
 }
 
 // ---------------------------------------------------------------------------
