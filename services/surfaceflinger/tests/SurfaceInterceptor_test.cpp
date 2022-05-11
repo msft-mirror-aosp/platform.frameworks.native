@@ -19,6 +19,7 @@
 #pragma clang diagnostic ignored "-Wconversion"
 #pragma clang diagnostic ignored "-Wextra"
 
+#include <android-base/stringprintf.h>
 #include <frameworks/native/cmds/surfacereplayer/proto/src/trace.pb.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <gtest/gtest.h>
@@ -56,12 +57,9 @@ std::vector<BlurRegion> BLUR_REGIONS_UPDATE;
 const String8 DISPLAY_NAME("SurfaceInterceptor Display Test");
 constexpr auto TEST_BG_SURFACE_NAME = "BG Interceptor Test Surface";
 constexpr auto TEST_FG_SURFACE_NAME = "FG Interceptor Test Surface";
-constexpr auto UNIQUE_TEST_BG_SURFACE_NAME = "BG Interceptor Test Surface#0";
-constexpr auto UNIQUE_TEST_FG_SURFACE_NAME = "FG Interceptor Test Surface#0";
 constexpr auto LAYER_NAME = "Layer Create and Delete Test";
-constexpr auto UNIQUE_LAYER_NAME = "Layer Create and Delete Test#0";
 
-constexpr auto DEFAULT_FILENAME = "/data/misc/wmtrace/transaction_trace.pb";
+constexpr auto DEFAULT_FILENAME = "/data/misc/wmtrace/transaction_trace.winscope";
 
 // Fill an RGBA_8888 formatted surface with a single color.
 static void fillSurfaceRGBA8(const sp<SurfaceControl>& sc, uint8_t r, uint8_t g, uint8_t b) {
@@ -105,11 +103,15 @@ static void disableInterceptor() {
     system("service call SurfaceFlinger 1020 i32 0 > /dev/null");
 }
 
+std::string getUniqueName(const std::string& name, const Increment& increment) {
+    return base::StringPrintf("%s#%d", name.c_str(), increment.surface_creation().id());
+}
+
 int32_t getSurfaceId(const Trace& capturedTrace, const std::string& surfaceName) {
     int32_t layerId = 0;
     for (const auto& increment : capturedTrace.increment()) {
         if (increment.increment_case() == increment.kSurfaceCreation) {
-            if (increment.surface_creation().name() == surfaceName) {
+            if (increment.surface_creation().name() == getUniqueName(surfaceName, increment)) {
                 layerId = increment.surface_creation().id();
             }
         }
@@ -193,6 +195,7 @@ public:
     bool reparentUpdateFound(const SurfaceChange& change, bool found);
     bool relativeParentUpdateFound(const SurfaceChange& change, bool found);
     bool shadowRadiusUpdateFound(const SurfaceChange& change, bool found);
+    bool trustedOverlayUpdateFound(const SurfaceChange& change, bool found);
     bool surfaceUpdateFound(const Trace& trace, SurfaceChange::SurfaceChangeCase changeCase);
 
     // Find all of the updates in the single trace
@@ -228,6 +231,7 @@ public:
     void reparentUpdate(Transaction&);
     void relativeParentUpdate(Transaction&);
     void shadowRadiusUpdate(Transaction&);
+    void trustedOverlayUpdate(Transaction&);
     void surfaceCreation(Transaction&);
     void displayCreation(Transaction&);
     void displayDeletion(Transaction&);
@@ -281,7 +285,7 @@ void SurfaceInterceptorTest::setupBackgroundSurface() {
     ASSERT_TRUE(mFGSurfaceControl->isValid());
 
     Transaction t;
-    t.setDisplayLayerStack(display, 0);
+    t.setDisplayLayerStack(display, ui::DEFAULT_LAYER_STACK);
     ASSERT_EQ(NO_ERROR,
               t.setLayer(mBGSurfaceControl, INT_MAX - 3)
                       .show(mBGSurfaceControl)
@@ -291,8 +295,8 @@ void SurfaceInterceptorTest::setupBackgroundSurface() {
 }
 
 void SurfaceInterceptorTest::preProcessTrace(const Trace& trace) {
-    mBGLayerId = getSurfaceId(trace, UNIQUE_TEST_BG_SURFACE_NAME);
-    mFGLayerId = getSurfaceId(trace, UNIQUE_TEST_FG_SURFACE_NAME);
+    mBGLayerId = getSurfaceId(trace, TEST_BG_SURFACE_NAME);
+    mFGLayerId = getSurfaceId(trace, TEST_FG_SURFACE_NAME);
 }
 
 void SurfaceInterceptorTest::captureTest(TestTransactionAction action,
@@ -378,7 +382,7 @@ void SurfaceInterceptorTest::transparentRegionHintUpdate(Transaction& t) {
 }
 
 void SurfaceInterceptorTest::layerStackUpdate(Transaction& t) {
-    t.setLayerStack(mBGSurfaceControl, STACK_UPDATE);
+    t.setLayerStack(mBGSurfaceControl, ui::LayerStack::fromValue(STACK_UPDATE));
 }
 
 void SurfaceInterceptorTest::hiddenFlagUpdate(Transaction& t) {
@@ -403,6 +407,10 @@ void SurfaceInterceptorTest::relativeParentUpdate(Transaction& t) {
 
 void SurfaceInterceptorTest::shadowRadiusUpdate(Transaction& t) {
     t.setShadowRadius(mBGSurfaceControl, SHADOW_RADIUS_UPDATE);
+}
+
+void SurfaceInterceptorTest::trustedOverlayUpdate(Transaction& t) {
+    t.setTrustedOverlay(mBGSurfaceControl, true);
 }
 
 void SurfaceInterceptorTest::displayCreation(Transaction&) {
@@ -433,6 +441,7 @@ void SurfaceInterceptorTest::runAllUpdates() {
     runInTransaction(&SurfaceInterceptorTest::reparentUpdate);
     runInTransaction(&SurfaceInterceptorTest::relativeParentUpdate);
     runInTransaction(&SurfaceInterceptorTest::shadowRadiusUpdate);
+    runInTransaction(&SurfaceInterceptorTest::trustedOverlayUpdate);
 }
 
 void SurfaceInterceptorTest::surfaceCreation(Transaction&) {
@@ -644,6 +653,17 @@ bool SurfaceInterceptorTest::shadowRadiusUpdateFound(const SurfaceChange& change
     return foundShadowRadius;
 }
 
+bool SurfaceInterceptorTest::trustedOverlayUpdateFound(const SurfaceChange& change,
+                                                       bool foundTrustedOverlay) {
+    bool hasTrustedOverlay(change.trusted_overlay().is_trusted_overlay());
+    if (hasTrustedOverlay && !foundTrustedOverlay) {
+        foundTrustedOverlay = true;
+    } else if (hasTrustedOverlay && foundTrustedOverlay) {
+        []() { FAIL(); }();
+    }
+    return foundTrustedOverlay;
+}
+
 bool SurfaceInterceptorTest::surfaceUpdateFound(const Trace& trace,
         SurfaceChange::SurfaceChangeCase changeCase) {
     bool foundUpdate = false;
@@ -704,6 +724,9 @@ bool SurfaceInterceptorTest::surfaceUpdateFound(const Trace& trace,
                         case SurfaceChange::SurfaceChangeCase::kShadowRadius:
                             foundUpdate = shadowRadiusUpdateFound(change, foundUpdate);
                             break;
+                        case SurfaceChange::SurfaceChangeCase::kTrustedOverlay:
+                            foundUpdate = trustedOverlayUpdateFound(change, foundUpdate);
+                            break;
                         case SurfaceChange::SurfaceChangeCase::SURFACECHANGE_NOT_SET:
                             break;
                     }
@@ -731,9 +754,7 @@ void SurfaceInterceptorTest::assertAllUpdatesFound(const Trace& trace) {
 }
 
 bool SurfaceInterceptorTest::surfaceCreationFound(const Increment& increment, bool foundSurface) {
-    bool isMatch(increment.surface_creation().name() == UNIQUE_LAYER_NAME &&
-            increment.surface_creation().w() == SIZE_UPDATE &&
-            increment.surface_creation().h() == SIZE_UPDATE);
+    bool isMatch(increment.surface_creation().name() == getUniqueName(LAYER_NAME, increment));
     if (isMatch && !foundSurface) {
         foundSurface = true;
     } else if (isMatch && foundSurface) {
@@ -787,7 +808,7 @@ bool SurfaceInterceptorTest::singleIncrementFound(const Trace& trace,
                     break;
                 case Increment::IncrementCase::kSurfaceDeletion:
                     // Find the id of created surface.
-                    targetId = getSurfaceId(trace, UNIQUE_LAYER_NAME);
+                    targetId = getSurfaceId(trace, LAYER_NAME);
                     foundIncrement = surfaceDeletionFound(increment, targetId, foundIncrement);
                     break;
                 case Increment::IncrementCase::kDisplayCreation:
@@ -895,6 +916,11 @@ TEST_F(SurfaceInterceptorTest, InterceptRelativeParentUpdateWorks) {
 TEST_F(SurfaceInterceptorTest, InterceptShadowRadiusUpdateWorks) {
     captureTest(&SurfaceInterceptorTest::shadowRadiusUpdate,
                 SurfaceChange::SurfaceChangeCase::kShadowRadius);
+}
+
+TEST_F(SurfaceInterceptorTest, InterceptTrustedOverlayUpdateWorks) {
+    captureTest(&SurfaceInterceptorTest::trustedOverlayUpdate,
+                SurfaceChange::SurfaceChangeCase::kTrustedOverlay);
 }
 
 TEST_F(SurfaceInterceptorTest, InterceptAllUpdatesWorks) {

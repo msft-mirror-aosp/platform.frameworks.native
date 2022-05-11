@@ -25,13 +25,6 @@ interface IInputConstants
     // android.os.InputConstants.DEFAULT_DISPATCHING_TIMEOUT_MILLIS.
     const int UNMULTIPLIED_DEFAULT_DISPATCHING_TIMEOUT_MILLIS = 5000; // 5 seconds
 
-    // Compatibility changes.
-    /**
-      * TODO(b/157929241): remove this before closing the bug. This is needed temporarily
-      * to identify apps that are using this flag.
-      */
-    const long BLOCK_FLAG_SLIPPERY = 157929241;
-
     // Indicate invalid battery capacity
     const int INVALID_BATTERY_CAPACITY = -1;
 
@@ -42,16 +35,18 @@ interface IInputConstants
     const int INVALID_INPUT_EVENT_ID = 0;
 
     /**
-     * The injected event was originally sent from InputDispatcher. Most likely, the journey of the
-     * event looked as follows:
-     * InputDispatcherPolicyInterface::filterInputEvent -> InputFilter.java::onInputEvent ->
-     * InputFilter.java::sendInputEvent -> InputDispatcher::injectInputEvent, without being modified
-     * along the way.
-     */
-    const int POLICY_FLAG_INPUTFILTER_TRUSTED = 0x10000;
-
-    /**
-     * The input event was injected from accessibility
+     * The input event was injected from accessibility. Used in policyFlags for input event
+     * injection.
      */
     const int POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY = 0x20000;
+
+    /**
+     * The input event was generated or modified by accessibility service.
+     * Shared by both KeyEvent and MotionEvent flags, so this value should not overlap with either
+     * set of flags, including in input/Input.h and in android/input.h.
+     */
+    const int INPUT_EVENT_FLAG_IS_ACCESSIBILITY_EVENT = 0x800;
+
+    /* The default pointer acceleration value. */
+    const int DEFAULT_POINTER_ACCELERATION = 3;
 }

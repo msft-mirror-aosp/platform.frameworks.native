@@ -32,36 +32,46 @@ namespace android::compositionengine::impl::planner {
 
 namespace {
 
-std::optional<Flattener::CachedSetRenderSchedulingTunables> buildFlattenerTuneables() {
+std::optional<Flattener::Tunables::RenderScheduling> buildRenderSchedulingTunables() {
     if (!base::GetBoolProperty(std::string("debug.sf.enable_cached_set_render_scheduling"), true)) {
         return std::nullopt;
     }
 
-    auto renderDuration = std::chrono::nanoseconds(
+    const auto renderDuration = std::chrono::nanoseconds(
             base::GetUintProperty<uint64_t>(std::string("debug.sf.cached_set_render_duration_ns"),
-                                            Flattener::CachedSetRenderSchedulingTunables::
+                                            Flattener::Tunables::RenderScheduling::
                                                     kDefaultCachedSetRenderDuration.count()));
 
-    auto maxDeferRenderAttempts = base::GetUintProperty<
+    const auto maxDeferRenderAttempts = base::GetUintProperty<
             size_t>(std::string("debug.sf.cached_set_max_defer_render_attmpts"),
-                    Flattener::CachedSetRenderSchedulingTunables::kDefaultMaxDeferRenderAttempts);
+                    Flattener::Tunables::RenderScheduling::kDefaultMaxDeferRenderAttempts);
 
-    return std::make_optional<Flattener::CachedSetRenderSchedulingTunables>(
-            Flattener::CachedSetRenderSchedulingTunables{
+    return std::make_optional<Flattener::Tunables::RenderScheduling>(
+            Flattener::Tunables::RenderScheduling{
                     .cachedSetRenderDuration = renderDuration,
                     .maxDeferRenderAttempts = maxDeferRenderAttempts,
             });
 }
 
+Flattener::Tunables buildFlattenerTuneables() {
+    const auto activeLayerTimeout = std::chrono::milliseconds(
+            base::GetIntProperty<int32_t>(std::string(
+                                                  "debug.sf.layer_caching_active_layer_timeout_ms"),
+                                          Flattener::Tunables::kDefaultActiveLayerTimeout.count()));
+    const auto enableHolePunch =
+            base::GetBoolProperty(std::string("debug.sf.enable_hole_punch_pip"),
+                                  Flattener::Tunables::kDefaultEnableHolePunch);
+    return Flattener::Tunables{
+            .mActiveLayerTimeout = activeLayerTimeout,
+            .mRenderScheduling = buildRenderSchedulingTunables(),
+            .mEnableHolePunch = enableHolePunch,
+    };
+}
+
 } // namespace
 
 Planner::Planner(renderengine::RenderEngine& renderEngine)
-      // Implicitly, layer caching must also be enabled for the hole punch or
-      // predictor to have any effect.
-      // E.g., setprop debug.sf.enable_layer_caching 1, or
-      // adb shell service call SurfaceFlinger 1040 i32 1 [i64 <display ID>]
       : mFlattener(renderEngine,
-                   base::GetBoolProperty(std::string("debug.sf.enable_hole_punch_pip"), true),
                    buildFlattenerTuneables()) {
     mPredictorEnabled =
             base::GetBoolProperty(std::string("debug.sf.enable_planner_prediction"), false);
@@ -87,7 +97,7 @@ void Planner::plan(
         if (const auto layerEntry = mPreviousLayers.find(id); layerEntry != mPreviousLayers.end()) {
             // Track changes from previous info
             LayerState& state = layerEntry->second;
-            Flags<LayerStateField> differences = state.update(layer);
+            ftl::Flags<LayerStateField> differences = state.update(layer);
             if (differences.get() == 0) {
                 state.incrementFramesSinceBufferUpdate();
             } else {
@@ -113,15 +123,6 @@ void Planner::plan(
         }
     }
 
-    for (LayerId removedLayer : removedLayers) {
-        if (const auto layerEntry = mPreviousLayers.find(removedLayer);
-            layerEntry != mPreviousLayers.end()) {
-            const auto& [id, state] = *layerEntry;
-            ALOGV("Removed layer %s", state.getName().c_str());
-            mPreviousLayers.erase(removedLayer);
-        }
-    }
-
     mCurrentLayers.clear();
     mCurrentLayers.reserve(currentLayerIds.size());
     std::transform(currentLayerIds.cbegin(), currentLayerIds.cend(),
@@ -135,6 +136,7 @@ void Planner::plan(
     mFlattenedHash =
             mFlattener.flattenLayers(mCurrentLayers, hash, std::chrono::steady_clock::now());
     const bool layersWereFlattened = hash != mFlattenedHash;
+
     ALOGV("[%s] Initial hash %zx flattened hash %zx", __func__, hash, mFlattenedHash);
 
     if (mPredictorEnabled) {
@@ -146,6 +148,17 @@ void Planner::plan(
             ALOGV("[%s] Predicting plan %s", __func__, to_string(mPredictedPlan->plan).c_str());
         } else {
             ALOGV("[%s] No prediction found\n", __func__);
+        }
+    }
+
+    // Clean up the set of previous layers now that the view of the LayerStates in the flattener are
+    // up-to-date.
+    for (LayerId removedLayer : removedLayers) {
+        if (const auto layerEntry = mPreviousLayers.find(removedLayer);
+            layerEntry != mPreviousLayers.end()) {
+            const auto& [id, state] = *layerEntry;
+            ALOGV("Removed layer %s", state.getName().c_str());
+            mPreviousLayers.erase(removedLayer);
         }
     }
 }
@@ -180,7 +193,7 @@ void Planner::reportFinalPlan(
 
         finalPlan.addLayerType(
                 forcedOrRequestedClient
-                        ? hardware::graphics::composer::hal::Composition::CLIENT
+                        ? aidl::android::hardware::graphics::composer3::Composition::CLIENT
                         : layer->getLayerFE().getCompositionState()->compositionType);
     }
 

@@ -23,16 +23,19 @@
 #define LOG_TAG "LibSurfaceFlingerUnittests"
 #define LOG_NDEBUG 0
 
-#include "Scheduler/TimeKeeper.h"
-#include "Scheduler/VSyncDispatchTimerQueue.h"
-#include "Scheduler/VSyncTracker.h"
+#include <thread>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <thread>
+
+#include <scheduler/TimeKeeper.h>
+
+#include "Scheduler/VSyncDispatchTimerQueue.h"
+#include "Scheduler/VSyncTracker.h"
 
 using namespace testing;
 using namespace std::literals;
+
 namespace android::scheduler {
 
 class MockVSyncTracker : public VSyncTracker {
@@ -71,10 +74,10 @@ public:
         ON_CALL(*this, now()).WillByDefault(Invoke(this, &ControllableClock::fakeTime));
     }
 
-    MOCK_CONST_METHOD0(now, nsecs_t());
-    MOCK_METHOD2(alarmAt, void(std::function<void()> const&, nsecs_t time));
-    MOCK_METHOD0(alarmCancel, void());
-    MOCK_CONST_METHOD1(dump, void(std::string&));
+    MOCK_METHOD(nsecs_t, now, (), (const));
+    MOCK_METHOD(void, alarmAt, (std::function<void()>, nsecs_t), (override));
+    MOCK_METHOD(void, alarmCancel, (), (override));
+    MOCK_METHOD(void, dump, (std::string&), (const, override));
 
     void alarmAtDefaultBehavior(std::function<void()> const& callback, nsecs_t time) {
         mCallback = callback;
@@ -196,11 +199,14 @@ protected:
         class TimeKeeperWrapper : public TimeKeeper {
         public:
             TimeKeeperWrapper(TimeKeeper& control) : mControllableClock(control) {}
-            void alarmAt(std::function<void()> const& callback, nsecs_t time) final {
-                mControllableClock.alarmAt(callback, time);
-            }
-            void alarmCancel() final { mControllableClock.alarmCancel(); }
+
             nsecs_t now() const final { return mControllableClock.now(); }
+
+            void alarmAt(std::function<void()> callback, nsecs_t time) final {
+                mControllableClock.alarmAt(std::move(callback), time);
+            }
+
+            void alarmCancel() final { mControllableClock.alarmCancel(); }
             void dump(std::string&) const final {}
 
         private:
@@ -940,6 +946,27 @@ TEST_F(VSyncDispatchTimerQueueTest, basicAlarmSettingFutureWithReadyDuration) {
     EXPECT_THAT(cb.mWakeupTime[0], 900);
     ASSERT_THAT(cb.mReadyTime.size(), Eq(1));
     EXPECT_THAT(cb.mReadyTime[0], 970);
+}
+
+TEST_F(VSyncDispatchTimerQueueTest, updatesVsyncTimeForCloseWakeupTime) {
+    Sequence seq;
+    EXPECT_CALL(mMockClock, alarmAt(_, 600)).InSequence(seq);
+
+    CountingCallback cb(mDispatch);
+
+    mDispatch.schedule(cb, {.workDuration = 400, .readyDuration = 0, .earliestVsync = 1000});
+    mDispatch.schedule(cb, {.workDuration = 1400, .readyDuration = 0, .earliestVsync = 1000});
+
+    advanceToNextCallback();
+
+    advanceToNextCallback();
+
+    ASSERT_THAT(cb.mCalls.size(), Eq(1));
+    EXPECT_THAT(cb.mCalls[0], Eq(2000));
+    ASSERT_THAT(cb.mWakeupTime.size(), Eq(1));
+    EXPECT_THAT(cb.mWakeupTime[0], Eq(600));
+    ASSERT_THAT(cb.mReadyTime.size(), Eq(1));
+    EXPECT_THAT(cb.mReadyTime[0], Eq(2000));
 }
 
 class VSyncDispatchTimerQueueEntryTest : public testing::Test {

@@ -77,6 +77,7 @@ public:
     float dtdx() const;
     float dtdy() const;
     float dsdy() const;
+    float det() const;
 
     float getScaleX() const;
     float getScaleY() const;
@@ -112,6 +113,7 @@ public:
     void dump(const char* name, const char* prefix = "") const;
 
     static constexpr RotationFlags toRotationFlags(Rotation);
+    static constexpr Rotation toRotation(RotationFlags);
 
 private:
     struct mat33 {
@@ -148,6 +150,21 @@ inline constexpr Transform::RotationFlags Transform::toRotationFlags(Rotation ro
             return ROT_270;
         default:
             return ROT_INVALID;
+    }
+}
+
+inline constexpr Rotation Transform::toRotation(Transform::RotationFlags rotationFlags) {
+    switch (rotationFlags) {
+        case ROT_0:
+            return ROTATION_0;
+        case ROT_90:
+            return ROTATION_90;
+        case ROT_180:
+            return ROTATION_180;
+        case ROT_270:
+            return ROTATION_270;
+        default:
+            return ROTATION_0;
     }
 }
 
