@@ -21,6 +21,7 @@
 #include "InputManager.h"
 #include "InputDispatcherFactory.h"
 #include "InputReaderFactory.h"
+#include "UnwantedInteractionBlocker.h"
 
 #include <binder/IPCThreadState.h>
 
@@ -30,6 +31,8 @@
 #include <private/android_filesystem_config.h>
 
 namespace android {
+
+using gui::FocusRequest;
 
 static int32_t exceptionCodeFromStatusT(status_t status) {
     switch (status) {
@@ -50,12 +53,17 @@ static int32_t exceptionCodeFromStatusT(status_t status) {
     }
 }
 
+/**
+ * The event flow is via the "InputListener" interface, as follows:
+ * InputReader -> UnwantedInteractionBlocker -> InputClassifier -> InputDispatcher
+ */
 InputManager::InputManager(
         const sp<InputReaderPolicyInterface>& readerPolicy,
         const sp<InputDispatcherPolicyInterface>& dispatcherPolicy) {
     mDispatcher = createInputDispatcher(dispatcherPolicy);
-    mClassifier = new InputClassifier(mDispatcher);
-    mReader = createInputReader(readerPolicy, mClassifier);
+    mClassifier = std::make_unique<InputClassifier>(*mDispatcher);
+    mUnwantedInteractionBlocker = std::make_unique<UnwantedInteractionBlocker>(*mClassifier);
+    mReader = createInputReader(readerPolicy, *mUnwantedInteractionBlocker);
 }
 
 InputManager::~InputManager() {
@@ -98,43 +106,20 @@ status_t InputManager::stop() {
     return status;
 }
 
-sp<InputReaderInterface> InputManager::getReader() {
-    return mReader;
+InputReaderInterface& InputManager::getReader() {
+    return *mReader;
 }
 
-sp<InputClassifierInterface> InputManager::getClassifier() {
-    return mClassifier;
+UnwantedInteractionBlockerInterface& InputManager::getUnwantedInteractionBlocker() {
+    return *mUnwantedInteractionBlocker;
 }
 
-sp<InputDispatcherInterface> InputManager::getDispatcher() {
-    return mDispatcher;
+InputClassifierInterface& InputManager::getClassifier() {
+    return *mClassifier;
 }
 
-class BinderWindowHandle : public InputWindowHandle {
-public:
-    BinderWindowHandle(const InputWindowInfo& info) { mInfo = info; }
-
-    bool updateInfo() override {
-        return true;
-    }
-};
-
-binder::Status InputManager::setInputWindows(
-        const std::vector<InputWindowInfo>& infos,
-        const sp<ISetInputWindowsListener>& setInputWindowsListener) {
-    std::unordered_map<int32_t, std::vector<sp<InputWindowHandle>>> handlesPerDisplay;
-
-    std::vector<sp<InputWindowHandle>> handles;
-    for (const auto& info : infos) {
-        handlesPerDisplay.emplace(info.displayId, std::vector<sp<InputWindowHandle>>());
-        handlesPerDisplay[info.displayId].push_back(new BinderWindowHandle(info));
-    }
-    mDispatcher->setInputWindows(handlesPerDisplay);
-
-    if (setInputWindowsListener) {
-        setInputWindowsListener->onSetInputWindowsFinished();
-    }
-    return binder::Status::ok();
+InputDispatcherInterface& InputManager::getDispatcher() {
+    return *mDispatcher;
 }
 
 // Used by tests only.

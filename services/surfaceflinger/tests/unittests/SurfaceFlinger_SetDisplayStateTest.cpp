@@ -25,6 +25,8 @@
 namespace android {
 namespace {
 
+constexpr ui::LayerStack LAYER_STACK{456u};
+
 class SetDisplayStateLockedTest : public DisplayTransactionTest {};
 
 TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedDoesNothingWithUnknownDisplay) {
@@ -38,7 +40,7 @@ TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedDoesNothingWithUnknownDis
     DisplayState state;
     state.what = DisplayState::eLayerStackChanged;
     state.token = displayToken;
-    state.layerStack = 456;
+    state.layerStack = LAYER_STACK;
 
     // --------------------------------------------------------------------
     // Invocation
@@ -167,13 +169,13 @@ TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedDoesNothingIfLayerStackDi
     display.inject();
 
     // The display has a layer stack set
-    display.mutableCurrentDisplayState().layerStack = 456u;
+    display.mutableCurrentDisplayState().layerStack = LAYER_STACK;
 
     // The incoming request sets the same layer stack
     DisplayState state;
     state.what = DisplayState::eLayerStackChanged;
     state.token = display.token();
-    state.layerStack = 456u;
+    state.layerStack = LAYER_STACK;
 
     // --------------------------------------------------------------------
     // Invocation
@@ -187,7 +189,7 @@ TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedDoesNothingIfLayerStackDi
     EXPECT_EQ(0u, flags);
 
     // The current display state is unchanged
-    EXPECT_EQ(456u, display.getCurrentDisplayState().layerStack);
+    EXPECT_EQ(LAYER_STACK, display.getCurrentDisplayState().layerStack);
 }
 
 TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedRequestsUpdateIfLayerStackChanged) {
@@ -201,13 +203,13 @@ TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedRequestsUpdateIfLayerStac
     display.inject();
 
     // The display has a layer stack set
-    display.mutableCurrentDisplayState().layerStack = 654u;
+    display.mutableCurrentDisplayState().layerStack = ui::LayerStack{LAYER_STACK.id + 1};
 
     // The incoming request sets a different layer stack
     DisplayState state;
     state.what = DisplayState::eLayerStackChanged;
     state.token = display.token();
-    state.layerStack = 456u;
+    state.layerStack = LAYER_STACK;
 
     // --------------------------------------------------------------------
     // Invocation
@@ -221,7 +223,75 @@ TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedRequestsUpdateIfLayerStac
     EXPECT_EQ(eDisplayTransactionNeeded, flags);
 
     // The desired display state has been set to the new value.
-    EXPECT_EQ(456u, display.getCurrentDisplayState().layerStack);
+    EXPECT_EQ(LAYER_STACK, display.getCurrentDisplayState().layerStack);
+}
+
+TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedDoesNothingIfFlagsNotChanged) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The display has flags set
+    display.mutableCurrentDisplayState().flags = 1u;
+
+    // The incoming request sets a different layer stack
+    DisplayState state;
+    state.what = DisplayState::eFlagsChanged;
+    state.token = display.token();
+    state.flags = 1u;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags are empty
+    EXPECT_EQ(0u, flags);
+
+    // The desired display state has been set to the new value.
+    EXPECT_EQ(1u, display.getCurrentDisplayState().flags);
+}
+
+TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedRequestsUpdateIfFlagsChanged) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // A display is set up
+    auto display = Case::Display::makeFakeExistingDisplayInjector(this);
+    display.inject();
+
+    // The display has a layer stack set
+    display.mutableCurrentDisplayState().flags = 0u;
+
+    // The incoming request sets a different layer stack
+    DisplayState state;
+    state.what = DisplayState::eFlagsChanged;
+    state.token = display.token();
+    state.flags = 1u;
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    uint32_t flags = mFlinger.setDisplayStateLocked(state);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The returned flags indicate a transaction is needed
+    EXPECT_EQ(eDisplayTransactionNeeded, flags);
+
+    // The desired display state has been set to the new value.
+    EXPECT_EQ(1u, display.getCurrentDisplayState().flags);
 }
 
 TEST_F(SetDisplayStateLockedTest, setDisplayStateLockedDoesNothingIfProjectionDidNotChange) {
