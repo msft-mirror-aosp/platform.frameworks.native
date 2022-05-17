@@ -100,6 +100,11 @@ static void verifyNotForked(bool forked) {
 
 sp<ProcessState> ProcessState::init(const char *driver, bool requireDefault)
 {
+#ifdef BINDER_IPC_32BIT
+    LOG_ALWAYS_FATAL("32-bit binder IPC is not supported for new devices starting in Android P. If "
+                     "you do need to use this mode, please see b/232423610 or file an issue with "
+                     "AOSP upstream as otherwise this will be removed soon.");
+#endif
 
     if (driver == nullptr) {
         std::lock_guard<std::mutex> l(gProcessMutex);
@@ -415,6 +420,8 @@ bool ProcessState::isDriverFeatureEnabled(const DriverFeature feature) {
     static const char* const names[] = {
         [static_cast<int>(DriverFeature::ONEWAY_SPAM_DETECTION)] =
             DRIVER_FEATURES_PATH "oneway_spam_detection",
+        [static_cast<int>(DriverFeature::EXTENDED_ERROR)] =
+            DRIVER_FEATURES_PATH "extended_error",
     };
     int fd = open(names[static_cast<int>(feature)], O_RDONLY | O_CLOEXEC);
     char on;
