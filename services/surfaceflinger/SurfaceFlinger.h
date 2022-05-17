@@ -166,9 +166,6 @@ enum class LatchUnsignaledConfig {
 using DisplayColorSetting = compositionengine::OutputColorSetting;
 
 struct SurfaceFlingerBE {
-    FenceTimeline mGlCompositionDoneTimeline;
-    FenceTimeline mDisplayTimeline;
-
     // protected by mCompositorTimingLock;
     mutable std::mutex mCompositorTimingLock;
     CompositorTiming mCompositorTiming;
@@ -348,6 +345,12 @@ public:
     // based on the previous frame. If the strategy can be predicted, gpu composition will
     // run parallel to the hwc validateDisplay call and re-run if the predition is incorrect.
     bool mPredictCompositionStrategy = false;
+
+    // If true, then any layer with a SMPTE 170M transfer function is decoded using the sRGB
+    // transfer instead. This is mainly to preserve legacy behavior, where implementations treated
+    // SMPTE 170M as sRGB prior to color management being implemented, and now implementations rely
+    // on this behavior to increase contrast for some media sources.
+    bool mTreat170mAsSrgb = false;
 
 protected:
     // We're reference counted, never destroy SurfaceFlinger directly
@@ -803,7 +806,7 @@ private:
         Ready,
         ReadyUnsignaled,
     };
-    TransactionReadiness transactionIsReadyToBeApplied(
+    TransactionReadiness transactionIsReadyToBeApplied(TransactionState& state,
             const FrameTimelineInfo& info, bool isAutoTimestamp, int64_t desiredPresentTime,
             uid_t originUid, const Vector<ComposerState>& states,
             const std::unordered_map<
@@ -1092,8 +1095,6 @@ private:
 
     void dumpVSync(std::string& result) const REQUIRES(mStateLock);
     void dumpStaticScreenStats(std::string& result) const;
-    // Not const because each Layer needs to query Fences and cache timestamps.
-    void dumpFrameEventsLocked(std::string& result);
 
     void dumpCompositionDisplays(std::string& result) const REQUIRES(mStateLock);
     void dumpDisplays(std::string& result) const REQUIRES(mStateLock);
