@@ -58,6 +58,8 @@
 
 namespace android {
 
+using gui::WindowInfo;
+
 static constexpr float defaultMaxLuminance = 1000.0;
 
 BufferLayer::BufferLayer(const LayerCreationArgs& args)
@@ -109,6 +111,10 @@ bool BufferLayer::isOpaque(const Layer::State& s) const {
     return ((s.flags & layer_state_t::eLayerOpaque) != 0) || getOpacityForFormat(getPixelFormat());
 }
 
+bool BufferLayer::canReceiveInput() const {
+    return !isHiddenByPolicy() && (mBufferInfo.mBuffer == nullptr || getAlpha() > 0.0f);
+}
+
 bool BufferLayer::isVisible() const {
     return !isHiddenByPolicy() && getAlpha() > 0.0f &&
             (mBufferInfo.mBuffer != nullptr || mSidebandStream != nullptr);
@@ -150,44 +156,15 @@ std::optional<compositionengine::LayerFE::LayerSettings> BufferLayer::prepareCli
         return result;
     }
 
-    if (CC_UNLIKELY(mBufferInfo.mBuffer == 0)) {
-        // the texture has not been created yet, this Layer has
-        // in fact never been drawn into. This happens frequently with
-        // SurfaceView because the WindowManager can't know when the client
-        // has drawn the first time.
-
-        // If there is nothing under us, we paint the screen in black, otherwise
-        // we just skip this update.
-
-        // figure out if there is something below us
-        Region under;
-        bool finished = false;
-        mFlinger->mDrawingState.traverseInZOrder([&](Layer* layer) {
-            if (finished || layer == static_cast<BufferLayer const*>(this)) {
-                finished = true;
-                return;
-            }
-
-            under.orSelf(layer->getScreenBounds());
-        });
-        // if not everything below us is covered, we plug the holes!
-        Region holes(targetSettings.clip.subtract(under));
-        if (!holes.isEmpty()) {
-            targetSettings.clearRegion.orSelf(holes);
-        }
-
-        if (mSidebandStream != nullptr) {
-            // For surfaceview of tv sideband, there is no activeBuffer
-            // in bufferqueue, we need return LayerSettings.
-            return result;
-        } else {
-            return std::nullopt;
-        }
+    if (CC_UNLIKELY(mBufferInfo.mBuffer == 0) && mSidebandStream != nullptr) {
+        // For surfaceview of tv sideband, there is no activeBuffer
+        // in bufferqueue, we need return LayerSettings.
+        return result;
     }
     const bool blackOutLayer = (isProtected() && !targetSettings.supportsProtectedContent) ||
             ((isSecure() || isProtected()) && !targetSettings.isSecure);
     const bool bufferCanBeUsedAsHwTexture =
-            mBufferInfo.mBuffer->getBuffer()->getUsage() & GraphicBuffer::USAGE_HW_TEXTURE;
+            mBufferInfo.mBuffer->getUsage() & GraphicBuffer::USAGE_HW_TEXTURE;
     compositionengine::LayerFE::LayerSettings& layer = *result;
     if (blackOutLayer || !bufferCanBeUsedAsHwTexture) {
         ALOGE_IF(!bufferCanBeUsedAsHwTexture, "%s is blacked out as buffer is not gpu readable",
@@ -224,7 +201,7 @@ std::optional<compositionengine::LayerFE::LayerSettings> BufferLayer::prepareCli
     }
     layer.source.buffer.maxLuminanceNits = maxLuminance;
     layer.frameNumber = mCurrentFrameNumber;
-    layer.bufferId = mBufferInfo.mBuffer ? mBufferInfo.mBuffer->getBuffer()->getId() : 0;
+    layer.bufferId = mBufferInfo.mBuffer ? mBufferInfo.mBuffer->getId() : 0;
 
     const bool useFiltering =
             targetSettings.needsFiltering || mNeedsFiltering || bufferNeedsFiltering();
@@ -314,30 +291,31 @@ void BufferLayer::preparePerFrameCompositionState() {
 
     // Sideband layers
     auto* compositionState = editCompositionState();
-    if (compositionState->sidebandStream.get()) {
-        compositionState->compositionType = Hwc2::IComposerClient::Composition::SIDEBAND;
+    if (compositionState->sidebandStream.get() && !compositionState->sidebandStreamHasFrame) {
+        compositionState->compositionType =
+                aidl::android::hardware::graphics::composer3::Composition::SIDEBAND;
         return;
+    } else if ((mDrawingState.flags & layer_state_t::eLayerIsDisplayDecoration) != 0) {
+        compositionState->compositionType =
+                aidl::android::hardware::graphics::composer3::Composition::DISPLAY_DECORATION;
     } else {
         // Normal buffer layers
         compositionState->hdrMetadata = mBufferInfo.mHdrMetadata;
         compositionState->compositionType = mPotentialCursor
-                ? Hwc2::IComposerClient::Composition::CURSOR
-                : Hwc2::IComposerClient::Composition::DEVICE;
+                ? aidl::android::hardware::graphics::composer3::Composition::CURSOR
+                : aidl::android::hardware::graphics::composer3::Composition::DEVICE;
     }
 
-    compositionState->buffer = mBufferInfo.mBuffer->getBuffer();
+    compositionState->buffer = getBuffer();
     compositionState->bufferSlot = (mBufferInfo.mBufferSlot == BufferQueue::INVALID_BUFFER_SLOT)
             ? 0
             : mBufferInfo.mBufferSlot;
     compositionState->acquireFence = mBufferInfo.mFence;
+    compositionState->frameNumber = mBufferInfo.mFrameNumber;
+    compositionState->sidebandStreamHasFrame = false;
 }
 
-bool BufferLayer::onPreComposition(nsecs_t refreshStartTime) {
-    if (mBufferInfo.mBuffer != nullptr) {
-        Mutex::Autolock lock(mFrameEventHistoryMutex);
-        mFrameEventHistory.addPreComposition(mCurrentFrameNumber, refreshStartTime);
-    }
-    mRefreshPending = false;
+bool BufferLayer::onPreComposition(nsecs_t) {
     return hasReadyFrame();
 }
 namespace {
@@ -372,21 +350,18 @@ TimeStats::SetFrameRateVote frameRateToSetFrameRateVotePayload(Layer::FrameRate 
 }
 } // namespace
 
-bool BufferLayer::onPostComposition(const DisplayDevice* display,
+void BufferLayer::onPostComposition(const DisplayDevice* display,
                                     const std::shared_ptr<FenceTime>& glDoneFence,
                                     const std::shared_ptr<FenceTime>& presentFence,
                                     const CompositorTiming& compositorTiming) {
     // mFrameLatencyNeeded is true when a new frame was latched for the
     // composition.
-    if (!mBufferInfo.mFrameLatencyNeeded) return false;
+    if (!mBufferInfo.mFrameLatencyNeeded) return;
+
+    mAlreadyDisplayedThisCompose = false;
 
     // Update mFrameEventHistory.
-    {
-        Mutex::Autolock lock(mFrameEventHistoryMutex);
-        mFrameEventHistory.addPostComposition(mCurrentFrameNumber, glDoneFence, presentFence,
-                                              compositorTiming);
-        finalizeFrameEventHistory(glDoneFence, compositorTiming);
-    }
+    finalizeFrameEventHistory(glDoneFence, compositorTiming);
 
     // Update mFrameTracker.
     nsecs_t desiredPresentTime = mBufferInfo.mDesiredPresentTime;
@@ -419,43 +394,42 @@ bool BufferLayer::onPostComposition(const DisplayDevice* display,
         mFrameTracker.setFrameReadyTime(desiredPresentTime);
     }
 
-    const Fps refreshRate = mFlinger->mRefreshRateConfigs->getCurrentRefreshRate().getFps();
-    const std::optional<Fps> renderRate = mFlinger->mScheduler->getFrameRateOverride(getOwnerUid());
-    if (presentFence->isValid()) {
-        mFlinger->mTimeStats->setPresentFence(layerId, mCurrentFrameNumber, presentFence,
-                                              refreshRate, renderRate,
-                                              frameRateToSetFrameRateVotePayload(
-                                                      mDrawingState.frameRate),
-                                              getGameMode());
-        mFlinger->mFrameTracer->traceFence(layerId, getCurrentBufferId(), mCurrentFrameNumber,
-                                           presentFence, FrameTracer::FrameEvent::PRESENT_FENCE);
-        mFrameTracker.setActualPresentFence(std::shared_ptr<FenceTime>(presentFence));
-    } else if (!display) {
-        // Do nothing.
-    } else if (const auto displayId = PhysicalDisplayId::tryCast(display->getId());
-               displayId && mFlinger->getHwComposer().isConnected(*displayId)) {
-        // The HWC doesn't support present fences, so use the refresh
-        // timestamp instead.
-        const nsecs_t actualPresentTime = display->getRefreshTimestamp();
-        mFlinger->mTimeStats->setPresentTime(layerId, mCurrentFrameNumber, actualPresentTime,
-                                             refreshRate, renderRate,
-                                             frameRateToSetFrameRateVotePayload(
-                                                     mDrawingState.frameRate),
-                                             getGameMode());
-        mFlinger->mFrameTracer->traceTimestamp(layerId, getCurrentBufferId(), mCurrentFrameNumber,
-                                               actualPresentTime,
+    if (display) {
+        const Fps refreshRate = display->refreshRateConfigs().getActiveMode()->getFps();
+        const std::optional<Fps> renderRate =
+                mFlinger->mScheduler->getFrameRateOverride(getOwnerUid());
+
+        const auto vote = frameRateToSetFrameRateVotePayload(mDrawingState.frameRate);
+        const auto gameMode = getGameMode();
+
+        if (presentFence->isValid()) {
+            mFlinger->mTimeStats->setPresentFence(layerId, mCurrentFrameNumber, presentFence,
+                                                  refreshRate, renderRate, vote, gameMode);
+            mFlinger->mFrameTracer->traceFence(layerId, getCurrentBufferId(), mCurrentFrameNumber,
+                                               presentFence,
                                                FrameTracer::FrameEvent::PRESENT_FENCE);
-        mFrameTracker.setActualPresentTime(actualPresentTime);
+            mFrameTracker.setActualPresentFence(std::shared_ptr<FenceTime>(presentFence));
+        } else if (const auto displayId = PhysicalDisplayId::tryCast(display->getId());
+                   displayId && mFlinger->getHwComposer().isConnected(*displayId)) {
+            // The HWC doesn't support present fences, so use the refresh
+            // timestamp instead.
+            const nsecs_t actualPresentTime = display->getRefreshTimestamp();
+            mFlinger->mTimeStats->setPresentTime(layerId, mCurrentFrameNumber, actualPresentTime,
+                                                 refreshRate, renderRate, vote, gameMode);
+            mFlinger->mFrameTracer->traceTimestamp(layerId, getCurrentBufferId(),
+                                                   mCurrentFrameNumber, actualPresentTime,
+                                                   FrameTracer::FrameEvent::PRESENT_FENCE);
+            mFrameTracker.setActualPresentTime(actualPresentTime);
+        }
     }
 
     mFrameTracker.advanceFrame();
     mBufferInfo.mFrameLatencyNeeded = false;
-    return true;
 }
 
 void BufferLayer::gatherBufferInfo() {
     mBufferInfo.mPixelFormat =
-            !mBufferInfo.mBuffer ? PIXEL_FORMAT_NONE : mBufferInfo.mBuffer->getBuffer()->format;
+            !mBufferInfo.mBuffer ? PIXEL_FORMAT_NONE : mBufferInfo.mBuffer->getPixelFormat();
     mBufferInfo.mFrameLatencyNeeded = true;
 }
 
@@ -493,24 +467,11 @@ bool BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime,
         return refreshRequired;
     }
 
-    if (!hasReadyFrame()) {
-        return false;
-    }
-
-    // if we've already called updateTexImage() without going through
-    // a composition step, we have to skip this layer at this point
-    // because we cannot call updateTeximage() without a corresponding
-    // compositionComplete() call.
-    // we'll trigger an update in onPreComposition().
-    if (mRefreshPending) {
-        return false;
-    }
-
     // If the head buffer's acquire fence hasn't signaled yet, return and
     // try again later
     if (!fenceHasSignaled()) {
         ATRACE_NAME("!fenceHasSignaled()");
-        mFlinger->signalLayerUpdate();
+        mFlinger->onLayerUpdate();
         return false;
     }
 
@@ -530,14 +491,13 @@ bool BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime,
         return false;
     }
 
-    err = updateFrameNumber(latchTime);
+    err = updateFrameNumber();
     if (err != NO_ERROR) {
         return false;
     }
 
     gatherBufferInfo();
 
-    mRefreshPending = true;
     if (oldBufferInfo.mBuffer == nullptr) {
         // the first time we receive a buffer, we need to trigger a
         // geometry invalidation.
@@ -552,10 +512,10 @@ bool BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime,
     }
 
     if (oldBufferInfo.mBuffer != nullptr) {
-        uint32_t bufWidth = mBufferInfo.mBuffer->getBuffer()->getWidth();
-        uint32_t bufHeight = mBufferInfo.mBuffer->getBuffer()->getHeight();
-        if (bufWidth != uint32_t(oldBufferInfo.mBuffer->getBuffer()->width) ||
-            bufHeight != uint32_t(oldBufferInfo.mBuffer->getBuffer()->height)) {
+        uint32_t bufWidth = mBufferInfo.mBuffer->getWidth();
+        uint32_t bufHeight = mBufferInfo.mBuffer->getHeight();
+        if (bufWidth != oldBufferInfo.mBuffer->getWidth() ||
+            bufHeight != oldBufferInfo.mBuffer->getHeight()) {
             recomputeVisibleRegions = true;
         }
     }
@@ -577,7 +537,7 @@ uint32_t BufferLayer::getEffectiveScalingMode() const {
 
 bool BufferLayer::isProtected() const {
     return (mBufferInfo.mBuffer != nullptr) &&
-            (mBufferInfo.mBuffer->getBuffer()->getUsage() & GRALLOC_USAGE_PROTECTED);
+            (mBufferInfo.mBuffer->getUsage() & GRALLOC_USAGE_PROTECTED);
 }
 
 // As documented in libhardware header, formats in the range
@@ -587,15 +547,16 @@ bool BufferLayer::isProtected() const {
 // hardware.h, instead of using hard-coded values here.
 #define HARDWARE_IS_DEVICE_FORMAT(f) ((f) >= 0x100 && (f) <= 0x1FF)
 
-bool BufferLayer::getOpacityForFormat(uint32_t format) {
+bool BufferLayer::getOpacityForFormat(PixelFormat format) {
     if (HARDWARE_IS_DEVICE_FORMAT(format)) {
         return true;
     }
     switch (format) {
-        case HAL_PIXEL_FORMAT_RGBA_8888:
-        case HAL_PIXEL_FORMAT_BGRA_8888:
-        case HAL_PIXEL_FORMAT_RGBA_FP16:
-        case HAL_PIXEL_FORMAT_RGBA_1010102:
+        case PIXEL_FORMAT_RGBA_8888:
+        case PIXEL_FORMAT_BGRA_8888:
+        case PIXEL_FORMAT_RGBA_FP16:
+        case PIXEL_FORMAT_RGBA_1010102:
+        case PIXEL_FORMAT_R_8:
             return false;
     }
     // in all other case, we have no blending (also for unknown formats)
@@ -644,14 +605,6 @@ bool BufferLayer::needsFilteringForScreenshots(const DisplayDevice* display,
     return sourceCrop.getHeight() != frameHeight || sourceCrop.getWidth() != frameWidth;
 }
 
-uint64_t BufferLayer::getHeadFrameNumber(nsecs_t expectedPresentTime) const {
-    if (hasFrameUpdate()) {
-        return getFrameNumber(expectedPresentTime);
-    } else {
-        return mCurrentFrameNumber;
-    }
-}
-
 Rect BufferLayer::getBufferSize(const State& s) const {
     // If we have a sideband stream, or we are scaling the buffer then return the layer size since
     // we cannot determine the buffer size.
@@ -664,8 +617,8 @@ Rect BufferLayer::getBufferSize(const State& s) const {
         return Rect::INVALID_RECT;
     }
 
-    uint32_t bufWidth = mBufferInfo.mBuffer->getBuffer()->getWidth();
-    uint32_t bufHeight = mBufferInfo.mBuffer->getBuffer()->getHeight();
+    uint32_t bufWidth = mBufferInfo.mBuffer->getWidth();
+    uint32_t bufHeight = mBufferInfo.mBuffer->getHeight();
 
     // Undo any transformations on the buffer and return the result.
     if (mBufferInfo.mTransform & ui::Transform::ROT_90) {
@@ -696,8 +649,8 @@ FloatRect BufferLayer::computeSourceBounds(const FloatRect& parentBounds) const 
         return parentBounds;
     }
 
-    uint32_t bufWidth = mBufferInfo.mBuffer->getBuffer()->getWidth();
-    uint32_t bufHeight = mBufferInfo.mBuffer->getBuffer()->getHeight();
+    uint32_t bufWidth = mBufferInfo.mBuffer->getWidth();
+    uint32_t bufHeight = mBufferInfo.mBuffer->getHeight();
 
     // Undo any transformations on the buffer and return the result.
     if (mBufferInfo.mTransform & ui::Transform::ROT_90) {
@@ -715,7 +668,6 @@ FloatRect BufferLayer::computeSourceBounds(const FloatRect& parentBounds) const 
 }
 
 void BufferLayer::latchAndReleaseBuffer() {
-    mRefreshPending = false;
     if (hasReadyFrame()) {
         bool ignored = false;
         latchBuffer(ignored, systemTime(), 0 /* expectedPresentTime */);
@@ -739,7 +691,7 @@ Rect BufferLayer::getBufferCrop() const {
         return mBufferInfo.mCrop;
     } else if (mBufferInfo.mBuffer != nullptr) {
         // otherwise we use the whole buffer
-        return mBufferInfo.mBuffer->getBuffer()->getBounds();
+        return mBufferInfo.mBuffer->getBounds();
     } else {
         // if we don't have a buffer yet, we use an empty/invalid crop
         return Rect();
@@ -825,9 +777,9 @@ void BufferLayer::updateCloneBufferInfo() {
     wp<Layer> tmpZOrderRelativeOf = mDrawingState.zOrderRelativeOf;
     SortedVector<wp<Layer>> tmpZOrderRelatives = mDrawingState.zOrderRelatives;
     wp<Layer> tmpTouchableRegionCrop = mDrawingState.touchableRegionCrop;
-    InputWindowInfo tmpInputInfo = mDrawingState.inputInfo;
+    WindowInfo tmpInputInfo = mDrawingState.inputInfo;
 
-    mDrawingState = clonedFrom->mDrawingState;
+    cloneDrawingState(clonedFrom.get());
 
     mDrawingState.touchableRegionCrop = tmpTouchableRegionCrop;
     mDrawingState.zOrderRelativeOf = tmpZOrderRelativeOf;
@@ -844,6 +796,10 @@ void BufferLayer::setTransformHint(ui::Transform::RotationFlags displayTransform
 
 bool BufferLayer::bufferNeedsFiltering() const {
     return isFixedSize();
+}
+
+const std::shared_ptr<renderengine::ExternalTexture>& BufferLayer::getExternalTexture() const {
+    return mBufferInfo.mBuffer;
 }
 
 } // namespace android

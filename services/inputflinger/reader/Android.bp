@@ -71,6 +71,7 @@ cc_defaults {
         "libstatslog",
         "libui",
         "libutils",
+        "PlatformProperties",
     ],
     static_libs: [
         "libc++fs",
@@ -85,7 +86,7 @@ cc_library_shared {
     name: "libinputreader",
     defaults: [
         "inputflinger_defaults",
-        "libinputreader_defaults"
+        "libinputreader_defaults",
     ],
     srcs: [
         "InputReaderFactory.cpp",
@@ -99,6 +100,6 @@ cc_library_shared {
         "libinputreader_headers",
     ],
     static_libs: [
-        "libc++fs"
+        "libc++fs",
     ],
 }

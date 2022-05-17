@@ -16,6 +16,7 @@
 
 #include <attestation/HmacKeyManager.h>
 #include <gtest/gtest.h>
+#include <gui/constants.h>
 #include <input/Input.h>
 
 namespace android {
@@ -42,14 +43,13 @@ static MotionEvent getMotionEventWithFlags(int32_t flags) {
 
     ui::Transform transform;
     transform.set({2, 0, 4, 0, 3, 5, 0, 0, 1});
+    ui::Transform identity;
     event.initialize(InputEvent::nextId(), 0 /*deviceId*/, AINPUT_SOURCE_MOUSE, ADISPLAY_ID_DEFAULT,
                      INVALID_HMAC, AMOTION_EVENT_ACTION_DOWN, 0 /*actionButton*/, flags,
                      AMOTION_EVENT_EDGE_FLAG_NONE, AMETA_NONE, 0 /*buttonState*/,
                      MotionClassification::NONE, transform, 0.1 /*xPrecision*/, 0.2 /*yPrecision*/,
-                     280 /*xCursorPosition*/, 540 /*yCursorPosition*/,
-                     AMOTION_EVENT_INVALID_DISPLAY_SIZE, AMOTION_EVENT_INVALID_DISPLAY_SIZE,
-                     100 /*downTime*/, 200 /*eventTime*/, pointerCount, pointerProperties,
-                     pointerCoords);
+                     280 /*xCursorPosition*/, 540 /*yCursorPosition*/, identity, 100 /*downTime*/,
+                     200 /*eventTime*/, pointerCount, pointerProperties, pointerCoords);
     return event;
 }
 

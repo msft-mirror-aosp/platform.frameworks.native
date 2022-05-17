@@ -17,8 +17,8 @@
 #pragma once
 
 #include <android-base/thread_annotations.h>
+#include <android/gui/BnDisplayEventConnection.h>
 #include <gui/DisplayEventReceiver.h>
-#include <gui/IDisplayEventConnection.h>
 #include <private/gui/BitTube.h>
 #include <sys/types.h>
 #include <utils/Errors.h>
@@ -45,6 +45,9 @@ namespace frametimeline {
 class TokenManager;
 } // namespace frametimeline
 
+using gui::ParcelableVsyncEventData;
+using gui::VsyncEventData;
+
 // ---------------------------------------------------------------------------
 
 using ResyncCallback = std::function<void()>;
@@ -62,11 +65,16 @@ enum class VSyncRequest {
 
 class VSyncSource {
 public:
+    class VSyncData {
+    public:
+        nsecs_t expectedPresentationTime;
+        nsecs_t deadlineTimestamp;
+    };
+
     class Callback {
     public:
         virtual ~Callback() {}
-        virtual void onVSyncEvent(nsecs_t when, nsecs_t expectedVSyncTimestamp,
-                                  nsecs_t deadlineTimestamp) = 0;
+        virtual void onVSyncEvent(nsecs_t when, VSyncData vsyncData) = 0;
     };
 
     virtual ~VSyncSource() {}
@@ -76,11 +84,12 @@ public:
     virtual void setCallback(Callback* callback) = 0;
     virtual void setDuration(std::chrono::nanoseconds workDuration,
                              std::chrono::nanoseconds readyDuration) = 0;
+    virtual VSyncData getLatestVSyncData() const = 0;
 
     virtual void dump(std::string& result) const = 0;
 };
 
-class EventThreadConnection : public BnDisplayEventConnection {
+class EventThreadConnection : public gui::BnDisplayEventConnection {
 public:
     EventThreadConnection(EventThread*, uid_t callingUid, ResyncCallback,
                           ISurfaceComposer::EventRegistrationFlags eventRegistration = {});
@@ -88,9 +97,10 @@ public:
 
     virtual status_t postEvent(const DisplayEventReceiver::Event& event);
 
-    status_t stealReceiveChannel(gui::BitTube* outChannel) override;
-    status_t setVsyncRate(uint32_t rate) override;
-    void requestNextVsync() override; // asynchronous
+    binder::Status stealReceiveChannel(gui::BitTube* outChannel) override;
+    binder::Status setVsyncRate(int rate) override;
+    binder::Status requestNextVsync() override; // asynchronous
+    binder::Status getLatestVsyncEventData(ParcelableVsyncEventData* outVsyncEventData) override;
 
     // Called in response to requestNextVsync.
     const ResyncCallback resyncCallback;
@@ -124,8 +134,7 @@ public:
     virtual void onHotplugReceived(PhysicalDisplayId displayId, bool connected) = 0;
 
     // called when SF changes the active mode and apps needs to be notified about the change
-    virtual void onModeChanged(PhysicalDisplayId displayId, DisplayModeId modeId,
-                               nsecs_t vsyncPeriod) = 0;
+    virtual void onModeChanged(DisplayModePtr) = 0;
 
     // called when SF updates the Frame Rate Override list
     virtual void onFrameRateOverridesChanged(PhysicalDisplayId displayId,
@@ -141,6 +150,8 @@ public:
     virtual void setVsyncRate(uint32_t rate, const sp<EventThreadConnection>& connection) = 0;
     // Requests the next vsync. If resetIdleTimer is set to true, it resets the idle timer.
     virtual void requestNextVsync(const sp<EventThreadConnection>& connection) = 0;
+    virtual VsyncEventData getLatestVsyncEventData(
+            const sp<EventThreadConnection>& connection) const = 0;
 
     // Retrieves the number of event connections tracked by this EventThread.
     virtual size_t getEventThreadConnectionCount() = 0;
@@ -165,6 +176,8 @@ public:
     status_t registerDisplayEventConnection(const sp<EventThreadConnection>& connection) override;
     void setVsyncRate(uint32_t rate, const sp<EventThreadConnection>& connection) override;
     void requestNextVsync(const sp<EventThreadConnection>& connection) override;
+    VsyncEventData getLatestVsyncEventData(
+            const sp<EventThreadConnection>& connection) const override;
 
     // called before the screen is turned off from main thread
     void onScreenReleased() override;
@@ -174,8 +187,7 @@ public:
 
     void onHotplugReceived(PhysicalDisplayId displayId, bool connected) override;
 
-    void onModeChanged(PhysicalDisplayId displayId, DisplayModeId modeId,
-                       nsecs_t vsyncPeriod) override;
+    void onModeChanged(DisplayModePtr) override;
 
     void onFrameRateOverridesChanged(PhysicalDisplayId displayId,
                                      std::vector<FrameRateOverride> overrides) override;
@@ -203,8 +215,13 @@ private:
             REQUIRES(mMutex);
 
     // Implements VSyncSource::Callback
-    void onVSyncEvent(nsecs_t timestamp, nsecs_t expectedVSyncTimestamp,
-                      nsecs_t deadlineTimestamp) override;
+    void onVSyncEvent(nsecs_t timestamp, VSyncSource::VSyncData vsyncData) override;
+
+    int64_t generateToken(nsecs_t timestamp, nsecs_t deadlineTimestamp,
+                          nsecs_t expectedPresentationTime) const;
+    void generateFrameTimeline(VsyncEventData& outVsyncEventData, nsecs_t frameInterval,
+                               nsecs_t timestamp, nsecs_t preferredExpectedPresentationTime,
+                               nsecs_t preferredDeadlineTimestamp) const;
 
     const std::unique_ptr<VSyncSource> mVSyncSource GUARDED_BY(mMutex);
     frametimeline::TokenManager* const mTokenManager;
