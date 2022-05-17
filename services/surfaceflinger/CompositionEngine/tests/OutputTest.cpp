@@ -248,6 +248,20 @@ TEST_F(OutputTest, setCompositionEnabledSetsDisabledAndDirtiesEntireOutput) {
 }
 
 /*
+ * Output::setTreat170mAsSrgb()
+ */
+
+TEST_F(OutputTest, setTreat170mAsSrgb) {
+    EXPECT_FALSE(mOutput->getState().treat170mAsSrgb);
+
+    mOutput->setTreat170mAsSrgb(true);
+    EXPECT_TRUE(mOutput->getState().treat170mAsSrgb);
+
+    mOutput->setTreat170mAsSrgb(false);
+    EXPECT_FALSE(mOutput->getState().treat170mAsSrgb);
+}
+
+/*
  * Output::setLayerCachingEnabled()
  */
 
@@ -836,14 +850,20 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, updatesLayerContentForAllLayers
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer1.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(false, false, ui::Transform::ROT_180));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer2.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(false, false, ui::Transform::ROT_180));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer3.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
 
     injectOutputLayer(layer1);
     injectOutputLayer(layer2);
@@ -870,14 +890,20 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, updatesLayerGeometryAndContentF
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer1.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(true, false, ui::Transform::ROT_0));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer2.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(true, false, ui::Transform::ROT_0));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer3.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
 
     injectOutputLayer(layer1);
     injectOutputLayer(layer2);
@@ -903,14 +929,20 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, forcesClientCompositionForAllLa
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer1.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer2.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer3.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
 
     injectOutputLayer(layer1);
     injectOutputLayer(layer2);
@@ -936,6 +968,8 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, peekThroughLayerChangesOrder) {
     InSequence seq;
     EXPECT_CALL(*layer0.outputLayer, updateCompositionState(true, false, ui::Transform::ROT_0));
     EXPECT_CALL(*layer1.outputLayer, updateCompositionState(true, false, ui::Transform::ROT_0));
+        EXPECT_CALL(*layer1.outputLayer, requiresClientComposition())
+                .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(true, false, ui::Transform::ROT_0));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(true, false, ui::Transform::ROT_0));
 
@@ -943,6 +977,9 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, peekThroughLayerChangesOrder) {
     EXPECT_CALL(*layer0.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer0.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
+
 
     // After calling planComposition (which clears overrideInfo), this test sets
     // layer3 to be the peekThroughLayer for layer1 and layer2. As a result, it
@@ -952,12 +989,18 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, peekThroughLayerChangesOrder) {
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ true, /*isPeekingThrough*/
                                 true));
+    EXPECT_CALL(*layer3.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ true, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer1.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ true, z++,
                                 /*zIsOverridden*/ true, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer2.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
 
     injectOutputLayer(layer0);
     injectOutputLayer(layer1);
@@ -3354,7 +3397,6 @@ struct OutputComposeSurfacesTest : public testing::Test {
     static constexpr float kDefaultMaxLuminance = 0.9f;
     static constexpr float kDefaultAvgLuminance = 0.7f;
     static constexpr float kDefaultMinLuminance = 0.1f;
-    static constexpr float kUnknownLuminance = -1.f;
     static constexpr float kDisplayLuminance = 400.f;
     static constexpr float kClientTargetLuminanceNits = 200.f;
     static constexpr float kClientTargetBrightness = 0.5f;
@@ -3752,7 +3794,7 @@ struct OutputComposeSurfacesTest_UsesExpectedDisplaySettings : public OutputComp
 TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forHdrMixedComposition) {
     verify().ifMixedCompositionIs(true)
             .andIfUsesHdr(true)
-            .withDisplayBrightnessNits(kUnknownLuminance)
+            .withDisplayBrightnessNits(kDisplayLuminance)
             .withDimmingStage(aidl::android::hardware::graphics::composer3::DimmingStage::LINEAR)
             .withRenderIntent(
                     aidl::android::hardware::graphics::composer3::RenderIntent::COLORIMETRIC)
@@ -3761,7 +3803,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forHdrMixedComposi
                     {.physicalDisplay = kDefaultOutputDestinationClip,
                      .clip = kDefaultOutputViewport,
                      .maxLuminance = kDefaultMaxLuminance,
-                     .currentLuminanceNits = kDefaultMaxLuminance,
+                     .currentLuminanceNits = kDisplayLuminance,
                      .outputDataspace = kDefaultOutputDataspace,
                      .colorTransform = kDefaultColorTransformMat,
                      .deviceHandlesColorTransform = true,
@@ -3806,7 +3848,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings,
        forHdrMixedCompositionWithDimmingStage) {
     verify().ifMixedCompositionIs(true)
             .andIfUsesHdr(true)
-            .withDisplayBrightnessNits(kUnknownLuminance)
+            .withDisplayBrightnessNits(kDisplayLuminance)
             .withDimmingStage(
                     aidl::android::hardware::graphics::composer3::DimmingStage::GAMMA_OETF)
             .withRenderIntent(
@@ -3816,7 +3858,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings,
                     {.physicalDisplay = kDefaultOutputDestinationClip,
                      .clip = kDefaultOutputViewport,
                      .maxLuminance = kDefaultMaxLuminance,
-                     .currentLuminanceNits = kDefaultMaxLuminance,
+                     .currentLuminanceNits = kDisplayLuminance,
                      .outputDataspace = kDefaultOutputDataspace,
                      .colorTransform = kDefaultColorTransformMat,
                      .deviceHandlesColorTransform = true,
@@ -3834,7 +3876,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings,
        forHdrMixedCompositionWithRenderIntent) {
     verify().ifMixedCompositionIs(true)
             .andIfUsesHdr(true)
-            .withDisplayBrightnessNits(kUnknownLuminance)
+            .withDisplayBrightnessNits(kDisplayLuminance)
             .withDimmingStage(aidl::android::hardware::graphics::composer3::DimmingStage::LINEAR)
             .withRenderIntent(aidl::android::hardware::graphics::composer3::RenderIntent::ENHANCE)
             .andIfSkipColorTransform(false)
@@ -3842,7 +3884,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings,
                     {.physicalDisplay = kDefaultOutputDestinationClip,
                      .clip = kDefaultOutputViewport,
                      .maxLuminance = kDefaultMaxLuminance,
-                     .currentLuminanceNits = kDefaultMaxLuminance,
+                     .currentLuminanceNits = kDisplayLuminance,
                      .outputDataspace = kDefaultOutputDataspace,
                      .colorTransform = kDefaultColorTransformMat,
                      .deviceHandlesColorTransform = true,
@@ -3859,7 +3901,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings,
 TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forNonHdrMixedComposition) {
     verify().ifMixedCompositionIs(true)
             .andIfUsesHdr(false)
-            .withDisplayBrightnessNits(kUnknownLuminance)
+            .withDisplayBrightnessNits(kDisplayLuminance)
             .withDimmingStage(aidl::android::hardware::graphics::composer3::DimmingStage::LINEAR)
             .withRenderIntent(
                     aidl::android::hardware::graphics::composer3::RenderIntent::COLORIMETRIC)
@@ -3868,7 +3910,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forNonHdrMixedComp
                     {.physicalDisplay = kDefaultOutputDestinationClip,
                      .clip = kDefaultOutputViewport,
                      .maxLuminance = kDefaultMaxLuminance,
-                     .currentLuminanceNits = kDefaultMaxLuminance,
+                     .currentLuminanceNits = kDisplayLuminance,
                      .outputDataspace = kDefaultOutputDataspace,
                      .colorTransform = kDefaultColorTransformMat,
                      .deviceHandlesColorTransform = true,
@@ -3885,7 +3927,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forNonHdrMixedComp
 TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forHdrOnlyClientComposition) {
     verify().ifMixedCompositionIs(false)
             .andIfUsesHdr(true)
-            .withDisplayBrightnessNits(kUnknownLuminance)
+            .withDisplayBrightnessNits(kDisplayLuminance)
             .withDimmingStage(aidl::android::hardware::graphics::composer3::DimmingStage::LINEAR)
             .withRenderIntent(
                     aidl::android::hardware::graphics::composer3::RenderIntent::COLORIMETRIC)
@@ -3894,7 +3936,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forHdrOnlyClientCo
                     {.physicalDisplay = kDefaultOutputDestinationClip,
                      .clip = kDefaultOutputViewport,
                      .maxLuminance = kDefaultMaxLuminance,
-                     .currentLuminanceNits = kDefaultMaxLuminance,
+                     .currentLuminanceNits = kDisplayLuminance,
                      .outputDataspace = kDefaultOutputDataspace,
                      .colorTransform = kDefaultColorTransformMat,
                      .deviceHandlesColorTransform = false,
@@ -3911,7 +3953,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forHdrOnlyClientCo
 TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forNonHdrOnlyClientComposition) {
     verify().ifMixedCompositionIs(false)
             .andIfUsesHdr(false)
-            .withDisplayBrightnessNits(kUnknownLuminance)
+            .withDisplayBrightnessNits(kDisplayLuminance)
             .withDimmingStage(aidl::android::hardware::graphics::composer3::DimmingStage::LINEAR)
             .withRenderIntent(
                     aidl::android::hardware::graphics::composer3::RenderIntent::COLORIMETRIC)
@@ -3920,7 +3962,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings, forNonHdrOnlyClien
                     {.physicalDisplay = kDefaultOutputDestinationClip,
                      .clip = kDefaultOutputViewport,
                      .maxLuminance = kDefaultMaxLuminance,
-                     .currentLuminanceNits = kDefaultMaxLuminance,
+                     .currentLuminanceNits = kDisplayLuminance,
                      .outputDataspace = kDefaultOutputDataspace,
                      .colorTransform = kDefaultColorTransformMat,
                      .deviceHandlesColorTransform = false,
@@ -3938,7 +3980,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings,
        usesExpectedDisplaySettingsForHdrOnlyClientCompositionWithSkipClientTransform) {
     verify().ifMixedCompositionIs(false)
             .andIfUsesHdr(true)
-            .withDisplayBrightnessNits(kUnknownLuminance)
+            .withDisplayBrightnessNits(kDisplayLuminance)
             .withDimmingStage(aidl::android::hardware::graphics::composer3::DimmingStage::LINEAR)
             .withRenderIntent(
                     aidl::android::hardware::graphics::composer3::RenderIntent::COLORIMETRIC)
@@ -3947,7 +3989,7 @@ TEST_F(OutputComposeSurfacesTest_UsesExpectedDisplaySettings,
                     {.physicalDisplay = kDefaultOutputDestinationClip,
                      .clip = kDefaultOutputViewport,
                      .maxLuminance = kDefaultMaxLuminance,
-                     .currentLuminanceNits = kDefaultMaxLuminance,
+                     .currentLuminanceNits = kDisplayLuminance,
                      .outputDataspace = kDefaultOutputDataspace,
                      .colorTransform = kDefaultColorTransformMat,
                      .deviceHandlesColorTransform = true,
@@ -4785,10 +4827,14 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, noBackgroundBlurWhenOpaque) {
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer1.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(false, false, ui::Transform::ROT_0));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer2.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
 
     layer2.layerFEState.backgroundBlurRadius = 10;
     layer2.layerFEState.isOpaque = true;
@@ -4817,14 +4863,20 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, handlesBackgroundBlurRequests) 
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer1.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer2.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(false, false, ui::Transform::ROT_0));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer3.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
 
     layer2.layerFEState.backgroundBlurRadius = 10;
     layer2.layerFEState.isOpaque = false;
@@ -4854,14 +4906,20 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, handlesBlurRegionRequests) {
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer1.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer2.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(false, false, ui::Transform::ROT_0));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+    EXPECT_CALL(*layer3.outputLayer, requiresClientComposition())
+            .WillRepeatedly(Return(false));
 
     BlurRegion region;
     layer2.layerFEState.blurRegions.push_back(region);
