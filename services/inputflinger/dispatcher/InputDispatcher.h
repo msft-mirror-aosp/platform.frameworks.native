@@ -104,7 +104,7 @@ public:
     void notifyPointerCaptureChanged(const NotifyPointerCaptureChangedArgs* args) override;
 
     android::os::InputEventInjectionResult injectInputEvent(
-            const InputEvent* event, int32_t injectorPid, int32_t injectorUid,
+            const InputEvent* event, std::optional<int32_t> targetUid,
             android::os::InputEventInjectionSync syncMode, std::chrono::milliseconds timeout,
             uint32_t policyFlags) override;
 
@@ -125,7 +125,7 @@ public:
 
     bool transferTouchFocus(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
                             bool isDragDrop = false) override;
-    bool transferTouch(const sp<IBinder>& destChannelToken) override;
+    bool transferTouch(const sp<IBinder>& destChannelToken, int32_t displayId) override;
 
     base::Result<std::unique_ptr<InputChannel>> createInputChannel(
             const std::string& name) override;
@@ -221,7 +221,8 @@ private:
                                  const std::string& reason) REQUIRES(mLock);
     // Enqueues a drag event.
     void enqueueDragEventLocked(const sp<android::gui::WindowInfoHandle>& windowToken,
-                                bool isExiting, const MotionEntry& motionEntry) REQUIRES(mLock);
+                                bool isExiting, const int32_t rawX, const int32_t rawY)
+            REQUIRES(mLock);
 
     // Adds an event to a queue of recent events for debugging purposes.
     void addRecentEventLocked(std::shared_ptr<EventEntry> entry) REQUIRES(mLock);
@@ -244,6 +245,9 @@ private:
 
     std::vector<sp<android::gui::WindowInfoHandle>> findTouchedSpyWindowsAtLocked(
             int32_t displayId, int32_t x, int32_t y, bool isStylus) const REQUIRES(mLock);
+
+    sp<android::gui::WindowInfoHandle> findTouchedForegroundWindowLocked(int32_t displayId) const
+            REQUIRES(mLock);
 
     sp<Connection> getConnectionLocked(const sp<IBinder>& inputConnectionToken) const
             REQUIRES(mLock);
@@ -275,7 +279,6 @@ private:
 
     // Event injection and synchronization.
     std::condition_variable mInjectionResultAvailable;
-    bool hasInjectionPermission(int32_t injectorPid, int32_t injectorUid);
     void setInjectionResult(EventEntry& entry,
                             android::os::InputEventInjectionResult injectionResult);
     void transformMotionEntryForInjectionLocked(MotionEntry&,
@@ -433,7 +436,8 @@ private:
     // Dispatcher state at time of last ANR.
     std::string mLastAnrState GUARDED_BY(mLock);
 
-    // The connection tokens of the channels that the user last interacted, for debugging
+    // The connection tokens of the channels that the user last interacted (used for debugging and
+    // when switching touch mode state).
     std::unordered_set<sp<IBinder>, StrongPointerHash<IBinder>> mInteractionConnectionTokens
             GUARDED_BY(mLock);
     void updateInteractionTokensLocked(const EventEntry& entry,
@@ -550,8 +554,6 @@ private:
     void addGlobalMonitoringTargetsLocked(std::vector<InputTarget>& inputTargets, int32_t displayId)
             REQUIRES(mLock);
     void pokeUserActivityLocked(const EventEntry& eventEntry) REQUIRES(mLock);
-    bool checkInjectionPermission(const sp<android::gui::WindowInfoHandle>& windowHandle,
-                                  const InjectionState* injectionState);
     // Enqueue a drag event if needed, and update the touch state.
     // Uses findTouchedWindowTargetsLocked to make the decision
     void addDragEventLocked(const MotionEntry& entry) REQUIRES(mLock);
@@ -676,6 +678,10 @@ private:
     void traceInboundQueueLengthLocked() REQUIRES(mLock);
     void traceOutboundQueueLength(const Connection& connection);
     void traceWaitQueueLength(const Connection& connection);
+
+    // Check window ownership
+    bool focusedWindowIsOwnedByLocked(int32_t pid, int32_t uid) REQUIRES(mLock);
+    bool recentWindowsAreOwnedByLocked(int32_t pid, int32_t uid) REQUIRES(mLock);
 
     sp<InputReporterInterface> mReporter;
 };

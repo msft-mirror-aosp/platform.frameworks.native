@@ -17,6 +17,7 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <variant>
 
 #include <compositionengine/Display.h>
@@ -200,6 +201,10 @@ public:
                 std::make_unique<impl::HWComposer>(std::move(composer)));
     }
 
+    void setupPowerAdvisor(std::unique_ptr<Hwc2::PowerAdvisor> powerAdvisor) {
+        mFlinger->mPowerAdvisor = std::move(powerAdvisor);
+    }
+
     void setupTimeStats(const std::shared_ptr<TimeStats>& timeStats) {
         mFlinger->mCompositionEngine->setTimeStats(timeStats);
     }
@@ -328,11 +333,26 @@ public:
     /* ------------------------------------------------------------------------
      * Forwarding for functions being tested
      */
+
+    nsecs_t commit(nsecs_t frameTime, int64_t vsyncId, nsecs_t expectedVSyncTime) {
+        mFlinger->commit(frameTime, vsyncId, expectedVSyncTime);
+        return frameTime;
+    }
+
+    nsecs_t commit(nsecs_t frameTime, int64_t vsyncId) {
+        std::chrono::nanoseconds period = 10ms;
+        return commit(frameTime, vsyncId, frameTime + period.count());
+    }
+
     nsecs_t commit() {
         const nsecs_t now = systemTime();
         const nsecs_t expectedVsyncTime = now + 10'000'000;
-        mFlinger->commit(now, kVsyncId, expectedVsyncTime);
-        return now;
+        return commit(now, kVsyncId, expectedVsyncTime);
+    }
+
+    void commitAndComposite(const nsecs_t frameTime, const int64_t vsyncId,
+                            const nsecs_t expectedVsyncTime) {
+        mFlinger->composite(commit(frameTime, vsyncId, expectedVsyncTime), kVsyncId);
     }
 
     void commitAndComposite() { mFlinger->composite(commit(), kVsyncId); }
@@ -458,11 +478,6 @@ public:
         mFlinger->onActiveDisplayChangedLocked(activeDisplay);
     }
 
-    auto commit(nsecs_t frameTime, int64_t vsyncId) {
-        const nsecs_t expectedVsyncTime = frameTime + 10'000'000;
-        mFlinger->commit(frameTime, vsyncId, expectedVsyncTime);
-    }
-
     auto createLayer(LayerCreationArgs& args, sp<IBinder>* outHandle,
                      const sp<IBinder>& parentHandle, int32_t* outLayerId,
                      const sp<Layer>& parentLayer, uint32_t* outTransformHint) {
@@ -502,6 +517,12 @@ public:
      * post-conditions.
      */
 
+    const auto& displays() const { return mFlinger->mDisplays; }
+    const auto& currentState() const { return mFlinger->mCurrentState; }
+    const auto& drawingState() const { return mFlinger->mDrawingState; }
+    const auto& transactionFlags() const { return mFlinger->mTransactionFlags; }
+    const auto& hwcPhysicalDisplayIdMap() const { return getHwComposer().mPhysicalDisplayIdMap; }
+
     auto& mutableHasWideColorDisplay() { return SurfaceFlinger::hasWideColorDisplay; }
 
     auto& mutableCurrentState() { return mFlinger->mCurrentState; }
@@ -515,7 +536,6 @@ public:
     auto& mutablePhysicalDisplayTokens() { return mFlinger->mPhysicalDisplayTokens; }
     auto& mutableTexturePool() { return mFlinger->mTexturePool; }
     auto& mutableTransactionFlags() { return mFlinger->mTransactionFlags; }
-    auto& mutablePowerAdvisor() { return mFlinger->mPowerAdvisor; }
     auto& mutableDebugDisableHWC() { return mFlinger->mDebugDisableHWC; }
     auto& mutableMaxRenderTargetSize() { return mFlinger->mMaxRenderTargetSize; }
 
@@ -741,7 +761,9 @@ public:
             return mFlinger.mutableCurrentState().displays.valueFor(mDisplayToken);
         }
 
-        auto& mutableDisplayDevice() { return mFlinger.mutableDisplays()[mDisplayToken]; }
+        const sp<DisplayDevice>& mutableDisplayDevice() {
+            return mFlinger.mutableDisplays().get(mDisplayToken)->get();
+        }
 
         // If `configs` is nullptr, the injector creates RefreshRateConfigs from the `modes`.
         // Otherwise, it uses `configs`, which the caller must create using the same `modes`.
@@ -848,12 +870,14 @@ public:
             if (!display->isVirtual()) {
                 display->setActiveMode(activeModeId);
             }
-            mFlinger.mutableDisplays().emplace(mDisplayToken, display);
+            mFlinger.mutableDisplays().emplace_or_replace(mDisplayToken, display);
+
             mFlinger.mutableCurrentState().displays.add(mDisplayToken, state);
             mFlinger.mutableDrawingState().displays.add(mDisplayToken, state);
 
             if (const auto& physical = state.physical) {
-                mFlinger.mutablePhysicalDisplayTokens()[physical->id] = mDisplayToken;
+                mFlinger.mutablePhysicalDisplayTokens().emplace_or_replace(physical->id,
+                                                                           mDisplayToken);
             }
 
             return display;

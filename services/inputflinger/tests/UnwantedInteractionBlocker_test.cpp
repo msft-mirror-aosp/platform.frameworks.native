@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <gui/constants.h>
 #include <linux/input.h>
+#include <thread>
 
 #include "TestInputListener.h"
 
@@ -490,6 +491,14 @@ TEST_F(UnwantedInteractionBlockerTest, NoCrashWhenResetHappens) {
             &(args = generateMotionArgs(0 /*downTime*/, 4 /*eventTime*/, DOWN, {{7, 8, 9}})));
 }
 
+TEST_F(UnwantedInteractionBlockerTest, NoCrashWhenStylusSourceWithFingerToolIsReceived) {
+    mBlocker->notifyInputDevicesChanged({generateTestDeviceInfo()});
+    NotifyMotionArgs args = generateMotionArgs(0 /*downTime*/, 1 /*eventTime*/, DOWN, {{1, 2, 3}});
+    args.pointerProperties[0].toolType = AMOTION_EVENT_TOOL_TYPE_FINGER;
+    args.source = AINPUT_SOURCE_STYLUS;
+    mBlocker->notifyMotion(&args);
+}
+
 /**
  * If input devices have changed, but the important device info that's used by the
  * UnwantedInteractionBlocker has not changed, there should not be a reset.
@@ -509,6 +518,55 @@ TEST_F(UnwantedInteractionBlockerTest, NoResetIfDeviceInfoChanges) {
     // cause a crash.
     mBlocker->notifyMotion(
             &(args = generateMotionArgs(0 /*downTime*/, 4 /*eventTime*/, MOVE, {{7, 8, 9}})));
+}
+
+/**
+ * Send a touch event, and then a stylus event. Make sure that both work.
+ */
+TEST_F(UnwantedInteractionBlockerTest, StylusAfterTouchWorks) {
+    NotifyMotionArgs args;
+    mBlocker->notifyInputDevicesChanged({generateTestDeviceInfo()});
+    args = generateMotionArgs(0 /*downTime*/, 0 /*eventTime*/, DOWN, {{1, 2, 3}});
+    mBlocker->notifyMotion(&args);
+    args = generateMotionArgs(0 /*downTime*/, 1 /*eventTime*/, MOVE, {{4, 5, 6}});
+    mBlocker->notifyMotion(&args);
+    args = generateMotionArgs(0 /*downTime*/, 2 /*eventTime*/, UP, {{4, 5, 6}});
+    mBlocker->notifyMotion(&args);
+
+    // Now touch down stylus
+    args = generateMotionArgs(3 /*downTime*/, 3 /*eventTime*/, DOWN, {{10, 20, 30}});
+    args.pointerProperties[0].toolType = AMOTION_EVENT_TOOL_TYPE_STYLUS;
+    args.source |= AINPUT_SOURCE_STYLUS;
+    mBlocker->notifyMotion(&args);
+    args = generateMotionArgs(3 /*downTime*/, 4 /*eventTime*/, MOVE, {{40, 50, 60}});
+    args.pointerProperties[0].toolType = AMOTION_EVENT_TOOL_TYPE_STYLUS;
+    args.source |= AINPUT_SOURCE_STYLUS;
+    mBlocker->notifyMotion(&args);
+    args = generateMotionArgs(3 /*downTime*/, 5 /*eventTime*/, UP, {{40, 50, 60}});
+    args.pointerProperties[0].toolType = AMOTION_EVENT_TOOL_TYPE_STYLUS;
+    args.source |= AINPUT_SOURCE_STYLUS;
+    mBlocker->notifyMotion(&args);
+}
+
+/**
+ * Call dump, and on another thread, try to send some motions. The blocker should
+ * not crash. On 2022 hardware, this test requires ~ 13K executions (about 20 seconds) to reproduce
+ * the original bug. This is meant to be run with "--gtest_repeat=100000 --gtest_break_on_failure"
+ * options
+ */
+TEST_F(UnwantedInteractionBlockerTest, DumpCanBeAccessedOnAnotherThread) {
+    mBlocker->notifyInputDevicesChanged({generateTestDeviceInfo()});
+    NotifyMotionArgs args1 = generateMotionArgs(0 /*downTime*/, 0 /*eventTime*/, DOWN, {{1, 2, 3}});
+    mBlocker->notifyMotion(&args1);
+    std::thread dumpThread([this]() {
+        std::string dump;
+        mBlocker->dump(dump);
+    });
+    NotifyMotionArgs args2 = generateMotionArgs(0 /*downTime*/, 1 /*eventTime*/, MOVE, {{4, 5, 6}});
+    mBlocker->notifyMotion(&args2);
+    NotifyMotionArgs args3 = generateMotionArgs(0 /*downTime*/, 2 /*eventTime*/, UP, {{4, 5, 6}});
+    mBlocker->notifyMotion(&args3);
+    dumpThread.join();
 }
 
 using UnwantedInteractionBlockerTestDeathTest = UnwantedInteractionBlockerTest;
