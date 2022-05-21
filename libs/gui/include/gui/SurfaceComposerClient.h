@@ -491,6 +491,7 @@ public:
                 uint32_t flags, uint32_t mask);
         Transaction& setTransparentRegionHint(const sp<SurfaceControl>& sc,
                 const Region& transparentRegion);
+        Transaction& setDimmingEnabled(const sp<SurfaceControl>& sc, bool dimmingEnabled);
         Transaction& setAlpha(const sp<SurfaceControl>& sc,
                 float alpha);
         Transaction& setMatrix(const sp<SurfaceControl>& sc,
@@ -771,6 +772,7 @@ protected:
     // This is protected by mSurfaceStatsListenerMutex, but GUARDED_BY isn't supported for
     // std::recursive_mutex
     std::multimap<int32_t, SurfaceStatsCallbackEntry> mSurfaceStatsListeners;
+    std::unordered_map<void*, std::function<void()>> mQueueStallListeners;
 
 public:
     static sp<TransactionCompletedListener> getInstance();
@@ -787,6 +789,9 @@ public:
     void addSurfaceControlToCallbacks(
             const sp<SurfaceControl>& surfaceControl,
             const std::unordered_set<CallbackId, CallbackIdHash>& callbackIds);
+
+    void addQueueStallListener(std::function<void()> stallListener, void* id);
+    void removeQueueStallListener(void *id);
 
     /*
      * Adds a jank listener to be informed about SurfaceFlinger's jank classification for a specific
@@ -815,6 +820,8 @@ public:
 
     // For Testing Only
     static void setInstance(const sp<TransactionCompletedListener>&);
+
+    void onTransactionQueueStalled() override;
 
 private:
     ReleaseBufferCallback popReleaseBufferCallbackLocked(const ReleaseCallbackId&);

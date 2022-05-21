@@ -33,6 +33,7 @@
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
 #include <aidl/android/hardware/graphics/composer3/Capability.h>
+#include <aidl/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.h>
 #include <aidl/android/hardware/graphics/composer3/Color.h>
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
@@ -236,7 +237,7 @@ public:
             return applyImmediately == other.applyImmediately;
         }
     };
-    virtual Error setDisplayBrightness(Display display, float brightness,
+    virtual Error setDisplayBrightness(Display display, float brightness, float brightnessNits,
                                        const DisplayBrightnessOptions& options) = 0;
 
     // Composer HAL 2.4
@@ -264,8 +265,7 @@ public:
             std::vector<IComposerClient::LayerGenericMetadataKey>* outKeys) = 0;
 
     virtual Error getClientTargetProperty(
-            Display display, IComposerClient::ClientTargetProperty* outClientTargetProperty,
-            float* outBrightness) = 0;
+            Display display, V3_0::ClientTargetPropertyWithBrightness* outClientTargetProperty) = 0;
 
     // AIDL Composer
     virtual Error setLayerBrightness(Display display, Layer layer, float brightness) = 0;

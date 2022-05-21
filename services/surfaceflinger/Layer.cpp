@@ -37,6 +37,7 @@
 #include <cutils/native_handle.h>
 #include <cutils/properties.h>
 #include <ftl/enum.h>
+#include <ftl/fake_guard.h>
 #include <gui/BufferItem.h>
 #include <gui/LayerDebugInfo.h>
 #include <gui/Surface.h>
@@ -46,6 +47,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <system/graphics-base-v1.0.h>
 #include <ui/DataspaceUtils.h>
 #include <ui/DebugUtils.h>
 #include <ui/GraphicBuffer.h>
@@ -81,10 +83,12 @@ namespace {
 constexpr int kDumpTableRowLength = 159;
 } // namespace
 
+using namespace ftl::flag_operators;
+
 using base::StringAppendF;
-using namespace android::flag_operators;
-using PresentState = frametimeline::SurfaceFrame::PresentState;
 using gui::WindowInfo;
+
+using PresentState = frametimeline::SurfaceFrame::PresentState;
 
 std::atomic<int32_t> Layer::sSequence{1};
 
@@ -139,6 +143,7 @@ Layer::Layer(const LayerCreationArgs& args)
     mDrawingState.destinationFrame.makeInvalid();
     mDrawingState.isTrustedOverlay = false;
     mDrawingState.dropInputMode = gui::DropInputMode::NONE;
+    mDrawingState.dimmingEnabled = true;
 
     if (args.flags & ISurfaceComposerClient::eNoColorFill) {
         // Set an invalid color so there is no color fill.
@@ -146,10 +151,8 @@ Layer::Layer(const LayerCreationArgs& args)
         mDrawingState.color.g = -1.0_hf;
         mDrawingState.color.b = -1.0_hf;
     }
-
     CompositorTiming compositorTiming;
     args.flinger->getCompositorTiming(&compositorTiming);
-    mFrameEventHistory.initializeCompositorTiming(compositorTiming);
     mFrameTracker.setDisplayRefreshPeriod(compositorTiming.interval);
 
     mCallingPid = args.callingPid;
@@ -208,8 +211,7 @@ LayerCreationArgs::LayerCreationArgs(SurfaceFlinger* flinger, sp<Client> client,
  * Layer.  So, the implementation is done in BufferLayer.  When called on a
  * EffectLayer object, it's essentially a NOP.
  */
-void Layer::onLayerDisplayed(
-        std::shared_future<renderengine::RenderEngineResult> /*futureRenderEngineResult*/) {}
+void Layer::onLayerDisplayed(ftl::SharedFuture<FenceResult>) {}
 
 void Layer::removeRelativeZ(const std::vector<Layer*>& layersInTree) {
     if (mDrawingState.zOrderRelativeOf == nullptr) {
@@ -477,6 +479,7 @@ void Layer::preparePerFrameCompositionState() {
     compositionState->colorTransformIsIdentity = !hasColorTransform();
     compositionState->surfaceDamage = surfaceDamageRegion;
     compositionState->hasProtectedContent = isProtected();
+    compositionState->dimmingEnabled = isDimmingEnabled();
 
     const bool usesRoundedCorners = getRoundedCornerState().radius != 0.f;
 
@@ -594,6 +597,18 @@ std::optional<compositionengine::LayerFE::LayerSettings> Layer::prepareClientCom
 
     layerSettings.alpha = alpha;
     layerSettings.sourceDataspace = getDataSpace();
+
+    // Override the dataspace transfer from 170M to sRGB if the device configuration requests this.
+    // We do this here instead of in buffer info so that dumpsys can still report layers that are
+    // using the 170M transfer.
+    if (mFlinger->mTreat170mAsSrgb &&
+        (layerSettings.sourceDataspace & HAL_DATASPACE_TRANSFER_MASK) ==
+                HAL_DATASPACE_TRANSFER_SMPTE_170M) {
+        layerSettings.sourceDataspace = static_cast<ui::Dataspace>(
+                (layerSettings.sourceDataspace & HAL_DATASPACE_STANDARD_MASK) |
+                (layerSettings.sourceDataspace & HAL_DATASPACE_RANGE_MASK) |
+                HAL_DATASPACE_TRANSFER_SRGB);
+    }
 
     layerSettings.whitePointNits = targetSettings.whitePointNits;
     switch (targetSettings.blurSetting) {
@@ -1033,6 +1048,16 @@ bool Layer::setColorSpaceAgnostic(const bool agnostic) {
     }
     mDrawingState.sequence++;
     mDrawingState.colorSpaceAgnostic = agnostic;
+    mDrawingState.modified = true;
+    setTransactionFlags(eTransactionNeeded);
+    return true;
+}
+
+bool Layer::setDimmingEnabled(const bool dimmingEnabled) {
+    if (mDrawingState.dimmingEnabled == dimmingEnabled) return false;
+
+    mDrawingState.sequence++;
+    mDrawingState.dimmingEnabled = dimmingEnabled;
     mDrawingState.modified = true;
     setTransactionFlags(eTransactionNeeded);
     return true;
@@ -1504,51 +1529,15 @@ void Layer::getFrameStats(FrameStats* outStats) const {
     mFrameTracker.getStats(outStats);
 }
 
-void Layer::dumpFrameEvents(std::string& result) {
-    StringAppendF(&result, "- Layer %s (%s, %p)\n", getName().c_str(), getType(), this);
-    Mutex::Autolock lock(mFrameEventHistoryMutex);
-    mFrameEventHistory.checkFencesForCompletion();
-    mFrameEventHistory.dump(result);
-}
-
 void Layer::dumpCallingUidPid(std::string& result) const {
     StringAppendF(&result, "Layer %s (%s) callingPid:%d callingUid:%d ownerUid:%d\n",
                   getName().c_str(), getType(), mCallingPid, mCallingUid, mOwnerUid);
 }
 
 void Layer::onDisconnect() {
-    Mutex::Autolock lock(mFrameEventHistoryMutex);
-    mFrameEventHistory.onDisconnect();
     const int32_t layerId = getSequence();
     mFlinger->mTimeStats->onDestroy(layerId);
     mFlinger->mFrameTracer->onDestroy(layerId);
-}
-
-void Layer::addAndGetFrameTimestamps(const NewFrameEventsEntry* newTimestamps,
-                                     FrameEventHistoryDelta* outDelta) {
-    if (newTimestamps) {
-        mFlinger->mTimeStats->setPostTime(getSequence(), newTimestamps->frameNumber,
-                                          getName().c_str(), mOwnerUid, newTimestamps->postedTime,
-                                          getGameMode());
-        mFlinger->mTimeStats->setAcquireFence(getSequence(), newTimestamps->frameNumber,
-                                              newTimestamps->acquireFence);
-    }
-
-    Mutex::Autolock lock(mFrameEventHistoryMutex);
-    if (newTimestamps) {
-        // If there are any unsignaled fences in the aquire timeline at this
-        // point, the previously queued frame hasn't been latched yet. Go ahead
-        // and try to get the signal time here so the syscall is taken out of
-        // the main thread's critical path.
-        mAcquireTimeline.updateSignalTimes();
-        // Push the new fence after updating since it's likely still pending.
-        mAcquireTimeline.push(newTimestamps->acquireFence);
-        mFrameEventHistory.addQueue(*newTimestamps);
-    }
-
-    if (outDelta) {
-        mFrameEventHistory.getAndResetDelta(outDelta);
-    }
 }
 
 size_t Layer::getChildrenCount() const {
@@ -2045,10 +2034,10 @@ LayerProto* Layer::writeToProto(LayersProto& layersProto, uint32_t traceFlags) {
     writeToProtoCommonState(layerProto, LayerVector::StateSet::Drawing, traceFlags);
 
     if (traceFlags & LayerTracing::TRACE_COMPOSITION) {
+        ftl::FakeGuard guard(mFlinger->mStateLock); // Called from the main thread.
+
         // Only populate for the primary display.
-        UnnecessaryLock assumeLocked(mFlinger->mStateLock); // called from the main thread.
-        const auto display = mFlinger->getDefaultDisplayDeviceLocked();
-        if (display) {
+        if (const auto display = mFlinger->getDefaultDisplayDeviceLocked()) {
             const auto compositionType = getCompositionType(*display);
             layerProto->set_hwc_composition_type(static_cast<HwcCompositionType>(compositionType));
             LayerProtoHelper::writeToProto(getVisibleRegion(display.get()),
@@ -2170,7 +2159,7 @@ void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet
 
     layerInfo->set_owner_uid(mOwnerUid);
 
-    if (traceFlags & LayerTracing::TRACE_INPUT) {
+    if ((traceFlags & LayerTracing::TRACE_INPUT) && needsInputInfo()) {
         WindowInfo info;
         if (useDrawing) {
             info = fillInputInfo(ui::Transform(), /* displayIsSecure */ true);
@@ -2581,6 +2570,8 @@ Layer::FrameRateCompatibility Layer::FrameRate::convertCompatibility(int8_t comp
             return FrameRateCompatibility::ExactOrMultiple;
         case ANATIVEWINDOW_FRAME_RATE_EXACT:
             return FrameRateCompatibility::Exact;
+        case ANATIVEWINDOW_FRAME_RATE_NO_VOTE:
+            return FrameRateCompatibility::NoVote;
         default:
             LOG_ALWAYS_FATAL("Invalid frame rate compatibility value %d", compatibility);
             return FrameRateCompatibility::Default;
@@ -2645,6 +2636,18 @@ void Layer::cloneDrawingState(const Layer* from) {
     // Skip callback info since they are not applicable for cloned layers.
     mDrawingState.releaseBufferListener = nullptr;
     mDrawingState.callbackHandles = {};
+}
+
+bool Layer::setTransactionCompletedListeners(const std::vector<sp<CallbackHandle>>& handles) {
+    if (handles.empty()) {
+        return false;
+    }
+
+    for (const auto& handle : handles) {
+        mFlinger->getTransactionCallbackInvoker().registerUnpresentedCallbackHandle(handle);
+    }
+
+    return true;
 }
 
 // ---------------------------------------------------------------------------

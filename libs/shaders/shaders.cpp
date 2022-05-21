@@ -78,7 +78,7 @@ void generateEOTF(ui::Dataspace dataspace, std::string& shader) {
             shader.append(R"(
 
                 float EOTF_sRGB(float srgb) {
-                    return srgb <= 0.08125 ? srgb / 4.50 : pow((srgb + 0.099) / 1.099, 0.45);
+                    return srgb <= 0.08125 ? srgb / 4.50 : pow((srgb + 0.099) / 1.099, 1 / 0.45);
                 }
 
                 float3 EOTF_sRGB(float3 srgb) {
@@ -464,12 +464,10 @@ std::string buildLinearEffectSkSL(const LinearEffect& linearEffect) {
 }
 
 // Generates a list of uniforms to set on the LinearEffect shader above.
-std::vector<tonemap::ShaderUniform> buildLinearEffectUniforms(const LinearEffect& linearEffect,
-                                                              const mat4& colorTransform,
-                                                              float maxDisplayLuminance,
-                                                              float currentDisplayLuminanceNits,
-                                                              float maxLuminance,
-                                                              AHardwareBuffer* buffer) {
+std::vector<tonemap::ShaderUniform> buildLinearEffectUniforms(
+        const LinearEffect& linearEffect, const mat4& colorTransform, float maxDisplayLuminance,
+        float currentDisplayLuminanceNits, float maxLuminance, AHardwareBuffer* buffer,
+        aidl::android::hardware::graphics::composer3::RenderIntent renderIntent) {
     std::vector<tonemap::ShaderUniform> uniforms;
     if (linearEffect.inputDataspace == linearEffect.outputDataspace) {
         uniforms.push_back({.name = "in_rgbToXyz", .value = buildUniformValue<mat4>(mat4())});
@@ -495,7 +493,8 @@ std::vector<tonemap::ShaderUniform> buildLinearEffectUniforms(const LinearEffect
                                .currentDisplayLuminance = currentDisplayLuminanceNits > 0
                                        ? currentDisplayLuminanceNits
                                        : maxDisplayLuminance,
-                               .buffer = buffer};
+                               .buffer = buffer,
+                               .renderIntent = renderIntent};
 
     for (const auto uniform : tonemap::getToneMapper()->generateShaderSkSLUniforms(metadata)) {
         uniforms.push_back(uniform);

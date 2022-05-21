@@ -30,7 +30,6 @@
 #include <compositionengine/Output.h>
 #include <compositionengine/OutputLayer.h>
 #include <compositionengine/impl/OutputLayerCompositionState.h>
-#include <ftl/future.h>
 #include <log/log.h>
 #include <ui/DebugUtils.h>
 #include <ui/GraphicBuffer.h>
@@ -479,12 +478,11 @@ status_t HWComposer::getDeviceCompositionChanges(
     RETURN_IF_HWC_ERROR_FOR("getRequests", error, displayId, BAD_INDEX);
 
     DeviceRequestedChanges::ClientTargetProperty clientTargetProperty;
-    float brightness = 1.f;
-    error = hwcDisplay->getClientTargetProperty(&clientTargetProperty, &brightness);
+    error = hwcDisplay->getClientTargetProperty(&clientTargetProperty);
 
     outChanges->emplace(DeviceRequestedChanges{std::move(changedTypes), std::move(displayRequests),
                                                std::move(layerRequests),
-                                               std::move(clientTargetProperty), brightness});
+                                               std::move(clientTargetProperty)});
     error = hwcDisplay->acceptChanges();
     RETURN_IF_HWC_ERROR_FOR("acceptChanges", error, displayId, BAD_INDEX);
 
@@ -721,13 +719,13 @@ status_t HWComposer::getDisplayedContentSample(HalDisplayId displayId, uint64_t 
     return NO_ERROR;
 }
 
-std::future<status_t> HWComposer::setDisplayBrightness(
-        PhysicalDisplayId displayId, float brightness,
+ftl::Future<status_t> HWComposer::setDisplayBrightness(
+        PhysicalDisplayId displayId, float brightness, float brightnessNits,
         const Hwc2::Composer::DisplayBrightnessOptions& options) {
     RETURN_IF_INVALID_DISPLAY(displayId, ftl::yield<status_t>(BAD_INDEX));
     auto& display = mDisplayData[displayId].hwcDisplay;
 
-    return ftl::chain(display->setDisplayBrightness(brightness, options))
+    return display->setDisplayBrightness(brightness, brightnessNits, options)
             .then([displayId](hal::Error error) -> status_t {
                 if (error == hal::Error::UNSUPPORTED) {
                     RETURN_IF_HWC_ERROR(error, displayId, INVALID_OPERATION);
