@@ -315,11 +315,7 @@ void BufferLayer::preparePerFrameCompositionState() {
     compositionState->sidebandStreamHasFrame = false;
 }
 
-bool BufferLayer::onPreComposition(nsecs_t refreshStartTime) {
-    if (mBufferInfo.mBuffer != nullptr) {
-        Mutex::Autolock lock(mFrameEventHistoryMutex);
-        mFrameEventHistory.addPreComposition(mCurrentFrameNumber, refreshStartTime);
-    }
+bool BufferLayer::onPreComposition(nsecs_t) {
     return hasReadyFrame();
 }
 namespace {
@@ -362,15 +358,8 @@ void BufferLayer::onPostComposition(const DisplayDevice* display,
     // composition.
     if (!mBufferInfo.mFrameLatencyNeeded) return;
 
-    mAlreadyDisplayedThisCompose = false;
-
     // Update mFrameEventHistory.
-    {
-        Mutex::Autolock lock(mFrameEventHistoryMutex);
-        mFrameEventHistory.addPostComposition(mCurrentFrameNumber, glDoneFence, presentFence,
-                                              compositorTiming);
-        finalizeFrameEventHistory(glDoneFence, compositorTiming);
-    }
+    finalizeFrameEventHistory(glDoneFence, compositorTiming);
 
     // Update mFrameTracker.
     nsecs_t desiredPresentTime = mBufferInfo.mDesiredPresentTime;
@@ -500,7 +489,7 @@ bool BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime,
         return false;
     }
 
-    err = updateFrameNumber(latchTime);
+    err = updateFrameNumber();
     if (err != NO_ERROR) {
         return false;
     }

@@ -447,6 +447,27 @@ void TransactionCompletedListener::onTransactionCompleted(ListenerStats listener
     }
 }
 
+void TransactionCompletedListener::onTransactionQueueStalled() {
+      std::unordered_map<void*, std::function<void()>> callbackCopy;
+      {
+          std::scoped_lock<std::mutex> lock(mMutex);
+          callbackCopy = mQueueStallListeners;
+      }
+      for (auto const& it : callbackCopy) {
+          it.second();
+      }
+}
+
+void TransactionCompletedListener::addQueueStallListener(std::function<void()> stallListener,
+                                                         void* id) {
+    std::scoped_lock<std::mutex> lock(mMutex);
+    mQueueStallListeners[id] = stallListener;
+}
+void TransactionCompletedListener::removeQueueStallListener(void *id) {
+    std::scoped_lock<std::mutex> lock(mMutex);
+    mQueueStallListeners.erase(id);
+}
+
 void TransactionCompletedListener::onReleaseBuffer(ReleaseCallbackId callbackId,
                                                    sp<Fence> releaseFence,
                                                    uint32_t currentMaxAcquiredBufferCount) {
@@ -1476,6 +1497,13 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBuffe
 
     releaseBufferIfOverwriting(*s);
 
+    if (buffer == nullptr) {
+        s->what &= ~layer_state_t::eBufferChanged;
+        s->bufferData = nullptr;
+        mContainsBuffer = false;
+        return *this;
+    }
+
     std::shared_ptr<BufferData> bufferData = std::make_shared<BufferData>();
     bufferData->buffer = buffer;
     uint64_t frameNumber = sc->resolveFrameNumber(optFrameNumber);
@@ -1494,6 +1522,18 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBuffe
     s->what |= layer_state_t::eBufferChanged;
     s->bufferData = std::move(bufferData);
     registerSurfaceControlForCallback(sc);
+
+    // With the current infrastructure, a release callback will not be invoked if there's no
+    // transaction callback in the case when a buffer is latched and not released early. This is
+    // because the legacy implementation didn't have a release callback and sent releases in the
+    // transaction callback. Because of this, we need to make sure to have a transaction callback
+    // set up when a buffer is sent in a transaction to ensure the caller gets the release
+    // callback, regardless if they set up a transaction callback.
+    //
+    // TODO (b/230380821): Remove when release callbacks are separated from transaction callbacks
+    addTransactionCompletedCallback([](void*, nsecs_t, const sp<Fence>&,
+                                       const std::vector<SurfaceControlStats>&) {},
+                                    nullptr);
 
     mContainsBuffer = true;
     return *this;
