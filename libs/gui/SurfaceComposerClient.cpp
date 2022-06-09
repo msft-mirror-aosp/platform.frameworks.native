@@ -447,6 +447,27 @@ void TransactionCompletedListener::onTransactionCompleted(ListenerStats listener
     }
 }
 
+void TransactionCompletedListener::onTransactionQueueStalled() {
+      std::unordered_map<void*, std::function<void()>> callbackCopy;
+      {
+          std::scoped_lock<std::mutex> lock(mMutex);
+          callbackCopy = mQueueStallListeners;
+      }
+      for (auto const& it : callbackCopy) {
+          it.second();
+      }
+}
+
+void TransactionCompletedListener::addQueueStallListener(std::function<void()> stallListener,
+                                                         void* id) {
+    std::scoped_lock<std::mutex> lock(mMutex);
+    mQueueStallListeners[id] = stallListener;
+}
+void TransactionCompletedListener::removeQueueStallListener(void *id) {
+    std::scoped_lock<std::mutex> lock(mMutex);
+    mQueueStallListeners.erase(id);
+}
+
 void TransactionCompletedListener::onReleaseBuffer(ReleaseCallbackId callbackId,
                                                    sp<Fence> releaseFence,
                                                    uint32_t currentMaxAcquiredBufferCount) {
@@ -1475,6 +1496,13 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBuffe
     }
 
     releaseBufferIfOverwriting(*s);
+
+    if (buffer == nullptr) {
+        s->what &= ~layer_state_t::eBufferChanged;
+        s->bufferData = nullptr;
+        mContainsBuffer = false;
+        return *this;
+    }
 
     std::shared_ptr<BufferData> bufferData = std::make_shared<BufferData>();
     bufferData->buffer = buffer;
