@@ -87,10 +87,9 @@ std::string toString(const DisplayEventReceiver::Event& event) {
                                 to_string(event.header.displayId).c_str(),
                                 event.hotplug.connected ? "connected" : "disconnected");
         case DisplayEventReceiver::DISPLAY_EVENT_VSYNC:
-            return StringPrintf("VSync{displayId=%s, count=%u, expectedPresentationTime=%" PRId64
-                                "}",
+            return StringPrintf("VSync{displayId=%s, count=%u, expectedVSyncTimestamp=%" PRId64 "}",
                                 to_string(event.header.displayId).c_str(), event.vsync.count,
-                                event.vsync.vsyncData.preferredExpectedPresentationTime());
+                                event.vsync.expectedVSyncTimestamp);
         case DisplayEventReceiver::DISPLAY_EVENT_MODE_CHANGE:
             return StringPrintf("ModeChanged{displayId=%s, modeId=%u}",
                                 to_string(event.header.displayId).c_str(), event.modeChange.modeId);
@@ -108,28 +107,23 @@ DisplayEventReceiver::Event makeHotplug(PhysicalDisplayId displayId, nsecs_t tim
 }
 
 DisplayEventReceiver::Event makeVSync(PhysicalDisplayId displayId, nsecs_t timestamp,
-                                      uint32_t count, nsecs_t expectedPresentationTime,
-                                      nsecs_t deadlineTimestamp) {
+                                      uint32_t count, nsecs_t expectedVSyncTimestamp,
+                                      nsecs_t deadlineTimestamp, int64_t vsyncId) {
     DisplayEventReceiver::Event event;
     event.header = {DisplayEventReceiver::DISPLAY_EVENT_VSYNC, displayId, timestamp};
     event.vsync.count = count;
-    event.vsync.vsyncData.preferredFrameTimelineIndex = 0;
-    // Temporarily store the current vsync information in frameTimelines[0], marked as
-    // platform-preferred. When the event is dispatched later, the frame interval at that time is
-    // used with this information to generate multiple frame timeline choices.
-    event.vsync.vsyncData.frameTimelines[0] = {.vsyncId = FrameTimelineInfo::INVALID_VSYNC_ID,
-                                               .deadlineTimestamp = deadlineTimestamp,
-                                               .expectedPresentationTime =
-                                                       expectedPresentationTime};
+    event.vsync.expectedVSyncTimestamp = expectedVSyncTimestamp;
+    event.vsync.deadlineTimestamp = deadlineTimestamp;
+    event.vsync.vsyncId = vsyncId;
     return event;
 }
 
-DisplayEventReceiver::Event makeModeChanged(DisplayModePtr mode) {
+DisplayEventReceiver::Event makeModeChanged(PhysicalDisplayId displayId, DisplayModeId modeId,
+                                            nsecs_t vsyncPeriod) {
     DisplayEventReceiver::Event event;
-    event.header = {DisplayEventReceiver::DISPLAY_EVENT_MODE_CHANGE, mode->getPhysicalDisplayId(),
-                    systemTime()};
-    event.modeChange.modeId = mode->getId().value();
-    event.modeChange.vsyncPeriod = mode->getVsyncPeriod();
+    event.header = {DisplayEventReceiver::DISPLAY_EVENT_MODE_CHANGE, displayId, systemTime()};
+    event.modeChange.modeId = modeId.value();
+    event.modeChange.vsyncPeriod = vsyncPeriod;
     return event;
 }
 
@@ -176,33 +170,25 @@ void EventThreadConnection::onFirstRef() {
     mEventThread->registerDisplayEventConnection(this);
 }
 
-binder::Status EventThreadConnection::stealReceiveChannel(gui::BitTube* outChannel) {
+status_t EventThreadConnection::stealReceiveChannel(gui::BitTube* outChannel) {
     std::scoped_lock lock(mLock);
     if (mChannel.initCheck() != NO_ERROR) {
-        return binder::Status::fromStatusT(NAME_NOT_FOUND);
+        return NAME_NOT_FOUND;
     }
 
     outChannel->setReceiveFd(mChannel.moveReceiveFd());
     outChannel->setSendFd(base::unique_fd(dup(mChannel.getSendFd())));
-    return binder::Status::ok();
+    return NO_ERROR;
 }
 
-binder::Status EventThreadConnection::setVsyncRate(int rate) {
-    mEventThread->setVsyncRate(static_cast<uint32_t>(rate), this);
-    return binder::Status::ok();
+status_t EventThreadConnection::setVsyncRate(uint32_t rate) {
+    mEventThread->setVsyncRate(rate, this);
+    return NO_ERROR;
 }
 
-binder::Status EventThreadConnection::requestNextVsync() {
-    ATRACE_CALL();
+void EventThreadConnection::requestNextVsync() {
+    ATRACE_NAME("requestNextVsync");
     mEventThread->requestNextVsync(this);
-    return binder::Status::ok();
-}
-
-binder::Status EventThreadConnection::getLatestVsyncEventData(
-        ParcelableVsyncEventData* outVsyncEventData) {
-    ATRACE_CALL();
-    outVsyncEventData->vsync = mEventThread->getLatestVsyncEventData(this);
-    return binder::Status::ok();
 }
 
 status_t EventThreadConnection::postEvent(const DisplayEventReceiver::Event& event) {
@@ -349,27 +335,6 @@ void EventThread::requestNextVsync(const sp<EventThreadConnection>& connection) 
     }
 }
 
-VsyncEventData EventThread::getLatestVsyncEventData(
-        const sp<EventThreadConnection>& connection) const {
-    // Resync so that the vsync is accurate with hardware. getLatestVsyncEventData is an alternate
-    // way to get vsync data (instead of posting callbacks to Choreographer).
-    if (connection->resyncCallback) {
-        connection->resyncCallback();
-    }
-
-    VsyncEventData vsyncEventData;
-    nsecs_t frameInterval = mGetVsyncPeriodFunction(connection->mOwnerUid);
-    vsyncEventData.frameInterval = frameInterval;
-    VSyncSource::VSyncData vsyncData;
-    {
-        std::lock_guard<std::mutex> lock(mMutex);
-        vsyncData = mVSyncSource->getLatestVSyncData();
-    }
-    generateFrameTimeline(vsyncEventData, frameInterval, systemTime(SYSTEM_TIME_MONOTONIC),
-                          vsyncData.expectedPresentationTime, vsyncData.deadlineTimestamp);
-    return vsyncEventData;
-}
-
 void EventThread::onScreenReleased() {
     std::lock_guard<std::mutex> lock(mMutex);
     if (!mVSyncState || mVSyncState->synthetic) {
@@ -390,13 +355,21 @@ void EventThread::onScreenAcquired() {
     mCondition.notify_all();
 }
 
-void EventThread::onVSyncEvent(nsecs_t timestamp, VSyncSource::VSyncData vsyncData) {
+void EventThread::onVSyncEvent(nsecs_t timestamp, nsecs_t expectedVSyncTimestamp,
+                               nsecs_t deadlineTimestamp) {
     std::lock_guard<std::mutex> lock(mMutex);
 
     LOG_FATAL_IF(!mVSyncState);
+    const int64_t vsyncId = [&] {
+        if (mTokenManager != nullptr) {
+            return mTokenManager->generateTokenForPredictions(
+                    {timestamp, deadlineTimestamp, expectedVSyncTimestamp});
+        }
+        return FrameTimelineInfo::INVALID_VSYNC_ID;
+    }();
+
     mPendingEvents.push_back(makeVSync(mVSyncState->displayId, timestamp, ++mVSyncState->count,
-                                       vsyncData.expectedPresentationTime,
-                                       vsyncData.deadlineTimestamp));
+                                       expectedVSyncTimestamp, deadlineTimestamp, vsyncId));
     mCondition.notify_all();
 }
 
@@ -407,10 +380,11 @@ void EventThread::onHotplugReceived(PhysicalDisplayId displayId, bool connected)
     mCondition.notify_all();
 }
 
-void EventThread::onModeChanged(DisplayModePtr mode) {
+void EventThread::onModeChanged(PhysicalDisplayId displayId, DisplayModeId modeId,
+                                nsecs_t vsyncPeriod) {
     std::lock_guard<std::mutex> lock(mMutex);
 
-    mPendingEvents.push_back(makeModeChanged(mode));
+    mPendingEvents.push_back(makeModeChanged(displayId, modeId, vsyncPeriod));
     mCondition.notify_all();
 }
 
@@ -531,9 +505,16 @@ void EventThread::threadMain(std::unique_lock<std::mutex>& lock) {
                 const auto now = systemTime(SYSTEM_TIME_MONOTONIC);
                 const auto deadlineTimestamp = now + timeout.count();
                 const auto expectedVSyncTime = deadlineTimestamp + timeout.count();
+                const int64_t vsyncId = [&] {
+                    if (mTokenManager != nullptr) {
+                        return mTokenManager->generateTokenForPredictions(
+                                {now, deadlineTimestamp, expectedVSyncTime});
+                    }
+                    return FrameTimelineInfo::INVALID_VSYNC_ID;
+                }();
                 mPendingEvents.push_back(makeVSync(mVSyncState->displayId, now,
                                                    ++mVSyncState->count, expectedVSyncTime,
-                                                   deadlineTimestamp));
+                                                   deadlineTimestamp, vsyncId));
             }
         }
     }
@@ -543,8 +524,7 @@ bool EventThread::shouldConsumeEvent(const DisplayEventReceiver::Event& event,
                                      const sp<EventThreadConnection>& connection) const {
     const auto throttleVsync = [&] {
         return mThrottleVsyncCallback &&
-                mThrottleVsyncCallback(event.vsync.vsyncData.preferredExpectedPresentationTime(),
-                                       connection->mOwnerUid);
+                mThrottleVsyncCallback(event.vsync.expectedVSyncTimestamp, connection->mOwnerUid);
     };
 
     switch (event.header.type) {
@@ -593,50 +573,12 @@ bool EventThread::shouldConsumeEvent(const DisplayEventReceiver::Event& event,
     }
 }
 
-int64_t EventThread::generateToken(nsecs_t timestamp, nsecs_t deadlineTimestamp,
-                                   nsecs_t expectedPresentationTime) const {
-    if (mTokenManager != nullptr) {
-        return mTokenManager->generateTokenForPredictions(
-                {timestamp, deadlineTimestamp, expectedPresentationTime});
-    }
-    return FrameTimelineInfo::INVALID_VSYNC_ID;
-}
-
-void EventThread::generateFrameTimeline(VsyncEventData& outVsyncEventData, nsecs_t frameInterval,
-                                        nsecs_t timestamp,
-                                        nsecs_t preferredExpectedPresentationTime,
-                                        nsecs_t preferredDeadlineTimestamp) const {
-    // Add 1 to ensure the preferredFrameTimelineIndex entry (when multiplier == 0) is included.
-    for (int64_t multiplier = -VsyncEventData::kFrameTimelinesLength + 1, currentIndex = 0;
-         currentIndex < VsyncEventData::kFrameTimelinesLength; multiplier++) {
-        nsecs_t deadlineTimestamp = preferredDeadlineTimestamp + multiplier * frameInterval;
-        // Valid possible frame timelines must have future values.
-        if (deadlineTimestamp > timestamp) {
-            if (multiplier == 0) {
-                outVsyncEventData.preferredFrameTimelineIndex = currentIndex;
-            }
-            nsecs_t expectedPresentationTime =
-                    preferredExpectedPresentationTime + multiplier * frameInterval;
-            outVsyncEventData.frameTimelines[currentIndex] =
-                    {.vsyncId =
-                             generateToken(timestamp, deadlineTimestamp, expectedPresentationTime),
-                     .deadlineTimestamp = deadlineTimestamp,
-                     .expectedPresentationTime = expectedPresentationTime};
-            currentIndex++;
-        }
-    }
-}
-
 void EventThread::dispatchEvent(const DisplayEventReceiver::Event& event,
                                 const DisplayEventConsumers& consumers) {
     for (const auto& consumer : consumers) {
         DisplayEventReceiver::Event copy = event;
         if (event.header.type == DisplayEventReceiver::DISPLAY_EVENT_VSYNC) {
-            const int64_t frameInterval = mGetVsyncPeriodFunction(consumer->mOwnerUid);
-            copy.vsync.vsyncData.frameInterval = frameInterval;
-            generateFrameTimeline(copy.vsync.vsyncData, frameInterval, copy.header.timestamp,
-                                  event.vsync.vsyncData.preferredExpectedPresentationTime(),
-                                  event.vsync.vsyncData.preferredDeadlineTimestamp());
+            copy.vsync.frameInterval = mGetVsyncPeriodFunction(consumer->mOwnerUid);
         }
         switch (consumer->postEvent(copy)) {
             case NO_ERROR:

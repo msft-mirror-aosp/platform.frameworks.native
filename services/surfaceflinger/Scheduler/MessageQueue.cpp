@@ -27,44 +27,49 @@
 #include "EventThread.h"
 #include "FrameTimeline.h"
 #include "MessageQueue.h"
+#include "SurfaceFlinger.h"
 
 namespace android::impl {
 
-void MessageQueue::Handler::dispatchFrame(int64_t vsyncId, nsecs_t expectedVsyncTime) {
-    if (!mFramePending.exchange(true)) {
+void MessageQueue::Handler::dispatchRefresh() {
+    if ((mEventMask.fetch_or(eventMaskRefresh) & eventMaskRefresh) == 0) {
+        mQueue.mLooper->sendMessage(this, Message(MessageQueue::REFRESH));
+    }
+}
+
+void MessageQueue::Handler::dispatchInvalidate(int64_t vsyncId, nsecs_t expectedVSyncTimestamp) {
+    if ((mEventMask.fetch_or(eventMaskInvalidate) & eventMaskInvalidate) == 0) {
         mVsyncId = vsyncId;
-        mExpectedVsyncTime = expectedVsyncTime;
-        mQueue.mLooper->sendMessage(this, Message());
+        mExpectedVSyncTime = expectedVSyncTimestamp;
+        mQueue.mLooper->sendMessage(this, Message(MessageQueue::INVALIDATE));
     }
 }
 
-bool MessageQueue::Handler::isFramePending() const {
-    return mFramePending.load();
+bool MessageQueue::Handler::invalidatePending() {
+    constexpr auto pendingMask = eventMaskInvalidate | eventMaskRefresh;
+    return (mEventMask.load() & pendingMask) != 0;
 }
 
-void MessageQueue::Handler::handleMessage(const Message&) {
-    mFramePending.store(false);
-
-    const nsecs_t frameTime = systemTime();
-    auto& compositor = mQueue.mCompositor;
-
-    if (!compositor.commit(frameTime, mVsyncId, mExpectedVsyncTime)) {
-        return;
+void MessageQueue::Handler::handleMessage(const Message& message) {
+    switch (message.what) {
+        case INVALIDATE:
+            mEventMask.fetch_and(~eventMaskInvalidate);
+            mQueue.mFlinger->onMessageReceived(message.what, mVsyncId, mExpectedVSyncTime);
+            break;
+        case REFRESH:
+            mEventMask.fetch_and(~eventMaskRefresh);
+            mQueue.mFlinger->onMessageReceived(message.what, mVsyncId, mExpectedVSyncTime);
+            break;
     }
-
-    compositor.composite(frameTime, mVsyncId);
-    compositor.sample();
 }
 
-MessageQueue::MessageQueue(ICompositor& compositor)
-      : MessageQueue(compositor, sp<Handler>::make(*this)) {}
+// ---------------------------------------------------------------------------
 
-constexpr bool kAllowNonCallbacks = true;
-
-MessageQueue::MessageQueue(ICompositor& compositor, sp<Handler> handler)
-      : mCompositor(compositor),
-        mLooper(sp<Looper>::make(kAllowNonCallbacks)),
-        mHandler(std::move(handler)) {}
+void MessageQueue::init(const sp<SurfaceFlinger>& flinger) {
+    mFlinger = flinger;
+    mLooper = new Looper(true);
+    mHandler = new Handler(*this);
+}
 
 // TODO(b/169865816): refactor VSyncInjections to use MessageQueue directly
 // and remove the EventThread from MessageQueue
@@ -105,13 +110,11 @@ void MessageQueue::vsyncCallback(nsecs_t vsyncTime, nsecs_t targetWakeupTime, ns
     {
         std::lock_guard lock(mVsync.mutex);
         mVsync.lastCallbackTime = std::chrono::nanoseconds(vsyncTime);
-        mVsync.scheduledFrameTime.reset();
+        mVsync.scheduled = false;
     }
-
-    const auto vsyncId = mVsync.tokenManager->generateTokenForPredictions(
-            {targetWakeupTime, readyTime, vsyncTime});
-
-    mHandler->dispatchFrame(vsyncId, vsyncTime);
+    mHandler->dispatchInvalidate(mVsync.tokenManager->generateTokenForPredictions(
+                                         {targetWakeupTime, readyTime, vsyncTime}),
+                                 vsyncTime);
 }
 
 void MessageQueue::initVsync(scheduler::VSyncDispatch& dispatch,
@@ -132,8 +135,8 @@ void MessageQueue::setDuration(std::chrono::nanoseconds workDuration) {
     ATRACE_CALL();
     std::lock_guard lock(mVsync.mutex);
     mVsync.workDuration = workDuration;
-    if (mVsync.scheduledFrameTime) {
-        mVsync.scheduledFrameTime = mVsync.registration->schedule(
+    if (mVsync.scheduled) {
+        mVsync.expectedWakeupTime = mVsync.registration->schedule(
                 {mVsync.workDuration.get().count(),
                  /*readyDuration=*/0, mVsync.lastCallbackTime.count()});
     }
@@ -165,7 +168,7 @@ void MessageQueue::postMessage(sp<MessageHandler>&& handler) {
     mLooper->sendMessage(handler, Message());
 }
 
-void MessageQueue::scheduleFrame() {
+void MessageQueue::invalidate() {
     ATRACE_CALL();
 
     {
@@ -178,10 +181,15 @@ void MessageQueue::scheduleFrame() {
     }
 
     std::lock_guard lock(mVsync.mutex);
-    mVsync.scheduledFrameTime =
+    mVsync.scheduled = true;
+    mVsync.expectedWakeupTime =
             mVsync.registration->schedule({.workDuration = mVsync.workDuration.get().count(),
                                            .readyDuration = 0,
                                            .earliestVsync = mVsync.lastCallbackTime.count()});
+}
+
+void MessageQueue::refresh() {
+    mHandler->dispatchRefresh();
 }
 
 void MessageQueue::injectorCallback() {
@@ -190,23 +198,24 @@ void MessageQueue::injectorCallback() {
     while ((n = DisplayEventReceiver::getEvents(&mInjector.tube, buffer, 8)) > 0) {
         for (int i = 0; i < n; i++) {
             if (buffer[i].header.type == DisplayEventReceiver::DISPLAY_EVENT_VSYNC) {
-                auto& vsync = buffer[i].vsync;
-                mHandler->dispatchFrame(vsync.vsyncData.preferredVsyncId(),
-                                        vsync.vsyncData.preferredExpectedPresentationTime());
+                mHandler->dispatchInvalidate(buffer[i].vsync.vsyncId,
+                                             buffer[i].vsync.expectedVSyncTimestamp);
                 break;
             }
         }
     }
 }
 
-auto MessageQueue::getScheduledFrameTime() const -> std::optional<Clock::time_point> {
-    if (mHandler->isFramePending()) {
-        return Clock::now();
+std::optional<std::chrono::steady_clock::time_point> MessageQueue::nextExpectedInvalidate() {
+    if (mHandler->invalidatePending()) {
+        return std::chrono::steady_clock::now();
     }
 
     std::lock_guard lock(mVsync.mutex);
-    if (const auto time = mVsync.scheduledFrameTime) {
-        return Clock::time_point(std::chrono::nanoseconds(*time));
+    if (mVsync.scheduled) {
+        LOG_ALWAYS_FATAL_IF(!mVsync.expectedWakeupTime.has_value(), "callback was never scheduled");
+        const auto expectedWakeupTime = std::chrono::nanoseconds(*mVsync.expectedWakeupTime);
+        return std::optional<std::chrono::steady_clock::time_point>(expectedWakeupTime);
     }
 
     return std::nullopt;

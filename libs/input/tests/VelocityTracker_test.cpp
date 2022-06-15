@@ -23,7 +23,6 @@
 #include <android-base/stringprintf.h>
 #include <attestation/HmacKeyManager.h>
 #include <gtest/gtest.h>
-#include <gui/constants.h>
 #include <input/VelocityTracker.h>
 
 using namespace std::chrono_literals;
@@ -184,7 +183,8 @@ static std::vector<MotionEvent> createMotionEventStream(
                          AMOTION_EVENT_EDGE_FLAG_NONE, AMETA_NONE, 0 /*buttonState*/,
                          MotionClassification::NONE, identityTransform, 0 /*xPrecision*/,
                          0 /*yPrecision*/, AMOTION_EVENT_INVALID_CURSOR_POSITION,
-                         AMOTION_EVENT_INVALID_CURSOR_POSITION, identityTransform, 0 /*downTime*/,
+                         AMOTION_EVENT_INVALID_CURSOR_POSITION, AMOTION_EVENT_INVALID_DISPLAY_SIZE,
+                         AMOTION_EVENT_INVALID_DISPLAY_SIZE, 0 /*downTime*/,
                          entry.eventTime.count(), pointerCount, properties, coords);
 
         events.emplace_back(event);
@@ -343,7 +343,7 @@ TEST_F(VelocityTrackerTest, SailfishFlingUpSlow1) {
         { 235089162955851ns, {{560.66, 843.82}} }, // ACTION_UP
     };
     computeAndCheckVelocity(VelocityTracker::Strategy::IMPULSE, motions, AMOTION_EVENT_AXIS_X,
-                            764.345703);
+                            872.794617);
     computeAndCheckVelocity(VelocityTracker::Strategy::LSQ2, motions, AMOTION_EVENT_AXIS_X,
                             951.698181);
     computeAndCheckVelocity(VelocityTracker::Strategy::IMPULSE, motions, AMOTION_EVENT_AXIS_Y,

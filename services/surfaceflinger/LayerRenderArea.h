@@ -46,7 +46,6 @@ public:
     Rect getSourceCrop() const override;
 
     void render(std::function<void()> drawLayers) override;
-    virtual sp<Layer> getParentLayer() const { return mLayer; }
 
 private:
     const sp<Layer> mLayer;

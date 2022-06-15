@@ -26,7 +26,6 @@
 #include <binder/IUidObserver.h>
 #include <cutils/compiler.h>
 #include <cutils/multiuser.h>
-#include <private/android_filesystem_config.h>
 #include <sensor/ISensorServer.h>
 #include <sensor/ISensorEventConnection.h>
 #include <sensor/Sensor.h>
@@ -90,52 +89,6 @@ public:
       UID_STATE_IDLE,
     };
 
-    enum Mode {
-       // The regular operating mode where any application can register/unregister/call flush on
-       // sensors.
-       NORMAL = 0,
-       // This mode is only used for testing purposes. Not all HALs support this mode. In this mode,
-       // the HAL ignores the sensor data provided by physical sensors and accepts the data that is
-       // injected from the SensorService as if it were the real sensor data. This mode is primarily
-       // used for testing various algorithms like vendor provided SensorFusion, Step Counter and
-       // Step Detector etc. Typically in this mode, there will be a client (a
-       // SensorEventConnection) which will be injecting sensor data into the HAL. Normal apps can
-       // unregister and register for any sensor that supports injection. Registering to sensors
-       // that do not support injection will give an error.  TODO: Allow exactly one
-       // client to inject sensor data at a time.
-       DATA_INJECTION = 1,
-       // This mode is used only for testing sensors. Each sensor can be tested in isolation with
-       // the required sampling_rate and maxReportLatency parameters without having to think about
-       // the data rates requested by other applications. End user devices are always expected to be
-       // in NORMAL mode. When this mode is first activated, all active sensors from all connections
-       // are disabled. Calling flush() will return an error. In this mode, only the requests from
-       // selected apps whose package names are allowlisted are allowed (typically CTS apps).  Only
-       // these apps can register/unregister/call flush() on sensors. If SensorService switches to
-       // NORMAL mode again, all sensors that were previously registered to are activated with the
-       // corresponding parameters if the application hasn't unregistered for sensors in the mean
-       // time.  NOTE: Non allowlisted app whose sensors were previously deactivated may still
-       // receive events if a allowlisted app requests data from the same sensor.
-       RESTRICTED = 2
-
-      // State Transitions supported.
-      //     RESTRICTED   <---  NORMAL   ---> DATA_INJECTION
-      //                  --->           <---
-
-      // Shell commands to switch modes in SensorService.
-      // 1) Put SensorService in RESTRICTED mode with packageName .cts. If it is already in
-      // restricted mode it is treated as a NO_OP (and packageName is NOT changed).
-      //
-      //     $ adb shell dumpsys sensorservice restrict .cts.
-      //
-      // 2) Put SensorService in DATA_INJECTION mode with packageName .xts. If it is already in
-      // data_injection mode it is treated as a NO_OP (and packageName is NOT changed).
-      //
-      //     $ adb shell dumpsys sensorservice data_injection .xts.
-      //
-      // 3) Reset sensorservice back to NORMAL mode.
-      //     $ adb shell dumpsys sensorservice enable
-    };
-
     class ProximityActiveListener : public virtual RefBase {
     public:
         // Note that the callback is invoked from an async thread and can interact with the
@@ -150,9 +103,8 @@ public:
     void cleanupConnection(SensorDirectConnection* c);
 
     // Call with mLock held.
-    void checkAndReportProxStateChangeLocked();
-    void notifyProximityStateLocked(const bool isActive,
-                                    const std::vector<sp<ProximityActiveListener>>& listeners);
+    void onProximityActiveLocked(bool isActive);
+    void notifyProximityStateLocked(const std::vector<sp<ProximityActiveListener>>& listeners);
 
     status_t enable(const sp<SensorEventConnection>& connection, int handle,
                     nsecs_t samplingPeriodNs,  nsecs_t maxBatchReportLatencyNs, int reservedFlags,
@@ -257,13 +209,11 @@ private:
 
             bool isUidActive(uid_t uid);
 
-            void onUidGone(uid_t uid, bool disabled) override;
-            void onUidActive(uid_t uid) override;
-            void onUidIdle(uid_t uid, bool disabled) override;
+            void onUidGone(uid_t uid, bool disabled);
+            void onUidActive(uid_t uid);
+            void onUidIdle(uid_t uid, bool disabled);
             void onUidStateChanged(uid_t uid __unused, int32_t procState __unused,
-                                   int64_t procStateSeq __unused,
-                                   int32_t capability __unused) override {}
-            void onUidProcAdjChanged(uid_t uid __unused) override {}
+                                   int64_t procStateSeq __unused, int32_t capability __unused) {}
 
             void addOverrideUid(uid_t uid, bool active);
             void removeOverrideUid(uid_t uid);
@@ -291,32 +241,22 @@ private:
     class SensorPrivacyPolicy : public hardware::BnSensorPrivacyListener {
         public:
             explicit SensorPrivacyPolicy(wp<SensorService> service)
-                    : mService(service) {}
+                    : mService(service), mIsIndividualMic(false), mUserId(0) {}
             void registerSelf();
             void unregisterSelf();
+
+            status_t registerSelfForIndividual(int userId);
 
             bool isSensorPrivacyEnabled();
 
-            binder::Status onSensorPrivacyChanged(int toggleType, int sensor,
-                                                  bool enabled);
-
-        protected:
-            std::atomic_bool mSensorPrivacyEnabled;
-            wp<SensorService> mService;
+            binder::Status onSensorPrivacyChanged(bool enabled);
 
         private:
+            wp<SensorService> mService;
             Mutex mSensorPrivacyLock;
-    };
-
-    class MicrophonePrivacyPolicy : public SensorPrivacyPolicy {
-        public:
-            explicit MicrophonePrivacyPolicy(wp<SensorService> service)
-                    : SensorPrivacyPolicy(service) {}
-            void registerSelf();
-            void unregisterSelf();
-
-            binder::Status onSensorPrivacyChanged(int toggleType, int sensor,
-                                                  bool enabled);
+            std::atomic_bool mSensorPrivacyEnabled;
+            bool mIsIndividualMic;
+            userid_t mUserId;
     };
 
     // A class automatically clearing and restoring binder caller identity inside
@@ -333,6 +273,52 @@ private:
 
         private:
             const int64_t mToken;
+    };
+
+    enum Mode {
+       // The regular operating mode where any application can register/unregister/call flush on
+       // sensors.
+       NORMAL = 0,
+       // This mode is only used for testing purposes. Not all HALs support this mode. In this mode,
+       // the HAL ignores the sensor data provided by physical sensors and accepts the data that is
+       // injected from the SensorService as if it were the real sensor data. This mode is primarily
+       // used for testing various algorithms like vendor provided SensorFusion, Step Counter and
+       // Step Detector etc. Typically in this mode, there will be a client (a
+       // SensorEventConnection) which will be injecting sensor data into the HAL. Normal apps can
+       // unregister and register for any sensor that supports injection. Registering to sensors
+       // that do not support injection will give an error.  TODO(aakella) : Allow exactly one
+       // client to inject sensor data at a time.
+       DATA_INJECTION = 1,
+       // This mode is used only for testing sensors. Each sensor can be tested in isolation with
+       // the required sampling_rate and maxReportLatency parameters without having to think about
+       // the data rates requested by other applications. End user devices are always expected to be
+       // in NORMAL mode. When this mode is first activated, all active sensors from all connections
+       // are disabled. Calling flush() will return an error. In this mode, only the requests from
+       // selected apps whose package names are whitelisted are allowed (typically CTS apps).  Only
+       // these apps can register/unregister/call flush() on sensors. If SensorService switches to
+       // NORMAL mode again, all sensors that were previously registered to are activated with the
+       // corresponding paramaters if the application hasn't unregistered for sensors in the mean
+       // time.  NOTE: Non whitelisted app whose sensors were previously deactivated may still
+       // receive events if a whitelisted app requests data from the same sensor.
+       RESTRICTED = 2
+
+      // State Transitions supported.
+      //     RESTRICTED   <---  NORMAL   ---> DATA_INJECTION
+      //                  --->           <---
+
+      // Shell commands to switch modes in SensorService.
+      // 1) Put SensorService in RESTRICTED mode with packageName .cts. If it is already in
+      // restricted mode it is treated as a NO_OP (and packageName is NOT changed).
+      //
+      //     $ adb shell dumpsys sensorservice restrict .cts.
+      //
+      // 2) Put SensorService in DATA_INJECTION mode with packageName .xts. If it is already in
+      // data_injection mode it is treated as a NO_OP (and packageName is NOT changed).
+      //
+      //     $ adb shell dumpsys sensorservice data_injection .xts.
+      //
+      // 3) Reset sensorservice back to NORMAL mode.
+      //     $ adb shell dumpsys sensorservice enable
     };
 
     static const char* WAKE_LOCK_NAME;
@@ -373,7 +359,7 @@ private:
     status_t cleanupWithoutDisableLocked(const sp<SensorEventConnection>& connection, int handle);
     void cleanupAutoDisabledSensorLocked(const sp<SensorEventConnection>& connection,
             sensors_event_t const* buffer, const int count);
-    bool canAccessSensor(const Sensor& sensor, const char* operation,
+    static bool canAccessSensor(const Sensor& sensor, const char* operation,
             const String16& opPackageName);
     static bool hasPermissionForSensor(const Sensor& sensor);
     static int getTargetSdkVersion(const String16& opPackageName);
@@ -456,13 +442,9 @@ private:
     void enableAllSensorsLocked(ConnectionSafeAutolock* connLock);
 
     // Caps active direct connections (when the mic toggle is flipped to on)
-    void capRates();
+    void capRates(userid_t userId);
     // Removes the capped rate on active direct connections (when the mic toggle is flipped to off)
-    void uncapRates();
-
-    static inline bool isAudioServerOrSystemServerUid(uid_t uid) {
-        return multiuser_get_app_id(uid) == AID_SYSTEM || uid == AID_AUDIOSERVER;
-    }
+    void uncapRates(userid_t userId);
 
     static uint8_t sHmacGlobalKey[128];
     static bool sHmacGlobalKeyIsValid;
@@ -492,10 +474,6 @@ private:
     std::unordered_map<int, SensorServiceUtil::RecentEventLogger*> mRecentEvent;
     Mode mCurrentOperatingMode;
 
-    // true if the head tracker sensor type is currently restricted to system usage only
-    // (can only be unrestricted for testing, via shell cmd)
-    bool mHtRestricted = true;
-
     // This packagaName is set when SensorService is in RESTRICTED or DATA_INJECTION mode. Only
     // applications with this packageName are allowed to activate/deactivate or call flush on
     // sensors. To run CTS this is can be set to ".cts." and only CTS tests will get access to
@@ -513,13 +491,13 @@ private:
     static Mutex sPackageTargetVersionLock;
     static String16 sSensorInterfaceDescriptorPrefix;
 
-    sp<MicrophonePrivacyPolicy> mMicSensorPrivacyPolicy;
+    // Map from user to SensorPrivacyPolicy
+    std::map<userid_t, sp<SensorPrivacyPolicy>> mMicSensorPrivacyPolicies;
+    // Checks if the mic sensor privacy is enabled for the uid
+    bool isMicSensorPrivacyEnabledForUid(uid_t uid);
 
-    // Keeps track of the handles of all proximity sensors in the system.
-    std::vector<int32_t> mProxSensorHandles;
-    // The last proximity sensor active state reported to listeners.
-    bool mLastReportedProxIsActive;
-    // Listeners subscribed to receive updates on the proximity sensor active state.
+    // Counts how many proximity sensors are currently active.
+    int mProximityActiveCount;
     std::vector<sp<ProximityActiveListener>> mProximityActiveListeners;
 };
 

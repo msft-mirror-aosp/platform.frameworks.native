@@ -33,14 +33,12 @@ namespace android {
 status_t FrameTimelineInfo::write(Parcel& output) const {
     SAFE_PARCEL(output.writeInt64, vsyncId);
     SAFE_PARCEL(output.writeInt32, inputEventId);
-    SAFE_PARCEL(output.writeInt64, startTimeNanos);
     return NO_ERROR;
 }
 
 status_t FrameTimelineInfo::read(const Parcel& input) {
     SAFE_PARCEL(input.readInt64, &vsyncId);
     SAFE_PARCEL(input.readInt32, &inputEventId);
-    SAFE_PARCEL(input.readInt64, &startTimeNanos);
     return NO_ERROR;
 }
 
@@ -50,19 +48,16 @@ void FrameTimelineInfo::merge(const FrameTimelineInfo& other) {
         if (other.vsyncId > vsyncId) {
             vsyncId = other.vsyncId;
             inputEventId = other.inputEventId;
-            startTimeNanos = other.startTimeNanos;
         }
     } else if (vsyncId == INVALID_VSYNC_ID) {
         vsyncId = other.vsyncId;
         inputEventId = other.inputEventId;
-        startTimeNanos = other.startTimeNanos;
     }
 }
 
 void FrameTimelineInfo::clear() {
     vsyncId = INVALID_VSYNC_ID;
     inputEventId = IInputConstants::INVALID_INPUT_EVENT_ID;
-    startTimeNanos = 0;
 }
 
 }; // namespace android

@@ -64,15 +64,17 @@ using SurfaceflingerStatsLayerInfoWrapper =
 #define LAYER_ID_0            0
 #define LAYER_ID_1            1
 #define UID_0                 123
+#define REFRESH_RATE_0        61
+#define RENDER_RATE_0         31
 #define REFRESH_RATE_BUCKET_0 60
 #define RENDER_RATE_BUCKET_0  30
 #define LAYER_ID_INVALID      -1
 #define NUM_LAYERS            1
 #define NUM_LAYERS_INVALID    "INVALID"
 
-constexpr Fps kRefreshRate0 = 61_Hz;
-constexpr Fps kRenderRate0 = 31_Hz;
-constexpr GameMode kGameMode = GameMode::Unsupported;
+const constexpr Fps kRefreshRate0 = Fps(static_cast<float>(REFRESH_RATE_0));
+const constexpr Fps kRenderRate0 = Fps(static_cast<float>(RENDER_RATE_0));
+static constexpr int32_t kGameMode = TimeStatsHelper::GameModeUnsupported;
 
 enum InputCommand : int32_t {
     ENABLE                 = 0,
@@ -145,14 +147,14 @@ public:
     std::string inputCommand(InputCommand cmd, bool useProto);
 
     void setTimeStamp(TimeStamp type, int32_t id, uint64_t frameNumber, nsecs_t ts,
-                      TimeStats::SetFrameRateVote, GameMode);
+                      TimeStats::SetFrameRateVote frameRateVote, int32_t gameMode);
 
     int32_t genRandomInt32(int32_t begin, int32_t end);
 
     template <size_t N>
     void insertTimeRecord(const TimeStamp (&sequence)[N], int32_t id, uint64_t frameNumber,
                           nsecs_t ts, TimeStats::SetFrameRateVote frameRateVote = {},
-                          GameMode gameMode = kGameMode) {
+                          int32_t gameMode = kGameMode) {
         for (size_t i = 0; i < N; i++, ts += 1000000) {
             setTimeStamp(sequence[i], id, frameNumber, ts, frameRateVote, gameMode);
         }
@@ -203,7 +205,7 @@ static std::string genLayerName(int32_t layerId) {
 }
 
 void TimeStatsTest::setTimeStamp(TimeStamp type, int32_t id, uint64_t frameNumber, nsecs_t ts,
-                                 TimeStats::SetFrameRateVote frameRateVote, GameMode gameMode) {
+                                 TimeStats::SetFrameRateVote frameRateVote, int32_t gameMode) {
     switch (type) {
         case TimeStamp::POST:
             ASSERT_NO_FATAL_FAILURE(mTimeStats->setPostTime(id, frameNumber, genLayerName(id),
@@ -268,11 +270,8 @@ TEST_F(TimeStatsTest, canIncreaseGlobalStats) {
     for (size_t i = 0; i < MISSED_FRAMES; i++) {
         ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementMissedFrames());
     }
-    TimeStats::ClientCompositionRecord record;
-    record.hadClientComposition = true;
-
     for (size_t i = 0; i < CLIENT_COMPOSITION_FRAMES; i++) {
-        ASSERT_NO_FATAL_FAILURE(mTimeStats->pushCompositionStrategyState(record));
+        ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementClientCompositionFrames());
     }
 
     SFTimeStatsGlobalProto globalProto;
@@ -462,49 +461,19 @@ TEST_F(TimeStatsTest, canCaptureSetFrameRateVoteAfterZeroForLayer) {
     EXPECT_THAT(result, HasSubstr(expectedResult));
 }
 
-TEST_F(TimeStatsTest, canIncreaseClientCompositionStats) {
+TEST_F(TimeStatsTest, canIncreaseClientCompositionReusedFrames) {
     // this stat is not in the proto so verify by checking the string dump
-    constexpr size_t COMPOSITION_STRATEGY_CHANGED_FRAMES = 1;
-    constexpr size_t HAD_CLIENT_COMPOSITION_FRAMES = 2;
-    constexpr size_t REUSED_CLIENT_COMPOSITION_FRAMES = 3;
-    constexpr size_t COMPOSITION_STRATEGY_PREDICTION_SUCCEEDED_FRAMES = 4;
-    constexpr size_t COMPOSITION_STRATEGY_PREDICTED_FRAMES = 5;
+    constexpr size_t CLIENT_COMPOSITION_REUSED_FRAMES = 2;
 
     EXPECT_TRUE(inputCommand(InputCommand::ENABLE, FMT_STRING).empty());
-    for (size_t i = 0; i <= COMPOSITION_STRATEGY_PREDICTED_FRAMES; i++) {
-        TimeStats::ClientCompositionRecord record;
-        record.hadClientComposition = i < HAD_CLIENT_COMPOSITION_FRAMES;
-        record.changed = i < COMPOSITION_STRATEGY_CHANGED_FRAMES;
-        record.reused = i < REUSED_CLIENT_COMPOSITION_FRAMES;
-        record.predicted = i < COMPOSITION_STRATEGY_PREDICTED_FRAMES;
-        record.predictionSucceeded = i < COMPOSITION_STRATEGY_PREDICTION_SUCCEEDED_FRAMES;
-        mTimeStats->pushCompositionStrategyState(record);
+    for (size_t i = 0; i < CLIENT_COMPOSITION_REUSED_FRAMES; i++) {
+        ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementClientCompositionReusedFrames());
     }
 
     const std::string result(inputCommand(InputCommand::DUMP_ALL, FMT_STRING));
-    std::string expected =
-            "compositionStrategyChanges = " + std::to_string(COMPOSITION_STRATEGY_CHANGED_FRAMES);
-    EXPECT_THAT(result, HasSubstr(expected));
-
-    expected = "clientCompositionFrames = " + std::to_string(HAD_CLIENT_COMPOSITION_FRAMES);
-    EXPECT_THAT(result, HasSubstr(expected));
-
-    expected =
-            "clientCompositionReusedFrames = " + std::to_string(REUSED_CLIENT_COMPOSITION_FRAMES);
-    EXPECT_THAT(result, HasSubstr(expected));
-
-    expected = "compositionStrategyPredicted = " +
-            std::to_string(COMPOSITION_STRATEGY_PREDICTED_FRAMES);
-    EXPECT_THAT(result, HasSubstr(expected));
-
-    expected = "compositionStrategyPredictionSucceeded = " +
-            std::to_string(COMPOSITION_STRATEGY_PREDICTION_SUCCEEDED_FRAMES);
-    EXPECT_THAT(result, HasSubstr(expected));
-
-    expected = "compositionStrategyPredictionFailed = " +
-            std::to_string(COMPOSITION_STRATEGY_PREDICTED_FRAMES -
-                           COMPOSITION_STRATEGY_PREDICTION_SUCCEEDED_FRAMES);
-    EXPECT_THAT(result, HasSubstr(expected));
+    const std::string expectedResult =
+            "clientCompositionReusedFrames = " + std::to_string(CLIENT_COMPOSITION_REUSED_FRAMES);
+    EXPECT_THAT(result, HasSubstr(expectedResult));
 }
 
 TEST_F(TimeStatsTest, canIncreaseRefreshRateSwitches) {
@@ -519,6 +488,21 @@ TEST_F(TimeStatsTest, canIncreaseRefreshRateSwitches) {
     const std::string result(inputCommand(InputCommand::DUMP_ALL, FMT_STRING));
     const std::string expectedResult =
             "refreshRateSwitches = " + std::to_string(REFRESH_RATE_SWITCHES);
+    EXPECT_THAT(result, HasSubstr(expectedResult));
+}
+
+TEST_F(TimeStatsTest, canIncreaseCompositionStrategyChanges) {
+    // this stat is not in the proto so verify by checking the string dump
+    constexpr size_t COMPOSITION_STRATEGY_CHANGES = 2;
+
+    EXPECT_TRUE(inputCommand(InputCommand::ENABLE, FMT_STRING).empty());
+    for (size_t i = 0; i < COMPOSITION_STRATEGY_CHANGES; i++) {
+        ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementCompositionStrategyChanges());
+    }
+
+    const std::string result(inputCommand(InputCommand::DUMP_ALL, FMT_STRING));
+    const std::string expectedResult =
+            "compositionStrategyChanges = " + std::to_string(COMPOSITION_STRATEGY_CHANGES);
     EXPECT_THAT(result, HasSubstr(expectedResult));
 }
 
@@ -854,7 +838,7 @@ TEST_F(TimeStatsTest, canClearTimeStats) {
 
     ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementTotalFrames());
     ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementMissedFrames());
-    ASSERT_NO_FATAL_FAILURE(mTimeStats->pushCompositionStrategyState({}));
+    ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementClientCompositionFrames());
     ASSERT_NO_FATAL_FAILURE(mTimeStats->setPowerMode(PowerMode::ON));
 
     mTimeStats->recordFrameDuration(std::chrono::nanoseconds(3ms).count(),
@@ -885,8 +869,9 @@ TEST_F(TimeStatsTest, canClearTimeStats) {
 TEST_F(TimeStatsTest, canClearDumpOnlyTimeStats) {
     // These stats are not in the proto so verify by checking the string dump.
     EXPECT_TRUE(inputCommand(InputCommand::ENABLE, FMT_STRING).empty());
-    ASSERT_NO_FATAL_FAILURE(mTimeStats->pushCompositionStrategyState({}));
+    ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementClientCompositionReusedFrames());
     ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementRefreshRateSwitches());
+    ASSERT_NO_FATAL_FAILURE(mTimeStats->incrementCompositionStrategyChanges());
     mTimeStats->setPowerMode(PowerMode::ON);
     mTimeStats->recordFrameDuration(std::chrono::nanoseconds(1ms).count(),
                                     std::chrono::nanoseconds(5ms).count());
@@ -1049,10 +1034,8 @@ TEST_F(TimeStatsTest, globalStatsCallback) {
     for (size_t i = 0; i < MISSED_FRAMES; i++) {
         mTimeStats->incrementMissedFrames();
     }
-    TimeStats::ClientCompositionRecord record;
-    record.hadClientComposition = true;
     for (size_t i = 0; i < CLIENT_COMPOSITION_FRAMES; i++) {
-        mTimeStats->pushCompositionStrategyState(record);
+        mTimeStats->incrementClientCompositionFrames();
     }
 
     insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 1, 1000000);
@@ -1187,7 +1170,8 @@ TEST_F(TimeStatsTest, layerStatsCallback_pullsAllAndClears) {
     constexpr nsecs_t APP_DEADLINE_DELTA_3MS = 3'000'000;
     EXPECT_TRUE(inputCommand(InputCommand::ENABLE, FMT_STRING).empty());
 
-    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 1, 1000000, {}, GameMode::Standard);
+    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 1, 1000000, {},
+                     TimeStatsHelper::GameModeStandard);
     for (size_t i = 0; i < LATE_ACQUIRE_FRAMES; i++) {
         mTimeStats->incrementLatchSkipped(LAYER_ID_0, TimeStats::LatchSkipReason::LateAcquire);
     }
@@ -1200,39 +1184,42 @@ TEST_F(TimeStatsTest, layerStatsCallback_pullsAllAndClears) {
                     TimeStats::SetFrameRateVote::FrameRateCompatibility::ExactOrMultiple,
             .seamlessness = TimeStats::SetFrameRateVote::Seamlessness::NotRequired,
     };
-    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 2, 2000000, frameRate60, GameMode::Standard);
+    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 2, 2000000, frameRate60,
+                     TimeStatsHelper::GameModeStandard);
 
-    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
-                                      GameMode::Standard, JankType::SurfaceFlingerCpuDeadlineMissed,
-                                      DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER,
-                                      APP_DEADLINE_DELTA_3MS});
-    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
-                                      GameMode::Standard, JankType::SurfaceFlingerGpuDeadlineMissed,
-                                      DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER,
-                                      APP_DEADLINE_DELTA_3MS});
-    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
-                                      GameMode::Standard, JankType::DisplayHAL,
-                                      DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER,
-                                      APP_DEADLINE_DELTA_3MS});
-    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
-                                      GameMode::Standard, JankType::AppDeadlineMissed,
-                                      DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER,
-                                      APP_DEADLINE_DELTA_3MS});
-    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
-                                      GameMode::Standard, JankType::SurfaceFlingerScheduling,
-                                      DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER,
-                                      APP_DEADLINE_DELTA_2MS});
-    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
-                                      GameMode::Standard, JankType::PredictionError,
-                                      DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER,
-                                      APP_DEADLINE_DELTA_2MS});
     mTimeStats->incrementJankyFrames(
-            {kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0), GameMode::Standard,
-             JankType::AppDeadlineMissed | JankType::BufferStuffing, DISPLAY_DEADLINE_DELTA,
-             APP_DEADLINE_DELTA_2MS, APP_DEADLINE_DELTA_2MS});
+            {kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
+             TimeStatsHelper::GameModeStandard, JankType::SurfaceFlingerCpuDeadlineMissed,
+             DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER, APP_DEADLINE_DELTA_3MS});
+    mTimeStats->incrementJankyFrames(
+            {kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
+             TimeStatsHelper::GameModeStandard, JankType::SurfaceFlingerGpuDeadlineMissed,
+             DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER, APP_DEADLINE_DELTA_3MS});
     mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
-                                      GameMode::Standard, JankType::None, DISPLAY_DEADLINE_DELTA,
+                                      TimeStatsHelper::GameModeStandard, JankType::DisplayHAL,
+                                      DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER,
+                                      APP_DEADLINE_DELTA_3MS});
+    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
+                                      TimeStatsHelper::GameModeStandard,
+                                      JankType::AppDeadlineMissed, DISPLAY_DEADLINE_DELTA,
                                       DISPLAY_PRESENT_JITTER, APP_DEADLINE_DELTA_3MS});
+    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
+                                      TimeStatsHelper::GameModeStandard,
+                                      JankType::SurfaceFlingerScheduling, DISPLAY_DEADLINE_DELTA,
+                                      DISPLAY_PRESENT_JITTER, APP_DEADLINE_DELTA_2MS});
+    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
+                                      TimeStatsHelper::GameModeStandard, JankType::PredictionError,
+                                      DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER,
+                                      APP_DEADLINE_DELTA_2MS});
+    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
+                                      TimeStatsHelper::GameModeStandard,
+                                      JankType::AppDeadlineMissed | JankType::BufferStuffing,
+                                      DISPLAY_DEADLINE_DELTA, APP_DEADLINE_DELTA_2MS,
+                                      APP_DEADLINE_DELTA_2MS});
+    mTimeStats->incrementJankyFrames({kRefreshRate0, kRenderRate0, UID_0, genLayerName(LAYER_ID_0),
+                                      TimeStatsHelper::GameModeStandard, JankType::None,
+                                      DISPLAY_DEADLINE_DELTA, DISPLAY_PRESENT_JITTER,
+                                      APP_DEADLINE_DELTA_3MS});
 
     std::string pulledData;
     EXPECT_TRUE(mTimeStats->onPullAtom(10063 /*SURFACEFLINGER_STATS_LAYER_INFO*/, &pulledData));
@@ -1308,18 +1295,22 @@ TEST_F(TimeStatsTest, layerStatsCallback_multipleGameModes) {
     constexpr size_t BAD_DESIRED_PRESENT_FRAMES = 3;
     EXPECT_TRUE(inputCommand(InputCommand::ENABLE, FMT_STRING).empty());
 
-    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 1, 1000000, {}, GameMode::Standard);
+    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 1, 1000000, {},
+                     TimeStatsHelper::GameModeStandard);
     for (size_t i = 0; i < LATE_ACQUIRE_FRAMES; i++) {
         mTimeStats->incrementLatchSkipped(LAYER_ID_0, TimeStats::LatchSkipReason::LateAcquire);
     }
     for (size_t i = 0; i < BAD_DESIRED_PRESENT_FRAMES; i++) {
         mTimeStats->incrementBadDesiredPresent(LAYER_ID_0);
     }
+    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 2, 2000000, {},
+                     TimeStatsHelper::GameModeStandard);
 
-    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 2, 2000000, {}, GameMode::Standard);
-    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 3, 3000000, {}, GameMode::Performance);
-    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 4, 4000000, {}, GameMode::Battery);
-    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 5, 4000000, {}, GameMode::Battery);
+    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 3, 3000000, {},
+                     TimeStatsHelper::GameModePerformance);
+
+    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 4, 4000000, {}, TimeStatsHelper::GameModeBattery);
+    insertTimeRecord(NORMAL_SEQUENCE, LAYER_ID_0, 5, 4000000, {}, TimeStatsHelper::GameModeBattery);
 
     std::string pulledData;
     EXPECT_TRUE(mTimeStats->onPullAtom(10063 /*SURFACEFLINGER_STATS_LAYER_INFO*/, &pulledData));
@@ -1507,14 +1498,14 @@ TEST_F(TimeStatsTest, refreshRateIsClampedToNearestBucket) {
         EXPECT_THAT(result, HasSubstr(expectedResult)) << "failed for " << fps;
     };
 
-    verifyRefreshRateBucket(91_Hz, 90);
-    verifyRefreshRateBucket(89_Hz, 90);
+    verifyRefreshRateBucket(Fps(91.f), 90);
+    verifyRefreshRateBucket(Fps(89.f), 90);
 
-    verifyRefreshRateBucket(61_Hz, 60);
-    verifyRefreshRateBucket(59_Hz, 60);
+    verifyRefreshRateBucket(Fps(61.f), 60);
+    verifyRefreshRateBucket(Fps(59.f), 60);
 
-    verifyRefreshRateBucket(31_Hz, 30);
-    verifyRefreshRateBucket(29_Hz, 30);
+    verifyRefreshRateBucket(Fps(31.f), 30);
+    verifyRefreshRateBucket(Fps(29.f), 30);
 }
 
 } // namespace

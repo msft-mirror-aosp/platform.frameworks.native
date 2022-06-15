@@ -18,10 +18,8 @@
 #define _LIBINPUT_DISPLAY_VIEWPORT_H
 
 #include <android-base/stringprintf.h>
-#include <ftl/enum.h>
-#include <ftl/string.h>
-#include <gui/constants.h>
 #include <input/Input.h>
+#include <input/NamedEnum.h>
 
 #include <cinttypes>
 #include <optional>
@@ -45,8 +43,6 @@ enum class ViewportType : int32_t {
     INTERNAL = 1,
     EXTERNAL = 2,
     VIRTUAL = 3,
-
-    ftl_last = VIRTUAL
 };
 
 /*
@@ -135,8 +131,9 @@ struct DisplayViewport {
                             "physicalFrame=[%d, %d, %d, %d], "
                             "deviceSize=[%d, %d], "
                             "isActive=[%d]",
-                            ftl::enum_string(type).c_str(), displayId, uniqueId.c_str(),
-                            physicalPort ? ftl::to_string(*physicalPort).c_str() : "<none>",
+                            NamedEnum::string(type).c_str(), displayId, uniqueId.c_str(),
+                            physicalPort ? StringPrintf("%" PRIu8, *physicalPort).c_str()
+                                         : "<none>",
                             orientation, logicalLeft, logicalTop, logicalRight, logicalBottom,
                             physicalLeft, physicalTop, physicalRight, physicalBottom, deviceWidth,
                             deviceHeight, isActive);

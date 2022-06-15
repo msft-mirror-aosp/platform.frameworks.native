@@ -17,14 +17,13 @@
 #pragma once
 
 #include <mutex>
-#include <optional>
-#include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <vector>
 
-#include <ftl/small_map.h>
 #include <utils/Timers.h>
 
-#include <scheduler/Fps.h>
-
+#include "Fps.h"
 #include "VsyncModulator.h"
 
 namespace android::scheduler {
@@ -89,8 +88,9 @@ protected:
 
     VsyncConfigSet getConfigsForRefreshRateLocked(Fps fps) const REQUIRES(mLock);
 
-    mutable ftl::SmallMap<Fps, VsyncConfigSet, 2, FpsApproxEqual> mOffsetsCache GUARDED_BY(mLock);
-    Fps mRefreshRateFps GUARDED_BY(mLock);
+    mutable std::unordered_map<Fps, VsyncConfigSet, std::hash<Fps>, Fps::EqualsInBuckets>
+            mOffsetsCache GUARDED_BY(mLock);
+    std::atomic<Fps> mRefreshRateFps GUARDED_BY(mLock);
     mutable std::mutex mLock;
 };
 

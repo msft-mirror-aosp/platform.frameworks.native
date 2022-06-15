@@ -47,6 +47,9 @@ struct CompositionRefreshArgs {
     // All the layers that have queued updates.
     Layers layersWithQueuedFrames;
 
+    // If true, forces the entire display to be considered dirty and repainted
+    bool repaintEverything{false};
+
     // Controls how the color mode is chosen for an output
     OutputColorSetting outputColorSetting{OutputColorSetting::kEnhanced};
 
@@ -85,11 +88,8 @@ struct CompositionRefreshArgs {
     // to prevent an early presentation of a frame.
     std::shared_ptr<FenceTime> previousPresentFence;
 
-    // The expected time for the next present
-    nsecs_t expectedPresentTime{0};
-
-    // If set, a frame has been scheduled for that time.
-    std::optional<std::chrono::steady_clock::time_point> scheduledFrameTime;
+    // The predicted next invalidation time
+    std::optional<std::chrono::steady_clock::time_point> nextInvalidateTime;
 };
 
 } // namespace android::compositionengine

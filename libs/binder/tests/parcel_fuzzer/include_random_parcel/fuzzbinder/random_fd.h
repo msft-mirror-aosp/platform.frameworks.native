@@ -16,13 +16,12 @@
 
 #pragma once
 
-#include <android-base/unique_fd.h>
 #include <fuzzer/FuzzedDataProvider.h>
 
 namespace android {
 
-// always valid or aborts
+// ownership to callee, always valid or aborts
 // get a random FD for use in fuzzing, of a few different specific types
-base::unique_fd getRandomFd(FuzzedDataProvider* provider);
+int getRandomFd(FuzzedDataProvider* provider);
 
 } // namespace android

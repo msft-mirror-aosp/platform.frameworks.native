@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <unordered_map>
 #undef LOG_TAG
 #define LOG_TAG "TimeStats"
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
@@ -27,7 +28,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <unordered_map>
 
 #include "TimeStats.h"
 #include "timestatsproto/TimeStatsHelper.h"
@@ -58,15 +58,15 @@ FrameTimingHistogram histogramToProto(const std::unordered_map<int32_t, int32_t>
     return histogramProto;
 }
 
-SurfaceflingerStatsLayerInfo_GameMode gameModeToProto(GameMode gameMode) {
+SurfaceflingerStatsLayerInfo_GameMode gameModeToProto(int32_t gameMode) {
     switch (gameMode) {
-        case GameMode::Unsupported:
+        case TimeStatsHelper::GameModeUnsupported:
             return SurfaceflingerStatsLayerInfo::GAME_MODE_UNSUPPORTED;
-        case GameMode::Standard:
+        case TimeStatsHelper::GameModeStandard:
             return SurfaceflingerStatsLayerInfo::GAME_MODE_STANDARD;
-        case GameMode::Performance:
+        case TimeStatsHelper::GameModePerformance:
             return SurfaceflingerStatsLayerInfo::GAME_MODE_PERFORMANCE;
-        case GameMode::Battery:
+        case TimeStatsHelper::GameModeBattery:
             return SurfaceflingerStatsLayerInfo::GAME_MODE_BATTERY;
         default:
             return SurfaceflingerStatsLayerInfo::GAME_MODE_UNSPECIFIED;
@@ -321,19 +321,22 @@ void TimeStats::incrementMissedFrames() {
     mTimeStats.missedFramesLegacy++;
 }
 
-void TimeStats::pushCompositionStrategyState(const TimeStats::ClientCompositionRecord& record) {
-    if (!mEnabled.load() || !record.hasInterestingData()) {
-        return;
-    }
+void TimeStats::incrementClientCompositionFrames() {
+    if (!mEnabled.load()) return;
 
     ATRACE_CALL();
 
     std::lock_guard<std::mutex> lock(mMutex);
-    if (record.changed) mTimeStats.compositionStrategyChangesLegacy++;
-    if (record.hadClientComposition) mTimeStats.clientCompositionFramesLegacy++;
-    if (record.reused) mTimeStats.clientCompositionReusedFramesLegacy++;
-    if (record.predicted) mTimeStats.compositionStrategyPredictedLegacy++;
-    if (record.predictionSucceeded) mTimeStats.compositionStrategyPredictionSucceededLegacy++;
+    mTimeStats.clientCompositionFramesLegacy++;
+}
+
+void TimeStats::incrementClientCompositionReusedFrames() {
+    if (!mEnabled.load()) return;
+
+    ATRACE_CALL();
+
+    std::lock_guard<std::mutex> lock(mMutex);
+    mTimeStats.clientCompositionReusedFramesLegacy++;
 }
 
 void TimeStats::incrementRefreshRateSwitches() {
@@ -343,6 +346,15 @@ void TimeStats::incrementRefreshRateSwitches() {
 
     std::lock_guard<std::mutex> lock(mMutex);
     mTimeStats.refreshRateSwitchesLegacy++;
+}
+
+void TimeStats::incrementCompositionStrategyChanges() {
+    if (!mEnabled.load()) return;
+
+    ATRACE_CALL();
+
+    std::lock_guard<std::mutex> lock(mMutex);
+    mTimeStats.compositionStrategyChangesLegacy++;
 }
 
 void TimeStats::recordDisplayEventConnectionCount(int32_t count) {
@@ -442,7 +454,7 @@ static int32_t clampToNearestBucket(Fps fps, size_t bucketWidth) {
 void TimeStats::flushAvailableRecordsToStatsLocked(int32_t layerId, Fps displayRefreshRate,
                                                    std::optional<Fps> renderRate,
                                                    SetFrameRateVote frameRateVote,
-                                                   GameMode gameMode) {
+                                                   int32_t gameMode) {
     ATRACE_CALL();
     ALOGV("[%d]-flushAvailableRecordsToStatsLocked", layerId);
 
@@ -542,7 +554,7 @@ static bool layerNameIsValid(const std::string& layerName) {
 }
 
 bool TimeStats::canAddNewAggregatedStats(uid_t uid, const std::string& layerName,
-                                         GameMode gameMode) {
+                                         int32_t gameMode) {
     uint32_t layerRecords = 0;
     for (const auto& record : mTimeStats.stats) {
         if (record.second.stats.count({uid, layerName, gameMode}) > 0) {
@@ -552,11 +564,11 @@ bool TimeStats::canAddNewAggregatedStats(uid_t uid, const std::string& layerName
         layerRecords += record.second.stats.size();
     }
 
-    return layerRecords < MAX_NUM_LAYER_STATS;
+    return mTimeStats.stats.size() < MAX_NUM_LAYER_STATS;
 }
 
 void TimeStats::setPostTime(int32_t layerId, uint64_t frameNumber, const std::string& layerName,
-                            uid_t uid, nsecs_t postTime, GameMode gameMode) {
+                            uid_t uid, nsecs_t postTime, int32_t gameMode) {
     if (!mEnabled.load()) return;
 
     ATRACE_CALL();
@@ -706,7 +718,7 @@ void TimeStats::setAcquireFence(int32_t layerId, uint64_t frameNumber,
 
 void TimeStats::setPresentTime(int32_t layerId, uint64_t frameNumber, nsecs_t presentTime,
                                Fps displayRefreshRate, std::optional<Fps> renderRate,
-                               SetFrameRateVote frameRateVote, GameMode gameMode) {
+                               SetFrameRateVote frameRateVote, int32_t gameMode) {
     if (!mEnabled.load()) return;
 
     ATRACE_CALL();
@@ -732,7 +744,7 @@ void TimeStats::setPresentTime(int32_t layerId, uint64_t frameNumber, nsecs_t pr
 void TimeStats::setPresentFence(int32_t layerId, uint64_t frameNumber,
                                 const std::shared_ptr<FenceTime>& presentFence,
                                 Fps displayRefreshRate, std::optional<Fps> renderRate,
-                                SetFrameRateVote frameRateVote, GameMode gameMode) {
+                                SetFrameRateVote frameRateVote, int32_t gameMode) {
     if (!mEnabled.load()) return;
 
     ATRACE_CALL();
@@ -811,7 +823,7 @@ void TimeStats::incrementJankyFrames(const JankyFramesInfo& info) {
     // the first jank record is not dropped.
 
     static const std::string kDefaultLayerName = "none";
-    constexpr GameMode kDefaultGameMode = GameMode::Unsupported;
+    static constexpr int32_t kDefaultGameMode = TimeStatsHelper::GameModeUnsupported;
 
     const int32_t refreshRateBucket =
             clampToNearestBucket(info.refreshRate, REFRESH_RATE_BUCKET_WIDTH);
@@ -1050,10 +1062,8 @@ void TimeStats::clearGlobalLocked() {
     mTimeStats.missedFramesLegacy = 0;
     mTimeStats.clientCompositionFramesLegacy = 0;
     mTimeStats.clientCompositionReusedFramesLegacy = 0;
-    mTimeStats.compositionStrategyChangesLegacy = 0;
-    mTimeStats.compositionStrategyPredictedLegacy = 0;
-    mTimeStats.compositionStrategyPredictionSucceededLegacy = 0;
     mTimeStats.refreshRateSwitchesLegacy = 0;
+    mTimeStats.compositionStrategyChangesLegacy = 0;
     mTimeStats.displayEventConnectionsCountLegacy = 0;
     mTimeStats.displayOnTimeLegacy = 0;
     mTimeStats.presentToPresentLegacy.hist.clear();

@@ -33,6 +33,7 @@
 
 #include "../Layer.h"
 #include "LayerInfo.h"
+#include "SchedulerUtils.h"
 
 namespace android::scheduler {
 
@@ -74,46 +75,52 @@ void trace(const LayerInfo& info, LayerHistory::LayerVoteType type, int fps) {
 }
 } // namespace
 
-LayerHistory::LayerHistory()
+LayerHistory::LayerHistory(const RefreshRateConfigs& refreshRateConfigs)
       : mTraceEnabled(traceEnabled()), mUseFrameRatePriority(useFrameRatePriority()) {
     LayerInfo::setTraceEnabled(mTraceEnabled);
+    LayerInfo::setRefreshRateConfigs(refreshRateConfigs);
 }
 
 LayerHistory::~LayerHistory() = default;
 
 void LayerHistory::registerLayer(Layer* layer, LayerVoteType type) {
     std::lock_guard lock(mLock);
-    LOG_ALWAYS_FATAL_IF(findLayer(layer->getSequence()).first != LayerStatus::NotFound,
-                        "%s already registered", layer->getName().c_str());
+    for (const auto& info : mLayerInfos) {
+        LOG_ALWAYS_FATAL_IF(info.first == layer, "%s already registered", layer->getName().c_str());
+    }
     auto info = std::make_unique<LayerInfo>(layer->getName(), layer->getOwnerUid(), type);
-
-    // The layer can be placed on either map, it is assumed that partitionLayers() will be called
-    // to correct them.
-    mInactiveLayerInfos.insert({layer->getSequence(), std::make_pair(layer, std::move(info))});
+    mLayerInfos.emplace_back(layer, std::move(info));
 }
 
 void LayerHistory::deregisterLayer(Layer* layer) {
     std::lock_guard lock(mLock);
-    if (!mActiveLayerInfos.erase(layer->getSequence())) {
-        if (!mInactiveLayerInfos.erase(layer->getSequence())) {
-            LOG_ALWAYS_FATAL("%s: unknown layer %p", __FUNCTION__, layer);
-        }
+
+    const auto it = std::find_if(mLayerInfos.begin(), mLayerInfos.end(),
+                                 [layer](const auto& pair) { return pair.first == layer; });
+    LOG_ALWAYS_FATAL_IF(it == mLayerInfos.end(), "%s: unknown layer %p", __FUNCTION__, layer);
+
+    const size_t i = static_cast<size_t>(it - mLayerInfos.begin());
+    if (i < mActiveLayersEnd) {
+        mActiveLayersEnd--;
     }
+    const size_t last = mLayerInfos.size() - 1;
+    std::swap(mLayerInfos[i], mLayerInfos[last]);
+    mLayerInfos.erase(mLayerInfos.begin() + static_cast<long>(last));
 }
 
 void LayerHistory::record(Layer* layer, nsecs_t presentTime, nsecs_t now,
                           LayerUpdateType updateType) {
     std::lock_guard lock(mLock);
-    auto id = layer->getSequence();
 
-    auto [found, layerPair] = findLayer(id);
-    if (found == LayerStatus::NotFound) {
+    const auto it = std::find_if(mLayerInfos.begin(), mLayerInfos.end(),
+                                 [layer](const auto& pair) { return pair.first == layer; });
+    if (it == mLayerInfos.end()) {
         // Offscreen layer
-        ALOGV("%s: %s not registered", __func__, layer->getName().c_str());
+        ALOGV("LayerHistory::record: %s not registered", layer->getName().c_str());
         return;
     }
 
-    const auto& info = layerPair->second;
+    const auto& info = it->second;
     const auto layerProps = LayerInfo::LayerProps{
             .visible = layer->isVisible(),
             .bounds = layer->getBounds(),
@@ -125,30 +132,28 @@ void LayerHistory::record(Layer* layer, nsecs_t presentTime, nsecs_t now,
     info->setLastPresentTime(presentTime, now, updateType, mModeChangePending, layerProps);
 
     // Activate layer if inactive.
-    if (found == LayerStatus::LayerInInactiveMap) {
-        mActiveLayerInfos.insert(
-                {id, std::make_pair(layerPair->first, std::move(layerPair->second))});
-        mInactiveLayerInfos.erase(id);
+    if (const auto end = activeLayers().end(); it >= end) {
+        std::iter_swap(it, end);
+        mActiveLayersEnd++;
     }
 }
 
-auto LayerHistory::summarize(const RefreshRateConfigs& configs, nsecs_t now) -> Summary {
-    Summary summary;
+LayerHistory::Summary LayerHistory::summarize(nsecs_t now) {
+    LayerHistory::Summary summary;
 
     std::lock_guard lock(mLock);
 
     partitionLayers(now);
 
-    for (const auto& [key, value] : mActiveLayerInfos) {
-        auto& info = value.second;
+    for (const auto& [layer, info] : activeLayers()) {
         const auto frameRateSelectionPriority = info->getFrameRateSelectionPriority();
         const auto layerFocused = Layer::isLayerFocusedBasedOnPriority(frameRateSelectionPriority);
         ALOGV("%s has priority: %d %s focused", info->getName().c_str(), frameRateSelectionPriority,
               layerFocused ? "" : "not");
 
-        const auto vote = info->getRefreshRateVote(configs, now);
+        const auto vote = info->getRefreshRateVote(now);
         // Skip NoVote layer as those don't have any requirements
-        if (vote.type == LayerVoteType::NoVote) {
+        if (vote.type == LayerHistory::LayerVoteType::NoVote) {
             continue;
         }
 
@@ -174,29 +179,12 @@ auto LayerHistory::summarize(const RefreshRateConfigs& configs, nsecs_t now) -> 
 void LayerHistory::partitionLayers(nsecs_t now) {
     const nsecs_t threshold = getActiveLayerThreshold(now);
 
-    // iterate over inactive map
-    LayerInfos::iterator it = mInactiveLayerInfos.begin();
-    while (it != mInactiveLayerInfos.end()) {
-        auto& [layerUnsafe, info] = it->second;
+    // Collect expired and inactive layers after active layers.
+    size_t i = 0;
+    while (i < mActiveLayersEnd) {
+        auto& [layerUnsafe, info] = mLayerInfos[i];
         if (isLayerActive(*info, threshold)) {
-            // move this to the active map
-
-            mActiveLayerInfos.insert({it->first, std::move(it->second)});
-            it = mInactiveLayerInfos.erase(it);
-        } else {
-            if (CC_UNLIKELY(mTraceEnabled)) {
-                trace(*info, LayerVoteType::NoVote, 0);
-            }
-            info->onLayerInactive(now);
-            it++;
-        }
-    }
-
-    // iterate over active map
-    it = mActiveLayerInfos.begin();
-    while (it != mActiveLayerInfos.end()) {
-        auto& [layerUnsafe, info] = it->second;
-        if (isLayerActive(*info, threshold)) {
+            i++;
             // Set layer vote if set
             const auto frameRate = info->getSetFrameRateVote();
             const auto voteType = [&]() {
@@ -218,54 +206,30 @@ void LayerHistory::partitionLayers(nsecs_t now) {
             } else {
                 info->resetLayerVote();
             }
-
-            it++;
-        } else {
-            if (CC_UNLIKELY(mTraceEnabled)) {
-                trace(*info, LayerVoteType::NoVote, 0);
-            }
-            info->onLayerInactive(now);
-            // move this to the inactive map
-            mInactiveLayerInfos.insert({it->first, std::move(it->second)});
-            it = mActiveLayerInfos.erase(it);
+            continue;
         }
+
+        if (CC_UNLIKELY(mTraceEnabled)) {
+            trace(*info, LayerHistory::LayerVoteType::NoVote, 0);
+        }
+
+        info->onLayerInactive(now);
+        std::swap(mLayerInfos[i], mLayerInfos[--mActiveLayersEnd]);
     }
 }
 
 void LayerHistory::clear() {
     std::lock_guard lock(mLock);
-    for (const auto& [key, value] : mActiveLayerInfos) {
-        value.second->clearHistory(systemTime());
+
+    for (const auto& [layer, info] : activeLayers()) {
+        info->clearHistory(systemTime());
     }
 }
 
 std::string LayerHistory::dump() const {
     std::lock_guard lock(mLock);
-    return base::StringPrintf("LayerHistory{size=%zu, active=%zu}",
-                              mActiveLayerInfos.size() + mInactiveLayerInfos.size(),
-                              mActiveLayerInfos.size());
-}
-
-float LayerHistory::getLayerFramerate(nsecs_t now, int32_t id) const {
-    std::lock_guard lock(mLock);
-    auto [found, layerPair] = findLayer(id);
-    if (found != LayerStatus::NotFound) {
-        return layerPair->second->getFps(now).getValue();
-    }
-    return 0.f;
-}
-
-auto LayerHistory::findLayer(int32_t id) -> std::pair<LayerStatus, LayerPair*> {
-    // the layer could be in either the active or inactive map, try both
-    auto it = mActiveLayerInfos.find(id);
-    if (it != mActiveLayerInfos.end()) {
-        return {LayerStatus::LayerInActiveMap, &(it->second)};
-    }
-    it = mInactiveLayerInfos.find(id);
-    if (it != mInactiveLayerInfos.end()) {
-        return {LayerStatus::LayerInInactiveMap, &(it->second)};
-    }
-    return {LayerStatus::NotFound, nullptr};
+    return base::StringPrintf("LayerHistory{size=%zu, active=%zu}", mLayerInfos.size(),
+                              mActiveLayersEnd);
 }
 
 } // namespace android::scheduler

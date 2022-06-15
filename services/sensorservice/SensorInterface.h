@@ -44,6 +44,9 @@ public:
     virtual const Sensor& getSensor() const = 0;
     virtual bool isVirtual() const = 0;
     virtual void autoDisable(void* /*ident*/, int /*handle*/) = 0;
+
+    virtual void willDisableAllSensors() = 0;
+    virtual void didEnableAllSensors() = 0;
 };
 
 class BaseSensor : public SensorInterface {
@@ -67,6 +70,8 @@ public:
     virtual const Sensor& getSensor() const override { return mSensor; }
     virtual void autoDisable(void* /*ident*/, int /*handle*/) override { }
 
+    virtual void willDisableAllSensors() override { }
+    virtual void didEnableAllSensors() override { }
 protected:
     SensorDevice& mSensorDevice;
     Sensor mSensor;
@@ -110,6 +115,8 @@ public:
 
     status_t activate(void* ident, bool enabled) override;
 
+    void willDisableAllSensors() override;
+    void didEnableAllSensors() override;
 private:
     SensorService& mSensorService;
 };

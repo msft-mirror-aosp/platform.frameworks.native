@@ -22,25 +22,28 @@
 //#define LOG_NDEBUG 0
 
 // Log debug messages for each raw event received from the EventHub.
-static constexpr bool DEBUG_RAW_EVENTS = false;
+#define DEBUG_RAW_EVENTS 0
+
+// Log debug messages about touch screen filtering hacks.
+#define DEBUG_HACKS 0
 
 // Log debug messages about virtual key processing.
-static constexpr bool DEBUG_VIRTUAL_KEYS = false;
+#define DEBUG_VIRTUAL_KEYS 0
 
 // Log debug messages about pointers.
-static constexpr bool DEBUG_POINTERS = false;
+#define DEBUG_POINTERS 0
 
 // Log debug messages about pointer assignment calculations.
-static constexpr bool DEBUG_POINTER_ASSIGNMENT = false;
+#define DEBUG_POINTER_ASSIGNMENT 0
 
 // Log debug messages about gesture detection.
-static constexpr bool DEBUG_GESTURES = false;
+#define DEBUG_GESTURES 0
 
 // Log debug messages about the vibrator.
-static constexpr bool DEBUG_VIBRATOR = false;
+#define DEBUG_VIBRATOR 0
 
 // Log debug messages about fusing stylus data.
-static constexpr bool DEBUG_STYLUS_FUSION = false;
+#define DEBUG_STYLUS_FUSION 0
 
 #define INDENT "  "
 #define INDENT2 "    "

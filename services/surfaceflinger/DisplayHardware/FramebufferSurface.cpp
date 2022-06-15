@@ -44,9 +44,17 @@
 #include "HWComposer.h"
 #include "../SurfaceFlinger.h"
 
+// ----------------------------------------------------------------------------
 namespace android {
+// ----------------------------------------------------------------------------
 
 using ui::Dataspace;
+
+/*
+ * This implements the (main) framebuffer management. This class is used
+ * mostly by SurfaceFlinger, but also by command line GL application.
+ *
+ */
 
 FramebufferSurface::FramebufferSurface(HWComposer& hwc, PhysicalDisplayId displayId,
                                        const sp<IGraphicBufferConsumer>& consumer,
@@ -197,14 +205,14 @@ ui::Size FramebufferSurface::limitSizeInternal(const ui::Size& size, const ui::S
 
 void FramebufferSurface::dumpAsString(String8& result) const {
     Mutex::Autolock lock(mMutex);
-    result.append("   FramebufferSurface\n");
-    result.appendFormat("      mDataSpace=%s (%d)\n",
+    result.appendFormat("  FramebufferSurface: dataspace: %s(%d)\n",
                         dataspaceDetails(static_cast<android_dataspace>(mDataSpace)).c_str(),
                         mDataSpace);
-    ConsumerBase::dumpLocked(result, "      ");
+    ConsumerBase::dumpLocked(result, "   ");
 }
 
-void FramebufferSurface::dumpLocked(String8& result, const char* prefix) const {
+void FramebufferSurface::dumpLocked(String8& result, const char* prefix) const
+{
     ConsumerBase::dumpLocked(result, prefix);
 }
 
@@ -212,7 +220,9 @@ const sp<Fence>& FramebufferSurface::getClientTargetAcquireFence() const {
     return mCurrentFence;
 }
 
-} // namespace android
+// ----------------------------------------------------------------------------
+}; // namespace android
+// ----------------------------------------------------------------------------
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic pop // ignored "-Wconversion"

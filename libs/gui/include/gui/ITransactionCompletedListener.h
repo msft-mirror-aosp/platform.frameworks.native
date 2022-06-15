@@ -30,7 +30,6 @@
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
-#include <variant>
 
 namespace android {
 
@@ -131,12 +130,12 @@ public:
     status_t readFromParcel(const Parcel* input) override;
 
     SurfaceStats() = default;
-    SurfaceStats(const sp<IBinder>& sc, std::variant<nsecs_t, sp<Fence>> acquireTimeOrFence,
-                 const sp<Fence>& prevReleaseFence, uint32_t hint,
-                 uint32_t currentMaxAcquiredBuffersCount, FrameEventHistoryStats frameEventStats,
-                 std::vector<JankData> jankData, ReleaseCallbackId previousReleaseCallbackId)
+    SurfaceStats(const sp<IBinder>& sc, nsecs_t time, const sp<Fence>& prevReleaseFence,
+                 uint32_t hint, uint32_t currentMaxAcquiredBuffersCount,
+                 FrameEventHistoryStats frameEventStats, std::vector<JankData> jankData,
+                 ReleaseCallbackId previousReleaseCallbackId)
           : surfaceControl(sc),
-            acquireTimeOrFence(std::move(acquireTimeOrFence)),
+            acquireTime(time),
             previousReleaseFence(prevReleaseFence),
             transformHint(hint),
             currentMaxAcquiredBufferCount(currentMaxAcquiredBuffersCount),
@@ -145,7 +144,7 @@ public:
             previousReleaseCallbackId(previousReleaseCallbackId) {}
 
     sp<IBinder> surfaceControl;
-    std::variant<nsecs_t, sp<Fence>> acquireTimeOrFence = -1;
+    nsecs_t acquireTime = -1;
     sp<Fence> previousReleaseFence;
     uint32_t transformHint = 0;
     uint32_t currentMaxAcquiredBufferCount = 0;
@@ -193,8 +192,8 @@ public:
     virtual void onTransactionCompleted(ListenerStats stats) = 0;
 
     virtual void onReleaseBuffer(ReleaseCallbackId callbackId, sp<Fence> releaseFence,
+                                 uint32_t transformHint,
                                  uint32_t currentMaxAcquiredBufferCount) = 0;
-    virtual void onTransactionQueueStalled() = 0;
 };
 
 class BnTransactionCompletedListener : public SafeBnInterface<ITransactionCompletedListener> {

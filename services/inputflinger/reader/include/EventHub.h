@@ -19,12 +19,13 @@
 
 #include <bitset>
 #include <climits>
-#include <filesystem>
 #include <unordered_map>
 #include <vector>
 
+#include <input/Flags.h>
+#include <filesystem>
+
 #include <batteryservice/BatteryService.h>
-#include <ftl/flags.h>
 #include <input/Input.h>
 #include <input/InputDevice.h>
 #include <input/KeyCharacterMap.h>
@@ -145,8 +146,6 @@ enum class InputDeviceClass : uint32_t {
 enum class SysfsClass : uint32_t {
     POWER_SUPPLY = 0,
     LEDS = 1,
-
-    ftl_last = LEDS
 };
 
 enum class LightColor : uint32_t {
@@ -188,7 +187,7 @@ struct RawLightInfo {
     int32_t id;
     std::string name;
     std::optional<int32_t> maxBrightness;
-    ftl::Flags<InputLightClass> flags;
+    Flags<InputLightClass> flags;
     std::array<int32_t, COLOR_NUM> rgbIndex;
     std::filesystem::path path;
 };
@@ -197,7 +196,7 @@ struct RawLightInfo {
 struct RawBatteryInfo {
     int32_t id;
     std::string name;
-    ftl::Flags<InputBatteryClass> flags;
+    Flags<InputBatteryClass> flags;
     std::filesystem::path path;
 };
 
@@ -205,8 +204,7 @@ struct RawBatteryInfo {
  * Gets the class that owns an axis, in cases where multiple classes might claim
  * the same axis for different purposes.
  */
-extern ftl::Flags<InputDeviceClass> getAbsAxisUsage(int32_t axis,
-                                                    ftl::Flags<InputDeviceClass> deviceClasses);
+extern Flags<InputDeviceClass> getAbsAxisUsage(int32_t axis, Flags<InputDeviceClass> deviceClasses);
 
 /*
  * Grand Central Station for events.
@@ -239,7 +237,7 @@ public:
         FIRST_SYNTHETIC_EVENT = DEVICE_ADDED,
     };
 
-    virtual ftl::Flags<InputDeviceClass> getDeviceClasses(int32_t deviceId) const = 0;
+    virtual Flags<InputDeviceClass> getDeviceClasses(int32_t deviceId) const = 0;
 
     virtual InputDeviceIdentifier getDeviceIdentifier(int32_t deviceId) const = 0;
 
@@ -306,7 +304,6 @@ public:
     virtual int32_t getSwitchState(int32_t deviceId, int32_t sw) const = 0;
     virtual status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
                                           int32_t* outValue) const = 0;
-    virtual int32_t getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const = 0;
 
     /*
      * Examine key input devices for specific framework keycode support
@@ -315,7 +312,6 @@ public:
                                        uint8_t* outFlags) const = 0;
 
     virtual bool hasScanCode(int32_t deviceId, int32_t scanCode) const = 0;
-    virtual bool hasKeyCode(int32_t deviceId, int32_t keyCode) const = 0;
 
     /* LED related functions expect Android LED constants, not scan codes or HID usages */
     virtual bool hasLed(int32_t deviceId, int32_t led) const = 0;
@@ -436,7 +432,7 @@ class EventHub : public EventHubInterface {
 public:
     EventHub();
 
-    ftl::Flags<InputDeviceClass> getDeviceClasses(int32_t deviceId) const override final;
+    Flags<InputDeviceClass> getDeviceClasses(int32_t deviceId) const override final;
 
     InputDeviceIdentifier getDeviceIdentifier(int32_t deviceId) const override final;
 
@@ -483,8 +479,6 @@ public:
     int32_t getScanCodeState(int32_t deviceId, int32_t scanCode) const override final;
     int32_t getKeyCodeState(int32_t deviceId, int32_t keyCode) const override final;
     int32_t getSwitchState(int32_t deviceId, int32_t sw) const override final;
-    int32_t getKeyCodeForKeyLocation(int32_t deviceId,
-                                     int32_t locationKeyCode) const override final;
     status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
                                   int32_t* outValue) const override final;
 
@@ -495,7 +489,6 @@ public:
     std::vector<TouchVideoFrame> getVideoFrames(int32_t deviceId) override final;
 
     bool hasScanCode(int32_t deviceId, int32_t scanCode) const override final;
-    bool hasKeyCode(int32_t deviceId, int32_t keyCode) const override final;
     bool hasLed(int32_t deviceId, int32_t led) const override final;
     void setLedState(int32_t deviceId, int32_t led, bool on) override final;
 
@@ -559,7 +552,7 @@ private:
 
         std::unique_ptr<TouchVideoDevice> videoDevice;
 
-        ftl::Flags<InputDeviceClass> classes;
+        Flags<InputDeviceClass> classes;
 
         BitArray<KEY_MAX> keyBitmask;
         BitArray<KEY_MAX> keyState;
@@ -662,16 +655,13 @@ private:
     int32_t getNextControllerNumberLocked(const std::string& name) REQUIRES(mLock);
     void releaseControllerNumberLocked(int32_t num) REQUIRES(mLock);
     void reportDeviceAddedForStatisticsLocked(const InputDeviceIdentifier& identifier,
-                                              ftl::Flags<InputDeviceClass> classes) REQUIRES(mLock);
+                                              Flags<InputDeviceClass> classes) REQUIRES(mLock);
 
     const std::unordered_map<int32_t, RawBatteryInfo>& getBatteryInfoLocked(int32_t deviceId) const
             REQUIRES(mLock);
 
     const std::unordered_map<int32_t, RawLightInfo>& getLightInfoLocked(int32_t deviceId) const
             REQUIRES(mLock);
-
-    void addDeviceInputInotify();
-    void addDeviceInotify();
 
     // Protect all internal state.
     mutable std::mutex mLock;
@@ -712,8 +702,8 @@ private:
     int mWakeReadPipeFd;
     int mWakeWritePipeFd;
 
-    int mDeviceInputWd;
-    int mDeviceWd = -1;
+    int mInputWd;
+    int mVideoWd;
 
     // Maximum number of signalled FDs to handle at a time.
     static const int EPOLL_MAX_EVENTS = 16;
@@ -725,6 +715,6 @@ private:
     bool mPendingINotify;
 };
 
-} // namespace android
+}; // namespace android
 
 #endif // _RUNTIME_EVENT_HUB_H

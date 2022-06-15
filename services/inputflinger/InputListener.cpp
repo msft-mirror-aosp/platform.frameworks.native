@@ -44,8 +44,8 @@ bool NotifyConfigurationChangedArgs::operator==(const NotifyConfigurationChanged
     return id == rhs.id && eventTime == rhs.eventTime;
 }
 
-void NotifyConfigurationChangedArgs::notify(InputListenerInterface& listener) const {
-    listener.notifyConfigurationChanged(this);
+void NotifyConfigurationChangedArgs::notify(const sp<InputListenerInterface>& listener) const {
+    listener->notifyConfigurationChanged(this);
 }
 
 // --- NotifyKeyArgs ---
@@ -89,8 +89,8 @@ bool NotifyKeyArgs::operator==(const NotifyKeyArgs& rhs) const {
             downTime == rhs.downTime;
 }
 
-void NotifyKeyArgs::notify(InputListenerInterface& listener) const {
-    listener.notifyKey(this);
+void NotifyKeyArgs::notify(const sp<InputListenerInterface>& listener) const {
+    listener->notifyKey(this);
 }
 
 // --- NotifyMotionArgs ---
@@ -188,29 +188,8 @@ bool NotifyMotionArgs::operator==(const NotifyMotionArgs& rhs) const {
     return true;
 }
 
-std::string NotifyMotionArgs::dump() const {
-    std::string coords;
-    for (uint32_t i = 0; i < pointerCount; i++) {
-        if (!coords.empty()) {
-            coords += ", ";
-        }
-        coords += StringPrintf("{%" PRIu32 ": ", i);
-        coords +=
-                StringPrintf("id=%" PRIu32 " x=%.1f y=%.1f, pressure=%.1f", pointerProperties[i].id,
-                             pointerCoords[i].getX(), pointerCoords[i].getY(),
-                             pointerCoords[i].getAxisValue(AMOTION_EVENT_AXIS_PRESSURE));
-        coords += "}";
-    }
-    return StringPrintf("NotifyMotionArgs(id=%" PRId32 ", eventTime=%" PRId64 ", deviceId=%" PRId32
-                        ", source=%s, action=%s, pointerCount=%" PRIu32
-                        " pointers=%s, flags=0x%08x)",
-                        id, eventTime, deviceId, inputEventSourceToString(source).c_str(),
-                        MotionEvent::actionToString(action).c_str(), pointerCount, coords.c_str(),
-                        flags);
-}
-
-void NotifyMotionArgs::notify(InputListenerInterface& listener) const {
-    listener.notifyMotion(this);
+void NotifyMotionArgs::notify(const sp<InputListenerInterface>& listener) const {
+    listener->notifyMotion(this);
 }
 
 // --- NotifySwitchArgs ---
@@ -233,8 +212,8 @@ bool NotifySwitchArgs::operator==(const NotifySwitchArgs rhs) const {
             switchValues == rhs.switchValues && switchMask == rhs.switchMask;
 }
 
-void NotifySwitchArgs::notify(InputListenerInterface& listener) const {
-    listener.notifySwitch(this);
+void NotifySwitchArgs::notify(const sp<InputListenerInterface>& listener) const {
+    listener->notifySwitch(this);
 }
 
 // --- NotifySensorArgs ---
@@ -268,8 +247,8 @@ bool NotifySensorArgs::operator==(const NotifySensorArgs rhs) const {
             hwTimestamp == rhs.hwTimestamp && values == rhs.values;
 }
 
-void NotifySensorArgs::notify(InputListenerInterface& listener) const {
-    listener.notifySensor(this);
+void NotifySensorArgs::notify(const sp<InputListenerInterface>& listener) const {
+    listener->notifySensor(this);
 }
 
 // --- NotifyVibratorStateArgs ---
@@ -286,8 +265,8 @@ bool NotifyVibratorStateArgs::operator==(const NotifyVibratorStateArgs rhs) cons
             isOn == rhs.isOn;
 }
 
-void NotifyVibratorStateArgs::notify(InputListenerInterface& listener) const {
-    listener.notifyVibratorState(this);
+void NotifyVibratorStateArgs::notify(const sp<InputListenerInterface>& listener) const {
+    listener->notifyVibratorState(this);
 }
 
 // --- NotifyDeviceResetArgs ---
@@ -302,26 +281,26 @@ bool NotifyDeviceResetArgs::operator==(const NotifyDeviceResetArgs& rhs) const {
     return id == rhs.id && eventTime == rhs.eventTime && deviceId == rhs.deviceId;
 }
 
-void NotifyDeviceResetArgs::notify(InputListenerInterface& listener) const {
-    listener.notifyDeviceReset(this);
+void NotifyDeviceResetArgs::notify(const sp<InputListenerInterface>& listener) const {
+    listener->notifyDeviceReset(this);
 }
 
 // --- NotifyPointerCaptureChangedArgs ---
 
-NotifyPointerCaptureChangedArgs::NotifyPointerCaptureChangedArgs(
-        int32_t id, nsecs_t eventTime, const PointerCaptureRequest& request)
-      : NotifyArgs(id, eventTime), request(request) {}
+NotifyPointerCaptureChangedArgs::NotifyPointerCaptureChangedArgs(int32_t id, nsecs_t eventTime,
+                                                                 bool enabled)
+      : NotifyArgs(id, eventTime), enabled(enabled) {}
 
 NotifyPointerCaptureChangedArgs::NotifyPointerCaptureChangedArgs(
         const NotifyPointerCaptureChangedArgs& other)
-      : NotifyArgs(other.id, other.eventTime), request(other.request) {}
+      : NotifyArgs(other.id, other.eventTime), enabled(other.enabled) {}
 
 bool NotifyPointerCaptureChangedArgs::operator==(const NotifyPointerCaptureChangedArgs& rhs) const {
-    return id == rhs.id && eventTime == rhs.eventTime && request == rhs.request;
+    return id == rhs.id && eventTime == rhs.eventTime && enabled == rhs.enabled;
 }
 
-void NotifyPointerCaptureChangedArgs::notify(InputListenerInterface& listener) const {
-    listener.notifyPointerCaptureChanged(this);
+void NotifyPointerCaptureChangedArgs::notify(const sp<InputListenerInterface>& listener) const {
+    listener->notifyPointerCaptureChanged(this);
 }
 
 // --- QueuedInputListener ---
@@ -333,53 +312,64 @@ static inline void traceEvent(const char* functionName, int32_t id) {
     }
 }
 
-QueuedInputListener::QueuedInputListener(InputListenerInterface& innerListener)
-      : mInnerListener(innerListener) {}
+QueuedInputListener::QueuedInputListener(const sp<InputListenerInterface>& innerListener) :
+        mInnerListener(innerListener) {
+}
+
+QueuedInputListener::~QueuedInputListener() {
+    size_t count = mArgsQueue.size();
+    for (size_t i = 0; i < count; i++) {
+        delete mArgsQueue[i];
+    }
+}
 
 void QueuedInputListener::notifyConfigurationChanged(
         const NotifyConfigurationChangedArgs* args) {
     traceEvent(__func__, args->id);
-    mArgsQueue.emplace_back(std::make_unique<NotifyConfigurationChangedArgs>(*args));
+    mArgsQueue.push_back(new NotifyConfigurationChangedArgs(*args));
 }
 
 void QueuedInputListener::notifyKey(const NotifyKeyArgs* args) {
     traceEvent(__func__, args->id);
-    mArgsQueue.emplace_back(std::make_unique<NotifyKeyArgs>(*args));
+    mArgsQueue.push_back(new NotifyKeyArgs(*args));
 }
 
 void QueuedInputListener::notifyMotion(const NotifyMotionArgs* args) {
     traceEvent(__func__, args->id);
-    mArgsQueue.emplace_back(std::make_unique<NotifyMotionArgs>(*args));
+    mArgsQueue.push_back(new NotifyMotionArgs(*args));
 }
 
 void QueuedInputListener::notifySwitch(const NotifySwitchArgs* args) {
     traceEvent(__func__, args->id);
-    mArgsQueue.emplace_back(std::make_unique<NotifySwitchArgs>(*args));
+    mArgsQueue.push_back(new NotifySwitchArgs(*args));
 }
 
 void QueuedInputListener::notifySensor(const NotifySensorArgs* args) {
     traceEvent(__func__, args->id);
-    mArgsQueue.emplace_back(std::make_unique<NotifySensorArgs>(*args));
+    mArgsQueue.push_back(new NotifySensorArgs(*args));
 }
 
 void QueuedInputListener::notifyVibratorState(const NotifyVibratorStateArgs* args) {
     traceEvent(__func__, args->id);
-    mArgsQueue.emplace_back(std::make_unique<NotifyVibratorStateArgs>(*args));
+    mArgsQueue.push_back(new NotifyVibratorStateArgs(*args));
 }
 
 void QueuedInputListener::notifyDeviceReset(const NotifyDeviceResetArgs* args) {
     traceEvent(__func__, args->id);
-    mArgsQueue.emplace_back(std::make_unique<NotifyDeviceResetArgs>(*args));
+    mArgsQueue.push_back(new NotifyDeviceResetArgs(*args));
 }
 
 void QueuedInputListener::notifyPointerCaptureChanged(const NotifyPointerCaptureChangedArgs* args) {
     traceEvent(__func__, args->id);
-    mArgsQueue.emplace_back(std::make_unique<NotifyPointerCaptureChangedArgs>(*args));
+    mArgsQueue.push_back(new NotifyPointerCaptureChangedArgs(*args));
 }
 
 void QueuedInputListener::flush() {
-    for (const std::unique_ptr<NotifyArgs>& args : mArgsQueue) {
+    size_t count = mArgsQueue.size();
+    for (size_t i = 0; i < count; i++) {
+        NotifyArgs* args = mArgsQueue[i];
         args->notify(mInnerListener);
+        delete args;
     }
     mArgsQueue.clear();
 }

@@ -32,6 +32,7 @@ SensorService::SensorDirectConnection::SensorDirectConnection(const sp<SensorSer
         : mService(service), mUid(uid), mMem(*mem),
         mHalChannelHandle(halChannelHandle),
         mOpPackageName(opPackageName), mDestroyed(false) {
+    mIsRateCappedBasedOnPermission = mService->isRateCappedBasedOnPermission(mOpPackageName);
     mUserId = multiuser_get_user_id(mUid);
     ALOGD_IF(DEBUG_CONNECTIONS, "Created SensorDirectConnection");
 }
@@ -157,7 +158,7 @@ int32_t SensorService::SensorDirectConnection::configureChannel(int handle, int 
     }
 
     const Sensor& s = si->getSensor();
-    if (!mService->canAccessSensor(s, "config direct channel", mOpPackageName)) {
+    if (!SensorService::canAccessSensor(s, "config direct channel", mOpPackageName)) {
         return PERMISSION_DENIED;
     }
 
@@ -196,8 +197,8 @@ int32_t SensorService::SensorDirectConnection::configureChannel(int handle, int 
             if (mService->isSensorInCappedSet(s.getType())) {
                 // Back up the rates that the app is allowed to have if the mic toggle is off
                 // This is used in the uncapRates() function.
-                if ((requestedRateLevel <= SENSOR_SERVICE_CAPPED_SAMPLING_RATE_LEVEL) ||
-                    !isRateCappedBasedOnPermission()) {
+                if (!mIsRateCappedBasedOnPermission ||
+                            requestedRateLevel <= SENSOR_SERVICE_CAPPED_SAMPLING_RATE_LEVEL) {
                     mMicRateBackup[handle] = requestedRateLevel;
                 } else {
                     mMicRateBackup[handle] = SENSOR_SERVICE_CAPPED_SAMPLING_RATE_LEVEL;

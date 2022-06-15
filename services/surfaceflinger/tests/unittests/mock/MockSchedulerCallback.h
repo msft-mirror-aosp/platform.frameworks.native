@@ -20,20 +20,25 @@
 
 #include "Scheduler/Scheduler.h"
 
-namespace android::scheduler::mock {
+namespace android::mock {
 
 struct SchedulerCallback final : ISchedulerCallback {
-    MOCK_METHOD(void, setVsyncEnabled, (bool), (override));
-    MOCK_METHOD(void, requestDisplayMode, (DisplayModePtr, DisplayModeEvent), (override));
-    MOCK_METHOD(void, kernelTimerChanged, (bool), (override));
-    MOCK_METHOD(void, triggerOnFrameRateOverridesChanged, (), (override));
+    MOCK_METHOD1(setVsyncEnabled, void(bool));
+    MOCK_METHOD2(changeRefreshRate,
+                 void(const scheduler::RefreshRateConfigs::RefreshRate&,
+                      scheduler::RefreshRateConfigEvent));
+    MOCK_METHOD0(repaintEverythingForHWC, void());
+    MOCK_METHOD1(kernelTimerChanged, void(bool));
+    MOCK_METHOD0(triggerOnFrameRateOverridesChanged, void());
 };
 
 struct NoOpSchedulerCallback final : ISchedulerCallback {
     void setVsyncEnabled(bool) override {}
-    void requestDisplayMode(DisplayModePtr, DisplayModeEvent) override {}
+    void changeRefreshRate(const scheduler::RefreshRateConfigs::RefreshRate&,
+                           scheduler::RefreshRateConfigEvent) override {}
+    void repaintEverythingForHWC() override {}
     void kernelTimerChanged(bool) override {}
-    void triggerOnFrameRateOverridesChanged() override {}
+    void triggerOnFrameRateOverridesChanged() {}
 };
 
-} // namespace android::scheduler::mock
+} // namespace android::mock

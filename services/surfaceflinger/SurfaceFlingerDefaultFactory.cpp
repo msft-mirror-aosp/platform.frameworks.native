@@ -38,6 +38,7 @@
 #include "SurfaceInterceptor.h"
 
 #include "DisplayHardware/ComposerHal.h"
+#include "Scheduler/MessageQueue.h"
 #include "Scheduler/Scheduler.h"
 #include "Scheduler/VsyncConfiguration.h"
 #include "Scheduler/VsyncController.h"
@@ -50,6 +51,10 @@ std::unique_ptr<HWComposer> DefaultFactory::createHWComposer(const std::string& 
     return std::make_unique<android::impl::HWComposer>(serviceName);
 }
 
+std::unique_ptr<MessageQueue> DefaultFactory::createMessageQueue() {
+    return std::make_unique<android::impl::MessageQueue>();
+}
+
 std::unique_ptr<scheduler::VsyncConfiguration> DefaultFactory::createVsyncConfiguration(
         Fps currentRefreshRate) {
     if (property_get_bool("debug.sf.use_phase_offsets_as_durations", false)) {
@@ -57,6 +62,11 @@ std::unique_ptr<scheduler::VsyncConfiguration> DefaultFactory::createVsyncConfig
     } else {
         return std::make_unique<scheduler::impl::PhaseOffsets>(currentRefreshRate);
     }
+}
+
+std::unique_ptr<Scheduler> DefaultFactory::createScheduler(
+        const scheduler::RefreshRateConfigs& configs, ISchedulerCallback& callback) {
+    return std::make_unique<Scheduler>(configs, callback);
 }
 
 sp<SurfaceInterceptor> DefaultFactory::createSurfaceInterceptor() {

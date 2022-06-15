@@ -39,8 +39,7 @@ public:
     // Implements Layer.
     const char* getType() const override { return "BufferStateLayer"; }
 
-    void onLayerDisplayed(ftl::SharedFuture<FenceResult>) override;
-
+    void onLayerDisplayed(const sp<Fence>& releaseFence) override;
     void releasePendingBuffer(nsecs_t dequeueReadyTime) override;
 
     void finalizeFrameEventHistory(const std::shared_ptr<FenceTime>& glDoneFence,
@@ -56,18 +55,23 @@ public:
     bool setTransform(uint32_t transform) override;
     bool setTransformToDisplayInverse(bool transformToDisplayInverse) override;
     bool setCrop(const Rect& crop) override;
-    bool setBuffer(std::shared_ptr<renderengine::ExternalTexture>& /* buffer */,
-                   const BufferData& bufferData, nsecs_t postTime, nsecs_t desiredPresentTime,
-                   bool isAutoTimestamp, std::optional<nsecs_t> dequeueTime,
-                   const FrameTimelineInfo& info) override;
+    bool setBuffer(const std::shared_ptr<renderengine::ExternalTexture>& buffer,
+                   const sp<Fence>& acquireFence, nsecs_t postTime, nsecs_t desiredPresentTime,
+                   bool isAutoTimestamp, const client_cache_t& clientCacheId, uint64_t frameNumber,
+                   std::optional<nsecs_t> dequeueTime, const FrameTimelineInfo& info,
+                   const sp<ITransactionCompletedListener>& transactionListener) override;
+    bool setAcquireFence(const sp<Fence>& fence) override;
     bool setDataspace(ui::Dataspace dataspace) override;
     bool setHdrMetadata(const HdrMetadata& hdrMetadata) override;
     bool setSurfaceDamageRegion(const Region& surfaceDamage) override;
     bool setApi(int32_t api) override;
     bool setSidebandStream(const sp<NativeHandle>& sidebandStream) override;
     bool setTransactionCompletedListeners(const std::vector<sp<CallbackHandle>>& handles) override;
+    bool addFrameEvent(const sp<Fence>& acquireFence, nsecs_t postedTime,
+                       nsecs_t requestedPresentTime) override;
     bool setPosition(float /*x*/, float /*y*/) override;
-    bool setMatrix(const layer_state_t::matrix22_t& /*matrix*/);
+    bool setMatrix(const layer_state_t::matrix22_t& /*matrix*/,
+                   bool /*allowNonRectPreservingTransforms*/);
 
     // Override to ignore legacy layer state properties that are not used by BufferStateLayer
     bool setSize(uint32_t /*w*/, uint32_t /*h*/) override { return false; }
@@ -100,6 +104,7 @@ public:
 
 protected:
     void gatherBufferInfo() override;
+    uint64_t getHeadFrameNumber(nsecs_t expectedPresentTime) const;
     void onSurfaceFrameCreated(const std::shared_ptr<frametimeline::SurfaceFrame>& surfaceFrame);
     ui::Transform getInputTransform() const override;
     Rect getInputBounds() const override;
@@ -114,6 +119,10 @@ private:
     bool updateFrameEventHistory(const sp<Fence>& acquireFence, nsecs_t postedTime,
                                  nsecs_t requestedPresentTime);
 
+    status_t addReleaseFence(const sp<CallbackHandle>& ch, const sp<Fence>& releaseFence);
+
+    uint64_t getFrameNumber(nsecs_t expectedPresentTime) const override;
+
     bool latchSidebandStream(bool& recomputeVisibleRegions) override;
 
     bool hasFrameUpdate() const override;
@@ -122,7 +131,7 @@ private:
                             nsecs_t expectedPresentTime) override;
 
     status_t updateActiveBuffer() override;
-    status_t updateFrameNumber() override;
+    status_t updateFrameNumber(nsecs_t latchTime) override;
 
     sp<Layer> createClone() override;
 
@@ -133,18 +142,15 @@ private:
 
     bool bufferNeedsFiltering() const override;
 
-    bool simpleBufferUpdate(const layer_state_t& s) const override;
-
+    sp<Fence> mPreviousReleaseFence;
     ReleaseCallbackId mPreviousReleaseCallbackId = ReleaseCallbackId::INVALID_ID;
     uint64_t mPreviousReleasedFrameNumber = 0;
-
-    uint64_t mPreviousBarrierFrameNumber = 0;
 
     bool mReleasePreviousBuffer = false;
 
     // Stores the last set acquire fence signal time used to populate the callback handle's acquire
     // time.
-    std::variant<nsecs_t, sp<Fence>> mCallbackHandleAcquireTimeOrFence = -1;
+    nsecs_t mCallbackHandleAcquireTime = -1;
 
     std::deque<std::shared_ptr<android::frametimeline::SurfaceFrame>> mPendingJankClassifications;
     // An upper bound on the number of SurfaceFrames in the pending classifications deque.
@@ -171,19 +177,19 @@ private:
     class HwcSlotGenerator : public ClientCache::ErasedRecipient {
     public:
         HwcSlotGenerator() {
-            for (int i = 0; i < BufferQueue::NUM_BUFFER_SLOTS; i++) {
+            for (uint32_t i = 0; i < BufferQueue::NUM_BUFFER_SLOTS; i++) {
                 mFreeHwcCacheSlots.push(i);
             }
         }
 
         void bufferErased(const client_cache_t& clientCacheId);
 
-        int getHwcCacheSlot(const client_cache_t& clientCacheId);
+        uint32_t getHwcCacheSlot(const client_cache_t& clientCacheId);
 
     private:
         friend class SlotGenerationTest;
-        int addCachedBuffer(const client_cache_t& clientCacheId) REQUIRES(mMutex);
-        int getFreeHwcCacheSlot() REQUIRES(mMutex);
+        uint32_t addCachedBuffer(const client_cache_t& clientCacheId) REQUIRES(mMutex);
+        uint32_t getFreeHwcCacheSlot() REQUIRES(mMutex);
         void evictLeastRecentlyUsed() REQUIRES(mMutex);
         void eraseBufferLocked(const client_cache_t& clientCacheId) REQUIRES(mMutex);
 
@@ -195,10 +201,11 @@ private:
 
         std::mutex mMutex;
 
-        std::unordered_map<client_cache_t, std::pair<int /*HwcCacheSlot*/, uint64_t /*counter*/>,
+        std::unordered_map<client_cache_t,
+                           std::pair<uint32_t /*HwcCacheSlot*/, uint32_t /*counter*/>,
                            CachedBufferHash>
                 mCachedBuffers GUARDED_BY(mMutex);
-        std::stack<int /*HwcCacheSlot*/> mFreeHwcCacheSlots GUARDED_BY(mMutex);
+        std::stack<uint32_t /*HwcCacheSlot*/> mFreeHwcCacheSlots GUARDED_BY(mMutex);
 
         // The cache increments this counter value when a slot is updated or used.
         // Used to track the least recently-used buffer

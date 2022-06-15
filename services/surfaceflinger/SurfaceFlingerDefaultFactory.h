@@ -27,8 +27,11 @@ public:
     virtual ~DefaultFactory();
 
     std::unique_ptr<HWComposer> createHWComposer(const std::string& serviceName) override;
+    std::unique_ptr<MessageQueue> createMessageQueue() override;
     std::unique_ptr<scheduler::VsyncConfiguration> createVsyncConfiguration(
             Fps currentRefreshRate) override;
+    std::unique_ptr<Scheduler> createScheduler(const scheduler::RefreshRateConfigs&,
+                                               ISchedulerCallback&) override;
     sp<SurfaceInterceptor> createSurfaceInterceptor() override;
     sp<StartPropertySetThread> createStartPropertySetThread(bool timestampPropertyValue) override;
     sp<DisplayDevice> createDisplayDevice(DisplayDeviceCreationArgs&) override;

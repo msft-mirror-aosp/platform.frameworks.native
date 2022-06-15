@@ -41,8 +41,7 @@ size_t DynamicDisplayInfo::getFlattenedSize() const {
             FlattenableHelpers::getFlattenedSize(activeColorMode) +
             FlattenableHelpers::getFlattenedSize(hdrCapabilities) +
             FlattenableHelpers::getFlattenedSize(autoLowLatencyModeSupported) +
-            FlattenableHelpers::getFlattenedSize(gameContentTypeSupported) +
-            FlattenableHelpers::getFlattenedSize(preferredBootDisplayMode);
+            FlattenableHelpers::getFlattenedSize(gameContentTypeSupported);
 }
 
 status_t DynamicDisplayInfo::flatten(void* buffer, size_t size) const {
@@ -56,7 +55,6 @@ status_t DynamicDisplayInfo::flatten(void* buffer, size_t size) const {
     RETURN_IF_ERROR(FlattenableHelpers::flatten(&buffer, &size, hdrCapabilities));
     RETURN_IF_ERROR(FlattenableHelpers::flatten(&buffer, &size, autoLowLatencyModeSupported));
     RETURN_IF_ERROR(FlattenableHelpers::flatten(&buffer, &size, gameContentTypeSupported));
-    RETURN_IF_ERROR(FlattenableHelpers::flatten(&buffer, &size, preferredBootDisplayMode));
     return OK;
 }
 
@@ -68,7 +66,6 @@ status_t DynamicDisplayInfo::unflatten(const void* buffer, size_t size) {
     RETURN_IF_ERROR(FlattenableHelpers::unflatten(&buffer, &size, &hdrCapabilities));
     RETURN_IF_ERROR(FlattenableHelpers::unflatten(&buffer, &size, &autoLowLatencyModeSupported));
     RETURN_IF_ERROR(FlattenableHelpers::unflatten(&buffer, &size, &gameContentTypeSupported));
-    RETURN_IF_ERROR(FlattenableHelpers::unflatten(&buffer, &size, &preferredBootDisplayMode));
     return OK;
 }
 

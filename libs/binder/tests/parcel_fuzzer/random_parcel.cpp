@@ -18,8 +18,6 @@
 
 #include <android-base/logging.h>
 #include <binder/IServiceManager.h>
-#include <binder/RpcSession.h>
-#include <binder/RpcTransportRaw.h>
 #include <fuzzbinder/random_fd.h>
 #include <utils/String16.h>
 
@@ -34,30 +32,7 @@ private:
     String16 mDescriptor;
 };
 
-static void fillRandomParcelData(Parcel* p, FuzzedDataProvider&& provider) {
-    std::vector<uint8_t> data = provider.ConsumeBytes<uint8_t>(provider.remaining_bytes());
-    CHECK(OK == p->write(data.data(), data.size()));
-}
-
-void fillRandomParcel(Parcel* p, FuzzedDataProvider&& provider,
-                      const RandomParcelOptions& options) {
-    if (provider.ConsumeBool()) {
-        auto session = RpcSession::make(RpcTransportCtxFactoryRaw::make());
-        CHECK_EQ(OK, session->addNullDebuggingClient());
-        p->markForRpc(session);
-
-        if (options.writeHeader) {
-            options.writeHeader(p, provider);
-        }
-
-        fillRandomParcelData(p, std::move(provider));
-        return;
-    }
-
-    if (options.writeHeader) {
-        options.writeHeader(p, provider);
-    }
-
+void fillRandomParcel(Parcel* p, FuzzedDataProvider&& provider) {
     while (provider.remaining_bytes() > 0) {
         auto fillFunc = provider.PickValueInArray<const std::function<void()>>({
                 // write data
@@ -69,16 +44,8 @@ void fillRandomParcel(Parcel* p, FuzzedDataProvider&& provider,
                 },
                 // write FD
                 [&]() {
-                    if (options.extraFds.size() > 0 && provider.ConsumeBool()) {
-                        const base::unique_fd& fd = options.extraFds.at(
-                                provider.ConsumeIntegralInRange<size_t>(0,
-                                                                        options.extraFds.size() -
-                                                                                1));
-                        CHECK(OK == p->writeFileDescriptor(fd.get(), false /*takeOwnership*/));
-                    } else {
-                        base::unique_fd fd = getRandomFd(&provider);
-                        CHECK(OK == p->writeFileDescriptor(fd.release(), true /*takeOwnership*/));
-                    }
+                    int fd = getRandomFd(&provider);
+                    CHECK(OK == p->writeFileDescriptor(fd, true /*takeOwnership*/));
                 },
                 // write binder
                 [&]() {
@@ -97,15 +64,7 @@ void fillRandomParcel(Parcel* p, FuzzedDataProvider&& provider,
                                 // candidate for checking usage of an actual BpBinder
                                 return IInterface::asBinder(defaultServiceManager());
                             },
-                            [&]() -> sp<IBinder> {
-                                if (options.extraBinders.size() > 0 && provider.ConsumeBool()) {
-                                    return options.extraBinders.at(
-                                            provider.ConsumeIntegralInRange<
-                                                    size_t>(0, options.extraBinders.size() - 1));
-                                } else {
-                                    return nullptr;
-                                }
-                            },
+                            []() { return nullptr; },
                     });
                     sp<IBinder> binder = makeFunc();
                     CHECK(OK == p->writeStrongBinder(binder));
@@ -114,6 +73,11 @@ void fillRandomParcel(Parcel* p, FuzzedDataProvider&& provider,
 
         fillFunc();
     }
+}
+
+void fillRandomParcelData(Parcel* p, FuzzedDataProvider&& provider) {
+    std::vector<uint8_t> data = provider.ConsumeBytes<uint8_t>(provider.remaining_bytes());
+    CHECK(OK == p->write(data.data(), data.size()));
 }
 
 } // namespace android

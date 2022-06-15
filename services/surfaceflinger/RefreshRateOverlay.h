@@ -16,66 +16,83 @@
 
 #pragma once
 
-#include <SkColor.h>
-#include <vector>
-
-#include <ftl/small_map.h>
-#include <ui/LayerStack.h>
+#include <math/vec4.h>
+#include <renderengine/RenderEngine.h>
+#include <ui/Rect.h>
 #include <ui/Size.h>
-#include <ui/Transform.h>
 #include <utils/StrongPointer.h>
 
-#include <scheduler/Fps.h>
+#include <unordered_map>
 
-class SkCanvas;
+#include "Fps.h"
 
 namespace android {
 
+class Client;
 class GraphicBuffer;
-class SurfaceControl;
+class IBinder;
+class IGraphicBufferProducer;
+class Layer;
+class SurfaceFlinger;
 
 class RefreshRateOverlay {
 public:
-    RefreshRateOverlay(FpsRange, bool showSpinner);
+    RefreshRateOverlay(SurfaceFlinger&, bool showSpinner);
 
-    void setLayerStack(ui::LayerStack);
     void setViewport(ui::Size);
-    void changeRefreshRate(Fps);
-    void animate();
+    void changeRefreshRate(const Fps&);
+    void onInvalidate();
+    void reset();
 
 private:
-    using Buffers = std::vector<sp<GraphicBuffer>>;
-
     class SevenSegmentDrawer {
     public:
-        static Buffers draw(int number, SkColor, ui::Transform::RotationFlags, bool showSpinner);
+        static std::vector<sp<GraphicBuffer>> drawNumber(int number, const half4& color,
+                                                         bool showSpinner);
+        static uint32_t getHeight() { return BUFFER_HEIGHT; }
+        static uint32_t getWidth() { return BUFFER_WIDTH; }
 
     private:
-        enum class Segment { Upper, UpperLeft, UpperRight, Middle, LowerLeft, LowerRight, Bottom };
+        enum class Segment { Upper, UpperLeft, UpperRight, Middle, LowerLeft, LowerRight, Buttom };
 
-        static void drawSegment(Segment, int left, SkColor, SkCanvas&);
-        static void drawDigit(int digit, int left, SkColor, SkCanvas&);
+        static void drawRect(const Rect& r, const half4& color, const sp<GraphicBuffer>& buffer,
+                             uint8_t* pixels);
+        static void drawSegment(Segment segment, int left, const half4& color,
+                                const sp<GraphicBuffer>& buffer, uint8_t* pixels);
+        static void drawDigit(int digit, int left, const half4& color,
+                              const sp<GraphicBuffer>& buffer, uint8_t* pixels);
+
+        static constexpr uint32_t DIGIT_HEIGHT = 100;
+        static constexpr uint32_t DIGIT_WIDTH = 64;
+        static constexpr uint32_t DIGIT_SPACE = 16;
+        static constexpr uint32_t BUFFER_HEIGHT = DIGIT_HEIGHT;
+        static constexpr uint32_t BUFFER_WIDTH =
+                4 * DIGIT_WIDTH + 3 * DIGIT_SPACE; // Digit|Space|Digit|Space|Digit|Space|Spinner
     };
 
-    const Buffers& getOrCreateBuffers(Fps);
+    bool createLayer();
+    const std::vector<std::shared_ptr<renderengine::ExternalTexture>>& getOrCreateBuffers(
+            uint32_t fps);
 
-    struct Key {
-        int fps;
-        ui::Transform::RotationFlags flags;
+    SurfaceFlinger& mFlinger;
+    const sp<Client> mClient;
+    sp<Layer> mLayer;
+    sp<IBinder> mIBinder;
+    sp<IGraphicBufferProducer> mGbp;
 
-        bool operator==(Key other) const { return fps == other.fps && flags == other.flags; }
-    };
+    std::unordered_map<int, std::vector<std::shared_ptr<renderengine::ExternalTexture>>>
+            mBufferCache;
+    std::optional<int> mCurrentFps;
+    int mFrame = 0;
+    static constexpr float ALPHA = 0.8f;
+    const half3 LOW_FPS_COLOR = half3(1.0f, 0.0f, 0.0f);
+    const half3 HIGH_FPS_COLOR = half3(0.0f, 1.0f, 0.0f);
 
-    using BufferCache = ftl::SmallMap<Key, Buffers, 9>;
-    BufferCache mBufferCache;
-
-    std::optional<Fps> mCurrentFps;
-    size_t mFrame = 0;
-
-    const FpsRange mFpsRange; // For color interpolation.
     const bool mShowSpinner;
 
-    const sp<SurfaceControl> mSurfaceControl;
+    // Interpolate the colors between these values.
+    uint32_t mLowFps;
+    uint32_t mHighFps;
 };
 
 } // namespace android

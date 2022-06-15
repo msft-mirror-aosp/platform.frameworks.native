@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "../InputCommonConverter.h"
+#include "../InputClassifierConverter.h"
 
 #include <gtest/gtest.h>
-#include <gui/constants.h>
 #include <utils/BitSet.h>
 
-using namespace aidl::android::hardware::input;
+
+using namespace android::hardware::input;
 
 namespace android {
 
@@ -50,7 +50,8 @@ static NotifyMotionArgs generateBasicMotionArgs() {
     return motionArgs;
 }
 
-static float getMotionEventAxis(common::PointerCoords coords, common::Axis axis) {
+static float getMotionEventAxis(common::V1_0::PointerCoords coords,
+        common::V1_0::Axis axis) {
     uint32_t index = BitSet64::getIndexOfBit(static_cast<uint64_t>(coords.bits),
             static_cast<uint64_t>(axis));
     return coords.values[index];
@@ -67,14 +68,14 @@ TEST(InputClassifierConverterTest, PointerCoordsAxes) {
     ASSERT_EQ(0.5, motionArgs.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_SIZE));
     ASSERT_EQ(3U, BitSet64::count(motionArgs.pointerCoords[0].bits));
 
-    common::MotionEvent motionEvent = notifyMotionArgsToHalMotionEvent(motionArgs);
+    common::V1_0::MotionEvent motionEvent = notifyMotionArgsToHalMotionEvent(motionArgs);
 
-    ASSERT_EQ(getMotionEventAxis(motionEvent.pointerCoords[0], common::Axis::X),
-              motionArgs.pointerCoords[0].getX());
-    ASSERT_EQ(getMotionEventAxis(motionEvent.pointerCoords[0], common::Axis::Y),
-              motionArgs.pointerCoords[0].getY());
-    ASSERT_EQ(getMotionEventAxis(motionEvent.pointerCoords[0], common::Axis::SIZE),
-              motionArgs.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_SIZE));
+    ASSERT_EQ(getMotionEventAxis(motionEvent.pointerCoords[0], common::V1_0::Axis::X),
+            motionArgs.pointerCoords[0].getX());
+    ASSERT_EQ(getMotionEventAxis(motionEvent.pointerCoords[0], common::V1_0::Axis::Y),
+            motionArgs.pointerCoords[0].getY());
+    ASSERT_EQ(getMotionEventAxis(motionEvent.pointerCoords[0], common::V1_0::Axis::SIZE),
+            motionArgs.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_SIZE));
     ASSERT_EQ(BitSet64::count(motionArgs.pointerCoords[0].bits),
             BitSet64::count(motionEvent.pointerCoords[0].bits));
 }

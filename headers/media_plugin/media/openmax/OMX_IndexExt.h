@@ -104,7 +104,6 @@ typedef enum OMX_INDEXEXTTYPE {
     OMX_IndexConfigLatency,                         /**< reference: OMX_PARAM_U32TYPE */
     OMX_IndexConfigLowLatency,                      /**< reference: OMX_CONFIG_BOOLEANTYPE */
     OMX_IndexConfigAndroidTunnelPeek,               /**< reference: OMX_CONFIG_BOOLEANTYPE */
-    OMX_IndexConfigAndroidTunnelPeekLegacyMode,     /**< reference: OMX_CONFIG_BOOLEANTYPE */
     OMX_IndexExtOtherEndUnused,
 
     /* Time configurations */

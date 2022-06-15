@@ -28,8 +28,8 @@
 
 #include <limits>
 
-#include <gui/test/CallbackUtils.h>
 #include "BufferGenerator.h"
+#include "utils/CallbackUtils.h"
 #include "utils/ColorUtils.h"
 #include "utils/TransactionUtils.h"
 
@@ -159,9 +159,10 @@ public:
                                                  {0, 0, static_cast<int32_t>(width),
                                                   static_cast<int32_t>(height)},
                                                  Color::RED);
-        transaction->setLayerStack(mSurfaceControl, ui::DEFAULT_LAYER_STACK)
+        transaction->setLayerStack(mSurfaceControl, 0)
                 .setLayer(mSurfaceControl, std::numeric_limits<int32_t>::max())
-                .setBuffer(mSurfaceControl, gb, fence)
+                .setBuffer(mSurfaceControl, gb)
+                .setAcquireFence(mSurfaceControl, fence)
                 .show(mSurfaceControl)
                 .addTransactionCompletedCallback(mCallbackHelper.function,
                                                  mCallbackHelper.getContext());
@@ -231,7 +232,7 @@ public:
         mDisplayHeight = mode.resolution.getHeight();
 
         Transaction setupTransaction;
-        setupTransaction.setDisplayLayerStack(mPrimaryDisplay, ui::DEFAULT_LAYER_STACK);
+        setupTransaction.setDisplayLayerStack(mPrimaryDisplay, 0);
         setupTransaction.apply();
     }
 
@@ -309,9 +310,10 @@ TEST_F(IPCTest, MergeBasic) {
                                              Color::RED);
 
     Transaction transaction;
-    transaction.setLayerStack(sc, ui::DEFAULT_LAYER_STACK)
+    transaction.setLayerStack(sc, 0)
             .setLayer(sc, std::numeric_limits<int32_t>::max() - 1)
-            .setBuffer(sc, gb, fence)
+            .setBuffer(sc, gb)
+            .setAcquireFence(sc, fence)
             .show(sc)
             .addTransactionCompletedCallback(helper1.function, helper1.getContext());
 

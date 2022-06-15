@@ -48,12 +48,14 @@ PhaseOffsets::VsyncConfigSet VsyncConfiguration::getConfigsForRefreshRate(Fps fp
 }
 
 PhaseOffsets::VsyncConfigSet VsyncConfiguration::getConfigsForRefreshRateLocked(Fps fps) const {
-    if (const auto offsets = mOffsetsCache.get(fps)) {
-        return offsets->get();
+    const auto iter = mOffsetsCache.find(fps);
+    if (iter != mOffsetsCache.end()) {
+        return iter->second;
     }
 
-    const auto [it, _] = mOffsetsCache.try_emplace(fps, constructOffsets(fps.getPeriodNsecs()));
-    return it->second;
+    const auto offset = constructOffsets(fps.getPeriodNsecs());
+    mOffsetsCache[fps] = offset;
+    return offset;
 }
 
 void VsyncConfiguration::dump(std::string& result) const {

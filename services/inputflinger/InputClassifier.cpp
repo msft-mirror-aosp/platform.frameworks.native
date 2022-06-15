@@ -17,19 +17,19 @@
 #define LOG_TAG "InputClassifier"
 
 #include "InputClassifier.h"
-#include "InputCommonConverter.h"
+#include "InputClassifierConverter.h"
 
+#include <algorithm>
 #include <android-base/stringprintf.h>
-#include <android/binder_manager.h>
-#include <android/binder_process.h>
+#include <cmath>
 #include <inttypes.h>
 #include <log/log.h>
-#include <algorithm>
-#include <cmath>
 #if defined(__linux__)
     #include <pthread.h>
 #endif
 #include <unordered_set>
+
+#include <android/hardware/input/classifier/1.0/IInputClassifier.h>
 
 #define INDENT1 "  "
 #define INDENT2 "    "
@@ -38,9 +38,10 @@
 #define INDENT5 "          "
 
 using android::base::StringPrintf;
-using namespace std::chrono_literals;
-using namespace ::aidl::android::hardware::input;
-using aidl::android::hardware::input::processor::IInputProcessor;
+using android::hardware::hidl_bitfield;
+using android::hardware::hidl_vec;
+using android::hardware::Return;
+using namespace android::hardware::input;
 
 namespace android {
 
@@ -56,69 +57,18 @@ static V getValueForKey(const std::unordered_map<K, V>& map, K key, V defaultVal
     return it->second;
 }
 
-static MotionClassification getMotionClassification(common::Classification classification) {
+static MotionClassification getMotionClassification(common::V1_0::Classification classification) {
     static_assert(MotionClassification::NONE ==
-                  static_cast<MotionClassification>(common::Classification::NONE));
+            static_cast<MotionClassification>(common::V1_0::Classification::NONE));
     static_assert(MotionClassification::AMBIGUOUS_GESTURE ==
-                  static_cast<MotionClassification>(common::Classification::AMBIGUOUS_GESTURE));
+            static_cast<MotionClassification>(common::V1_0::Classification::AMBIGUOUS_GESTURE));
     static_assert(MotionClassification::DEEP_PRESS ==
-                  static_cast<MotionClassification>(common::Classification::DEEP_PRESS));
+            static_cast<MotionClassification>(common::V1_0::Classification::DEEP_PRESS));
     return static_cast<MotionClassification>(classification);
 }
 
 static bool isTouchEvent(const NotifyMotionArgs& args) {
-    return isFromSource(args.source, AINPUT_SOURCE_TOUCHPAD) ||
-            isFromSource(args.source, AINPUT_SOURCE_TOUCHSCREEN);
-}
-
-static void setCurrentThreadName(const char* name) {
-#if defined(__linux__)
-    // Set the thread name for debugging
-    pthread_setname_np(pthread_self(), name);
-#else
-    (void*)(name); // prevent unused variable warning
-#endif
-}
-
-static std::shared_ptr<IInputProcessor> getService() {
-    const std::string aidl_instance_name = std::string(IInputProcessor::descriptor) + "/default";
-
-    if (!AServiceManager_isDeclared(aidl_instance_name.c_str())) {
-        ALOGI("HAL %s is not declared", aidl_instance_name.c_str());
-        return nullptr;
-    }
-
-    ndk::SpAIBinder binder(AServiceManager_waitForService(aidl_instance_name.c_str()));
-    return IInputProcessor::fromBinder(binder);
-}
-
-// Temporarily releases a held mutex for the lifetime of the instance.
-// Named to match std::scoped_lock
-class scoped_unlock {
-public:
-    explicit scoped_unlock(std::mutex& mutex) : mMutex(mutex) { mMutex.unlock(); }
-    ~scoped_unlock() { mMutex.lock(); }
-
-private:
-    std::mutex& mMutex;
-};
-
-// --- ScopedDeathRecipient ---
-ScopedDeathRecipient::ScopedDeathRecipient(AIBinder_DeathRecipient_onBinderDied onBinderDied,
-                                           void* cookie)
-      : mCookie(cookie) {
-    mRecipient = AIBinder_DeathRecipient_new(onBinderDied);
-}
-
-void ScopedDeathRecipient::linkToDeath(AIBinder* binder) {
-    binder_status_t linked = AIBinder_linkToDeath(binder, mRecipient, mCookie);
-    if (linked != STATUS_OK) {
-        ALOGE("Could not link death recipient to the HAL death");
-    }
-}
-
-ScopedDeathRecipient::~ScopedDeathRecipient() {
-    AIBinder_DeathRecipient_delete(mRecipient);
+    return args.source == AINPUT_SOURCE_TOUCHPAD || args.source == AINPUT_SOURCE_TOUCHSCREEN;
 }
 
 // --- ClassifierEvent ---
@@ -169,8 +119,9 @@ std::optional<int32_t> ClassifierEvent::getDeviceId() const {
 
 // --- MotionClassifier ---
 
-MotionClassifier::MotionClassifier(std::shared_ptr<IInputProcessor> service)
-      : mEvents(MAX_EVENTS), mService(std::move(service)) {
+MotionClassifier::MotionClassifier(
+        sp<android::hardware::input::classifier::V1_0::IInputClassifier> service)
+      : mEvents(MAX_EVENTS), mService(service) {
     // Under normal operation, we do not need to reset the HAL here. But in the case where system
     // crashed, but HAL didn't, we may be connecting to an existing HAL process that might already
     // have received events in the past. That means, that HAL could be in an inconsistent state
@@ -185,10 +136,23 @@ MotionClassifier::MotionClassifier(std::shared_ptr<IInputProcessor> service)
 }
 
 std::unique_ptr<MotionClassifierInterface> MotionClassifier::create(
-        std::shared_ptr<IInputProcessor> service) {
-    LOG_ALWAYS_FATAL_IF(service == nullptr);
+        sp<android::hardware::hidl_death_recipient> deathRecipient) {
+    sp<android::hardware::input::classifier::V1_0::IInputClassifier> service =
+            classifier::V1_0::IInputClassifier::getService();
+    if (!service) {
+        // Not really an error, maybe the device does not have this HAL,
+        // but somehow the feature flag is flipped
+        ALOGI("Could not obtain InputClassifier HAL");
+        return nullptr;
+    }
+
+    const bool linked = service->linkToDeath(deathRecipient, 0 /* cookie */).withDefault(false);
+    if (!linked) {
+        ALOGE("Could not link death recipient to the HAL death");
+        return nullptr;
+    }
     // Using 'new' to access a non-public constructor
-    return std::unique_ptr<MotionClassifier>(new MotionClassifier(std::move(service)));
+    return std::unique_ptr<MotionClassifier>(new MotionClassifier(service));
 }
 
 MotionClassifier::~MotionClassifier() {
@@ -213,12 +177,14 @@ void MotionClassifier::processEvents() {
         switch (event.type) {
             case ClassifierEventType::MOTION: {
                 NotifyMotionArgs* motionArgs = static_cast<NotifyMotionArgs*>(event.args.get());
-                common::MotionEvent motionEvent = notifyMotionArgsToHalMotionEvent(*motionArgs);
-                common::Classification classification;
-                ndk::ScopedAStatus response = mService->classify(motionEvent, &classification);
-                if (response.isOk()) {
+                common::V1_0::MotionEvent motionEvent =
+                        notifyMotionArgsToHalMotionEvent(*motionArgs);
+                Return<common::V1_0::Classification> response = mService->classify(motionEvent);
+                halResponseOk = response.isOk();
+                if (halResponseOk) {
+                    common::V1_0::Classification halClassification = response;
                     updateClassification(motionArgs->deviceId, motionArgs->eventTime,
-                                         getMotionClassification(classification));
+                            getMotionClassification(halClassification));
                 }
                 break;
             }
@@ -335,8 +301,7 @@ const char* MotionClassifier::getServiceStatus() REQUIRES(mLock) {
     if (!mService) {
         return "null";
     }
-
-    if (AIBinder_ping(mService->asBinder().get()) == STATUS_OK) {
+    if (mService->ping().isOk()) {
         return "running";
     }
     return "not responding";
@@ -365,128 +330,99 @@ void MotionClassifier::dump(std::string& dump) {
     }
 }
 
-// --- InputClassifier ---
+// --- HalDeathRecipient
 
-InputClassifier::InputClassifier(InputListenerInterface& listener) : mQueuedListener(listener) {}
+InputClassifier::HalDeathRecipient::HalDeathRecipient(InputClassifier& parent) : mParent(parent) {}
 
-void InputClassifier::onBinderDied(void* cookie) {
-    InputClassifier* classifier = static_cast<InputClassifier*>(cookie);
-    if (classifier == nullptr) {
-        LOG_ALWAYS_FATAL("Cookie is not valid");
-        return;
+void InputClassifier::HalDeathRecipient::serviceDied(
+        uint64_t cookie, const wp<android::hidl::base::V1_0::IBase>& who) {
+    sp<android::hidl::base::V1_0::IBase> service = who.promote();
+    if (service) {
+        service->unlinkToDeath(this);
     }
-    classifier->setMotionClassifierEnabled(false);
+    mParent.setMotionClassifier(nullptr);
 }
 
+// --- InputClassifier ---
+
+InputClassifier::InputClassifier(const sp<InputListenerInterface>& listener)
+      : mListener(listener), mHalDeathRecipient(new HalDeathRecipient(*this)) {}
+
 void InputClassifier::setMotionClassifierEnabled(bool enabled) {
-    std::scoped_lock lock(mLock);
     if (enabled) {
         ALOGI("Enabling motion classifier");
-        if (mInitializeMotionClassifier.valid()) {
-            scoped_unlock unlock(mLock);
-            std::future_status status = mInitializeMotionClassifier.wait_for(5s);
-            if (status != std::future_status::ready) {
-                /**
-                 * We don't have a better option here than to crash. We can't stop the thread,
-                 * and we can't continue because 'mInitializeMotionClassifier' will block in its
-                 * destructor.
-                 */
-                LOG_ALWAYS_FATAL("The thread to load IInputClassifier is stuck!");
-            }
+        if (mInitializeMotionClassifierThread.joinable()) {
+            mInitializeMotionClassifierThread.join();
         }
-        mInitializeMotionClassifier = std::async(std::launch::async, [this] {
-            setCurrentThreadName("Create MotionClassifier");
-            std::shared_ptr<IInputProcessor> service = getService();
-            if (service == nullptr) {
-                // Keep the MotionClassifier null, no service was found
-                return;
-            }
-            { // acquire lock
-                std::scoped_lock threadLock(mLock);
-                mHalDeathRecipient =
-                        std::make_unique<ScopedDeathRecipient>(onBinderDied, this /*cookie*/);
-                mHalDeathRecipient->linkToDeath(service->asBinder().get());
-                setMotionClassifierLocked(MotionClassifier::create(std::move(service)));
-            } // release lock
-        });
+        mInitializeMotionClassifierThread = std::thread(
+                [this] { setMotionClassifier(MotionClassifier::create(mHalDeathRecipient)); });
+#if defined(__linux__)
+        // Set the thread name for debugging
+        pthread_setname_np(mInitializeMotionClassifierThread.native_handle(),
+                           "Create MotionClassifier");
+#endif
     } else {
         ALOGI("Disabling motion classifier");
-        setMotionClassifierLocked(nullptr);
+        setMotionClassifier(nullptr);
     }
 }
 
 void InputClassifier::notifyConfigurationChanged(const NotifyConfigurationChangedArgs* args) {
     // pass through
-    mQueuedListener.notifyConfigurationChanged(args);
-    mQueuedListener.flush();
+    mListener->notifyConfigurationChanged(args);
 }
 
 void InputClassifier::notifyKey(const NotifyKeyArgs* args) {
     // pass through
-    mQueuedListener.notifyKey(args);
-    mQueuedListener.flush();
+    mListener->notifyKey(args);
 }
 
 void InputClassifier::notifyMotion(const NotifyMotionArgs* args) {
-    { // acquire lock
-        std::scoped_lock lock(mLock);
-        // MotionClassifier is only used for touch events, for now
-        const bool sendToMotionClassifier = mMotionClassifier && isTouchEvent(*args);
-        if (!sendToMotionClassifier) {
-            mQueuedListener.notifyMotion(args);
-        } else {
-            NotifyMotionArgs newArgs(*args);
-            newArgs.classification = mMotionClassifier->classify(newArgs);
-            mQueuedListener.notifyMotion(&newArgs);
-        }
-    } // release lock
-    mQueuedListener.flush();
+    std::scoped_lock lock(mLock);
+    // MotionClassifier is only used for touch events, for now
+    const bool sendToMotionClassifier = mMotionClassifier && isTouchEvent(*args);
+    if (!sendToMotionClassifier) {
+        mListener->notifyMotion(args);
+        return;
+    }
+
+    NotifyMotionArgs newArgs(*args);
+    newArgs.classification = mMotionClassifier->classify(newArgs);
+    mListener->notifyMotion(&newArgs);
 }
 
 void InputClassifier::notifySensor(const NotifySensorArgs* args) {
     // pass through
-    mQueuedListener.notifySensor(args);
-    mQueuedListener.flush();
+    mListener->notifySensor(args);
 }
 
 void InputClassifier::notifyVibratorState(const NotifyVibratorStateArgs* args) {
     // pass through
-    mQueuedListener.notifyVibratorState(args);
-    mQueuedListener.flush();
+    mListener->notifyVibratorState(args);
 }
 
 void InputClassifier::notifySwitch(const NotifySwitchArgs* args) {
     // pass through
-    mQueuedListener.notifySwitch(args);
-    mQueuedListener.flush();
+    mListener->notifySwitch(args);
 }
 
 void InputClassifier::notifyDeviceReset(const NotifyDeviceResetArgs* args) {
-    { // acquire lock
-        std::scoped_lock lock(mLock);
-        if (mMotionClassifier) {
-            mMotionClassifier->reset(*args);
-        }
-    } // release lock
-
+    std::scoped_lock lock(mLock);
+    if (mMotionClassifier) {
+        mMotionClassifier->reset(*args);
+    }
     // continue to next stage
-    mQueuedListener.notifyDeviceReset(args);
-    mQueuedListener.flush();
+    mListener->notifyDeviceReset(args);
 }
 
 void InputClassifier::notifyPointerCaptureChanged(const NotifyPointerCaptureChangedArgs* args) {
     // pass through
-    mQueuedListener.notifyPointerCaptureChanged(args);
-    mQueuedListener.flush();
+    mListener->notifyPointerCaptureChanged(args);
 }
 
-void InputClassifier::setMotionClassifierLocked(
-        std::unique_ptr<MotionClassifierInterface> motionClassifier) REQUIRES(mLock) {
-    if (motionClassifier == nullptr) {
-        // Destroy the ScopedDeathRecipient object, which will cause it to unlinkToDeath.
-        // We can't call 'unlink' here because we don't have the binder handle.
-        mHalDeathRecipient = nullptr;
-    }
+void InputClassifier::setMotionClassifier(
+        std::unique_ptr<MotionClassifierInterface> motionClassifier) {
+    std::scoped_lock lock(mLock);
     mMotionClassifier = std::move(motionClassifier);
 }
 
@@ -502,11 +438,10 @@ void InputClassifier::dump(std::string& dump) {
     dump += "\n";
 }
 
-void InputClassifier::monitor() {
-    std::scoped_lock lock(mLock);
-}
-
 InputClassifier::~InputClassifier() {
+    if (mInitializeMotionClassifierThread.joinable()) {
+        mInitializeMotionClassifierThread.join();
+    }
 }
 
 } // namespace android

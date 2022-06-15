@@ -20,8 +20,6 @@
 #include <ostream>
 #include <unordered_set>
 
-#include <compositionengine/FenceResult.h>
-
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
@@ -32,7 +30,6 @@
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic pop // ignored "-Wconversion -Wextra"
 
-#include <ftl/future.h>
 #include <utils/RefBase.h>
 #include <utils/Timers.h>
 
@@ -118,6 +115,10 @@ public:
         // If set to true, the target buffer has protected content support.
         const bool supportsProtectedContent;
 
+        // Modified by each call to prepareClientComposition to indicate the
+        // region of the target buffer that should be cleared.
+        Region& clearRegion;
+
         // Viewport of the target being rendered to. This is used to determine
         // the shadow light position.
         const Rect& viewport;
@@ -135,9 +136,6 @@ public:
 
         // Configure layer settings for using blurs
         BlurSetting blurSetting;
-
-        // Requested white point of the layer in nits
-        const float whitePointNits;
     };
 
     // A superset of LayerSettings required by RenderEngine to compose a layer
@@ -157,7 +155,7 @@ public:
             ClientCompositionTargetSettings&) = 0;
 
     // Called after the layer is displayed to update the presentation fence
-    virtual void onLayerDisplayed(ftl::SharedFuture<FenceResult>) = 0;
+    virtual void onLayerDisplayed(const sp<Fence>&) = 0;
 
     // Gets some kind of identifier for the layer for debug purposes.
     virtual const char* getDebugName() const = 0;
@@ -167,7 +165,6 @@ public:
 
     // Whether the layer should be rendered with rounded corners.
     virtual bool hasRoundedCorners() const = 0;
-    virtual void setWasClientComposed(const sp<Fence>&) {}
 };
 
 // TODO(b/121291683): Specialize std::hash<> for sp<T> so these and others can
@@ -180,10 +177,11 @@ using LayerFESet = std::unordered_set<sp<LayerFE>, LayerFESpHash>;
 
 static inline bool operator==(const LayerFE::ClientCompositionTargetSettings& lhs,
                               const LayerFE::ClientCompositionTargetSettings& rhs) {
-    return lhs.clip.hasSameRects(rhs.clip) && lhs.needsFiltering == rhs.needsFiltering &&
-            lhs.isSecure == rhs.isSecure &&
+    return lhs.clip.hasSameRects(rhs.clip) &&
+            lhs.needsFiltering == rhs.needsFiltering && lhs.isSecure == rhs.isSecure &&
             lhs.supportsProtectedContent == rhs.supportsProtectedContent &&
-            lhs.viewport == rhs.viewport && lhs.dataspace == rhs.dataspace &&
+            lhs.clearRegion.hasSameRects(rhs.clearRegion) && lhs.viewport == rhs.viewport &&
+            lhs.dataspace == rhs.dataspace &&
             lhs.realContentIsVisible == rhs.realContentIsVisible &&
             lhs.clearContent == rhs.clearContent;
 }
@@ -204,6 +202,8 @@ static inline void PrintTo(const LayerFE::ClientCompositionTargetSettings& setti
     *os << "\n    .needsFiltering = " << settings.needsFiltering;
     *os << "\n    .isSecure = " << settings.isSecure;
     *os << "\n    .supportsProtectedContent = " << settings.supportsProtectedContent;
+    *os << "\n    .clearRegion = ";
+    PrintTo(settings.clearRegion, os);
     *os << "\n    .viewport = ";
     PrintTo(settings.viewport, os);
     *os << "\n    .dataspace = ";

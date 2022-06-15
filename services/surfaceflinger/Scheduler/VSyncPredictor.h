@@ -16,12 +16,11 @@
 
 #pragma once
 
+#include <android-base/thread_annotations.h>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
-
-#include <android-base/thread_annotations.h>
-
+#include "SchedulerUtils.h"
 #include "VSyncTracker.h"
 
 namespace android::scheduler {
@@ -96,7 +95,7 @@ private:
     std::unordered_map<nsecs_t, Model> mutable mRateMap GUARDED_BY(mMutex);
 
     // Map between the divided vsync period and the last known vsync timestamp
-    std::unordered_map<nsecs_t, nsecs_t> mutable mRateDivisorKnownTimestampMap GUARDED_BY(mMutex);
+    std::unordered_map<nsecs_t, nsecs_t> mutable mRateDividerKnownTimestampMap GUARDED_BY(mMutex);
 
     size_t mLastTimestampIndex GUARDED_BY(mMutex) = 0;
     std::vector<nsecs_t> mTimestamps GUARDED_BY(mMutex);

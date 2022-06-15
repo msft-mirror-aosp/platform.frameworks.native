@@ -134,27 +134,16 @@ VsyncModulator::VsyncConfig VsyncModulator::getVsyncConfig() const {
     return mVsyncConfig;
 }
 
-auto VsyncModulator::getNextVsyncConfigType() const -> VsyncConfigType {
+const VsyncModulator::VsyncConfig& VsyncModulator::getNextVsyncConfig() const {
     // Early offsets are used if we're in the middle of a refresh rate
     // change, or if we recently begin a transaction.
     if (!mEarlyWakeupRequests.empty() || mTransactionSchedule == Schedule::EarlyEnd ||
         mEarlyTransactionFrames > 0 || mRefreshRateChangePending) {
-        return VsyncConfigType::Early;
+        return mVsyncConfigSet.early;
     } else if (mEarlyGpuFrames > 0) {
-        return VsyncConfigType::EarlyGpu;
+        return mVsyncConfigSet.earlyGpu;
     } else {
-        return VsyncConfigType::Late;
-    }
-}
-
-const VsyncModulator::VsyncConfig& VsyncModulator::getNextVsyncConfig() const {
-    switch (getNextVsyncConfigType()) {
-        case VsyncConfigType::Early:
-            return mVsyncConfigSet.early;
-        case VsyncConfigType::EarlyGpu:
-            return mVsyncConfigSet.earlyGpu;
-        case VsyncConfigType::Late:
-            return mVsyncConfigSet.late;
+        return mVsyncConfigSet.late;
     }
 }
 
@@ -185,11 +174,6 @@ void VsyncModulator::binderDied(const wp<IBinder>& who) {
     mEarlyWakeupRequests.erase(who);
 
     static_cast<void>(updateVsyncConfigLocked());
-}
-
-bool VsyncModulator::isVsyncConfigDefault() const {
-    std::lock_guard<std::mutex> lock(mMutex);
-    return getNextVsyncConfigType() == VsyncConfigType::Late;
 }
 
 } // namespace android::scheduler

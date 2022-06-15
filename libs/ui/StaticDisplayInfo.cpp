@@ -29,8 +29,7 @@ size_t StaticDisplayInfo::getFlattenedSize() const {
     return FlattenableHelpers::getFlattenedSize(connectionType) +
             FlattenableHelpers::getFlattenedSize(density) +
             FlattenableHelpers::getFlattenedSize(secure) +
-            FlattenableHelpers::getFlattenedSize(deviceProductInfo) +
-            FlattenableHelpers::getFlattenedSize(installOrientation);
+            FlattenableHelpers::getFlattenedSize(deviceProductInfo);
 }
 
 status_t StaticDisplayInfo::flatten(void* buffer, size_t size) const {
@@ -41,7 +40,6 @@ status_t StaticDisplayInfo::flatten(void* buffer, size_t size) const {
     RETURN_IF_ERROR(FlattenableHelpers::flatten(&buffer, &size, density));
     RETURN_IF_ERROR(FlattenableHelpers::flatten(&buffer, &size, secure));
     RETURN_IF_ERROR(FlattenableHelpers::flatten(&buffer, &size, deviceProductInfo));
-    RETURN_IF_ERROR(FlattenableHelpers::flatten(&buffer, &size, installOrientation));
     return OK;
 }
 
@@ -50,7 +48,6 @@ status_t StaticDisplayInfo::unflatten(void const* buffer, size_t size) {
     RETURN_IF_ERROR(FlattenableHelpers::unflatten(&buffer, &size, &density));
     RETURN_IF_ERROR(FlattenableHelpers::unflatten(&buffer, &size, &secure));
     RETURN_IF_ERROR(FlattenableHelpers::unflatten(&buffer, &size, &deviceProductInfo));
-    RETURN_IF_ERROR(FlattenableHelpers::unflatten(&buffer, &size, &installOrientation));
     return OK;
 }
 

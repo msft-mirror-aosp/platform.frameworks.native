@@ -16,18 +16,14 @@
 
 #pragma once
 
+#include <android-base/thread_annotations.h>
+#include <ui/FenceTime.h>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
-
-#include <android-base/thread_annotations.h>
-#include <ui/FenceTime.h>
-
-#include <scheduler/TimeKeeper.h>
-
+#include "TimeKeeper.h"
 #include "VsyncController.h"
-
 namespace android::scheduler {
 
 class Clock;
@@ -41,7 +37,7 @@ public:
                  bool supportKernelIdleTimer);
     ~VSyncReactor();
 
-    bool addPresentFence(std::shared_ptr<FenceTime>) final;
+    bool addPresentFence(const std::shared_ptr<android::FenceTime>& fence) final;
     void setIgnorePresentFences(bool ignore) final;
 
     void startPeriodTransition(nsecs_t period) final;

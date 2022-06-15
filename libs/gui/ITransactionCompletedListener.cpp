@@ -29,7 +29,6 @@ namespace { // Anonymous
 enum class Tag : uint32_t {
     ON_TRANSACTION_COMPLETED = IBinder::FIRST_CALL_TRANSACTION,
     ON_RELEASE_BUFFER,
-    ON_TRANSACTION_QUEUE_STALLED,
     LAST = ON_RELEASE_BUFFER,
 };
 
@@ -112,14 +111,7 @@ status_t JankData::readFromParcel(const Parcel* input) {
 
 status_t SurfaceStats::writeToParcel(Parcel* output) const {
     SAFE_PARCEL(output->writeStrongBinder, surfaceControl);
-    if (const auto* acquireFence = std::get_if<sp<Fence>>(&acquireTimeOrFence)) {
-        SAFE_PARCEL(output->writeBool, true);
-        SAFE_PARCEL(output->write, **acquireFence);
-    } else {
-        SAFE_PARCEL(output->writeBool, false);
-        SAFE_PARCEL(output->writeInt64, std::get<nsecs_t>(acquireTimeOrFence));
-    }
-
+    SAFE_PARCEL(output->writeInt64, acquireTime);
     if (previousReleaseFence) {
         SAFE_PARCEL(output->writeBool, true);
         SAFE_PARCEL(output->write, *previousReleaseFence);
@@ -139,18 +131,8 @@ status_t SurfaceStats::writeToParcel(Parcel* output) const {
 
 status_t SurfaceStats::readFromParcel(const Parcel* input) {
     SAFE_PARCEL(input->readStrongBinder, &surfaceControl);
-
+    SAFE_PARCEL(input->readInt64, &acquireTime);
     bool hasFence = false;
-    SAFE_PARCEL(input->readBool, &hasFence);
-    if (hasFence) {
-        acquireTimeOrFence = sp<Fence>::make();
-        SAFE_PARCEL(input->read, *std::get<sp<Fence>>(acquireTimeOrFence));
-    } else {
-        nsecs_t acquireTime;
-        SAFE_PARCEL(input->readInt64, &acquireTime);
-        acquireTimeOrFence = acquireTime;
-    }
-
     SAFE_PARCEL(input->readBool, &hasFence);
     if (hasFence) {
         previousReleaseFence = new Fence();
@@ -272,16 +254,12 @@ public:
     }
 
     void onReleaseBuffer(ReleaseCallbackId callbackId, sp<Fence> releaseFence,
-                         uint32_t currentMaxAcquiredBufferCount) override {
+                         uint32_t transformHint, uint32_t currentMaxAcquiredBufferCount) override {
         callRemoteAsync<decltype(
                 &ITransactionCompletedListener::onReleaseBuffer)>(Tag::ON_RELEASE_BUFFER,
                                                                   callbackId, releaseFence,
+                                                                  transformHint,
                                                                   currentMaxAcquiredBufferCount);
-    }
-
-    void onTransactionQueueStalled() override {
-        callRemoteAsync<decltype(&ITransactionCompletedListener::onTransactionQueueStalled)>(
-            Tag::ON_TRANSACTION_QUEUE_STALLED);
     }
 };
 
@@ -303,9 +281,6 @@ status_t BnTransactionCompletedListener::onTransact(uint32_t code, const Parcel&
                                   &ITransactionCompletedListener::onTransactionCompleted);
         case Tag::ON_RELEASE_BUFFER:
             return callLocalAsync(data, reply, &ITransactionCompletedListener::onReleaseBuffer);
-        case Tag::ON_TRANSACTION_QUEUE_STALLED:
-            return callLocalAsync(data, reply,
-                                  &ITransactionCompletedListener::onTransactionQueueStalled);
     }
 }
 
