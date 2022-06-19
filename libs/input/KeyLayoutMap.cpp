@@ -23,20 +23,31 @@
 #include <input/InputEventLabels.h>
 #include <input/KeyLayoutMap.h>
 #include <input/Keyboard.h>
+#include <log/log.h>
 #include <utils/Errors.h>
-#include <utils/Log.h>
 #include <utils/Timers.h>
 #include <utils/Tokenizer.h>
 
-// Enables debug output for the parser.
-#define DEBUG_PARSER 0
+#include <cstdlib>
+#include <string_view>
+#include <unordered_map>
+
+/**
+ * Log debug output for the parser.
+ * Enable this via "adb shell setprop log.tag.KeyLayoutMapParser DEBUG" (requires restart)
+ */
+const bool DEBUG_PARSER =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "Parser", ANDROID_LOG_INFO);
 
 // Enables debug output for parser performance.
 #define DEBUG_PARSER_PERFORMANCE 0
 
-// Enables debug output for mapping.
-#define DEBUG_MAPPING 0
-
+/**
+ * Log debug output for mapping.
+ * Enable this via "adb shell setprop log.tag.KeyLayoutMapMapping DEBUG" (requires restart)
+ */
+const bool DEBUG_MAPPING =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, LOG_TAG "Mapping", ANDROID_LOG_INFO);
 
 namespace android {
 
@@ -130,9 +141,8 @@ status_t KeyLayoutMap::mapKey(int32_t scanCode, int32_t usageCode,
         int32_t* outKeyCode, uint32_t* outFlags) const {
     const Key* key = getKey(scanCode, usageCode);
     if (!key) {
-#if DEBUG_MAPPING
-        ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Failed.", scanCode, usageCode);
-#endif
+        ALOGD_IF(DEBUG_MAPPING, "mapKey: scanCode=%d, usageCode=0x%08x ~ Failed.", scanCode,
+                 usageCode);
         *outKeyCode = AKEYCODE_UNKNOWN;
         *outFlags = 0;
         return NAME_NOT_FOUND;
@@ -141,10 +151,9 @@ status_t KeyLayoutMap::mapKey(int32_t scanCode, int32_t usageCode,
     *outKeyCode = key->keyCode;
     *outFlags = key->flags;
 
-#if DEBUG_MAPPING
-    ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Result keyCode=%d, outFlags=0x%08x.",
-            scanCode, usageCode, *outKeyCode, *outFlags);
-#endif
+    ALOGD_IF(DEBUG_MAPPING,
+             "mapKey: scanCode=%d, usageCode=0x%08x ~ Result keyCode=%d, outFlags=0x%08x.",
+             scanCode, usageCode, *outKeyCode, *outFlags);
     return NO_ERROR;
 }
 
@@ -152,102 +161,78 @@ status_t KeyLayoutMap::mapKey(int32_t scanCode, int32_t usageCode,
 base::Result<std::pair<InputDeviceSensorType, int32_t>> KeyLayoutMap::mapSensor(int32_t absCode) {
     auto it = mSensorsByAbsCode.find(absCode);
     if (it == mSensorsByAbsCode.end()) {
-#if DEBUG_MAPPING
-        ALOGD("mapSensor: absCode=%d, ~ Failed.", absCode);
-#endif
+        ALOGD_IF(DEBUG_MAPPING, "mapSensor: absCode=%d, ~ Failed.", absCode);
         return Errorf("Can't find abs code {}.", absCode);
     }
     const Sensor& sensor = it->second;
-
-#if DEBUG_MAPPING
-    ALOGD("mapSensor: absCode=%d, sensorType=0x%0x, sensorDataIndex=0x%x.", absCode,
-          NamedEnum::string(sensor.sensorType), sensor.sensorDataIndex);
-#endif
+    ALOGD_IF(DEBUG_MAPPING, "mapSensor: absCode=%d, sensorType=%s, sensorDataIndex=0x%x.", absCode,
+             NamedEnum::string(sensor.sensorType).c_str(), sensor.sensorDataIndex);
     return std::make_pair(sensor.sensorType, sensor.sensorDataIndex);
 }
 
 const KeyLayoutMap::Key* KeyLayoutMap::getKey(int32_t scanCode, int32_t usageCode) const {
     if (usageCode) {
-        ssize_t index = mKeysByUsageCode.indexOfKey(usageCode);
-        if (index >= 0) {
-            return &mKeysByUsageCode.valueAt(index);
+        auto it = mKeysByUsageCode.find(usageCode);
+        if (it != mKeysByUsageCode.end()) {
+            return &it->second;
         }
     }
     if (scanCode) {
-        ssize_t index = mKeysByScanCode.indexOfKey(scanCode);
-        if (index >= 0) {
-            return &mKeysByScanCode.valueAt(index);
+        auto it = mKeysByScanCode.find(scanCode);
+        if (it != mKeysByScanCode.end()) {
+            return &it->second;
         }
     }
     return nullptr;
 }
 
-status_t KeyLayoutMap::findScanCodesForKey(
-        int32_t keyCode, std::vector<int32_t>* outScanCodes) const {
-    const size_t N = mKeysByScanCode.size();
-    for (size_t i=0; i<N; i++) {
-        if (mKeysByScanCode.valueAt(i).keyCode == keyCode) {
-            outScanCodes->push_back(mKeysByScanCode.keyAt(i));
+std::vector<int32_t> KeyLayoutMap::findScanCodesForKey(int32_t keyCode) const {
+    std::vector<int32_t> scanCodes;
+    for (const auto& [scanCode, key] : mKeysByScanCode) {
+        if (keyCode == key.keyCode) {
+            scanCodes.push_back(scanCode);
         }
     }
-    return NO_ERROR;
+    return scanCodes;
 }
 
-status_t KeyLayoutMap::mapAxis(int32_t scanCode, AxisInfo* outAxisInfo) const {
-    ssize_t index = mAxes.indexOfKey(scanCode);
-    if (index < 0) {
-#if DEBUG_MAPPING
-        ALOGD("mapAxis: scanCode=%d ~ Failed.", scanCode);
-#endif
-        return NAME_NOT_FOUND;
+std::optional<AxisInfo> KeyLayoutMap::mapAxis(int32_t scanCode) const {
+    auto it = mAxes.find(scanCode);
+    if (it == mAxes.end()) {
+        ALOGD_IF(DEBUG_MAPPING, "mapAxis: scanCode=%d ~ Failed.", scanCode);
+        return std::nullopt;
     }
 
-    *outAxisInfo = mAxes.valueAt(index);
-
-#if DEBUG_MAPPING
-    ALOGD("mapAxis: scanCode=%d ~ Result mode=%d, axis=%d, highAxis=%d, "
-            "splitValue=%d, flatOverride=%d.",
-            scanCode,
-            outAxisInfo->mode, outAxisInfo->axis, outAxisInfo->highAxis,
-            outAxisInfo->splitValue, outAxisInfo->flatOverride);
-#endif
-    return NO_ERROR;
+    const AxisInfo& axisInfo = it->second;
+    ALOGD_IF(DEBUG_MAPPING,
+             "mapAxis: scanCode=%d ~ Result mode=%d, axis=%d, highAxis=%d, "
+             "splitValue=%d, flatOverride=%d.",
+             scanCode, axisInfo.mode, axisInfo.axis, axisInfo.highAxis, axisInfo.splitValue,
+             axisInfo.flatOverride);
+    return axisInfo;
 }
 
-status_t KeyLayoutMap::findScanCodeForLed(int32_t ledCode, int32_t* outScanCode) const {
-    const size_t N = mLedsByScanCode.size();
-    for (size_t i = 0; i < N; i++) {
-        if (mLedsByScanCode.valueAt(i).ledCode == ledCode) {
-            *outScanCode = mLedsByScanCode.keyAt(i);
-#if DEBUG_MAPPING
-            ALOGD("findScanCodeForLed: ledCode=%d, scanCode=%d.", ledCode, *outScanCode);
-#endif
-            return NO_ERROR;
+std::optional<int32_t> KeyLayoutMap::findScanCodeForLed(int32_t ledCode) const {
+    for (const auto& [scanCode, led] : mLedsByScanCode) {
+        if (led.ledCode == ledCode) {
+            ALOGD_IF(DEBUG_MAPPING, "%s: ledCode=%d, scanCode=%d.", __func__, ledCode, scanCode);
+            return scanCode;
         }
     }
-#if DEBUG_MAPPING
-            ALOGD("findScanCodeForLed: ledCode=%d ~ Not found.", ledCode);
-#endif
-    return NAME_NOT_FOUND;
+    ALOGD_IF(DEBUG_MAPPING, "%s: ledCode=%d ~ Not found.", __func__, ledCode);
+    return std::nullopt;
 }
 
-status_t KeyLayoutMap::findUsageCodeForLed(int32_t ledCode, int32_t* outUsageCode) const {
-    const size_t N = mLedsByUsageCode.size();
-    for (size_t i = 0; i < N; i++) {
-        if (mLedsByUsageCode.valueAt(i).ledCode == ledCode) {
-            *outUsageCode = mLedsByUsageCode.keyAt(i);
-#if DEBUG_MAPPING
-            ALOGD("findUsageForLed: ledCode=%d, usage=%x.", ledCode, *outUsageCode);
-#endif
-            return NO_ERROR;
+std::optional<int32_t> KeyLayoutMap::findUsageCodeForLed(int32_t ledCode) const {
+    for (const auto& [usageCode, led] : mLedsByUsageCode) {
+        if (led.ledCode == ledCode) {
+            ALOGD_IF(DEBUG_MAPPING, "%s: ledCode=%d, usage=%x.", __func__, ledCode, usageCode);
+            return usageCode;
         }
     }
-#if DEBUG_MAPPING
-            ALOGD("findUsageForLed: ledCode=%d ~ Not found.", ledCode);
-#endif
-    return NAME_NOT_FOUND;
+    ALOGD_IF(DEBUG_MAPPING, "%s: ledCode=%d ~ Not found.", __func__, ledCode);
+    return std::nullopt;
 }
-
 
 // --- KeyLayoutMap::Parser ---
 
@@ -260,10 +245,8 @@ KeyLayoutMap::Parser::~Parser() {
 
 status_t KeyLayoutMap::Parser::parse() {
     while (!mTokenizer->isEof()) {
-#if DEBUG_PARSER
-        ALOGD("Parsing %s: '%s'.", mTokenizer->getLocation().string(),
-                mTokenizer->peekRemainderOfLine().string());
-#endif
+        ALOGD_IF(DEBUG_PARSER, "Parsing %s: '%s'.", mTokenizer->getLocation().string(),
+                 mTokenizer->peekRemainderOfLine().string());
 
         mTokenizer->skipDelimiters(WHITESPACE);
 
@@ -321,8 +304,9 @@ status_t KeyLayoutMap::Parser::parseKey() {
                 mapUsage ? "usage" : "scan code", codeToken.string());
         return BAD_VALUE;
     }
-    KeyedVector<int32_t, Key>& map = mapUsage ? mMap->mKeysByUsageCode : mMap->mKeysByScanCode;
-    if (map.indexOfKey(code) >= 0) {
+    std::unordered_map<int32_t, Key>& map =
+            mapUsage ? mMap->mKeysByUsageCode : mMap->mKeysByScanCode;
+    if (map.find(code) != map.end()) {
         ALOGE("%s: Duplicate entry for key %s '%s'.", mTokenizer->getLocation().string(),
                 mapUsage ? "usage" : "scan code", codeToken.string());
         return BAD_VALUE;
@@ -357,14 +341,13 @@ status_t KeyLayoutMap::Parser::parseKey() {
         flags |= flag;
     }
 
-#if DEBUG_PARSER
-    ALOGD("Parsed key %s: code=%d, keyCode=%d, flags=0x%08x.",
-            mapUsage ? "usage" : "scan code", code, keyCode, flags);
-#endif
+    ALOGD_IF(DEBUG_PARSER, "Parsed key %s: code=%d, keyCode=%d, flags=0x%08x.",
+             mapUsage ? "usage" : "scan code", code, keyCode, flags);
+
     Key key;
     key.keyCode = keyCode;
     key.flags = flags;
-    map.add(code, key);
+    map.insert({code, key});
     return NO_ERROR;
 }
 
@@ -377,7 +360,7 @@ status_t KeyLayoutMap::Parser::parseAxis() {
                 scanCodeToken.string());
         return BAD_VALUE;
     }
-    if (mMap->mAxes.indexOfKey(scanCode) >= 0) {
+    if (mMap->mAxes.find(scanCode) != mMap->mAxes.end()) {
         ALOGE("%s: Duplicate entry for axis scan code '%s'.", mTokenizer->getLocation().string(),
                 scanCodeToken.string());
         return BAD_VALUE;
@@ -458,14 +441,12 @@ status_t KeyLayoutMap::Parser::parseAxis() {
         }
     }
 
-#if DEBUG_PARSER
-    ALOGD("Parsed axis: scanCode=%d, mode=%d, axis=%d, highAxis=%d, "
-            "splitValue=%d, flatOverride=%d.",
-            scanCode,
-            axisInfo.mode, axisInfo.axis, axisInfo.highAxis,
-            axisInfo.splitValue, axisInfo.flatOverride);
-#endif
-    mMap->mAxes.add(scanCode, axisInfo);
+    ALOGD_IF(DEBUG_PARSER,
+             "Parsed axis: scanCode=%d, mode=%d, axis=%d, highAxis=%d, "
+             "splitValue=%d, flatOverride=%d.",
+             scanCode, axisInfo.mode, axisInfo.axis, axisInfo.highAxis, axisInfo.splitValue,
+             axisInfo.flatOverride);
+    mMap->mAxes.insert({scanCode, axisInfo});
     return NO_ERROR;
 }
 
@@ -485,8 +466,9 @@ status_t KeyLayoutMap::Parser::parseLed() {
         return BAD_VALUE;
     }
 
-    KeyedVector<int32_t, Led>& map = mapUsage ? mMap->mLedsByUsageCode : mMap->mLedsByScanCode;
-    if (map.indexOfKey(code) >= 0) {
+    std::unordered_map<int32_t, Led>& map =
+            mapUsage ? mMap->mLedsByUsageCode : mMap->mLedsByScanCode;
+    if (map.find(code) != map.end()) {
         ALOGE("%s: Duplicate entry for led %s '%s'.", mTokenizer->getLocation().string(),
                 mapUsage ? "usage" : "scan code", codeToken.string());
         return BAD_VALUE;
@@ -501,14 +483,12 @@ status_t KeyLayoutMap::Parser::parseLed() {
         return BAD_VALUE;
     }
 
-#if DEBUG_PARSER
-    ALOGD("Parsed led %s: code=%d, ledCode=%d.",
-            mapUsage ? "usage" : "scan code", code, ledCode);
-#endif
+    ALOGD_IF(DEBUG_PARSER, "Parsed led %s: code=%d, ledCode=%d.", mapUsage ? "usage" : "scan code",
+             code, ledCode);
 
     Led led;
     led.ledCode = ledCode;
-    map.add(code, led);
+    map.insert({code, led});
     return NO_ERROR;
 }
 
@@ -580,10 +560,8 @@ status_t KeyLayoutMap::Parser::parseSensor() {
     }
     int32_t sensorDataIndex = indexOpt.value();
 
-#if DEBUG_PARSER
-    ALOGD("Parsed sensor: abs code=%d, sensorType=%d, sensorDataIndex=%d.", code,
-          NamedEnum::string(sensorType).c_str(), sensorDataIndex);
-#endif
+    ALOGD_IF(DEBUG_PARSER, "Parsed sensor: abs code=%d, sensorType=%s, sensorDataIndex=%d.", code,
+             NamedEnum::string(sensorType).c_str(), sensorDataIndex);
 
     Sensor sensor;
     sensor.sensorType = sensorType;
