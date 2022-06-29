@@ -32,26 +32,30 @@ namespace {
 class RpcTransportRaw : public RpcTransport {
 public:
     explicit RpcTransportRaw(android::base::unique_fd socket) : mSocket(std::move(socket)) {}
-    status_t peek(void* buf, size_t size, size_t* out_size) override {
-        ssize_t ret = TEMP_FAILURE_RETRY(::recv(mSocket.get(), buf, size, MSG_PEEK));
+    status_t pollRead(void) override {
+        uint8_t buf;
+        ssize_t ret = TEMP_FAILURE_RETRY(
+                ::recv(mSocket.get(), &buf, sizeof(buf), MSG_PEEK | MSG_DONTWAIT));
         if (ret < 0) {
             int savedErrno = errno;
             if (savedErrno == EAGAIN || savedErrno == EWOULDBLOCK) {
                 return WOULD_BLOCK;
             }
 
-            LOG_RPC_DETAIL("RpcTransport peek(): %s", strerror(savedErrno));
+            LOG_RPC_DETAIL("RpcTransport poll(): %s", strerror(savedErrno));
             return -savedErrno;
+        } else if (ret == 0) {
+            return DEAD_OBJECT;
         }
 
-        *out_size = static_cast<size_t>(ret);
         return OK;
     }
 
     template <typename SendOrReceive>
-    status_t interruptableReadOrWrite(FdTrigger* fdTrigger, iovec* iovs, int niovs,
-                                      SendOrReceive sendOrReceiveFun, const char* funName,
-                                      int16_t event, const std::function<status_t()>& altPoll) {
+    status_t interruptableReadOrWrite(
+            FdTrigger* fdTrigger, iovec* iovs, int niovs, SendOrReceive sendOrReceiveFun,
+            const char* funName, int16_t event,
+            const std::optional<android::base::function_ref<status_t()>>& altPoll) {
         MAYBE_WAIT_IN_FLAKE_MODE;
 
         if (niovs < 0) {
@@ -126,7 +130,7 @@ public:
             }
 
             if (altPoll) {
-                if (status_t status = altPoll(); status != OK) return status;
+                if (status_t status = (*altPoll)(); status != OK) return status;
                 if (fdTrigger->isTriggered()) {
                     return DEAD_OBJECT;
                 }
@@ -139,14 +143,16 @@ public:
         }
     }
 
-    status_t interruptableWriteFully(FdTrigger* fdTrigger, iovec* iovs, int niovs,
-                                     const std::function<status_t()>& altPoll) override {
+    status_t interruptableWriteFully(
+            FdTrigger* fdTrigger, iovec* iovs, int niovs,
+            const std::optional<android::base::function_ref<status_t()>>& altPoll) override {
         return interruptableReadOrWrite(fdTrigger, iovs, niovs, sendmsg, "sendmsg", POLLOUT,
                                         altPoll);
     }
 
-    status_t interruptableReadFully(FdTrigger* fdTrigger, iovec* iovs, int niovs,
-                                    const std::function<status_t()>& altPoll) override {
+    status_t interruptableReadFully(
+            FdTrigger* fdTrigger, iovec* iovs, int niovs,
+            const std::optional<android::base::function_ref<status_t()>>& altPoll) override {
         return interruptableReadOrWrite(fdTrigger, iovs, niovs, recvmsg, "recvmsg", POLLIN,
                                         altPoll);
     }

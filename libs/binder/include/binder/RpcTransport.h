@@ -20,8 +20,10 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
+#include <android-base/function_ref.h>
 #include <android-base/unique_fd.h>
 #include <utils/Errors.h>
 
@@ -39,8 +41,15 @@ class RpcTransport {
 public:
     virtual ~RpcTransport() = default;
 
-    // replacement of ::recv(MSG_PEEK). Error code may not be set if TLS is enabled.
-    [[nodiscard]] virtual status_t peek(void *buf, size_t size, size_t *out_size) = 0;
+    /**
+     * Poll the transport to check whether there is any data ready to read.
+     *
+     * Return:
+     *   OK - There is data available on this transport
+     *   WOULDBLOCK - No data is available
+     *   error - any other error
+     */
+    [[nodiscard]] virtual status_t pollRead(void) = 0;
 
     /**
      * Read (or write), but allow to be interrupted by a trigger.
@@ -58,10 +67,10 @@ public:
      */
     [[nodiscard]] virtual status_t interruptableWriteFully(
             FdTrigger *fdTrigger, iovec *iovs, int niovs,
-            const std::function<status_t()> &altPoll) = 0;
+            const std::optional<android::base::function_ref<status_t()>> &altPoll) = 0;
     [[nodiscard]] virtual status_t interruptableReadFully(
             FdTrigger *fdTrigger, iovec *iovs, int niovs,
-            const std::function<status_t()> &altPoll) = 0;
+            const std::optional<android::base::function_ref<status_t()>> &altPoll) = 0;
 
 protected:
     RpcTransport() = default;

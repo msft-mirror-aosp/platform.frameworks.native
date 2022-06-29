@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
-#include <cstdint>
 #include <stddef.h>
+#include <cstdint>
+#include <optional>
 
 #include <android-base/result.h>
 #include <android-base/unique_fd.h>
 #include <log/log.h>
+#include <utils/Errors.h>
 
 #define TEST_AND_RETURN(value, expr)            \
     do {                                        \
@@ -35,5 +37,29 @@ namespace android {
 void zeroMemory(uint8_t* data, size_t size);
 
 android::base::Result<void> setNonBlocking(android::base::borrowed_fd fd);
+
+status_t getRandomBytes(uint8_t* data, size_t size);
+
+// View of contiguous sequence. Similar to std::span.
+template <typename T>
+struct Span {
+    T* data = nullptr;
+    size_t size = 0;
+
+    size_t byteSize() { return size * sizeof(T); }
+
+    iovec toIovec() { return {const_cast<std::remove_const_t<T>*>(data), byteSize()}; }
+
+    // Truncates `this` to a length of `offset` and returns a span with the
+    // remainder.
+    //
+    // Aborts if offset > size.
+    Span<T> splitOff(size_t offset) {
+        LOG_ALWAYS_FATAL_IF(offset > size);
+        Span<T> rest = {data + offset, size - offset};
+        size = offset;
+        return rest;
+    }
+};
 
 }   // namespace android
