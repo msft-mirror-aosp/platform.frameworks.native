@@ -805,10 +805,6 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
         }
     }
 
-    // NOTE: Any new formats that are added must be coordinated across different
-    // Android users.  This includes the ANGLE team (a layered implementation of
-    // OpenGL-ES).
-
     VkResult result = VK_SUCCESS;
     if (formats) {
         uint32_t transfer_count = all_formats.size();
@@ -924,8 +920,7 @@ VkResult GetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice pdev,
         // VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR and
         // VK_PRESENT_MODE_SHARED_CONTINUOUS_REFRESH_KHR.  We technically cannot
         // know if VK_PRESENT_MODE_SHARED_MAILBOX_KHR is supported without a
-        // surface, and that cannot be relied upon.
-        present_modes.push_back(VK_PRESENT_MODE_MAILBOX_KHR);
+        // surface, and that cannot be relied upon.  Therefore, don't return it.
         present_modes.push_back(VK_PRESENT_MODE_FIFO_KHR);
     } else {
         ANativeWindow* window = SurfaceFromHandle(surface)->window.get();

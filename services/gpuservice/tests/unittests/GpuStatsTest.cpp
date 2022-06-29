@@ -18,12 +18,14 @@
 #define LOG_TAG "gpuservice_unittest"
 
 #include <unistd.h>
+#include <binder/ProcessState.h>
 #include <cutils/properties.h>
 #include <gmock/gmock.h>
 #include <gpustats/GpuStats.h>
 #include <gtest/gtest.h>
 #include <stats_pull_atom_callback.h>
 #include <statslog.h>
+#include <utils/Looper.h>
 #include <utils/String16.h>
 #include <utils/Vector.h>
 
@@ -61,8 +63,9 @@ enum InputCommand : int32_t {
 // clang-format on
 
 class GpuStatsTest : public testing::Test {
+    sp<android::Looper> looper;
 public:
-    GpuStatsTest() {
+    GpuStatsTest() : looper(Looper::prepare(0 /* opts */)) {
         const ::testing::TestInfo* const test_info =
                 ::testing::UnitTest::GetInstance()->current_test_info();
         ALOGD("**** Setting up for %s.%s\n", test_info->test_case_name(), test_info->name());
@@ -72,6 +75,10 @@ public:
         const ::testing::TestInfo* const test_info =
                 ::testing::UnitTest::GetInstance()->current_test_info();
         ALOGD("**** Tearing down after %s.%s\n", test_info->test_case_name(), test_info->name());
+
+        // performs all pending callbacks until all data has been consumed
+        // gives time to process binder transactions by thread pool
+        looper->pollAll(1000);
     }
 
     std::string inputCommand(InputCommand cmd);
@@ -79,6 +86,10 @@ public:
     void SetUp() override {
         mCpuVulkanVersion = property_get_int32("ro.cpuvulkan.version", 0);
         mGlesVersion = property_get_int32("ro.opengles.version", 0);
+
+        // start the thread pool
+        sp<ProcessState> ps(ProcessState::self());
+        ps->startThreadPool();
     }
 
     std::unique_ptr<GpuStats> mGpuStats = std::make_unique<GpuStats>();

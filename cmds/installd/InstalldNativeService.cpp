@@ -2830,6 +2830,9 @@ binder::Status InstalldNativeService::getExternalSize(const std::optional<std::s
         auto obbPath = StringPrintf("%s/Android/obb",
                 create_data_media_path(uuid_, userId).c_str());
         calculate_tree_size(obbPath, &obbSize);
+        if (!(flags & FLAG_USE_QUOTA)) {
+            totalSize -= obbSize;
+        }
         ATRACE_END();
     }
 
@@ -3502,10 +3505,10 @@ binder::Status InstalldNativeService::tryMountDataMirror(
         return error("Failed to stat " + mirrorVolCePath);
     }
 
-    if (mirrorCeStat.st_ino == ceStat.st_ino) {
+    if (mirrorCeStat.st_ino == ceStat.st_ino && mirrorCeStat.st_dev == ceStat.st_dev) {
         // As it's being called by prepareUserStorage, it can be called multiple times.
         // Hence, we if we mount it already, we should skip it.
-        LOG(WARNING) << "CE dir is mounted already: " + cePath;
+        LOG(INFO) << "CE dir is mounted already: " + cePath;
         return ok();
     }
 

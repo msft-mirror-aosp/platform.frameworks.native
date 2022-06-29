@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <android-base/threads.h>
 #include <android-base/unique_fd.h>
 #include <binder/IBinder.h>
 #include <binder/RpcTransport.h>
@@ -35,9 +36,15 @@ class RpcState;
 class RpcTransport;
 class FdTrigger;
 
-constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION_NEXT = 0;
+constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION_NEXT = 1;
 constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION_EXPERIMENTAL = 0xF0000000;
 constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION = RPC_WIRE_PROTOCOL_VERSION_EXPERIMENTAL;
+
+// Starting with this version:
+//
+// * RpcWireReply is larger (4 bytes -> 20).
+// * RpcWireTransaction and RpcWireReplyV1 include the parcel data size.
+constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION_RPC_HEADER_FEATURE_EXPLICIT_PARCEL_SIZE = 1;
 
 /**
  * This represents a session (group of connections) between a client
@@ -211,7 +218,7 @@ private:
 
         // whether this or another thread is currently using this fd to make
         // or receive transactions.
-        std::optional<pid_t> exclusiveTid;
+        std::optional<uint64_t> exclusiveTid;
 
         bool allowNested = false;
     };
@@ -257,6 +264,7 @@ private:
     sp<RpcConnection> assignIncomingConnectionToThisThread(
             std::unique_ptr<RpcTransport> rpcTransport);
     [[nodiscard]] bool removeIncomingConnection(const sp<RpcConnection>& connection);
+    void clearConnectionTid(const sp<RpcConnection>& connection);
 
     [[nodiscard]] status_t initShutdownTrigger();
 
@@ -276,7 +284,7 @@ private:
         const sp<RpcConnection>& get() { return mConnection; }
 
     private:
-        static void findConnection(pid_t tid, sp<RpcConnection>* exclusive,
+        static void findConnection(uint64_t tid, sp<RpcConnection>* exclusive,
                                    sp<RpcConnection>* available,
                                    std::vector<sp<RpcConnection>>& sockets,
                                    size_t socketsIndexHint);
