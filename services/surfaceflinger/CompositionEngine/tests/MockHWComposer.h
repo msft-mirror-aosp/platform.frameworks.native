@@ -84,9 +84,9 @@ public:
     MOCK_METHOD4(setDisplayContentSamplingEnabled, status_t(HalDisplayId, bool, uint8_t, uint64_t));
     MOCK_METHOD4(getDisplayedContentSample,
                  status_t(HalDisplayId, uint64_t, uint64_t, DisplayedFrameStats*));
-    MOCK_METHOD3(setDisplayBrightness,
-                 std::future<status_t>(PhysicalDisplayId, float,
-                                       const Hwc2::Composer::DisplayBrightnessOptions&));
+    MOCK_METHOD(ftl::Future<status_t>, setDisplayBrightness,
+                (PhysicalDisplayId, float, float, const Hwc2::Composer::DisplayBrightnessOptions&),
+                (override));
     MOCK_METHOD2(getDisplayBrightnessSupport, status_t(PhysicalDisplayId, bool*));
 
     MOCK_METHOD2(onHotplug,
@@ -112,8 +112,8 @@ public:
     MOCK_METHOD1(getPreferredBootDisplayMode, std::optional<hal::HWConfigId>(PhysicalDisplayId));
     MOCK_METHOD0(getBootDisplayModeSupport, bool());
     MOCK_METHOD2(setAutoLowLatencyMode, status_t(PhysicalDisplayId, bool));
-    MOCK_METHOD2(getSupportedContentTypes,
-                 status_t(PhysicalDisplayId, std::vector<hal::ContentType>*));
+    MOCK_METHOD(status_t, getSupportedContentTypes,
+                (PhysicalDisplayId, std::vector<hal::ContentType>*), (const, override));
     MOCK_METHOD2(setContentType, status_t(PhysicalDisplayId, hal::ContentType));
     MOCK_CONST_METHOD0(getSupportedLayerGenericMetadata,
                        const std::unordered_map<std::string, bool>&());
@@ -133,6 +133,10 @@ public:
                  status_t(PhysicalDisplayId,
                           std::optional<aidl::android::hardware::graphics::common::
                                                 DisplayDecorationSupport>* support));
+    MOCK_METHOD2(setIdleTimerEnabled, status_t(PhysicalDisplayId, std::chrono::milliseconds));
+    MOCK_METHOD(bool, hasDisplayIdleTimerCapability, (PhysicalDisplayId), (const, override));
+    MOCK_METHOD(Hwc2::AidlTransform, getPhysicalDisplayOrientation, (PhysicalDisplayId),
+                (const, override));
 };
 
 } // namespace mock

@@ -76,16 +76,30 @@ static constexpr std::chrono::nanoseconds DISPATCHING_TIMEOUT = 5s;
 
 class InputSurface {
 public:
-    InputSurface(const sp<SurfaceControl> &sc, int width, int height) {
+    InputSurface(const sp<SurfaceControl> &sc, int width, int height, bool noInputChannel = false) {
         mSurfaceControl = sc;
 
         mInputFlinger = getInputFlinger();
-        mClientChannel = std::make_shared<InputChannel>();
-        mInputFlinger->createInputChannel("testchannels", mClientChannel.get());
+        if (noInputChannel) {
+            mInputInfo.setInputConfig(WindowInfo::InputConfig::NO_INPUT_CHANNEL, true);
+        } else {
+            mClientChannel = std::make_shared<InputChannel>();
+            mInputFlinger->createInputChannel("testchannels", mClientChannel.get());
+            mInputInfo.token = mClientChannel->getConnectionToken();
+            mInputConsumer = new InputConsumer(mClientChannel);
+        }
 
-        populateInputInfo(width, height);
+        mInputInfo.name = "Test info";
+        mInputInfo.dispatchingTimeout = 5s;
+        mInputInfo.globalScaleFactor = 1.0;
+        mInputInfo.touchableRegion.orSelf(Rect(0, 0, width, height));
 
-        mInputConsumer = new InputConsumer(mClientChannel);
+        InputApplicationInfo aInfo;
+        aInfo.token = new BBinder();
+        aInfo.name = "Test app info";
+        aInfo.dispatchingTimeoutMillis =
+                std::chrono::duration_cast<std::chrono::milliseconds>(DISPATCHING_TIMEOUT).count();
+        mInputInfo.applicationInfo = aInfo;
     }
 
     static std::unique_ptr<InputSurface> makeColorInputSurface(const sp<SurfaceComposerClient> &scc,
@@ -112,6 +126,16 @@ public:
                                    0 /* bufWidth */, PIXEL_FORMAT_RGBA_8888,
                                    ISurfaceComposerClient::eFXSurfaceContainer);
         return std::make_unique<InputSurface>(surfaceControl, width, height);
+    }
+
+    static std::unique_ptr<InputSurface> makeContainerInputSurfaceNoInputChannel(
+            const sp<SurfaceComposerClient> &scc, int width, int height) {
+        sp<SurfaceControl> surfaceControl =
+                scc->createSurface(String8("Test Container Surface"), 100 /* height */,
+                                   100 /* width */, PIXEL_FORMAT_RGBA_8888,
+                                   ISurfaceComposerClient::eFXSurfaceContainer);
+        return std::make_unique<InputSurface>(surfaceControl, width, height,
+                                              true /* noInputChannel */);
     }
 
     static std::unique_ptr<InputSurface> makeCursorInputSurface(
@@ -219,7 +243,9 @@ public:
     }
 
     virtual ~InputSurface() {
-        mInputFlinger->removeInputChannel(mClientChannel->getConnectionToken());
+        if (mClientChannel) {
+            mInputFlinger->removeInputChannel(mClientChannel->getConnectionToken());
+        }
     }
 
     virtual void doTransaction(
@@ -263,21 +289,6 @@ private:
         poll(&fd, 1, timeoutMs);
     }
 
-    void populateInputInfo(int width, int height) {
-        mInputInfo.token = mClientChannel->getConnectionToken();
-        mInputInfo.name = "Test info";
-        mInputInfo.dispatchingTimeout = 5s;
-        mInputInfo.globalScaleFactor = 1.0;
-        mInputInfo.touchableRegion.orSelf(Rect(0, 0, width, height));
-
-        InputApplicationInfo aInfo;
-        aInfo.token = new BBinder();
-        aInfo.name = "Test app info";
-        aInfo.dispatchingTimeoutMillis =
-                std::chrono::duration_cast<std::chrono::milliseconds>(DISPATCHING_TIMEOUT).count();
-
-        mInputInfo.applicationInfo = aInfo;
-    }
 public:
     sp<SurfaceControl> mSurfaceControl;
     std::shared_ptr<InputChannel> mClientChannel;
@@ -553,6 +564,55 @@ TEST_F(InputSurfacesTest, input_respects_scaled_surface_insets_overflow) {
     // expect no crash for overflow, and inset size to be clamped to surface size
     injectTap(112, 124);
     bgSurface->expectTap(12, 24);
+}
+
+TEST_F(InputSurfacesTest, touchable_region) {
+    std::unique_ptr<InputSurface> surface = makeSurface(100, 100);
+
+    surface->mInputInfo.touchableRegion.set(Rect{19, 29, 21, 31});
+
+    surface->showAt(11, 22);
+
+    // A tap within the surface but outside the touchable region should not be sent to the surface.
+    injectTap(20, 30);
+    EXPECT_EQ(surface->consumeEvent(200 /*timeoutMs*/), nullptr);
+
+    injectTap(31, 52);
+    surface->expectTap(20, 30);
+}
+
+TEST_F(InputSurfacesTest, input_respects_touchable_region_offset_overflow) {
+    std::unique_ptr<InputSurface> bgSurface = makeSurface(100, 100);
+    std::unique_ptr<InputSurface> fgSurface = makeSurface(100, 100);
+    bgSurface->showAt(100, 100);
+
+    // Set the touchable region to the values at the limit of its corresponding type.
+    // Since the surface is offset from the origin, the touchable region will be transformed into
+    // display space, which would trigger an overflow or an underflow. Ensure that we are protected
+    // against such a situation.
+    fgSurface->mInputInfo.touchableRegion.orSelf(Rect{INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX});
+
+    fgSurface->showAt(100, 100);
+
+    // Expect no crash for overflow. The overflowed touchable region is ignored, so the background
+    // surface receives touch.
+    injectTap(112, 124);
+    bgSurface->expectTap(12, 24);
+}
+
+TEST_F(InputSurfacesTest, input_respects_scaled_touchable_region_overflow) {
+    std::unique_ptr<InputSurface> bgSurface = makeSurface(100, 100);
+    std::unique_ptr<InputSurface> fgSurface = makeSurface(100, 100);
+    bgSurface->showAt(0, 0);
+
+    fgSurface->mInputInfo.touchableRegion.orSelf(Rect{INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX});
+    fgSurface->showAt(0, 0);
+
+    fgSurface->doTransaction([&](auto &t, auto &sc) { t.setMatrix(sc, 2.0, 0, 0, 2.0); });
+
+    // Expect no crash for overflow.
+    injectTap(12, 24);
+    fgSurface->expectTap(6, 12);
 }
 
 // Ensure we ignore transparent region when getting screen bounds when positioning input frame.
@@ -984,21 +1044,6 @@ TEST_F(InputSurfacesTest, drop_input_policy) {
     EXPECT_EQ(surface->consumeEvent(100), nullptr);
 }
 
-TEST_F(InputSurfacesTest, layer_with_empty_crop_cannot_be_focused) {
-    std::unique_ptr<InputSurface> bufferSurface =
-            InputSurface::makeBufferInputSurface(mComposerClient, 100, 100);
-
-    bufferSurface->showAt(50, 50, Rect::EMPTY_RECT);
-
-    bufferSurface->requestFocus();
-    EXPECT_EQ(bufferSurface->consumeEvent(100), nullptr);
-
-    bufferSurface->showAt(50, 50, Rect::INVALID_RECT);
-
-    bufferSurface->requestFocus();
-    EXPECT_EQ(bufferSurface->consumeEvent(100), nullptr);
-}
-
 TEST_F(InputSurfacesTest, layer_with_valid_crop_can_be_focused) {
     std::unique_ptr<InputSurface> bufferSurface =
             InputSurface::makeBufferInputSurface(mComposerClient, 100, 100);
@@ -1083,6 +1128,23 @@ TEST_F(InputSurfacesTest, replace_touchable_region_with_crop) {
     injectTap(21, 21);
     injectTap(71, 71);
     EXPECT_EQ(containerSurface->consumeEvent(100), nullptr);
+}
+
+TEST_F(InputSurfacesTest, child_container_with_no_input_channel_blocks_parent) {
+    std::unique_ptr<InputSurface> parent = makeSurface(100, 100);
+
+    parent->showAt(100, 100);
+    injectTap(101, 101);
+    parent->expectTap(1, 1);
+
+    std::unique_ptr<InputSurface> childContainerSurface =
+            InputSurface::makeContainerInputSurfaceNoInputChannel(mComposerClient, 100, 100);
+    childContainerSurface->showAt(0, 0);
+    childContainerSurface->doTransaction(
+            [&](auto &t, auto &sc) { t.reparent(sc, parent->mSurfaceControl); });
+    injectTap(101, 101);
+
+    EXPECT_EQ(parent->consumeEvent(100), nullptr);
 }
 
 class MultiDisplayTests : public InputSurfacesTest {

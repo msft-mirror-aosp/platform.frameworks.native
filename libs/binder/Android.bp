@@ -166,6 +166,7 @@ cc_library {
         "-Wextra-semi",
         "-Werror",
         "-Wzero-as-null-pointer-constant",
+        "-Wreorder-init-list",
         "-DANDROID_BASE_UNIQUE_FD_DISABLE_IMPLICIT_CONVERSION",
         "-DANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION",
     ],
@@ -225,6 +226,10 @@ cc_library {
     ],
 
     afdo: true,
+
+    header_abi_checker: {
+        diff_flags: ["-allow-adding-removing-weak-symbols"],
+    },
 }
 
 cc_defaults {

@@ -29,7 +29,6 @@ cc_fuzz {
         "libcutils",
         "libhidlbase",
         "liblog",
-        "libutils",
     ],
 
     target: {
@@ -37,12 +36,14 @@ cc_fuzz {
             shared_libs: [
                 "libbinder_ndk",
                 "libbinder",
+                "libutils",
             ],
         },
         host: {
             static_libs: [
                 "libbinder_ndk",
                 "libbinder",
+                "libutils",
             ],
         },
         darwin: {
@@ -66,10 +67,13 @@ cc_library_static {
     srcs: [
         "random_fd.cpp",
         "random_parcel.cpp",
+        "libbinder_driver.cpp",
+        "libbinder_ndk_driver.cpp",
     ],
     shared_libs: [
         "libbase",
         "libbinder",
+        "libbinder_ndk",
         "libcutils",
         "libutils",
     ],

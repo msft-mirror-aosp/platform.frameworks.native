@@ -311,14 +311,11 @@ void BufferLayer::preparePerFrameCompositionState() {
             ? 0
             : mBufferInfo.mBufferSlot;
     compositionState->acquireFence = mBufferInfo.mFence;
+    compositionState->frameNumber = mBufferInfo.mFrameNumber;
     compositionState->sidebandStreamHasFrame = false;
 }
 
-bool BufferLayer::onPreComposition(nsecs_t refreshStartTime) {
-    if (mBufferInfo.mBuffer != nullptr) {
-        Mutex::Autolock lock(mFrameEventHistoryMutex);
-        mFrameEventHistory.addPreComposition(mCurrentFrameNumber, refreshStartTime);
-    }
+bool BufferLayer::onPreComposition(nsecs_t) {
     return hasReadyFrame();
 }
 namespace {
@@ -362,12 +359,7 @@ void BufferLayer::onPostComposition(const DisplayDevice* display,
     if (!mBufferInfo.mFrameLatencyNeeded) return;
 
     // Update mFrameEventHistory.
-    {
-        Mutex::Autolock lock(mFrameEventHistoryMutex);
-        mFrameEventHistory.addPostComposition(mCurrentFrameNumber, glDoneFence, presentFence,
-                                              compositorTiming);
-        finalizeFrameEventHistory(glDoneFence, compositorTiming);
-    }
+    finalizeFrameEventHistory(glDoneFence, compositorTiming);
 
     // Update mFrameTracker.
     nsecs_t desiredPresentTime = mBufferInfo.mDesiredPresentTime;
@@ -401,7 +393,7 @@ void BufferLayer::onPostComposition(const DisplayDevice* display,
     }
 
     if (display) {
-        const Fps refreshRate = display->refreshRateConfigs().getCurrentRefreshRate().getFps();
+        const Fps refreshRate = display->refreshRateConfigs().getActiveMode()->getFps();
         const std::optional<Fps> renderRate =
                 mFlinger->mScheduler->getFrameRateOverride(getOwnerUid());
 
@@ -497,7 +489,7 @@ bool BufferLayer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime,
         return false;
     }
 
-    err = updateFrameNumber(latchTime);
+    err = updateFrameNumber();
     if (err != NO_ERROR) {
         return false;
     }

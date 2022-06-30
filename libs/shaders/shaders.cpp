@@ -78,7 +78,7 @@ void generateEOTF(ui::Dataspace dataspace, std::string& shader) {
             shader.append(R"(
 
                 float EOTF_sRGB(float srgb) {
-                    return srgb <= 0.08125 ? srgb / 4.50 : pow((srgb + 0.099) / 1.099, 0.45);
+                    return srgb <= 0.08125 ? srgb / 4.50 : pow((srgb + 0.099) / 1.099, 1 / 0.45);
                 }
 
                 float3 EOTF_sRGB(float3 srgb) {
@@ -185,9 +185,8 @@ void generateLuminanceScalesForOOTF(ui::Dataspace inputDataspace, ui::Dataspace 
             break;
         case HAL_DATASPACE_TRANSFER_HLG:
             shader.append(R"(
-                    uniform float in_hlgGamma;
                     float3 ScaleLuminance(float3 xyz) {
-                        return xyz * 1000.0 * pow(xyz.y, in_hlgGamma - 1);
+                        return xyz * 1000.0;
                     }
                 )");
             break;
@@ -228,10 +227,8 @@ static void generateLuminanceNormalizationForOOTF(ui::Dataspace outputDataspace,
             break;
         case HAL_DATASPACE_TRANSFER_HLG:
             shader.append(R"(
-                    uniform float in_hlgGamma;
                     float3 NormalizeLuminance(float3 xyz) {
-                        return xyz / 1000.0 *
-                                pow(xyz.y / 1000.0, (1 - in_hlgGamma) / (in_hlgGamma));
+                        return xyz / 1000.0;
                     }
                 )");
             break;
@@ -451,11 +448,6 @@ std::vector<uint8_t> buildUniformValue(T value) {
     return result;
 }
 
-// Refer to BT2100-2
-float computeHlgGamma(float currentDisplayBrightnessNits) {
-    return 1.2 + 0.42 * std::log10(currentDisplayBrightnessNits / 1000);
-}
-
 } // namespace
 
 std::string buildLinearEffectSkSL(const LinearEffect& linearEffect) {
@@ -472,18 +464,22 @@ std::string buildLinearEffectSkSL(const LinearEffect& linearEffect) {
 }
 
 // Generates a list of uniforms to set on the LinearEffect shader above.
-std::vector<tonemap::ShaderUniform> buildLinearEffectUniforms(const LinearEffect& linearEffect,
-                                                              const mat4& colorTransform,
-                                                              float maxDisplayLuminance,
-                                                              float currentDisplayLuminanceNits,
-                                                              float maxLuminance) {
+std::vector<tonemap::ShaderUniform> buildLinearEffectUniforms(
+        const LinearEffect& linearEffect, const mat4& colorTransform, float maxDisplayLuminance,
+        float currentDisplayLuminanceNits, float maxLuminance, AHardwareBuffer* buffer,
+        aidl::android::hardware::graphics::composer3::RenderIntent renderIntent) {
     std::vector<tonemap::ShaderUniform> uniforms;
-    if (linearEffect.inputDataspace == linearEffect.outputDataspace) {
+
+    const ui::Dataspace inputDataspace = linearEffect.fakeInputDataspace == ui::Dataspace::UNKNOWN
+            ? linearEffect.inputDataspace
+            : linearEffect.fakeInputDataspace;
+
+    if (inputDataspace == linearEffect.outputDataspace) {
         uniforms.push_back({.name = "in_rgbToXyz", .value = buildUniformValue<mat4>(mat4())});
         uniforms.push_back(
                 {.name = "in_xyzToRgb", .value = buildUniformValue<mat4>(colorTransform)});
     } else {
-        ColorSpace inputColorSpace = toColorSpace(linearEffect.inputDataspace);
+        ColorSpace inputColorSpace = toColorSpace(inputDataspace);
         ColorSpace outputColorSpace = toColorSpace(linearEffect.outputDataspace);
         uniforms.push_back({.name = "in_rgbToXyz",
                             .value = buildUniformValue<mat4>(mat4(inputColorSpace.getRGBtoXYZ()))});
@@ -492,19 +488,18 @@ std::vector<tonemap::ShaderUniform> buildLinearEffectUniforms(const LinearEffect
                                     colorTransform * mat4(outputColorSpace.getXYZtoRGB()))});
     }
 
-    if ((linearEffect.inputDataspace & HAL_DATASPACE_TRANSFER_MASK) == HAL_DATASPACE_TRANSFER_HLG) {
-        uniforms.push_back(
-                {.name = "in_hlgGamma",
-                 .value = buildUniformValue<float>(computeHlgGamma(currentDisplayLuminanceNits))});
-    }
-
     tonemap::Metadata metadata{.displayMaxLuminance = maxDisplayLuminance,
                                // If the input luminance is unknown, use display luminance (aka,
                                // no-op any luminance changes)
                                // This will be the case for eg screenshots in addition to
                                // uncalibrated displays
                                .contentMaxLuminance =
-                                       maxLuminance > 0 ? maxLuminance : maxDisplayLuminance};
+                                       maxLuminance > 0 ? maxLuminance : maxDisplayLuminance,
+                               .currentDisplayLuminance = currentDisplayLuminanceNits > 0
+                                       ? currentDisplayLuminanceNits
+                                       : maxDisplayLuminance,
+                               .buffer = buffer,
+                               .renderIntent = renderIntent};
 
     for (const auto uniform : tonemap::getToneMapper()->generateShaderSkSLUniforms(metadata)) {
         uniforms.push_back(uniform);

@@ -113,8 +113,9 @@ public:
         mFlinger.setupTimeStats(std::shared_ptr<TimeStats>(mTimeStats));
 
         mComposer = new Hwc2::mock::Composer();
+        mPowerAdvisor = new Hwc2::mock::PowerAdvisor();
         mFlinger.setupComposer(std::unique_ptr<Hwc2::Composer>(mComposer));
-
+        mFlinger.setupPowerAdvisor(std::unique_ptr<Hwc2::PowerAdvisor>(mPowerAdvisor));
         mFlinger.mutableMaxRenderTargetSize() = 16384;
     }
 
@@ -188,7 +189,7 @@ public:
     Hwc2::mock::Composer* mComposer = nullptr;
     renderengine::mock::RenderEngine* mRenderEngine = new renderengine::mock::RenderEngine();
     mock::TimeStats* mTimeStats = new mock::TimeStats();
-    Hwc2::mock::PowerAdvisor mPowerAdvisor;
+    Hwc2::mock::PowerAdvisor* mPowerAdvisor = nullptr;
 
     sp<Fence> mClientTargetAcquireFence = Fence::NO_FENCE;
 
@@ -244,15 +245,14 @@ void CompositionTest::captureScreenComposition() {
                                                                       HAL_PIXEL_FORMAT_RGBA_8888, 1,
                                                                       usage);
 
-    auto result = mFlinger.renderScreenImplLocked(*renderArea, traverseLayers, mCaptureScreenBuffer,
-                                                  forSystem, regionSampling);
-    EXPECT_TRUE(result.valid());
+    auto future = mFlinger.renderScreenImpl(*renderArea, traverseLayers, mCaptureScreenBuffer,
+                                            forSystem, regionSampling);
+    ASSERT_TRUE(future.valid());
+    const auto fenceResult = future.get();
 
-    auto& [status, drawFence] = result.get();
-
-    EXPECT_EQ(NO_ERROR, status);
-    if (drawFence.ok()) {
-        sync_wait(drawFence.get(), -1);
+    EXPECT_EQ(NO_ERROR, fenceStatus(fenceResult));
+    if (fenceResult.ok()) {
+        fenceResult.value()->waitForever(LOG_TAG);
     }
 
     LayerCase::cleanup(this);
@@ -300,7 +300,7 @@ struct BaseDisplayVariant {
                                      .setId(DEFAULT_DISPLAY_ID)
                                      .setPixels({DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT})
                                      .setIsSecure(Derived::IS_SECURE)
-                                     .setPowerAdvisor(&test->mPowerAdvisor)
+                                     .setPowerAdvisor(test->mPowerAdvisor)
                                      .setName(std::string("Injected display for ") +
                                               test_info->test_case_name() + "." + test_info->name())
                                      .build();

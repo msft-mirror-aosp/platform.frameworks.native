@@ -19,21 +19,25 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <fts.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <sys/capability.h>
+#include <sys/pidfd.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/wait.h>
 #include <sys/xattr.h>
+#include <unistd.h>
 #include <uuid/uuid.h>
 
 #include <android-base/file.h>
 #include <android-base/logging.h>
-#include <android-base/strings.h>
 #include <android-base/stringprintf.h>
+#include <android-base/strings.h>
 #include <android-base/unique_fd.h>
 #include <cutils/fs.h>
 #include <cutils/properties.h>
+#include <linux/fs.h>
 #include <log/log.h>
 #include <private/android_filesystem_config.h>
 #include <private/android_projectid_config.h>
@@ -195,40 +199,42 @@ std::string create_data_user_de_path(const char* volume_uuid, userid_t userid) {
 }
 
 /**
- * Create the path name where supplemental data for all apps will be stored.
- * E.g. /data/misc_ce/0/supplemental
+ * Create the path name where sdk_sandbox data for all apps will be stored.
+ * E.g. /data/misc_ce/0/sdksandbox
  */
-std::string create_data_misc_supplemental_path(const char* uuid, bool isCeData, userid_t user) {
+std::string create_data_misc_sdk_sandbox_path(const char* uuid, bool isCeData, userid_t user) {
     std::string data(create_data_path(uuid));
     if (isCeData) {
-        return StringPrintf("%s/misc_ce/%d/supplemental", data.c_str(), user);
+        return StringPrintf("%s/misc_ce/%d/sdksandbox", data.c_str(), user);
     } else {
-        return StringPrintf("%s/misc_de/%d/supplemental", data.c_str(), user);
+        return StringPrintf("%s/misc_de/%d/sdksandbox", data.c_str(), user);
     }
 }
 
 /**
  * Create the path name where code data for all codes in a particular app will be stored.
- * E.g. /data/misc_ce/0/supplemental/<app-name>
+ * E.g. /data/misc_ce/0/sdksandbox/<package-name>
  */
-std::string create_data_misc_supplemental_package_path(const char* volume_uuid, bool isCeData,
-                                                       userid_t user, const char* package_name) {
+std::string create_data_misc_sdk_sandbox_package_path(const char* volume_uuid, bool isCeData,
+                                                      userid_t user, const char* package_name) {
     check_package_name(package_name);
     return StringPrintf("%s/%s",
-                        create_data_misc_supplemental_path(volume_uuid, isCeData, user).c_str(),
+                        create_data_misc_sdk_sandbox_path(volume_uuid, isCeData, user).c_str(),
                         package_name);
 }
 
 /**
- * Create the path name where shared code data for a particular app will be stored.
- * E.g. /data/misc_ce/0/supplemental/<app-name>/shared
+ * Create the path name where sdk data for a particular sdk will be stored.
+ * E.g. /data/misc_ce/0/sdksandbox/<package-name>/com.foo@randomstrings
  */
-std::string create_data_misc_supplemental_shared_path(const char* volume_uuid, bool isCeData,
-                                                      userid_t user, const char* package_name) {
-    return StringPrintf("%s/shared",
-                        create_data_misc_supplemental_package_path(volume_uuid, isCeData, user,
-                                                                   package_name)
-                                .c_str());
+std::string create_data_misc_sdk_sandbox_sdk_path(const char* volume_uuid, bool isCeData,
+                                                  userid_t user, const char* package_name,
+                                                  const char* sub_dir_name) {
+    return StringPrintf("%s/%s",
+                        create_data_misc_sdk_sandbox_package_path(volume_uuid, isCeData, user,
+                                                                  package_name)
+                                .c_str(),
+                        sub_dir_name);
 }
 
 std::string create_data_misc_ce_rollback_base_path(const char* volume_uuid, userid_t user) {
@@ -417,6 +423,45 @@ std::vector<userid_t> get_known_users(const char* volume_uuid) {
     closedir(dir);
 
     return users;
+}
+
+long get_project_id(uid_t uid, long start_project_id_range) {
+    return uid - AID_APP_START + start_project_id_range;
+}
+
+int set_quota_project_id(const std::string& path, long project_id, bool set_inherit) {
+    struct fsxattr fsx;
+    android::base::unique_fd fd(TEMP_FAILURE_RETRY(open(path.c_str(), O_RDONLY | O_CLOEXEC)));
+    if (fd == -1) {
+        PLOG(ERROR) << "Failed to open " << path << " to set project id.";
+        return -1;
+    }
+
+    if (ioctl(fd, FS_IOC_FSGETXATTR, &fsx) == -1) {
+        PLOG(ERROR) << "Failed to get extended attributes for " << path << " to get project id.";
+        return -1;
+    }
+
+    fsx.fsx_projid = project_id;
+    if (ioctl(fd, FS_IOC_FSSETXATTR, &fsx) == -1) {
+        PLOG(ERROR) << "Failed to set project id on " << path;
+        return -1;
+    }
+    if (set_inherit) {
+        unsigned int flags;
+        if (ioctl(fd, FS_IOC_GETFLAGS, &flags) == -1) {
+            PLOG(ERROR) << "Failed to get flags for " << path << " to set project id inheritance.";
+            return -1;
+        }
+
+        flags |= FS_PROJINHERIT_FL;
+
+        if (ioctl(fd, FS_IOC_SETFLAGS, &flags) == -1) {
+            PLOG(ERROR) << "Failed to set flags for " << path << " to set project id inheritance.";
+            return -1;
+        }
+    }
+    return 0;
 }
 
 int calculate_tree_size(const std::string& path, int64_t* size,
@@ -662,16 +707,16 @@ static int rename_delete_dir_contents(const std::string& pathname,
     auto temp_dir_path =
             base::StringPrintf("%s/%s", Dirname(pathname).c_str(), temp_dir_name.c_str());
 
-    if (::rename(pathname.c_str(), temp_dir_path.c_str())) {
+    auto dir_to_delete = temp_dir_path.c_str();
+    if (::rename(pathname.c_str(), dir_to_delete)) {
         if (ignore_if_missing && (errno == ENOENT)) {
             return 0;
         }
-        ALOGE("Couldn't rename %s -> %s: %s \n", pathname.c_str(), temp_dir_path.c_str(),
-              strerror(errno));
-        return -errno;
+        ALOGE("Couldn't rename %s -> %s: %s \n", pathname.c_str(), dir_to_delete, strerror(errno));
+        dir_to_delete = pathname.c_str();
     }
 
-    return delete_dir_contents(temp_dir_path.c_str(), 1, exclusion_predicate, ignore_if_missing);
+    return delete_dir_contents(dir_to_delete, 1, exclusion_predicate, ignore_if_missing);
 }
 
 bool is_renamed_deleted_dir(const std::string& path) {
@@ -691,6 +736,34 @@ static auto open_dir(const char* dir) {
         void operator()(DIR* d) const noexcept { ::closedir(d); }
     };
     return std::unique_ptr<DIR, DirCloser>(::opendir(dir));
+}
+
+// Collects filename of subdirectories of given directory and passes it to the function
+int foreach_subdir(const std::string& pathname, const std::function<void(const std::string&)> fn) {
+    auto dir = open_dir(pathname.c_str());
+    if (!dir) return -1;
+
+    int dfd = dirfd(dir.get());
+    if (dfd < 0) {
+        ALOGE("Couldn't dirfd %s: %s\n", pathname.c_str(), strerror(errno));
+        return -1;
+    }
+
+    struct dirent* de;
+    while ((de = readdir(dir.get()))) {
+        if (de->d_type != DT_DIR) {
+            continue;
+        }
+
+        std::string name{de->d_name};
+        // always skip "." and ".."
+        if (name == "." || name == "..") {
+            continue;
+        }
+        fn(name);
+    }
+
+    return 0;
 }
 
 void cleanup_invalid_package_dirs_under_path(const std::string& pathname) {
@@ -1096,30 +1169,45 @@ int ensure_config_user_dirs(userid_t userid) {
     return fs_prepare_dir(path.c_str(), 0750, uid, gid);
 }
 
-int wait_child(pid_t pid)
-{
+static int wait_child(pid_t pid) {
     int status;
-    pid_t got_pid;
+    pid_t got_pid = TEMP_FAILURE_RETRY(waitpid(pid, &status, /*options=*/0));
 
-    while (1) {
-        got_pid = waitpid(pid, &status, 0);
-        if (got_pid == -1 && errno == EINTR) {
-            printf("waitpid interrupted, retrying\n");
-        } else {
-            break;
-        }
-    }
     if (got_pid != pid) {
-        ALOGW("waitpid failed: wanted %d, got %d: %s\n",
-            (int) pid, (int) got_pid, strerror(errno));
-        return 1;
+        PLOG(ERROR) << "waitpid failed: wanted " << pid << ", got " << got_pid;
+        return W_EXITCODE(/*exit_code=*/255, /*signal_number=*/0);
     }
 
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-        return 0;
-    } else {
-        return status;      /* always nonzero */
+    return status;
+}
+
+int wait_child_with_timeout(pid_t pid, int timeout_ms) {
+    int pidfd = pidfd_open(pid, /*flags=*/0);
+    if (pidfd < 0) {
+        PLOG(ERROR) << "pidfd_open failed for pid " << pid;
+        kill(pid, SIGKILL);
+        return wait_child(pid);
     }
+
+    struct pollfd pfd;
+    pfd.fd = pidfd;
+    pfd.events = POLLIN;
+    int poll_ret = TEMP_FAILURE_RETRY(poll(&pfd, /*nfds=*/1, timeout_ms));
+
+    close(pidfd);
+
+    if (poll_ret < 0) {
+        PLOG(ERROR) << "poll failed for pid " << pid;
+        kill(pid, SIGKILL);
+        return wait_child(pid);
+    }
+    if (poll_ret == 0) {
+        LOG(WARNING) << "Child process " << pid << " timed out after " << timeout_ms
+                     << "ms. Killing it";
+        kill(pid, SIGKILL);
+        return wait_child(pid);
+    }
+    return wait_child(pid);
 }
 
 /**
@@ -1330,6 +1418,28 @@ void drop_capabilities(uid_t uid) {
         PLOG(ERROR) << "capset failed";
         exit(DexoptReturnCodes::kCapSet);
     }
+}
+
+bool remove_file_at_fd(int fd, /*out*/ std::string* path) {
+    char path_buffer[PATH_MAX + 1];
+    std::string proc_path = android::base::StringPrintf("/proc/self/fd/%d", fd);
+    ssize_t len = readlink(proc_path.c_str(), path_buffer, PATH_MAX);
+    if (len < 0) {
+        PLOG(WARNING) << "Could not remove file at fd " << fd << ": Failed to get file path";
+        return false;
+    }
+    path_buffer[len] = '\0';
+    if (path != nullptr) {
+        *path = path_buffer;
+    }
+    if (unlink(path_buffer) != 0) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        PLOG(WARNING) << "Could not remove file at path " << path_buffer;
+        return false;
+    }
+    return true;
 }
 
 }  // namespace installd

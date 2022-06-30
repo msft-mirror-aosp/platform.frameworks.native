@@ -74,9 +74,18 @@ using android::base::ReadFdToString;
 using android::base::ReadFully;
 using android::base::StringPrintf;
 using android::base::WriteFully;
+using android::base::borrowed_fd;
 using android::base::unique_fd;
 
 namespace {
+
+// Timeout for short operations, such as merging profiles.
+constexpr int kShortTimeoutMs = 60000; // 1 minute.
+
+// Timeout for long operations, such as compilation. This should be smaller than the Package Manager
+// watchdog (PackageManagerService.WATCHDOG_TIMEOUT, 10 minutes), so that the operation will be
+// aborted before that watchdog would take down the system server.
+constexpr int kLongTimeoutMs = 570000; // 9.5 minutes.
 
 class DexOptStatus {
  public:
@@ -486,6 +495,25 @@ static void open_profile_files(uid_t uid, const std::string& package_name,
     }
 }
 
+// Cleans up an output file specified by a file descriptor. This function should be called whenever
+// a subprocess that modifies a system-managed file crashes.
+// If the subprocess crashes while it's writing to the file, the file is likely corrupted, so we
+// should remove it.
+// If the subprocess times out and is killed while it's acquiring a flock on the file, there is
+// probably a deadlock, so it's also good to remove the file so that later operations won't
+// encounter the same problem. It's safe to do so because the process that is holding the flock will
+// still have access to the file until the file descriptor is closed.
+// Note that we can't do `clear_reference_profile` here even if the fd points to a reference profile
+// because that also requires a flock and is therefore likely to be stuck in the second case.
+static bool cleanup_output_fd(int fd) {
+    std::string path;
+    bool ret = remove_file_at_fd(fd, &path);
+    if (ret) {
+        LOG(INFO) << "Removed file at path " << path;
+    }
+    return ret;
+}
+
 static constexpr int PROFMAN_BIN_RETURN_CODE_SUCCESS = 0;
 static constexpr int PROFMAN_BIN_RETURN_CODE_COMPILE = 1;
 static constexpr int PROFMAN_BIN_RETURN_CODE_SKIP_COMPILATION_NOT_ENOUGH_DELTA = 2;
@@ -497,13 +525,14 @@ static constexpr int PROFMAN_BIN_RETURN_CODE_SKIP_COMPILATION_EMPTY_PROFILES = 7
 
 class RunProfman : public ExecVHelper {
   public:
-   void SetupArgs(const std::vector<unique_fd>& profile_fds,
-                  const unique_fd& reference_profile_fd,
-                  const std::vector<unique_fd>& apk_fds,
-                  const std::vector<std::string>& dex_locations,
-                  bool copy_and_update,
-                  bool for_snapshot,
-                  bool for_boot_image) {
+    template <typename T, typename U>
+    void SetupArgs(const std::vector<T>& profile_fds,
+                   const unique_fd& reference_profile_fd,
+                   const std::vector<U>& apk_fds,
+                   const std::vector<std::string>& dex_locations,
+                   bool copy_and_update,
+                   bool for_snapshot,
+                   bool for_boot_image) {
 
         // TODO(calin): Assume for now we run in the bg compile job (which is in
         // most of the invocation). With the current data flow, is not very easy or
@@ -519,11 +548,11 @@ class RunProfman : public ExecVHelper {
             AddArg("--reference-profile-file-fd=" + std::to_string(reference_profile_fd.get()));
         }
 
-        for (const unique_fd& fd : profile_fds) {
+        for (const T& fd : profile_fds) {
             AddArg("--profile-file-fd=" + std::to_string(fd.get()));
         }
 
-        for (const unique_fd& fd : apk_fds) {
+        for (const U& fd : apk_fds) {
             AddArg("--apk-fd=" + std::to_string(fd.get()));
         }
 
@@ -582,31 +611,28 @@ class RunProfman : public ExecVHelper {
                   for_boot_image);
     }
 
-    void SetupCopyAndUpdate(unique_fd&& profile_fd,
-                            unique_fd&& reference_profile_fd,
-                            unique_fd&& apk_fd,
+    void SetupCopyAndUpdate(const unique_fd& profile_fd,
+                            const unique_fd& reference_profile_fd,
+                            const unique_fd& apk_fd,
                             const std::string& dex_location) {
-        // The fds need to stay open longer than the scope of the function, so put them into a local
-        // variable vector.
-        profiles_fd_.push_back(std::move(profile_fd));
-        apk_fds_.push_back(std::move(apk_fd));
-        reference_profile_fd_ = std::move(reference_profile_fd);
-        std::vector<std::string> dex_locations = {dex_location};
-        SetupArgs(profiles_fd_,
-                  reference_profile_fd_,
-                  apk_fds_,
-                  dex_locations,
+        SetupArgs(std::vector<borrowed_fd>{profile_fd},
+                  reference_profile_fd,
+                  std::vector<borrowed_fd>{apk_fd},
+                  {dex_location},
                   /*copy_and_update=*/true,
                   /*for_snapshot*/false,
                   /*for_boot_image*/false);
     }
 
-    void SetupDump(const std::vector<unique_fd>& profiles_fd,
-                   const unique_fd& reference_profile_fd,
+    void SetupDump(const std::vector<unique_fd>& profiles_fd, const unique_fd& reference_profile_fd,
                    const std::vector<std::string>& dex_locations,
-                   const std::vector<unique_fd>& apk_fds,
+                   const std::vector<unique_fd>& apk_fds, bool dump_classes_and_methods,
                    const unique_fd& output_fd) {
-        AddArg("--dump-only");
+        if (dump_classes_and_methods) {
+            AddArg("--dump-classes-and-methods");
+        } else {
+            AddArg("--dump-only");
+        }
         AddArg(StringPrintf("--dump-output-to-fd=%d", output_fd.get()));
         SetupArgs(profiles_fd,
                   reference_profile_fd,
@@ -621,11 +647,6 @@ class RunProfman : public ExecVHelper {
     void Exec() {
         ExecVHelper::Exec(DexoptReturnCodes::kProfmanExec);
     }
-
-  private:
-    unique_fd reference_profile_fd_;
-    std::vector<unique_fd> profiles_fd_;
-    std::vector<unique_fd> apk_fds_;
 };
 
 static int analyze_profiles(uid_t uid, const std::string& package_name,
@@ -657,13 +678,14 @@ static int analyze_profiles(uid_t uid, const std::string& package_name,
         profman_merge.Exec();
     }
     /* parent */
-    int return_code = wait_child(pid);
+    int return_code = wait_child_with_timeout(pid, kShortTimeoutMs);
     bool need_to_compile = false;
     bool empty_profiles = false;
     bool should_clear_current_profiles = false;
     bool should_clear_reference_profile = false;
     if (!WIFEXITED(return_code)) {
         LOG(WARNING) << "profman failed for location " << location << ": " << return_code;
+        cleanup_output_fd(reference_profile_fd.get());
     } else {
         return_code = WEXITSTATUS(return_code);
         switch (return_code) {
@@ -753,7 +775,7 @@ int analyze_primary_profiles(uid_t uid, const std::string& package_name,
 }
 
 bool dump_profiles(int32_t uid, const std::string& pkgname, const std::string& profile_name,
-        const std::string& code_path) {
+                   const std::string& code_path, bool dump_classes_and_methods) {
     std::vector<unique_fd> profile_fds;
     unique_fd reference_profile_fd;
     std::string out_file_name = StringPrintf("/data/misc/profman/%s-%s.txt",
@@ -789,7 +811,8 @@ bool dump_profiles(int32_t uid, const std::string& pkgname, const std::string& p
 
 
     RunProfman profman_dump;
-    profman_dump.SetupDump(profile_fds, reference_profile_fd, dex_locations, apk_fds, output_fd);
+    profman_dump.SetupDump(profile_fds, reference_profile_fd, dex_locations, apk_fds,
+                           dump_classes_and_methods, output_fd);
     pid_t pid = fork();
     if (pid == 0) {
         /* child -- drop privileges before continuing */
@@ -797,10 +820,10 @@ bool dump_profiles(int32_t uid, const std::string& pkgname, const std::string& p
         profman_dump.Exec();
     }
     /* parent */
-    int return_code = wait_child(pid);
+    int return_code = wait_child_with_timeout(pid, kShortTimeoutMs);
     if (!WIFEXITED(return_code)) {
-        LOG(WARNING) << "profman failed for package " << pkgname << ": "
-                << return_code;
+        LOG(WARNING) << "profman failed for package " << pkgname << ": " << return_code;
+        cleanup_output_fd(output_fd.get());
         return false;
     }
     return true;
@@ -871,7 +894,11 @@ bool copy_system_profile(const std::string& system_profile,
         _exit(0);
     }
     /* parent */
-    int return_code = wait_child(pid);
+    int return_code = wait_child_with_timeout(pid, kShortTimeoutMs);
+    if (!WIFEXITED(return_code)) {
+        cleanup_output_fd(out_fd.get());
+        return false;
+    }
     return return_code == 0;
 }
 
@@ -1521,7 +1548,7 @@ static bool get_class_loader_context_dex_paths(const char* class_loader_context,
     }
     pipe_read.reset();
 
-    int return_code = wait_child(pid);
+    int return_code = wait_child_with_timeout(pid, kShortTimeoutMs);
     if (!WIFEXITED(return_code)) {
         PLOG(ERROR) << "Error waiting for child dexoptanalyzer process";
         return false;
@@ -1695,7 +1722,7 @@ static SecondaryDexOptProcessResult process_secondary_dex_dexopt(const std::stri
     }
 
     /* parent */
-    int result = wait_child(pid);
+    int result = wait_child_with_timeout(pid, kShortTimeoutMs);
     cancelled = dexopt_status_->check_if_killed_and_remove_dexopt_pid(pid);
     if (!WIFEXITED(result)) {
         if ((WTERMSIG(result) == SIGKILL) && cancelled) {
@@ -1954,7 +1981,7 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
 
         runner.Exec(DexoptReturnCodes::kDex2oatExec);
     } else {
-        int res = wait_child(pid);
+        int res = wait_child_with_timeout(pid, kLongTimeoutMs);
         bool cancelled = dexopt_status_->check_if_killed_and_remove_dexopt_pid(pid);
         if (res == 0) {
             LOG(VERBOSE) << "DexInv: --- END '" << dex_path << "' (success) ---";
@@ -2143,7 +2170,7 @@ bool reconcile_secondary_dex_file(const std::string& dex_path,
         _exit(result ? kReconcileSecondaryDexCleanedUp : kReconcileSecondaryDexAccessIOError);
     }
 
-    int return_code = wait_child(pid);
+    int return_code = wait_child_with_timeout(pid, kShortTimeoutMs);
     if (!WIFEXITED(return_code)) {
         LOG(WARNING) << "reconcile dex failed for location " << dex_path << ": " << return_code;
     } else {
@@ -2261,7 +2288,7 @@ bool hash_secondary_dex_file(const std::string& dex_path, const std::string& pkg
     if (!ReadFully(pipe_read, out_secondary_dex_hash->data(), out_secondary_dex_hash->size())) {
         out_secondary_dex_hash->clear();
     }
-    return wait_child(pid) == 0;
+    return wait_child_with_timeout(pid, kShortTimeoutMs) == 0;
 }
 
 // Helper for move_ab, so that we can have common failure-case cleanup.
@@ -2591,9 +2618,10 @@ static bool create_app_profile_snapshot(int32_t app_id,
     }
 
     /* parent */
-    int return_code = wait_child(pid);
+    int return_code = wait_child_with_timeout(pid, kShortTimeoutMs);
     if (!WIFEXITED(return_code)) {
         LOG(WARNING) << "profman failed for " << package_name << ":" << profile_name;
+        cleanup_output_fd(snapshot_fd.get());
         return false;
     }
 
@@ -2700,10 +2728,11 @@ static bool create_boot_image_profile_snapshot(const std::string& package_name,
         }
 
         /* parent */
-        int return_code = wait_child(pid);
+        int return_code = wait_child_with_timeout(pid, kShortTimeoutMs);
 
         if (!WIFEXITED(return_code)) {
             PLOG(WARNING) << "profman failed for " << package_name << ":" << profile_name;
+            cleanup_output_fd(snapshot_fd.get());
             return false;
         }
 
@@ -2748,13 +2777,23 @@ bool prepare_app_profile(const std::string& package_name,
                          const std::string& profile_name,
                          const std::string& code_path,
                          const std::optional<std::string>& dex_metadata) {
-    // Prepare the current profile.
-    std::string cur_profile  = create_current_profile_path(user_id, package_name, profile_name,
-            /*is_secondary_dex*/ false);
-    uid_t uid = multiuser_get_uid(user_id, app_id);
-    if (fs_prepare_file_strict(cur_profile.c_str(), 0600, uid, uid) != 0) {
-        PLOG(ERROR) << "Failed to prepare " << cur_profile;
-        return false;
+    if (user_id != USER_NULL) {
+        if (user_id < 0) {
+            LOG(ERROR) << "Unexpected user ID " << user_id;
+            return false;
+        }
+
+        // Prepare the current profile.
+        std::string cur_profile = create_current_profile_path(user_id, package_name, profile_name,
+                                                              /*is_secondary_dex*/ false);
+        uid_t uid = multiuser_get_uid(user_id, app_id);
+        if (fs_prepare_file_strict(cur_profile.c_str(), 0600, uid, uid) != 0) {
+            PLOG(ERROR) << "Failed to prepare " << cur_profile;
+            return false;
+        }
+    } else {
+        // Prepare the reference profile as the system user.
+        user_id = USER_SYSTEM;
     }
 
     // Check if we need to install the profile from the dex metadata.
@@ -2763,8 +2802,9 @@ bool prepare_app_profile(const std::string& package_name,
     }
 
     // We have a dex metdata. Merge the profile into the reference profile.
-    unique_fd ref_profile_fd = open_reference_profile(uid, package_name, profile_name,
-            /*read_write*/ true, /*is_secondary_dex*/ false);
+    unique_fd ref_profile_fd =
+            open_reference_profile(multiuser_get_uid(user_id, app_id), package_name, profile_name,
+                                   /*read_write*/ true, /*is_secondary_dex*/ false);
     unique_fd dex_metadata_fd(TEMP_FAILURE_RETRY(
             open(dex_metadata->c_str(), O_RDONLY | O_NOFOLLOW)));
     unique_fd apk_fd(TEMP_FAILURE_RETRY(open(code_path.c_str(), O_RDONLY | O_NOFOLLOW)));
@@ -2774,9 +2814,9 @@ bool prepare_app_profile(const std::string& package_name,
     }
 
     RunProfman args;
-    args.SetupCopyAndUpdate(std::move(dex_metadata_fd),
-                            std::move(ref_profile_fd),
-                            std::move(apk_fd),
+    args.SetupCopyAndUpdate(dex_metadata_fd,
+                            ref_profile_fd,
+                            apk_fd,
                             code_path);
     pid_t pid = fork();
     if (pid == 0) {
@@ -2789,12 +2829,30 @@ bool prepare_app_profile(const std::string& package_name,
     }
 
     /* parent */
-    int return_code = wait_child(pid);
+    int return_code = wait_child_with_timeout(pid, kShortTimeoutMs);
     if (!WIFEXITED(return_code)) {
         PLOG(WARNING) << "profman failed for " << package_name << ":" << profile_name;
+        cleanup_output_fd(ref_profile_fd.get());
         return false;
     }
     return true;
+}
+
+int get_odex_visibility(const char* apk_path, const char* instruction_set, const char* oat_dir) {
+    char oat_path[PKG_PATH_MAX];
+    if (!create_oat_out_path(apk_path, instruction_set, oat_dir, /*is_secondary_dex=*/false,
+                             oat_path)) {
+        return -1;
+    }
+    struct stat st;
+    if (stat(oat_path, &st) == -1) {
+        if (errno == ENOENT) {
+            return ODEX_NOT_FOUND;
+        }
+        PLOG(ERROR) << "Could not stat " << oat_path;
+        return -1;
+    }
+    return (st.st_mode & S_IROTH) ? ODEX_IS_PUBLIC : ODEX_IS_PRIVATE;
 }
 
 }  // namespace installd

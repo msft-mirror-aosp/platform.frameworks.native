@@ -177,6 +177,11 @@ void EventThreadConnection::onFirstRef() {
 }
 
 binder::Status EventThreadConnection::stealReceiveChannel(gui::BitTube* outChannel) {
+    std::scoped_lock lock(mLock);
+    if (mChannel.initCheck() != NO_ERROR) {
+        return binder::Status::fromStatusT(NAME_NOT_FOUND);
+    }
+
     outChannel->setReceiveFd(mChannel.moveReceiveFd());
     outChannel->setSendFd(base::unique_fd(dup(mChannel.getSendFd())));
     return binder::Status::ok();
@@ -346,6 +351,12 @@ void EventThread::requestNextVsync(const sp<EventThreadConnection>& connection) 
 
 VsyncEventData EventThread::getLatestVsyncEventData(
         const sp<EventThreadConnection>& connection) const {
+    // Resync so that the vsync is accurate with hardware. getLatestVsyncEventData is an alternate
+    // way to get vsync data (instead of posting callbacks to Choreographer).
+    if (connection->resyncCallback) {
+        connection->resyncCallback();
+    }
+
     VsyncEventData vsyncEventData;
     nsecs_t frameInterval = mGetVsyncPeriodFunction(connection->mOwnerUid);
     vsyncEventData.frameInterval = frameInterval;

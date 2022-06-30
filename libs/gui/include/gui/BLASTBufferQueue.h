@@ -95,7 +95,9 @@ public:
                                      const std::vector<SurfaceControlStats>& stats);
     void releaseBufferCallback(const ReleaseCallbackId& id, const sp<Fence>& releaseFence,
                                std::optional<uint32_t> currentMaxAcquiredBufferCount);
-    void setSyncTransaction(SurfaceComposerClient::Transaction* t, bool acquireSingleBuffer = true);
+    void syncNextTransaction(std::function<void(SurfaceComposerClient::Transaction*)> callback,
+                             bool acquireSingleBuffer = true);
+    void stopContinuousSyncTransaction();
     void mergeWithNextTransaction(SurfaceComposerClient::Transaction* t, uint64_t frameNumber);
     void applyPendingTransactions(uint64_t frameNumber);
     SurfaceComposerClient::Transaction* gatherPendingTransactions(uint64_t frameNumber);
@@ -110,6 +112,14 @@ public:
     uint32_t getLastTransformHint() const;
     uint64_t getLastAcquiredFrameNum();
     void abandon();
+
+    /**
+     * Set a callback to be invoked when we are hung. The boolean parameter
+     * indicates whether the hang is due to an unfired fence.
+     * TODO: The boolean is always true atm, unfired fence is
+     * the only case we detect.
+     */
+    void setTransactionHangCallback(std::function<void(bool)> callback);
 
     virtual ~BLASTBufferQueue();
 
@@ -213,6 +223,8 @@ private:
     sp<IGraphicBufferProducer> mProducer;
     sp<BLASTBufferItemConsumer> mBufferItemConsumer;
 
+    std::function<void(SurfaceComposerClient::Transaction*)> mTransactionReadyCallback
+            GUARDED_BY(mMutex);
     SurfaceComposerClient::Transaction* mSyncTransaction GUARDED_BY(mMutex);
     std::vector<std::tuple<uint64_t /* framenumber */, SurfaceComposerClient::Transaction>>
             mPendingTransactions GUARDED_BY(mMutex);
@@ -250,6 +262,23 @@ private:
     // surfacecontol. This is useful if the caller wants to synchronize the buffer scale with
     // additional scales in the hierarchy.
     bool mUpdateDestinationFrame GUARDED_BY(mMutex) = true;
+
+    // We send all transactions on our apply token over one-way binder calls to avoid blocking
+    // client threads. All of our transactions remain in order, since they are one-way binder calls
+    // from a single process, to a single interface. However once we give up a Transaction for sync
+    // we can start to have ordering issues. When we return from sync to normal frame production,
+    // we wait on the commit callback of sync frames ensuring ordering, however we don't want to
+    // wait on the commit callback for every normal frame (since even emitting them has a
+    // performance cost) this means we need a method to ensure frames are in order when switching
+    // from one-way application on our apply token, to application on some other apply token. We
+    // make use of setBufferHasBarrier to declare this ordering. This boolean simply tracks when we
+    // need to set this flag, notably only in the case where we are transitioning from a previous
+    // transaction applied by us (one way, may not yet have reached server) and an upcoming
+    // transaction that will be applied by some sync consumer.
+    bool mAppliedLastTransaction = false;
+    uint64_t mLastAppliedFrameNumber = 0;
+
+    std::function<void(bool)> mTransactionHangCallback;
 };
 
 } // namespace android

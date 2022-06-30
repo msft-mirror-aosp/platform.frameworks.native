@@ -27,6 +27,7 @@ cc_defaults {
         "-DEGL_EGLEXT_PROTOTYPES",
     ],
     shared_libs: [
+        "android.hardware.graphics.composer3-V1-ndk",
         "libbase",
         "libcutils",
         "libEGL",
@@ -121,6 +122,9 @@ cc_library_static {
         ":librenderengine_gl_sources",
         ":librenderengine_threaded_sources",
         ":librenderengine_skia_sources",
+    ],
+    header_libs: [
+        "libtonemap_headers",
     ],
     include_dirs: [
         "external/skia/src/gpu",

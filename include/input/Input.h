@@ -814,6 +814,8 @@ public:
     static vec2 calculateTransformedXY(uint32_t source, const ui::Transform&, const vec2& xy);
     static float calculateTransformedAxisValue(int32_t axis, uint32_t source, const ui::Transform&,
                                                const PointerCoords&);
+    static PointerCoords calculateTransformedCoords(uint32_t source, const ui::Transform&,
+                                                    const PointerCoords&);
 
 protected:
     int32_t mAction;
@@ -834,6 +836,8 @@ protected:
     std::vector<nsecs_t> mSampleEventTimes;
     std::vector<PointerCoords> mSamplePointerCoords;
 };
+
+std::ostream& operator<<(std::ostream& out, const MotionEvent& event);
 
 /*
  * Focus events.

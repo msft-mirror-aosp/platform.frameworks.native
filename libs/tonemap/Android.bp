@@ -25,19 +25,27 @@ cc_library_static {
     name: "libtonemap",
     vendor_available: true,
 
-    export_include_dirs: ["include"],
     local_include_dirs: ["include"],
 
     shared_libs: [
         "android.hardware.graphics.common-V3-ndk",
+        "android.hardware.graphics.composer3-V1-ndk",
         "liblog",
+        "libnativewindow",
     ],
 
     static_libs: [
+        "libarect",
         "libmath",
     ],
 
     srcs: [
         "tonemap.cpp",
     ],
+}
+
+cc_library_headers {
+    name: "libtonemap_headers",
+    vendor_available: true,
+    export_include_dirs: ["include"],
 }
