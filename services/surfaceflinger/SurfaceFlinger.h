@@ -1335,7 +1335,8 @@ private:
         sp<Fence> fence = Fence::NO_FENCE;
         FenceTimePtr fenceTime = FenceTime::NO_FENCE;
     };
-    std::array<FenceWithFenceTime, 2> mPreviousPresentFences;
+    // size should be longest sf-duration / shortest vsync period and round up
+    std::array<FenceWithFenceTime, 5> mPreviousPresentFences; // currently consider 166hz.
 
     TimePoint mScheduledPresentTime GUARDED_BY(kMainThreadContext);
     TimePoint mExpectedPresentTime GUARDED_BY(kMainThreadContext);

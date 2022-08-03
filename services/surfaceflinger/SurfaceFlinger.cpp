@@ -2170,8 +2170,17 @@ bool SurfaceFlinger::wouldPresentEarly(TimePoint frameTime, Period vsyncPeriod) 
 auto SurfaceFlinger::getPreviousPresentFence(TimePoint frameTime, Period vsyncPeriod) const
         -> const FenceTimePtr& {
     const bool isTwoVsyncsAhead = mExpectedPresentTime - frameTime > vsyncPeriod;
-    const size_t i = static_cast<size_t>(isTwoVsyncsAhead);
-    return mPreviousPresentFences[i].fenceTime;
+
+    size_t shift = 0;
+    if (isTwoVsyncsAhead) {
+        shift = static_cast<size_t>(
+            Duration(mExpectedPresentTime - frameTime).ns() / vsyncPeriod.ns());
+        if (shift >= mPreviousPresentFences.size()) {
+            shift = mPreviousPresentFences.size() - 1;
+        }
+    }
+    ATRACE_FORMAT("previousFrameFence shift=%zu", shift);
+    return mPreviousPresentFences[shift].fenceTime;
 }
 
 bool SurfaceFlinger::isFencePending(const FenceTimePtr& fence, int graceTimeMs) {
@@ -2849,7 +2858,9 @@ void SurfaceFlinger::postComposition(nsecs_t callTime) {
         glCompositionDoneFenceTime = FenceTime::NO_FENCE;
     }
 
-    mPreviousPresentFences[1] = mPreviousPresentFences[0];
+    for (size_t i = mPreviousPresentFences.size()-1; i >= 1; i--) {
+        mPreviousPresentFences[i] = mPreviousPresentFences[i-1];
+    }
 
     auto presentFence = defaultDisplay
             ? getHwComposer().getPresentFence(defaultDisplay->getPhysicalId())
