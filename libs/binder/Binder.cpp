@@ -38,6 +38,7 @@
 #include <linux/sched.h>
 #endif
 
+#include "BuildFlags.h"
 #include "RpcState.h"
 
 namespace android {
@@ -162,6 +163,10 @@ status_t IBinder::setRpcClientDebug(android::base::unique_fd socketFd,
                                     const sp<IBinder>& keepAliveBinder) {
     if (!kEnableRpcDevServers) {
         ALOGW("setRpcClientDebug disallowed because RPC is not enabled");
+        return INVALID_OPERATION;
+    }
+    if (!kEnableKernelIpc) {
+        ALOGW("setRpcClientDebug disallowed because kernel binder is not enabled");
         return INVALID_OPERATION;
     }
 
@@ -515,6 +520,10 @@ status_t BBinder::setRpcClientDebug(const Parcel& data) {
         ALOGW("%s: disallowed because RPC is not enabled", __PRETTY_FUNCTION__);
         return INVALID_OPERATION;
     }
+    if (!kEnableKernelIpc) {
+        ALOGW("setRpcClientDebug disallowed because kernel binder is not enabled");
+        return INVALID_OPERATION;
+    }
     uid_t uid = IPCThreadState::self()->getCallingUid();
     if (uid != AID_ROOT) {
         ALOGE("%s: not allowed because client %" PRIu32 " is not root", __PRETTY_FUNCTION__, uid);
@@ -538,6 +547,10 @@ status_t BBinder::setRpcClientDebug(android::base::unique_fd socketFd,
                                     const sp<IBinder>& keepAliveBinder) {
     if (!kEnableRpcDevServers) {
         ALOGW("%s: disallowed because RPC is not enabled", __PRETTY_FUNCTION__);
+        return INVALID_OPERATION;
+    }
+    if (!kEnableKernelIpc) {
+        ALOGW("setRpcClientDebug disallowed because kernel binder is not enabled");
         return INVALID_OPERATION;
     }
 
@@ -597,8 +610,24 @@ void BBinder::removeRpcServerLink(const sp<RpcServerLink>& link) {
 
 BBinder::~BBinder()
 {
-    if (!wasParceled() && getExtension()) {
-        ALOGW("Binder %p destroyed with extension attached before being parceled.", this);
+    if (!wasParceled()) {
+        if (getExtension()) {
+             ALOGW("Binder %p destroyed with extension attached before being parceled.", this);
+        }
+        if (isRequestingSid()) {
+             ALOGW("Binder %p destroyed when requesting SID before being parceled.", this);
+        }
+        if (isInheritRt()) {
+             ALOGW("Binder %p destroyed after setInheritRt before being parceled.", this);
+        }
+#ifdef __linux__
+        if (getMinSchedulerPolicy() != SCHED_NORMAL) {
+             ALOGW("Binder %p destroyed after setMinSchedulerPolicy before being parceled.", this);
+        }
+        if (getMinSchedulerPriority() != 0) {
+             ALOGW("Binder %p destroyed after setMinSchedulerPolicy before being parceled.", this);
+        }
+#endif // __linux__
     }
 
     Extras* e = mExtras.load(std::memory_order_relaxed);
@@ -635,13 +664,14 @@ status_t BBinder::onTransact(
             for (int i = 0; i < argc && data.dataAvail() > 0; i++) {
                args.add(data.readString16());
             }
-            sp<IShellCallback> shellCallback = IShellCallback::asInterface(
-                    data.readStrongBinder());
+            sp<IBinder> shellCallbackBinder = data.readStrongBinder();
             sp<IResultReceiver> resultReceiver = IResultReceiver::asInterface(
                     data.readStrongBinder());
 
             // XXX can't add virtuals until binaries are updated.
-            //return shellCommand(in, out, err, args, resultReceiver);
+            // sp<IShellCallback> shellCallback = IShellCallback::asInterface(
+            //        shellCallbackBinder);
+            // return shellCommand(in, out, err, args, resultReceiver);
             (void)in;
             (void)out;
             (void)err;

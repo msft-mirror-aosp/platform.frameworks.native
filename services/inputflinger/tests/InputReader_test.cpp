@@ -192,7 +192,7 @@ private:
         mSpotsByDisplay[displayId] = newSpots;
     }
 
-    void clearSpots() override {}
+    void clearSpots() override { mSpotsByDisplay.clear(); }
 
     std::map<int32_t, std::vector<int32_t>> mSpotsByDisplay;
 };
@@ -6251,6 +6251,36 @@ TEST_F(SingleTouchInputMapperTest, Process_WhenAbsPressureIsPresent_HoversIfItsV
             toDisplayX(150), toDisplayY(250), 0, 0, 0, 0, 0, 0, 0, 0));
 }
 
+TEST_F(SingleTouchInputMapperTest,
+       Process_WhenViewportDisplayIdChanged_TouchIsCanceledAndDeviceIsReset) {
+    addConfigurationProperty("touch.deviceType", "touchScreen");
+    prepareDisplay(DISPLAY_ORIENTATION_0);
+    prepareButtons();
+    prepareAxes(POSITION);
+    SingleTouchInputMapper& mapper = addMapperAndConfigure<SingleTouchInputMapper>();
+    NotifyMotionArgs motionArgs;
+
+    // Down.
+    int32_t x = 100;
+    int32_t y = 200;
+    processDown(mapper, x, y);
+    processSync(mapper);
+
+    // We should receive a down event
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
+    ASSERT_EQ(AMOTION_EVENT_ACTION_DOWN, motionArgs.action);
+
+    // Change display id
+    clearViewports();
+    prepareSecondaryDisplay(ViewportType::INTERNAL);
+
+    // We should receive a cancel event
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
+    ASSERT_EQ(AMOTION_EVENT_ACTION_CANCEL, motionArgs.action);
+    // Then receive reset called
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyDeviceResetWasCalled());
+}
+
 // --- MultiTouchInputMapperTest ---
 
 class MultiTouchInputMapperTest : public TouchInputMapperTest {
@@ -7959,7 +7989,8 @@ TEST_F(MultiTouchInputMapperTest, Process_Pointer_ShowTouches) {
 
     // Default device will reconfigure above, need additional reconfiguration for another device.
     device2->configure(ARBITRARY_TIME, mFakePolicy->getReaderConfiguration(),
-                       InputReaderConfiguration::CHANGE_DISPLAY_INFO);
+                       InputReaderConfiguration::CHANGE_DISPLAY_INFO |
+                               InputReaderConfiguration::CHANGE_SHOW_TOUCHES);
 
     // Two fingers down at default display.
     int32_t x1 = 100, y1 = 125, x2 = 300, y2 = 500;
@@ -7986,6 +8017,13 @@ TEST_F(MultiTouchInputMapperTest, Process_Pointer_ShowTouches) {
     iter = fakePointerController->getSpots().find(SECONDARY_DISPLAY_ID);
     ASSERT_TRUE(iter != fakePointerController->getSpots().end());
     ASSERT_EQ(size_t(2), iter->second.size());
+
+    // Disable the show touches configuration and ensure the spots are cleared.
+    mFakePolicy->setShowTouches(false);
+    device2->configure(ARBITRARY_TIME, mFakePolicy->getReaderConfiguration(),
+                       InputReaderConfiguration::CHANGE_SHOW_TOUCHES);
+
+    ASSERT_TRUE(fakePointerController->getSpots().empty());
 }
 
 TEST_F(MultiTouchInputMapperTest, VideoFrames_ReceivedByListener) {
@@ -8064,6 +8102,10 @@ TEST_F(MultiTouchInputMapperTest, VideoFrames_WhenNotOrientationAware_AreRotated
         // window's coordinate space.
         frames[0].rotate(getInverseRotation(orientation));
         ASSERT_EQ(frames, motionArgs.videoFrames);
+
+        // Release finger.
+        processSync(mapper);
+        ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
     }
 }
 
