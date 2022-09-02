@@ -57,6 +57,7 @@ cc_library {
     srcs: [
         "ibinder.cpp",
         "ibinder_jni.cpp",
+        "libbinder.cpp",
         "parcel.cpp",
         "parcel_jni.cpp",
         "process.cpp",
@@ -113,6 +114,7 @@ cc_library {
         "abseil-*",
         "android-*",
         "bugprone-*",
+        "-bugprone-branch-clone", // b/155034972
         "cert-*",
         "clang-analyzer-*",
         "-clang-analyzer-core.CallAndMessage",

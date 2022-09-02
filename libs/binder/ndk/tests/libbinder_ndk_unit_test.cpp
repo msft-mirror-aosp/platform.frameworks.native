@@ -231,8 +231,7 @@ TEST(NdkBinder, DetectDoubleOwn) {
 }
 
 TEST(NdkBinder, DetectNoSharedRefBaseCreated) {
-    EXPECT_DEATH(std::make_shared<MyBinderNdkUnitTest>(),
-                 "SharedRefBase: no ref created during lifetime");
+    EXPECT_DEATH(MyBinderNdkUnitTest(), "SharedRefBase: no ref created during lifetime");
 }
 
 TEST(NdkBinder, GetServiceThatDoesntExist) {
@@ -660,6 +659,15 @@ TEST(NdkBinder, ConvertToPlatformBinder) {
         ndk::SpAIBinder backBinder = ndk::SpAIBinder(AIBinder_fromPlatformBinder(platformBinder));
         EXPECT_EQ(backBinder.get(), binder.get());
     }
+}
+
+TEST(NdkBinder, ConvertToPlatformParcel) {
+    ndk::ScopedAParcel parcel = ndk::ScopedAParcel(AParcel_create());
+    EXPECT_EQ(OK, AParcel_writeInt32(parcel.get(), 42));
+
+    android::Parcel* pparcel = AParcel_viewPlatformParcel(parcel.get());
+    pparcel->setDataPosition(0);
+    EXPECT_EQ(42, pparcel->readInt32());
 }
 
 class MyResultReceiver : public BnResultReceiver {

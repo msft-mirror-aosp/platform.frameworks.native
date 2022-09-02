@@ -424,6 +424,7 @@ std::vector<userid_t> get_known_users(const char* volume_uuid) {
 
     return users;
 }
+
 long get_project_id(uid_t uid, long start_project_id_range) {
     return uid - AID_APP_START + start_project_id_range;
 }
@@ -462,6 +463,7 @@ int set_quota_project_id(const std::string& path, long project_id, bool set_inhe
     }
     return 0;
 }
+
 int calculate_tree_size(const std::string& path, int64_t* size,
         int32_t include_gid, int32_t exclude_gid, bool exclude_apps) {
     FTS *fts;
@@ -521,7 +523,6 @@ int calculate_tree_size(const std::string& path, int64_t* size,
  */
 bool is_valid_package_name(const std::string& packageName) {
     // This logic is borrowed from PackageParser.java
-    bool hasSep = false;
     bool front = true;
 
     auto it = packageName.begin();
@@ -537,7 +538,6 @@ bool is_valid_package_name(const std::string& packageName) {
             }
         }
         if (c == '.') {
-            hasSep = true;
             front = true;
             continue;
         }
@@ -705,16 +705,16 @@ static int rename_delete_dir_contents(const std::string& pathname,
     auto temp_dir_path =
             base::StringPrintf("%s/%s", Dirname(pathname).c_str(), temp_dir_name.c_str());
 
-    if (::rename(pathname.c_str(), temp_dir_path.c_str())) {
+    auto dir_to_delete = temp_dir_path.c_str();
+    if (::rename(pathname.c_str(), dir_to_delete)) {
         if (ignore_if_missing && (errno == ENOENT)) {
             return 0;
         }
-        ALOGE("Couldn't rename %s -> %s: %s \n", pathname.c_str(), temp_dir_path.c_str(),
-              strerror(errno));
-        return -errno;
+        ALOGE("Couldn't rename %s -> %s: %s \n", pathname.c_str(), dir_to_delete, strerror(errno));
+        dir_to_delete = pathname.c_str();
     }
 
-    return delete_dir_contents(temp_dir_path.c_str(), 1, exclusion_predicate, ignore_if_missing);
+    return delete_dir_contents(dir_to_delete, 1, exclusion_predicate, ignore_if_missing);
 }
 
 bool is_renamed_deleted_dir(const std::string& path) {
@@ -1182,8 +1182,8 @@ static int wait_child(pid_t pid) {
 int wait_child_with_timeout(pid_t pid, int timeout_ms) {
     int pidfd = pidfd_open(pid, /*flags=*/0);
     if (pidfd < 0) {
-        PLOG(ERROR) << "pidfd_open failed for pid " << pid;
-        kill(pid, SIGKILL);
+        PLOG(ERROR) << "pidfd_open failed for pid " << pid
+                    << ", waiting for child process without timeout";
         return wait_child(pid);
     }
 

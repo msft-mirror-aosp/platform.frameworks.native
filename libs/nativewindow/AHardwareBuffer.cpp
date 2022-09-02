@@ -30,7 +30,7 @@
 
 #include <private/android/AHardwareBufferHelpers.h>
 #include <android/hardware/graphics/common/1.1/types.h>
-
+#include <aidl/android/hardware/graphics/common/PixelFormat.h>
 
 static constexpr int kFdBufferSize = 128 * sizeof(int);  // 128 ints
 
@@ -207,7 +207,11 @@ int AHardwareBuffer_lockPlanes(AHardwareBuffer* buffer, uint64_t usage,
       if (result == 0) {
         outPlanes->planeCount = 3;
         outPlanes->planes[0].data = yuvData.y;
-        outPlanes->planes[0].pixelStride = 1;
+        if (format == AHARDWAREBUFFER_FORMAT_YCbCr_P010) {
+            outPlanes->planes[0].pixelStride = 2;
+        } else {
+            outPlanes->planes[0].pixelStride = 1;
+        }
         outPlanes->planes[0].rowStride = yuvData.ystride;
         outPlanes->planes[1].data = yuvData.cb;
         outPlanes->planes[1].pixelStride = yuvData.chroma_step;
@@ -370,7 +374,7 @@ int AHardwareBuffer_isSupported(const AHardwareBuffer_Desc* desc) {
     if (!AHardwareBuffer_isValidDescription(desc, /*log=*/false)) return 0;
 
     bool supported = false;
-    GraphicBuffer* gBuffer = new GraphicBuffer();
+    sp<GraphicBuffer> gBuffer(new GraphicBuffer());
     status_t err = gBuffer->isSupported(desc->width, desc->height, desc->format, desc->layers,
                                         desc->usage, &supported);
 
@@ -509,10 +513,6 @@ bool AHardwareBuffer_isValidDescription(const AHardwareBuffer_Desc* desc, bool l
             ALOGE_IF(log, "AHARDWAREBUFFER_USAGE_SENSOR_DIRECT_DATA requires AHARDWAREBUFFER_FORMAT_BLOB");
             return false;
         }
-        if (desc->usage & AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER) {
-            ALOGE_IF(log, "AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER requires AHARDWAREBUFFER_FORMAT_BLOB");
-            return false;
-        }
     }
 
     if ((desc->usage & (AHARDWAREBUFFER_USAGE_CPU_READ_MASK | AHARDWAREBUFFER_USAGE_CPU_WRITE_MASK)) &&
@@ -590,8 +590,12 @@ bool AHardwareBuffer_isValidPixelFormat(uint32_t format) {
             "HAL and AHardwareBuffer pixel format don't match");
     static_assert(HAL_PIXEL_FORMAT_YCBCR_P010 == AHARDWAREBUFFER_FORMAT_YCbCr_P010,
             "HAL and AHardwareBuffer pixel format don't match");
+    static_assert(static_cast<int>(aidl::android::hardware::graphics::common::PixelFormat::R_8) ==
+                          AHARDWAREBUFFER_FORMAT_R8_UNORM,
+            "HAL and AHardwareBuffer pixel format don't match");
 
     switch (format) {
+        case AHARDWAREBUFFER_FORMAT_R8_UNORM:
         case AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM:
         case AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM:
         case AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM:
@@ -645,6 +649,8 @@ bool AHardwareBuffer_formatIsYuv(uint32_t format) {
 
 uint32_t AHardwareBuffer_bytesPerPixel(uint32_t format) {
   switch (format) {
+      case AHARDWAREBUFFER_FORMAT_R8_UNORM:
+          return 1;
       case AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM:
       case AHARDWAREBUFFER_FORMAT_D16_UNORM:
           return 2;
