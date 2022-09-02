@@ -44,6 +44,7 @@ cc_binary {
     defaults: ["servicemanager_defaults"],
     init_rc: ["servicemanager.rc"],
     srcs: ["main.cpp"],
+    bootstrap: true,
 }
 
 cc_binary {
@@ -85,4 +86,23 @@ cc_test {
         "test_sm.cpp",
     ],
     static_libs: ["libgmock"],
+}
+
+cc_fuzz {
+    name: "servicemanager_fuzzer",
+    defaults: [
+        "servicemanager_defaults",
+        "service_fuzzer_defaults",
+    ],
+    host_supported: true,
+    srcs: ["ServiceManagerFuzzer.cpp"],
+    fuzz_config: {
+        libfuzzer_options: [
+            "max_len=50000",
+        ],
+        cc: [
+            "smoreland@google.com",
+            "waghpawan@google.com",
+        ],
+    },
 }

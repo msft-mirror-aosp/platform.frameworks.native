@@ -84,6 +84,9 @@ enum class InputDeviceSensorType : int32_t {
     GAME_ROTATION_VECTOR = ASENSOR_TYPE_GAME_ROTATION_VECTOR,
     GYROSCOPE_UNCALIBRATED = ASENSOR_TYPE_GYROSCOPE_UNCALIBRATED,
     SIGNIFICANT_MOTION = ASENSOR_TYPE_SIGNIFICANT_MOTION,
+
+    ftl_first = ACCELEROMETER,
+    ftl_last = SIGNIFICANT_MOTION
 };
 
 enum class InputDeviceSensorAccuracy : int32_t {
@@ -105,6 +108,8 @@ enum class InputDeviceLightType : int32_t {
     PLAYER_ID = 1,
     RGB = 2,
     MULTI_COLOR = 3,
+
+    ftl_last = MULTI_COLOR
 };
 
 struct InputDeviceSensorInfo {
@@ -230,7 +235,7 @@ public:
     void addBatteryInfo(const InputDeviceBatteryInfo& info);
     void addLightInfo(const InputDeviceLightInfo& info);
 
-    inline void setKeyboardType(int32_t keyboardType) { mKeyboardType = keyboardType; }
+    void setKeyboardType(int32_t keyboardType);
     inline int32_t getKeyboardType() const { return mKeyboardType; }
 
     inline void setKeyCharacterMap(const std::shared_ptr<KeyCharacterMap> value) {
@@ -295,6 +300,8 @@ enum class InputDeviceConfigurationFileType : int32_t {
 /*
  * Gets the path of an input device configuration file, if one is available.
  * Considers both system provided and user installed configuration files.
+ * The optional suffix is appended to the end of the file name (before the
+ * extension).
  *
  * The device identifier is used to construct several default configuration file
  * names to try based on the device name, vendor, product, and version.
@@ -302,8 +309,8 @@ enum class InputDeviceConfigurationFileType : int32_t {
  * Returns an empty string if not found.
  */
 extern std::string getInputDeviceConfigurationFilePathByDeviceIdentifier(
-        const InputDeviceIdentifier& deviceIdentifier,
-        InputDeviceConfigurationFileType type);
+        const InputDeviceIdentifier& deviceIdentifier, InputDeviceConfigurationFileType type,
+        const char* suffix = "");
 
 /*
  * Gets the path of an input device configuration file, if one is available.

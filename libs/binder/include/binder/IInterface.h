@@ -72,9 +72,9 @@ class BnInterface : public INTERFACE, public BBinder
 public:
     virtual sp<IInterface>      queryLocalInterface(const String16& _descriptor);
     virtual const String16&     getInterfaceDescriptor() const;
+    typedef INTERFACE BaseInterface;
 
 protected:
-    typedef INTERFACE           BaseInterface;
     virtual IBinder*            onAsBinder();
 };
 
@@ -85,9 +85,9 @@ class BpInterface : public INTERFACE, public BpRefBase
 {
 public:
     explicit                    BpInterface(const sp<IBinder>& remote);
+    typedef INTERFACE BaseInterface;
 
 protected:
-    typedef INTERFACE           BaseInterface;
     virtual IBinder*            onAsBinder();
 };
 
@@ -228,10 +228,8 @@ constexpr const char* const kManualInterfaces[] = {
   "android.gfx.tests.IIPCTest",
   "android.gfx.tests.ISafeInterfaceTest",
   "android.graphicsenv.IGpuService",
-  "android.gui.DisplayEventConnection",
   "android.gui.IConsumerListener",
   "android.gui.IGraphicBufferConsumer",
-  "android.gui.IRegionSamplingListener",
   "android.gui.ITransactionComposerListener",
   "android.gui.SensorEventConnection",
   "android.gui.SensorServer",
