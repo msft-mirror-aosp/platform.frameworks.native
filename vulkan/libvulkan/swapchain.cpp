@@ -763,7 +763,11 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
     // We must support R8G8B8A8
     std::vector<VkSurfaceFormatKHR> all_formats = {
         {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
-        {VK_FORMAT_R8G8B8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+        {VK_FORMAT_R8G8B8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+        // Also allow to use PASS_THROUGH + HAL_DATASPACE_ARBITRARY
+        {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_PASS_THROUGH_EXT},
+        {VK_FORMAT_R8G8B8A8_SRGB, VK_COLOR_SPACE_PASS_THROUGH_EXT},
+    };
 
     if (colorspace_ext) {
         all_formats.emplace_back(VkSurfaceFormatKHR{
@@ -785,12 +789,16 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
     if (AHardwareBuffer_isSupported(&desc)) {
         all_formats.emplace_back(VkSurfaceFormatKHR{
             VK_FORMAT_R5G6B5_UNORM_PACK16, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
+        all_formats.emplace_back(VkSurfaceFormatKHR{
+            VK_FORMAT_R5G6B5_UNORM_PACK16, VK_COLOR_SPACE_PASS_THROUGH_EXT});
     }
 
     desc.format = AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT;
     if (AHardwareBuffer_isSupported(&desc)) {
         all_formats.emplace_back(VkSurfaceFormatKHR{
             VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
+        all_formats.emplace_back(VkSurfaceFormatKHR{
+            VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_PASS_THROUGH_EXT});
         if (wide_color_support) {
             all_formats.emplace_back(
                 VkSurfaceFormatKHR{VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -806,6 +814,9 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
         all_formats.emplace_back(
             VkSurfaceFormatKHR{VK_FORMAT_A2B10G10R10_UNORM_PACK32,
                                VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
+        all_formats.emplace_back(
+            VkSurfaceFormatKHR{VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+                               VK_COLOR_SPACE_PASS_THROUGH_EXT});
         if (wide_color_support) {
             all_formats.emplace_back(
                 VkSurfaceFormatKHR{VK_FORMAT_A2B10G10R10_UNORM_PACK32,
@@ -1228,11 +1239,15 @@ VkResult CreateSwapchainKHR(VkDevice device,
               decodePixelFormat(native_pixel_format).c_str(), strerror(-err), err);
         return VK_ERROR_SURFACE_LOST_KHR;
     }
-    err = native_window_set_buffers_data_space(window, native_dataspace);
-    if (err != android::OK) {
-        ALOGE("native_window_set_buffers_data_space(%d) failed: %s (%d)",
-              native_dataspace, strerror(-err), err);
-        return VK_ERROR_SURFACE_LOST_KHR;
+
+    /* Respect consumer default dataspace upon HAL_DATASPACE_ARBITRARY. */
+    if (native_dataspace != HAL_DATASPACE_ARBITRARY) {
+        err = native_window_set_buffers_data_space(window, native_dataspace);
+        if (err != android::OK) {
+            ALOGE("native_window_set_buffers_data_space(%d) failed: %s (%d)",
+                  native_dataspace, strerror(-err), err);
+            return VK_ERROR_SURFACE_LOST_KHR;
+        }
     }
 
     err = native_window_set_buffers_dimensions(
