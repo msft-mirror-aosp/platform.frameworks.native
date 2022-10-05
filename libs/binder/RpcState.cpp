@@ -41,7 +41,7 @@ using base::StringPrintf;
 #if RPC_FLAKE_PRONE
 void rpcMaybeWaitToFlake() {
     [[clang::no_destroy]] static std::random_device r;
-    [[clang::no_destroy]] static std::mutex m;
+    [[clang::no_destroy]] static RpcMutex m;
     unsigned num;
     {
         RpcMutexLockGuard lock(m);
@@ -886,6 +886,7 @@ processTransactInternalTailCall:
                 it->second.asyncTodo.push(BinderNode::AsyncTodo{
                         .ref = target,
                         .data = std::move(transactionData),
+                        .ancillaryFds = std::move(ancillaryFds),
                         .asyncNumber = transaction->asyncNumber,
                 });
 
@@ -1046,6 +1047,7 @@ processTransactInternalTailCall:
 
                 // reset up arguments
                 transactionData = std::move(todo.data);
+                ancillaryFds = std::move(todo.ancillaryFds);
                 LOG_ALWAYS_FATAL_IF(target != todo.ref,
                                     "async list should be associated with a binder");
 
