@@ -100,6 +100,8 @@ public:
         NONE = 0,
         // Send file descriptors via unix domain socket ancillary data.
         UNIX = 1,
+        // Send file descriptors as Trusty IPC handles.
+        TRUSTY = 2,
     };
 
     /**
@@ -113,6 +115,11 @@ public:
      * process.
      */
     [[nodiscard]] status_t setupUnixDomainClient(const char* path);
+
+    /**
+     * Connects to an RPC server over a nameless Unix domain socket pair.
+     */
+    [[nodiscard]] status_t setupUnixDomainSocketBootstrapClient(base::unique_fd bootstrap);
 
     /**
      * Connects to an RPC server at the CVD & port.
@@ -365,6 +372,8 @@ private:
     FileDescriptorTransportMode mFileDescriptorTransportMode = FileDescriptorTransportMode::NONE;
 
     RpcConditionVariable mAvailableConnectionCv; // for mWaitingThreads
+
+    std::unique_ptr<RpcTransport> mBootstrapTransport;
 
     struct ThreadState {
         size_t mWaitingThreads = 0;
