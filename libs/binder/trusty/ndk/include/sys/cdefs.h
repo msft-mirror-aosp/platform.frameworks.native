@@ -13,14 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
-parcelable BinderRpcTestServerConfig {
-    int numThreads;
-    int[] serverSupportedFileDescriptorTransportModes;
-    int socketType;
-    int rpcSecurity;
-    int serverVersion;
-    int vsockPort;
-    int unixBootstrapFd; // Inherited from parent
-    @utf8InCpp String addr;
-}
+#include <lk/compiler.h>
+
+/* Alias the bionic macros to the ones from lk/compiler.h */
+#define __BEGIN_DECLS __BEGIN_CDECLS
+#define __END_DECLS __END_CDECLS
+
+#define __INTRODUCED_IN(x) /* nothing on Trusty */
