@@ -133,7 +133,9 @@ Layer::Layer(const LayerCreationArgs& args)
     mDrawingState.fixedTransformHint = ui::Transform::ROT_INVALID;
     mDrawingState.frameTimelineInfo = {};
     mDrawingState.postTime = -1;
+    mDrawingState.dropInputMode = gui::DropInputMode::NONE;
     mDrawingState.destinationFrame.makeInvalid();
+    mDrawingState.isTrustedOverlay = false;
 
     if (args.flags & ISurfaceComposerClient::eNoColorFill) {
         // Set an invalid color so there is no color fill.
@@ -2131,7 +2133,7 @@ void Layer::writeToProtoCommonState(LayerProto* layerInfo, LayerVector::StateSet
         layerInfo->set_owner_uid(mOwnerUid);
     }
 
-    if (traceFlags & SurfaceTracing::TRACE_INPUT) {
+    if (traceFlags & SurfaceTracing::TRACE_INPUT && needsInputInfo()) {
         InputWindowInfo info;
         if (useDrawing) {
             info = fillInputInfo({nullptr});
@@ -2157,6 +2159,35 @@ bool Layer::isRemovedFromCurrentState() const  {
 
 ui::Transform Layer::getInputTransform() const {
     return getTransform();
+}
+
+gui::DropInputMode Layer::getDropInputMode() const {
+    gui::DropInputMode mode = mDrawingState.dropInputMode;
+    if (mode == gui::DropInputMode::ALL) {
+        return mode;
+    }
+    sp<Layer> parent = mDrawingParent.promote();
+    if (parent) {
+        gui::DropInputMode parentMode = parent->getDropInputMode();
+        if (parentMode != gui::DropInputMode::NONE) {
+            return parentMode;
+        }
+    }
+    return mode;
+}
+
+void Layer::handleDropInputMode(InputWindowInfo& info) const {
+    if (mDrawingState.inputInfo.inputFeatures.test(InputWindowInfo::Feature::NO_INPUT_CHANNEL)) {
+        return;
+    }
+
+    // Check if we need to drop input unconditionally
+    gui::DropInputMode dropInputMode = getDropInputMode();
+    if (dropInputMode == gui::DropInputMode::ALL) {
+        info.inputFeatures |= InputWindowInfo::Feature::DROP_INPUT;
+        ALOGV("Dropping input for %s as requested by policy.", getDebugName());
+        return;
+    }
 }
 
 Rect Layer::getInputBounds() const {
@@ -2306,6 +2337,7 @@ InputWindowInfo Layer::fillInputInfo(const sp<DisplayDevice>& display) {
     info.visible = hasInputInfo() ? canReceiveInput() : isVisible();
     info.alpha = getAlpha();
     fillTouchOcclusionMode(info);
+    handleDropInputMode(info);
 
     auto cropLayer = mDrawingState.touchableRegionCrop.promote();
     if (info.replaceTouchableRegionWithCrop) {
@@ -2349,7 +2381,8 @@ sp<Layer> Layer::getClonedRoot() {
 }
 
 bool Layer::hasInputInfo() const {
-    return mDrawingState.inputInfo.token != nullptr;
+    return mDrawingState.inputInfo.token != nullptr ||
+            mDrawingState.inputInfo.inputFeatures.test(InputWindowInfo::Feature::NO_INPUT_CHANNEL);
 }
 
 bool Layer::canReceiveInput() const {
@@ -2512,6 +2545,17 @@ Layer::FrameRateCompatibility Layer::FrameRate::convertCompatibility(int8_t comp
             LOG_ALWAYS_FATAL("Invalid frame rate compatibility value %d", compatibility);
             return FrameRateCompatibility::Default;
     }
+}
+
+bool Layer::setDropInputMode(gui::DropInputMode mode) {
+    if (mDrawingState.dropInputMode == mode) {
+        return false;
+    }
+    mDrawingState.dropInputMode = mode;
+    mDrawingState.modified = true;
+    mFlinger->mInputInfoChanged = true;
+    setTransactionFlags(eTransactionNeeded);
+    return true;
 }
 
 scheduler::Seamlessness Layer::FrameRate::convertChangeFrameRateStrategy(int8_t strategy) {
