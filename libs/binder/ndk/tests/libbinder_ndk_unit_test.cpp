@@ -33,13 +33,15 @@
 #include <binder/IResultReceiver.h>
 #include <binder/IServiceManager.h>
 #include <binder/IShellCallback.h>
-
 #include <sys/prctl.h>
+
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <thread>
+
 #include "android/binder_ibinder.h"
 
 using namespace android;
@@ -252,6 +254,47 @@ TEST(NdkBinder, CheckServiceThatDoesExist) {
     AIBinder_decStrong(binder);
 }
 
+struct ServiceData {
+    std::string instance;
+    ndk::SpAIBinder binder;
+
+    static void fillOnRegister(const char* instance, AIBinder* binder, void* cookie) {
+        ServiceData* d = reinterpret_cast<ServiceData*>(cookie);
+        d->instance = instance;
+        d->binder = ndk::SpAIBinder(binder);
+    }
+};
+
+TEST(NdkBinder, RegisterForServiceNotificationsNonExisting) {
+    ServiceData data;
+    auto* notif = AServiceManager_registerForServiceNotifications(
+            "DOES_NOT_EXIST", ServiceData::fillOnRegister, (void*)&data);
+    ASSERT_NE(notif, nullptr);
+
+    sleep(1);  // give us a chance to fail
+    AServiceManager_NotificationRegistration_delete(notif);
+
+    // checking after deleting to avoid needing a mutex over the data - otherwise
+    // in an environment w/ multiple threads, you would need to guard access
+    EXPECT_EQ(data.instance, "");
+    EXPECT_EQ(data.binder, nullptr);
+}
+
+TEST(NdkBinder, RegisterForServiceNotificationsExisting) {
+    ServiceData data;
+    auto* notif = AServiceManager_registerForServiceNotifications(
+            kExistingNonNdkService, ServiceData::fillOnRegister, (void*)&data);
+    ASSERT_NE(notif, nullptr);
+
+    sleep(1);  // give us a chance to fail
+    AServiceManager_NotificationRegistration_delete(notif);
+
+    // checking after deleting to avoid needing a mutex over the data - otherwise
+    // in an environment w/ multiple threads, you would need to guard access
+    EXPECT_EQ(data.instance, kExistingNonNdkService);
+    EXPECT_EQ(data.binder, ndk::SpAIBinder(AServiceManager_checkService(kExistingNonNdkService)));
+}
+
 TEST(NdkBinder, UnimplementedDump) {
     sp<IFoo> foo = IFoo::getService(IFoo::kSomeInstanceName);
     ASSERT_NE(foo, nullptr);
@@ -335,6 +378,16 @@ TEST(NdkBinder, GetLazyService) {
 TEST(NdkBinder, IsUpdatable) {
     bool isUpdatable = AServiceManager_isUpdatableViaApex("android.hardware.light.ILights/default");
     EXPECT_EQ(isUpdatable, false);
+}
+
+TEST(NdkBinder, GetUpdatableViaApex) {
+    std::optional<std::string> updatableViaApex;
+    AServiceManager_getUpdatableApexName(
+            "android.hardware.light.ILights/default", &updatableViaApex,
+            [](const char* apexName, void* context) {
+                *static_cast<std::optional<std::string>*>(context) = apexName;
+            });
+    EXPECT_EQ(updatableViaApex, std::nullopt) << *updatableViaApex;
 }
 
 // This is too slow
@@ -668,6 +721,26 @@ TEST(NdkBinder, ConvertToPlatformParcel) {
     android::Parcel* pparcel = AParcel_viewPlatformParcel(parcel.get());
     pparcel->setDataPosition(0);
     EXPECT_EQ(42, pparcel->readInt32());
+}
+
+TEST(NdkBinder, GetAndVerifyScopedAIBinder_Weak) {
+    for (const ndk::SpAIBinder& binder :
+         {// remote
+          ndk::SpAIBinder(AServiceManager_getService(kBinderNdkUnitTestService)),
+          // local
+          ndk::SharedRefBase::make<MyBinderNdkUnitTest>()->asBinder()}) {
+        // get a const ScopedAIBinder_Weak and verify promote
+        EXPECT_NE(binder.get(), nullptr);
+        const ndk::ScopedAIBinder_Weak wkAIBinder =
+                ndk::ScopedAIBinder_Weak(AIBinder_Weak_new(binder.get()));
+        EXPECT_EQ(wkAIBinder.promote().get(), binder.get());
+        // get another ScopedAIBinder_Weak and verify
+        ndk::ScopedAIBinder_Weak wkAIBinder2 =
+                ndk::ScopedAIBinder_Weak(AIBinder_Weak_new(binder.get()));
+        EXPECT_FALSE(AIBinder_Weak_lt(wkAIBinder.get(), wkAIBinder2.get()));
+        EXPECT_FALSE(AIBinder_Weak_lt(wkAIBinder2.get(), wkAIBinder.get()));
+        EXPECT_EQ(wkAIBinder2.promote(), wkAIBinder.promote());
+    }
 }
 
 class MyResultReceiver : public BnResultReceiver {

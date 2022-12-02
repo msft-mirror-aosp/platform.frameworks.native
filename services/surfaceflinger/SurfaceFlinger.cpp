@@ -328,8 +328,9 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory, SkipInitializationTag)
         mCompositionEngine(mFactory.createCompositionEngine()),
         mHwcServiceName(base::GetProperty("debug.sf.hwc_service_name"s, "default"s)),
         mTunnelModeEnabledReporter(new TunnelModeEnabledReporter()),
-        mInternalDisplayDensity(getDensityFromProperty("ro.sf.lcd_density", true)),
         mEmulatedDisplayDensity(getDensityFromProperty("qemu.sf.lcd_density", false)),
+        mInternalDisplayDensity(
+                getDensityFromProperty("ro.sf.lcd_density", !mEmulatedDisplayDensity)),
         mPowerAdvisor(std::make_unique<Hwc2::impl::PowerAdvisor>(*this)),
         mWindowInfosListenerInvoker(sp<WindowInfosListenerInvoker>::make(*this)) {
     ALOGI("Using HWComposer service: %s", mHwcServiceName.c_str());
@@ -7564,7 +7565,7 @@ status_t SurfaceComposerAIDL::checkControlDisplayBrightnessPermission() {
     IPCThreadState* ipc = IPCThreadState::self();
     const int pid = ipc->getCallingPid();
     const int uid = ipc->getCallingUid();
-    if ((uid != AID_GRAPHICS) &&
+    if ((uid != AID_GRAPHICS) && (uid != AID_SYSTEM) &&
         !PermissionCache::checkPermission(sControlDisplayBrightness, pid, uid)) {
         ALOGE("Permission Denial: can't control brightness pid=%d, uid=%d", pid, uid);
         return PERMISSION_DENIED;
