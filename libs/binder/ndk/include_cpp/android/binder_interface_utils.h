@@ -196,6 +196,10 @@ class BnCInterface : public INTERFACE {
 
     bool isRemote() override final { return false; }
 
+    static std::string makeServiceName(std::string_view instance) {
+        return INTERFACE::descriptor + ("/" + std::string(instance));
+    }
+
    protected:
     /**
      * This function should only be called by asBinder. Otherwise, there is a possibility of
@@ -291,7 +295,10 @@ void ICInterface::ICInterfaceData::onDestroy(void* userData) {
 binder_status_t ICInterface::ICInterfaceData::onDump(AIBinder* binder, int fd, const char** args,
                                                      uint32_t numArgs) {
     std::shared_ptr<ICInterface> interface = getInterface(binder);
-    return interface->dump(fd, args, numArgs);
+    if (interface != nullptr) {
+        return interface->dump(fd, args, numArgs);
+    }
+    return STATUS_DEAD_OBJECT;
 }
 
 #ifdef HAS_BINDER_SHELL_COMMAND
@@ -299,7 +306,10 @@ binder_status_t ICInterface::ICInterfaceData::handleShellCommand(AIBinder* binde
                                                                  int err, const char** argv,
                                                                  uint32_t argc) {
     std::shared_ptr<ICInterface> interface = getInterface(binder);
-    return interface->handleShellCommand(in, out, err, argv, argc);
+    if (interface != nullptr) {
+        return interface->handleShellCommand(in, out, err, argv, argc);
+    }
+    return STATUS_DEAD_OBJECT;
 }
 #endif
 

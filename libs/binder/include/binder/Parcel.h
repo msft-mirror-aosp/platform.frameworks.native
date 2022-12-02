@@ -150,6 +150,9 @@ public:
     // Returns Status(EX_BAD_PARCELABLE) when the Parcel is not consumed.
     binder::Status enforceNoDataAvail() const;
 
+    // This Api is used by fuzzers to skip dataAvail checks.
+    void setEnforceNoDataAvail(bool enforceNoDataAvail);
+
     void                freeData();
 
     size_t              objectsCount() const;
@@ -595,7 +598,7 @@ public:
     // uid.
     uid_t               readCallingWorkSourceUid() const;
 
-    void                print(TextOutput& to, uint32_t flags = 0) const;
+    void print(std::ostream& to, uint32_t flags = 0) const;
 
 private:
     // `objects` and `objectsSize` always 0 for RPC Parcels.
@@ -1329,6 +1332,9 @@ private:
     // data to be overridden with zero when deallocated
     mutable bool        mDeallocZero;
 
+    // Set this to false to skip dataAvail checks.
+    bool mEnforceNoDataAvail;
+
     release_func        mOwner;
 
     size_t mReserved;
@@ -1594,8 +1600,7 @@ status_t Parcel::readNullableStrongBinder(sp<T>* val) const {
 
 // ---------------------------------------------------------------------------
 
-inline TextOutput& operator<<(TextOutput& to, const Parcel& parcel)
-{
+inline std::ostream& operator<<(std::ostream& to, const Parcel& parcel) {
     parcel.print(to);
     return to;
 }

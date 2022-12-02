@@ -17,7 +17,6 @@ rust_library {
     rustlibs: [
         "libbinder_ndk_sys",
         "libdowncast_rs",
-        "liblazy_static",
         "liblibc",
     ],
     host_supported: true,
@@ -30,6 +29,7 @@ rust_library {
     apex_available: [
         "//apex_available:platform",
         "com.android.compos",
+        "com.android.rkpd",
         "com.android.uwb",
         "com.android.virt",
     ],
@@ -80,12 +80,14 @@ rust_library {
     apex_available: [
         "//apex_available:platform",
         "com.android.compos",
+        "com.android.rkpd",
         "com.android.uwb",
         "com.android.virt",
     ],
     min_sdk_version: "Tiramisu",
     lints: "none",
     clippy_lints: "none",
+    visibility: [":__subpackages__"],
 }
 
 rust_bindgen {
@@ -138,6 +140,7 @@ rust_bindgen {
     apex_available: [
         "//apex_available:platform",
         "com.android.compos",
+        "com.android.rkpd",
         "com.android.uwb",
         "com.android.virt",
     ],
@@ -156,7 +159,6 @@ rust_test {
     rustlibs: [
         "libbinder_ndk_sys",
         "libdowncast_rs",
-        "liblazy_static",
         "liblibc",
     ],
 }

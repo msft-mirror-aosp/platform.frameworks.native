@@ -52,6 +52,8 @@ public:
 
     std::optional<String16> updatableViaApex(const String16& name) override;
 
+    Vector<String16> getUpdatableNames(const String16& apexName) override;
+
     std::optional<IServiceManager::ConnectionInfo> getConnectionInfo(const String16& name) override;
 
     status_t registerForNotifications(const String16& name,
@@ -61,6 +63,9 @@ public:
                                         const sp<LocalRegistrationCallback>& callback) override;
 
     std::vector<IServiceManager::ServiceDebugInfo> getServiceDebugInfo() override;
+
+    // Clear all of the registered services
+    void clear();
 
 private:
     std::map<String16, sp<IBinder>> mNameToService;

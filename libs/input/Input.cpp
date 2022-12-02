@@ -64,9 +64,10 @@ float transformAngle(const ui::Transform& transform, float angleRadians) {
 }
 
 bool shouldDisregardTransformation(uint32_t source) {
-    // Do not apply any transformations to axes from joysticks or touchpads.
+    // Do not apply any transformations to axes from joysticks, touchpads, or relative mice.
     return isFromSource(source, AINPUT_SOURCE_CLASS_JOYSTICK) ||
-            isFromSource(source, AINPUT_SOURCE_CLASS_POSITION);
+            isFromSource(source, AINPUT_SOURCE_CLASS_POSITION) ||
+            isFromSource(source, AINPUT_SOURCE_MOUSE_RELATIVE);
 }
 
 bool shouldDisregardOffset(uint32_t source) {
@@ -929,6 +930,8 @@ std::ostream& operator<<(std::ostream& out, const MotionEvent& event) {
         out << ", actionButton=" << std::to_string(event.getActionButton());
     }
     const size_t pointerCount = event.getPointerCount();
+    LOG_ALWAYS_FATAL_IF(pointerCount > MAX_POINTERS, "Too many pointers : pointerCount = %zu",
+                        pointerCount);
     for (size_t i = 0; i < pointerCount; i++) {
         out << ", id[" << i << "]=" << event.getPointerId(i);
         float x = event.getX(i);
