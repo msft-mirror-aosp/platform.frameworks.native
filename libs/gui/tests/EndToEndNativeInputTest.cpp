@@ -24,6 +24,7 @@
 
 #include <memory>
 
+#include <android/keycodes.h>
 #include <android/native_window.h>
 
 #include <binder/Binder.h>
@@ -65,17 +66,40 @@ static const int LAYER_BASE = INT32_MAX - 10;
 
 class InputSurface {
 public:
-    InputSurface(const sp<SurfaceControl> &sc, int width, int height) {
+    InputSurface(const sp<SurfaceControl> &sc, int width, int height, bool noInputChannel = false) {
         mSurfaceControl = sc;
 
-        InputChannel::openInputChannelPair("testchannels", mServerChannel, mClientChannel);
-
         mInputFlinger = getInputFlinger();
-        mInputFlinger->registerInputChannel(mServerChannel);
+        if (noInputChannel) {
+            mInputInfo.inputFeatures = InputWindowInfo::INPUT_FEATURE_NO_INPUT_CHANNEL;
+        } else {
+            InputChannel::openInputChannelPair("testchannels", mServerChannel, mClientChannel);
+            mInputFlinger->registerInputChannel(mServerChannel);
+            mInputInfo.token = mServerChannel->getConnectionToken();
+            mInputConsumer = new InputConsumer(mClientChannel);
+        }
 
-        populateInputInfo(width, height);
+        mInputInfo.name = "Test info";
+        mInputInfo.layoutParamsFlags = InputWindowInfo::FLAG_NOT_TOUCH_MODAL;
+        mInputInfo.layoutParamsType = InputWindowInfo::TYPE_BASE_APPLICATION;
+        mInputInfo.dispatchingTimeout = seconds_to_nanoseconds(5);
+        mInputInfo.globalScaleFactor = 1.0;
+        mInputInfo.canReceiveKeys = true;
+        mInputInfo.hasFocus = true;
+        mInputInfo.hasWallpaper = false;
+        mInputInfo.paused = false;
+        mInputInfo.touchableRegion.orSelf(Rect(0, 0, width, height));
+        // TODO: Fill in from SF?
+        mInputInfo.ownerPid = 11111;
+        mInputInfo.ownerUid = 11111;
+        mInputInfo.inputFeatures = 0;
+        mInputInfo.displayId = 0;
 
-        mInputConsumer = new InputConsumer(mClientChannel);
+        InputApplicationInfo aInfo;
+        aInfo.token = new BBinder();
+        aInfo.name = "Test app info";
+        aInfo.dispatchingTimeout = seconds_to_nanoseconds(5);
+        mInputInfo.applicationInfo = aInfo;
     }
 
     static std::unique_ptr<InputSurface> makeColorInputSurface(const sp<SurfaceComposerClient> &scc,
@@ -104,6 +128,16 @@ public:
         return std::make_unique<InputSurface>(surfaceControl, width, height);
     }
 
+    static std::unique_ptr<InputSurface> makeContainerInputSurfaceNoInputChannel(
+            const sp<SurfaceComposerClient> &scc, int width, int height) {
+        sp<SurfaceControl> surfaceControl =
+                scc->createSurface(String8("Test Container Surface"), 0 /* bufHeight */,
+                                   0 /* bufWidth */, PIXEL_FORMAT_RGBA_8888,
+                                   ISurfaceComposerClient::eFXSurfaceContainer);
+        return std::make_unique<InputSurface>(surfaceControl, width, height,
+                                              true /* noInputChannel */);
+    }
+
     static std::unique_ptr<InputSurface> makeCursorInputSurface(
             const sp<SurfaceComposerClient> &scc, int width, int height) {
         sp<SurfaceControl> surfaceControl =
@@ -113,8 +147,8 @@ public:
         return std::make_unique<InputSurface>(surfaceControl, width, height);
     }
 
-    InputEvent* consumeEvent() {
-        waitForEventAvailable();
+    InputEvent *consumeEvent(int timeoutMs = 3000) {
+        waitForEventAvailable(timeoutMs);
 
         InputEvent *ev;
         uint32_t seqId;
@@ -153,8 +187,28 @@ public:
         EXPECT_EQ(0, mev->getFlags() & VERIFIED_MOTION_EVENT_FLAGS);
     }
 
+    void expectKey(uint32_t keycode) {
+        InputEvent *ev = consumeEvent();
+        ASSERT_NE(ev, nullptr);
+        ASSERT_EQ(AINPUT_EVENT_TYPE_KEY, ev->getType());
+        KeyEvent *keyEvent = static_cast<KeyEvent *>(ev);
+        EXPECT_EQ(AMOTION_EVENT_ACTION_DOWN, keyEvent->getAction());
+        EXPECT_EQ(keycode, keyEvent->getKeyCode());
+        EXPECT_EQ(0, keyEvent->getFlags() & VERIFIED_KEY_EVENT_FLAGS);
+
+        ev = consumeEvent();
+        ASSERT_NE(ev, nullptr);
+        ASSERT_EQ(AINPUT_EVENT_TYPE_KEY, ev->getType());
+        keyEvent = static_cast<KeyEvent *>(ev);
+        EXPECT_EQ(AMOTION_EVENT_ACTION_UP, keyEvent->getAction());
+        EXPECT_EQ(keycode, keyEvent->getKeyCode());
+        EXPECT_EQ(0, keyEvent->getFlags() & VERIFIED_KEY_EVENT_FLAGS);
+    }
+
     ~InputSurface() {
-        mInputFlinger->unregisterInputChannel(mServerChannel);
+        if (mInputInfo.token) {
+            mInputFlinger->unregisterInputChannel(mServerChannel);
+        }
     }
 
     void doTransaction(std::function<void(SurfaceComposerClient::Transaction&,
@@ -176,41 +230,14 @@ public:
     }
 
 private:
-    void waitForEventAvailable() {
+    void waitForEventAvailable(int timeoutMs) {
         struct pollfd fd;
 
         fd.fd = mClientChannel->getFd();
         fd.events = POLLIN;
-        poll(&fd, 1, 3000);
+        poll(&fd, 1, timeoutMs);
     }
 
-    void populateInputInfo(int width, int height) {
-        mInputInfo.token = mServerChannel->getConnectionToken();
-        mInputInfo.name = "Test info";
-        mInputInfo.layoutParamsFlags = InputWindowInfo::FLAG_NOT_TOUCH_MODAL;
-        mInputInfo.layoutParamsType = InputWindowInfo::TYPE_BASE_APPLICATION;
-        mInputInfo.dispatchingTimeout = seconds_to_nanoseconds(5);
-        mInputInfo.globalScaleFactor = 1.0;
-        mInputInfo.canReceiveKeys = true;
-        mInputInfo.hasFocus = true;
-        mInputInfo.hasWallpaper = false;
-        mInputInfo.paused = false;
-
-        mInputInfo.touchableRegion.orSelf(Rect(0, 0, width, height));
-
-        // TODO: Fill in from SF?
-        mInputInfo.ownerPid = 11111;
-        mInputInfo.ownerUid = 11111;
-        mInputInfo.inputFeatures = 0;
-        mInputInfo.displayId = 0;
-
-        InputApplicationInfo aInfo;
-        aInfo.token = new BBinder();
-        aInfo.name = "Test app info";
-        aInfo.dispatchingTimeout = seconds_to_nanoseconds(5);
-
-        mInputInfo.applicationInfo = aInfo;
-    }
 public:
     sp<SurfaceControl> mSurfaceControl;
     sp<InputChannel> mServerChannel, mClientChannel;
@@ -274,6 +301,14 @@ void injectTap(int x, int y) {
     asprintf(&buf2, "%d", y);
     if (fork() == 0) {
         execlp("input", "input", "tap", buf1, buf2, NULL);
+    }
+}
+
+void injectKey(uint32_t keycode) {
+    char *buf1;
+    asprintf(&buf1, "%d", keycode);
+    if (fork() == 0) {
+        execlp("input", "input", "keyevent", buf1, NULL);
     }
 }
 
@@ -561,5 +596,36 @@ TEST_F(InputSurfacesTest, input_ignores_cursor_layer) {
     injectTap(11, 11);
     surface->expectTap(1, 1);
 }
+
+TEST_F(InputSurfacesTest, child_container_with_no_input_channel_blocks_parent) {
+    std::unique_ptr<InputSurface> parent = makeSurface(100, 100);
+    parent->showAt(100, 100);
+    parent->assertFocusChange(true);
+    injectTap(101, 101);
+    parent->expectTap(1, 1);
+
+    std::unique_ptr<InputSurface> childContainerSurface =
+            InputSurface::makeContainerInputSurfaceNoInputChannel(mComposerClient, 100, 100);
+    childContainerSurface->showAt(0, 0);
+    childContainerSurface->doTransaction(
+            [&](auto &t, auto &sc) { t.reparent(sc, parent->mSurfaceControl->getHandle()); });
+    injectTap(101, 101);
+
+    EXPECT_EQ(parent->consumeEvent(100), nullptr);
+}
+
+TEST_F(InputSurfacesTest, drop_input_policy) {
+    std::unique_ptr<InputSurface> surface = makeSurface(100, 100);
+    surface->doTransaction(
+            [&](auto &t, auto &sc) { t.setDropInputMode(sc, gui::DropInputMode::ALL); });
+    surface->showAt(100, 100);
+    surface->assertFocusChange(true);
+
+    injectTap(101, 101);
+    EXPECT_EQ(surface->consumeEvent(100), nullptr);
+
+    injectKey(AKEYCODE_V);
+    EXPECT_EQ(surface->consumeEvent(100), nullptr);
 }
 }
+} // namespace android
