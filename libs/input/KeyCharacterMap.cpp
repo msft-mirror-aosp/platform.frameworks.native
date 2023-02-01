@@ -43,7 +43,6 @@
 // Enables debug output for mapping.
 #define DEBUG_MAPPING 0
 
-
 namespace android {
 
 static const char* WHITESPACE = " \t\r";
@@ -93,6 +92,7 @@ KeyCharacterMap::KeyCharacterMap(const KeyCharacterMap& other)
       : mType(other.mType),
         mLoadFileName(other.mLoadFileName),
         mLayoutOverlayApplied(other.mLayoutOverlayApplied),
+        mKeyRemapping(other.mKeyRemapping),
         mKeysByScanCode(other.mKeysByScanCode),
         mKeysByUsageCode(other.mKeysByUsageCode) {
     for (size_t i = 0; i < other.mKeys.size(); i++) {
@@ -114,7 +114,7 @@ bool KeyCharacterMap::operator==(const KeyCharacterMap& other) const {
     if (mLayoutOverlayApplied != other.mLayoutOverlayApplied) {
         return false;
     }
-    if (mKeys.size() != other.mKeys.size() ||
+    if (mKeys.size() != other.mKeys.size() || mKeyRemapping.size() != other.mKeyRemapping.size() ||
         mKeysByScanCode.size() != other.mKeysByScanCode.size() ||
         mKeysByUsageCode.size() != other.mKeysByUsageCode.size()) {
         return false;
@@ -131,22 +131,9 @@ bool KeyCharacterMap::operator==(const KeyCharacterMap& other) const {
         }
     }
 
-    for (size_t i = 0; i < mKeysByScanCode.size(); i++) {
-        if (mKeysByScanCode.keyAt(i) != other.mKeysByScanCode.keyAt(i)) {
-            return false;
-        }
-        if (mKeysByScanCode.valueAt(i) != other.mKeysByScanCode.valueAt(i)) {
-            return false;
-        }
-    }
-
-    for (size_t i = 0; i < mKeysByUsageCode.size(); i++) {
-        if (mKeysByUsageCode.keyAt(i) != other.mKeysByUsageCode.keyAt(i)) {
-            return false;
-        }
-        if (mKeysByUsageCode.valueAt(i) != other.mKeysByUsageCode.valueAt(i)) {
-            return false;
-        }
+    if (mKeyRemapping != other.mKeyRemapping || mKeysByScanCode != other.mKeysByScanCode ||
+        mKeysByUsageCode != other.mKeysByUsageCode) {
+        return false;
     }
 
     return true;
@@ -258,16 +245,21 @@ void KeyCharacterMap::combine(const KeyCharacterMap& overlay) {
         }
     }
 
-    for (size_t i = 0; i < overlay.mKeysByScanCode.size(); i++) {
-        mKeysByScanCode.replaceValueFor(overlay.mKeysByScanCode.keyAt(i),
-                                        overlay.mKeysByScanCode.valueAt(i));
+    for (auto const& it : overlay.mKeysByScanCode) {
+        mKeysByScanCode.insert_or_assign(it.first, it.second);
     }
 
-    for (size_t i = 0; i < overlay.mKeysByUsageCode.size(); i++) {
-        mKeysByUsageCode.replaceValueFor(overlay.mKeysByUsageCode.keyAt(i),
-                                         overlay.mKeysByUsageCode.valueAt(i));
+    for (auto const& it : overlay.mKeysByUsageCode) {
+        mKeysByUsageCode.insert_or_assign(it.first, it.second);
     }
     mLayoutOverlayApplied = true;
+}
+
+void KeyCharacterMap::clearLayoutOverlay() {
+    if (mLayoutOverlayApplied) {
+        reloadBaseFromFile();
+        mLayoutOverlayApplied = false;
+    }
 }
 
 KeyCharacterMap::KeyboardType KeyCharacterMap::getKeyboardType() const {
@@ -304,9 +296,8 @@ char16_t KeyCharacterMap::getNumber(int32_t keyCode) const {
 
 char16_t KeyCharacterMap::getCharacter(int32_t keyCode, int32_t metaState) const {
     char16_t result = 0;
-    const Key* key;
-    const Behavior* behavior;
-    if (getKeyBehavior(keyCode, metaState, &key, &behavior)) {
+    const Behavior* behavior = getKeyBehavior(keyCode, metaState);
+    if (behavior != nullptr) {
         result = behavior->character;
     }
 #if DEBUG_MAPPING
@@ -321,9 +312,8 @@ bool KeyCharacterMap::getFallbackAction(int32_t keyCode, int32_t metaState,
     outFallbackAction->metaState = 0;
 
     bool result = false;
-    const Key* key;
-    const Behavior* behavior;
-    if (getKeyBehavior(keyCode, metaState, &key, &behavior)) {
+    const Behavior* behavior = getKeyBehavior(keyCode, metaState);
+    if (behavior != nullptr) {
         if (behavior->fallbackKeyCode) {
             outFallbackAction->keyCode = behavior->fallbackKeyCode;
             outFallbackAction->metaState = metaState & ~behavior->metaState;
@@ -347,12 +337,12 @@ char16_t KeyCharacterMap::getMatch(int32_t keyCode, const char16_t* chars, size_
         // Try to find the most general behavior that maps to this character.
         // For example, the base key behavior will usually be last in the list.
         // However, if we find a perfect meta state match for one behavior then use that one.
-        for (const Behavior* behavior = key->firstBehavior; behavior; behavior = behavior->next) {
-            if (behavior->character) {
+        for (const Behavior& behavior : key->behaviors) {
+            if (behavior.character) {
                 for (size_t i = 0; i < numChars; i++) {
-                    if (behavior->character == chars[i]) {
-                        result = behavior->character;
-                        if ((behavior->metaState & metaState) == behavior->metaState) {
+                    if (behavior.character == chars[i]) {
+                        result = behavior.character;
+                        if ((behavior.metaState & metaState) == behavior.metaState) {
                             goto ExactMatch;
                         }
                         break;
@@ -402,11 +392,26 @@ bool KeyCharacterMap::getEvents(int32_t deviceId, const char16_t* chars, size_t 
     return true;
 }
 
+void KeyCharacterMap::addKeyRemapping(int32_t fromKeyCode, int32_t toKeyCode) {
+    if (fromKeyCode == toKeyCode) {
+        mKeyRemapping.erase(fromKeyCode);
+#if DEBUG_MAPPING
+        ALOGD("addKeyRemapping: Cleared remapping forKeyCode=%d ~ Result Successful.", fromKeyCode);
+#endif
+        return;
+    }
+    mKeyRemapping.insert_or_assign(fromKeyCode, toKeyCode);
+#if DEBUG_MAPPING
+    ALOGD("addKeyRemapping: fromKeyCode=%d, toKeyCode=%d ~ Result Successful.", fromKeyCode,
+          toKeyCode);
+#endif
+}
+
 status_t KeyCharacterMap::mapKey(int32_t scanCode, int32_t usageCode, int32_t* outKeyCode) const {
     if (usageCode) {
-        ssize_t index = mKeysByUsageCode.indexOfKey(usageCode);
-        if (index >= 0) {
-            *outKeyCode = mKeysByUsageCode.valueAt(index);
+        const auto it = mKeysByUsageCode.find(usageCode);
+        if (it != mKeysByUsageCode.end()) {
+            *outKeyCode = it->second;
 #if DEBUG_MAPPING
             ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Result keyCode=%d.",
                     scanCode, usageCode, *outKeyCode);
@@ -415,9 +420,9 @@ status_t KeyCharacterMap::mapKey(int32_t scanCode, int32_t usageCode, int32_t* o
         }
     }
     if (scanCode) {
-        ssize_t index = mKeysByScanCode.indexOfKey(scanCode);
-        if (index >= 0) {
-            *outKeyCode = mKeysByScanCode.valueAt(index);
+        const auto it = mKeysByScanCode.find(scanCode);
+        if (it != mKeysByScanCode.end()) {
+            *outKeyCode = it->second;
 #if DEBUG_MAPPING
             ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Result keyCode=%d.",
                     scanCode, usageCode, *outKeyCode);
@@ -433,46 +438,59 @@ status_t KeyCharacterMap::mapKey(int32_t scanCode, int32_t usageCode, int32_t* o
     return NAME_NOT_FOUND;
 }
 
-void KeyCharacterMap::tryRemapKey(int32_t keyCode, int32_t metaState,
-                                  int32_t *outKeyCode, int32_t *outMetaState) const {
-    *outKeyCode = keyCode;
-    *outMetaState = metaState;
+int32_t KeyCharacterMap::applyKeyRemapping(int32_t fromKeyCode) const {
+    int32_t toKeyCode = fromKeyCode;
 
-    const Key* key;
-    const Behavior* behavior;
-    if (getKeyBehavior(keyCode, metaState, &key, &behavior)) {
+    const auto it = mKeyRemapping.find(fromKeyCode);
+    if (it != mKeyRemapping.end()) {
+        toKeyCode = it->second;
+    }
+#if DEBUG_MAPPING
+    ALOGD("applyKeyRemapping: keyCode=%d ~ replacement keyCode=%d.", fromKeyCode, toKeyCode);
+#endif
+    return toKeyCode;
+}
+
+std::pair<int32_t, int32_t> KeyCharacterMap::applyKeyBehavior(int32_t fromKeyCode,
+                                                              int32_t fromMetaState) const {
+    int32_t toKeyCode = fromKeyCode;
+    int32_t toMetaState = fromMetaState;
+
+    const Behavior* behavior = getKeyBehavior(fromKeyCode, fromMetaState);
+    if (behavior != nullptr) {
         if (behavior->replacementKeyCode) {
-            *outKeyCode = behavior->replacementKeyCode;
-            int32_t newMetaState = metaState & ~behavior->metaState;
+            toKeyCode = behavior->replacementKeyCode;
+            toMetaState = fromMetaState & ~behavior->metaState;
             // Reset dependent meta states.
             if (behavior->metaState & AMETA_ALT_ON) {
-                newMetaState &= ~(AMETA_ALT_LEFT_ON | AMETA_ALT_RIGHT_ON);
+                toMetaState &= ~(AMETA_ALT_LEFT_ON | AMETA_ALT_RIGHT_ON);
             }
             if (behavior->metaState & (AMETA_ALT_LEFT_ON | AMETA_ALT_RIGHT_ON)) {
-                newMetaState &= ~AMETA_ALT_ON;
+                toMetaState &= ~AMETA_ALT_ON;
             }
             if (behavior->metaState & AMETA_CTRL_ON) {
-                newMetaState &= ~(AMETA_CTRL_LEFT_ON | AMETA_CTRL_RIGHT_ON);
+                toMetaState &= ~(AMETA_CTRL_LEFT_ON | AMETA_CTRL_RIGHT_ON);
             }
             if (behavior->metaState & (AMETA_CTRL_LEFT_ON | AMETA_CTRL_RIGHT_ON)) {
-                newMetaState &= ~AMETA_CTRL_ON;
+                toMetaState &= ~AMETA_CTRL_ON;
             }
             if (behavior->metaState & AMETA_SHIFT_ON) {
-                newMetaState &= ~(AMETA_SHIFT_LEFT_ON | AMETA_SHIFT_RIGHT_ON);
+                toMetaState &= ~(AMETA_SHIFT_LEFT_ON | AMETA_SHIFT_RIGHT_ON);
             }
             if (behavior->metaState & (AMETA_SHIFT_LEFT_ON | AMETA_SHIFT_RIGHT_ON)) {
-                newMetaState &= ~AMETA_SHIFT_ON;
+                toMetaState &= ~AMETA_SHIFT_ON;
             }
             // ... and put universal bits back if needed
-            *outMetaState = normalizeMetaState(newMetaState);
+            toMetaState = normalizeMetaState(toMetaState);
         }
     }
 
 #if DEBUG_MAPPING
-    ALOGD("tryRemapKey: keyCode=%d, metaState=0x%08x ~ "
-            "replacement keyCode=%d, replacement metaState=0x%08x.",
-            keyCode, metaState, *outKeyCode, *outMetaState);
+    ALOGD("applyKeyBehavior: keyCode=%d, metaState=0x%08x ~ "
+          "replacement keyCode=%d, replacement metaState=0x%08x.",
+          fromKeyCode, fromMetaState, toKeyCode, toMetaState);
 #endif
+    return std::make_pair(toKeyCode, toMetaState);
 }
 
 bool KeyCharacterMap::getKey(int32_t keyCode, const Key** outKey) const {
@@ -484,21 +502,17 @@ bool KeyCharacterMap::getKey(int32_t keyCode, const Key** outKey) const {
     return false;
 }
 
-bool KeyCharacterMap::getKeyBehavior(int32_t keyCode, int32_t metaState,
-        const Key** outKey, const Behavior** outBehavior) const {
+const KeyCharacterMap::Behavior* KeyCharacterMap::getKeyBehavior(int32_t keyCode,
+                                                                 int32_t metaState) const {
     const Key* key;
     if (getKey(keyCode, &key)) {
-        const Behavior* behavior = key->firstBehavior;
-        while (behavior) {
-            if (matchesMetaState(metaState, behavior->metaState)) {
-                *outKey = key;
-                *outBehavior = behavior;
-                return true;
+        for (const Behavior& behavior : key->behaviors) {
+            if (matchesMetaState(metaState, behavior.metaState)) {
+                return &behavior;
             }
-            behavior = behavior->next;
         }
     }
-    return false;
+    return nullptr;
 }
 
 bool KeyCharacterMap::matchesMetaState(int32_t eventMetaState, int32_t behaviorMetaState) {
@@ -543,12 +557,12 @@ bool KeyCharacterMap::findKey(char16_t ch, int32_t* outKeyCode, int32_t* outMeta
         // Try to find the most general behavior that maps to this character.
         // For example, the base key behavior will usually be last in the list.
         const Behavior* found = nullptr;
-        for (const Behavior* behavior = key->firstBehavior; behavior; behavior = behavior->next) {
-            if (behavior->character == ch) {
-                found = behavior;
+        for (const Behavior& behavior : key->behaviors) {
+            if (behavior.character == ch) {
+                found = &behavior;
             }
         }
-        if (found) {
+        if (found != nullptr) {
             *outKeyCode = mKeys.keyAt(i);
             *outMetaState = found->metaState;
             return true;
@@ -706,7 +720,6 @@ std::shared_ptr<KeyCharacterMap> KeyCharacterMap::readFromParcel(Parcel* parcel)
         key->number = number;
         map->mKeys.add(keyCode, key);
 
-        Behavior* lastBehavior = nullptr;
         while (parcel->readInt32()) {
             int32_t metaState = parcel->readInt32();
             char16_t character = parcel->readInt32();
@@ -716,19 +729,26 @@ std::shared_ptr<KeyCharacterMap> KeyCharacterMap::readFromParcel(Parcel* parcel)
                 return nullptr;
             }
 
-            Behavior* behavior = new Behavior();
-            behavior->metaState = metaState;
-            behavior->character = character;
-            behavior->fallbackKeyCode = fallbackKeyCode;
-            behavior->replacementKeyCode = replacementKeyCode;
-            if (lastBehavior) {
-                lastBehavior->next = behavior;
-            } else {
-                key->firstBehavior = behavior;
-            }
-            lastBehavior = behavior;
+            key->behaviors.push_back({
+                    .metaState = metaState,
+                    .character = character,
+                    .fallbackKeyCode = fallbackKeyCode,
+                    .replacementKeyCode = replacementKeyCode,
+            });
         }
 
+        if (parcel->errorCheck()) {
+            return nullptr;
+        }
+    }
+    size_t numKeyRemapping = parcel->readInt32();
+    if (parcel->errorCheck()) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < numKeyRemapping; i++) {
+        int32_t key = parcel->readInt32();
+        int32_t value = parcel->readInt32();
+        map->mKeyRemapping.insert_or_assign(key, value);
         if (parcel->errorCheck()) {
             return nullptr;
         }
@@ -740,7 +760,7 @@ std::shared_ptr<KeyCharacterMap> KeyCharacterMap::readFromParcel(Parcel* parcel)
     for (size_t i = 0; i < numKeysByScanCode; i++) {
         int32_t key = parcel->readInt32();
         int32_t value = parcel->readInt32();
-        map->mKeysByScanCode.add(key, value);
+        map->mKeysByScanCode.insert_or_assign(key, value);
         if (parcel->errorCheck()) {
             return nullptr;
         }
@@ -752,7 +772,7 @@ std::shared_ptr<KeyCharacterMap> KeyCharacterMap::readFromParcel(Parcel* parcel)
     for (size_t i = 0; i < numKeysByUsageCode; i++) {
         int32_t key = parcel->readInt32();
         int32_t value = parcel->readInt32();
-        map->mKeysByUsageCode.add(key, value);
+        map->mKeysByUsageCode.insert_or_assign(key, value);
         if (parcel->errorCheck()) {
             return nullptr;
         }
@@ -777,65 +797,42 @@ void KeyCharacterMap::writeToParcel(Parcel* parcel) const {
         parcel->writeInt32(keyCode);
         parcel->writeInt32(key->label);
         parcel->writeInt32(key->number);
-        for (const Behavior* behavior = key->firstBehavior; behavior != nullptr;
-                behavior = behavior->next) {
+        for (const Behavior& behavior : key->behaviors) {
             parcel->writeInt32(1);
-            parcel->writeInt32(behavior->metaState);
-            parcel->writeInt32(behavior->character);
-            parcel->writeInt32(behavior->fallbackKeyCode);
-            parcel->writeInt32(behavior->replacementKeyCode);
+            parcel->writeInt32(behavior.metaState);
+            parcel->writeInt32(behavior.character);
+            parcel->writeInt32(behavior.fallbackKeyCode);
+            parcel->writeInt32(behavior.replacementKeyCode);
         }
         parcel->writeInt32(0);
     }
+    size_t numKeyRemapping = mKeyRemapping.size();
+    parcel->writeInt32(numKeyRemapping);
+    for (auto const& [fromAndroidKeyCode, toAndroidKeyCode] : mKeyRemapping) {
+        parcel->writeInt32(fromAndroidKeyCode);
+        parcel->writeInt32(toAndroidKeyCode);
+    }
     size_t numKeysByScanCode = mKeysByScanCode.size();
     parcel->writeInt32(numKeysByScanCode);
-    for (size_t i = 0; i < numKeysByScanCode; i++) {
-        parcel->writeInt32(mKeysByScanCode.keyAt(i));
-        parcel->writeInt32(mKeysByScanCode.valueAt(i));
+    for (auto const& [fromScanCode, toAndroidKeyCode] : mKeysByScanCode) {
+        parcel->writeInt32(fromScanCode);
+        parcel->writeInt32(toAndroidKeyCode);
     }
     size_t numKeysByUsageCode = mKeysByUsageCode.size();
     parcel->writeInt32(numKeysByUsageCode);
-    for (size_t i = 0; i < numKeysByUsageCode; i++) {
-        parcel->writeInt32(mKeysByUsageCode.keyAt(i));
-        parcel->writeInt32(mKeysByUsageCode.valueAt(i));
+    for (auto const& [fromUsageCode, toAndroidKeyCode] : mKeysByUsageCode) {
+        parcel->writeInt32(fromUsageCode);
+        parcel->writeInt32(toAndroidKeyCode);
     }
 }
 #endif // __linux__
 
 // --- KeyCharacterMap::Key ---
 
-KeyCharacterMap::Key::Key() :
-        label(0), number(0), firstBehavior(nullptr) {
-}
+KeyCharacterMap::Key::Key() : label(0), number(0) {}
 
-KeyCharacterMap::Key::Key(const Key& other) :
-        label(other.label), number(other.number),
-        firstBehavior(other.firstBehavior ? new Behavior(*other.firstBehavior) : nullptr) {
-}
-
-KeyCharacterMap::Key::~Key() {
-    Behavior* behavior = firstBehavior;
-    while (behavior) {
-        Behavior* next = behavior->next;
-        delete behavior;
-        behavior = next;
-    }
-}
-
-
-// --- KeyCharacterMap::Behavior ---
-
-KeyCharacterMap::Behavior::Behavior() :
-        next(nullptr), metaState(0), character(0), fallbackKeyCode(0), replacementKeyCode(0) {
-}
-
-KeyCharacterMap::Behavior::Behavior(const Behavior& other) :
-        next(other.next ? new Behavior(*other.next) : nullptr),
-        metaState(other.metaState), character(other.character),
-        fallbackKeyCode(other.fallbackKeyCode),
-        replacementKeyCode(other.replacementKeyCode) {
-}
-
+KeyCharacterMap::Key::Key(const Key& other)
+      : label(other.label), number(other.number), behaviors(other.behaviors) {}
 
 // --- KeyCharacterMap::Parser ---
 
@@ -992,9 +989,9 @@ status_t KeyCharacterMap::Parser::parseMapKey() {
                 mapUsage ? "usage" : "scan code", codeToken.string());
         return BAD_VALUE;
     }
-    KeyedVector<int32_t, int32_t>& map =
-            mapUsage ? mMap->mKeysByUsageCode : mMap->mKeysByScanCode;
-    if (map.indexOfKey(code) >= 0) {
+    std::map<int32_t, int32_t>& map = mapUsage ? mMap->mKeysByUsageCode : mMap->mKeysByScanCode;
+    const auto it = map.find(code);
+    if (it != map.end()) {
         ALOGE("%s: Duplicate entry for key %s '%s'.", mTokenizer->getLocation().string(),
                 mapUsage ? "usage" : "scan code", codeToken.string());
         return BAD_VALUE;
@@ -1002,7 +999,7 @@ status_t KeyCharacterMap::Parser::parseMapKey() {
 
     mTokenizer->skipDelimiters(WHITESPACE);
     String8 keyCodeToken = mTokenizer->nextToken(WHITESPACE);
-    int32_t keyCode = InputEventLookup::getKeyCodeByLabel(keyCodeToken.string());
+    std::optional<int> keyCode = InputEventLookup::getKeyCodeByLabel(keyCodeToken.string());
     if (!keyCode) {
         ALOGE("%s: Expected key code label, got '%s'.", mTokenizer->getLocation().string(),
                 keyCodeToken.string());
@@ -1013,19 +1010,19 @@ status_t KeyCharacterMap::Parser::parseMapKey() {
     ALOGD("Parsed map key %s: code=%d, keyCode=%d.",
             mapUsage ? "usage" : "scan code", code, keyCode);
 #endif
-    map.add(code, keyCode);
+    map.insert_or_assign(code, *keyCode);
     return NO_ERROR;
 }
 
 status_t KeyCharacterMap::Parser::parseKey() {
     String8 keyCodeToken = mTokenizer->nextToken(WHITESPACE);
-    int32_t keyCode = InputEventLookup::getKeyCodeByLabel(keyCodeToken.string());
+    std::optional<int> keyCode = InputEventLookup::getKeyCodeByLabel(keyCodeToken.string());
     if (!keyCode) {
         ALOGE("%s: Expected key code label, got '%s'.", mTokenizer->getLocation().string(),
                 keyCodeToken.string());
         return BAD_VALUE;
     }
-    if (mMap->mKeys.indexOfKey(keyCode) >= 0) {
+    if (mMap->mKeys.indexOfKey(*keyCode) >= 0) {
         ALOGE("%s: Duplicate entry for key code '%s'.", mTokenizer->getLocation().string(),
                 keyCodeToken.string());
         return BAD_VALUE;
@@ -1039,11 +1036,9 @@ status_t KeyCharacterMap::Parser::parseKey() {
         return BAD_VALUE;
     }
 
-#if DEBUG_PARSER
-    ALOGD("Parsed beginning of key: keyCode=%d.", keyCode);
-#endif
-    mKeyCode = keyCode;
-    mMap->mKeys.add(keyCode, new Key());
+    ALOGD_IF(DEBUG_PARSER, "Parsed beginning of key: keyCode=%d.", *keyCode);
+    mKeyCode = *keyCode;
+    mMap->mKeys.add(*keyCode, new Key());
     mState = STATE_KEY;
     return NO_ERROR;
 }
@@ -1139,7 +1134,7 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
             } else if (token == "fallback") {
                 mTokenizer->skipDelimiters(WHITESPACE);
                 token = mTokenizer->nextToken(WHITESPACE);
-                int32_t keyCode = InputEventLookup::getKeyCodeByLabel(token.string());
+                std::optional<int> keyCode = InputEventLookup::getKeyCodeByLabel(token.string());
                 if (!keyCode) {
                     ALOGE("%s: Invalid key code label for fallback behavior, got '%s'.",
                             mTokenizer->getLocation().string(),
@@ -1151,12 +1146,12 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
                             mTokenizer->getLocation().string());
                     return BAD_VALUE;
                 }
-                behavior.fallbackKeyCode = keyCode;
+                behavior.fallbackKeyCode = *keyCode;
                 haveFallback = true;
             } else if (token == "replace") {
                 mTokenizer->skipDelimiters(WHITESPACE);
                 token = mTokenizer->nextToken(WHITESPACE);
-                int32_t keyCode = InputEventLookup::getKeyCodeByLabel(token.string());
+                std::optional<int> keyCode = InputEventLookup::getKeyCodeByLabel(token.string());
                 if (!keyCode) {
                     ALOGE("%s: Invalid key code label for replace, got '%s'.",
                             mTokenizer->getLocation().string(),
@@ -1173,7 +1168,7 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
                             mTokenizer->getLocation().string());
                     return BAD_VALUE;
                 }
-                behavior.replacementKeyCode = keyCode;
+                behavior.replacementKeyCode = *keyCode;
                 haveReplacement = true;
 
             } else {
@@ -1213,23 +1208,21 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
 #endif
             break;
         case PROPERTY_META: {
-            for (Behavior* b = key->firstBehavior; b; b = b->next) {
-                if (b->metaState == property.metaState) {
+            for (const Behavior& b : key->behaviors) {
+                if (b.metaState == property.metaState) {
                     ALOGE("%s: Duplicate key behavior for modifier.",
                             mTokenizer->getLocation().string());
                     return BAD_VALUE;
                 }
             }
-            Behavior* newBehavior = new Behavior(behavior);
-            newBehavior->metaState = property.metaState;
-            newBehavior->next = key->firstBehavior;
-            key->firstBehavior = newBehavior;
-#if DEBUG_PARSER
-            ALOGD("Parsed key meta: keyCode=%d, meta=0x%x, char=%d, fallback=%d replace=%d.",
-                    mKeyCode,
-                    newBehavior->metaState, newBehavior->character,
-                    newBehavior->fallbackKeyCode, newBehavior->replacementKeyCode);
-#endif
+            Behavior newBehavior = behavior;
+            newBehavior.metaState = property.metaState;
+            key->behaviors.push_front(newBehavior);
+            ALOGD_IF(DEBUG_PARSER,
+                     "Parsed key meta: keyCode=%d, meta=0x%x, char=%d, fallback=%d replace=%d.",
+                     mKeyCode, key->behaviors.front().metaState, key->behaviors.front().character,
+                     key->behaviors.front().fallbackKeyCode,
+                     key->behaviors.front().replacementKeyCode);
             break;
         }
         }
@@ -1242,8 +1235,8 @@ status_t KeyCharacterMap::Parser::finishKey(Key* key) {
     if (!key->number) {
         char16_t digit = 0;
         char16_t symbol = 0;
-        for (Behavior* b = key->firstBehavior; b; b = b->next) {
-            char16_t ch = b->character;
+        for (const Behavior& b : key->behaviors) {
+            char16_t ch = b.character;
             if (ch) {
                 if (ch >= '0' && ch <= '9') {
                     digit = ch;

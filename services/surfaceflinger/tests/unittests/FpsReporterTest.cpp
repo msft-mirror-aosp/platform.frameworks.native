@@ -24,9 +24,6 @@
 #include <gtest/gtest.h>
 #include <gui/LayerMetadata.h>
 
-#include "BufferQueueLayer.h"
-#include "BufferStateLayer.h"
-#include "EffectLayer.h"
 #include "FpsReporter.h"
 #include "Layer.h"
 #include "TestableSurfaceFlinger.h"
@@ -51,6 +48,7 @@ using android::Hwc2::IComposer;
 using android::Hwc2::IComposerClient;
 
 using FakeHwcDisplayInjector = TestableSurfaceFlinger::FakeHwcDisplayInjector;
+using gui::LayerMetadata;
 
 struct TestableFpsListener : public gui::BnFpsListener {
     TestableFpsListener() {}
@@ -80,7 +78,7 @@ protected:
     static constexpr int32_t PRIORITY_UNSET = -1;
 
     void setupScheduler();
-    sp<BufferStateLayer> createBufferStateLayer(LayerMetadata metadata);
+    sp<Layer> createBufferStateLayer(LayerMetadata metadata);
 
     TestableSurfaceFlinger mFlinger;
     mock::FrameTimeline mFrameTimeline =
@@ -95,8 +93,8 @@ protected:
 
     sp<TestableFpsListener> mFpsListener;
     fake::FakeClock* mClock = new fake::FakeClock();
-    sp<FpsReporter> mFpsReporter =
-            new FpsReporter(mFrameTimeline, *(mFlinger.flinger()), std::unique_ptr<Clock>(mClock));
+    sp<FpsReporter> mFpsReporter = sp<FpsReporter>::make(mFrameTimeline, *(mFlinger.flinger()),
+                                                         std::unique_ptr<Clock>(mClock));
 };
 
 FpsReporterTest::FpsReporterTest() {
@@ -107,7 +105,7 @@ FpsReporterTest::FpsReporterTest() {
     setupScheduler();
     mFlinger.setupComposer(std::make_unique<Hwc2::mock::Composer>());
 
-    mFpsListener = new TestableFpsListener();
+    mFpsListener = sp<TestableFpsListener>::make();
 }
 
 FpsReporterTest::~FpsReporterTest() {
@@ -116,10 +114,10 @@ FpsReporterTest::~FpsReporterTest() {
     ALOGD("**** Tearing down after %s.%s\n", test_info->test_case_name(), test_info->name());
 }
 
-sp<BufferStateLayer> FpsReporterTest::createBufferStateLayer(LayerMetadata metadata = {}) {
+sp<Layer> FpsReporterTest::createBufferStateLayer(LayerMetadata metadata = {}) {
     sp<Client> client;
     LayerCreationArgs args(mFlinger.flinger(), client, "buffer-state-layer", LAYER_FLAGS, metadata);
-    return new BufferStateLayer(args);
+    return sp<Layer>::make(args);
 }
 
 void FpsReporterTest::setupScheduler() {
@@ -128,13 +126,15 @@ void FpsReporterTest::setupScheduler() {
 
     EXPECT_CALL(*eventThread, registerDisplayEventConnection(_));
     EXPECT_CALL(*eventThread, createEventConnection(_, _))
-            .WillOnce(Return(new EventThreadConnection(eventThread.get(), /*callingUid=*/0,
-                                                       ResyncCallback())));
+            .WillOnce(Return(sp<EventThreadConnection>::make(eventThread.get(),
+                                                             mock::EventThread::kCallingUid,
+                                                             ResyncCallback())));
 
     EXPECT_CALL(*sfEventThread, registerDisplayEventConnection(_));
     EXPECT_CALL(*sfEventThread, createEventConnection(_, _))
-            .WillOnce(Return(new EventThreadConnection(sfEventThread.get(), /*callingUid=*/0,
-                                                       ResyncCallback())));
+            .WillOnce(Return(sp<EventThreadConnection>::make(sfEventThread.get(),
+                                                             mock::EventThread::kCallingUid,
+                                                             ResyncCallback())));
 
     auto vsyncController = std::make_unique<mock::VsyncController>();
     auto vsyncTracker = std::make_unique<mock::VSyncTracker>();
@@ -153,7 +153,7 @@ TEST_F(FpsReporterTest, callsListeners) {
     mParent = createBufferStateLayer();
     constexpr int32_t kTaskId = 12;
     LayerMetadata targetMetadata;
-    targetMetadata.setInt32(METADATA_TASK_ID, kTaskId);
+    targetMetadata.setInt32(gui::METADATA_TASK_ID, kTaskId);
     mTarget = createBufferStateLayer(targetMetadata);
     mChild = createBufferStateLayer();
     mGrandChild = createBufferStateLayer();
@@ -188,7 +188,7 @@ TEST_F(FpsReporterTest, callsListeners) {
 TEST_F(FpsReporterTest, rateLimits) {
     const constexpr int32_t kTaskId = 12;
     LayerMetadata targetMetadata;
-    targetMetadata.setInt32(METADATA_TASK_ID, kTaskId);
+    targetMetadata.setInt32(gui::METADATA_TASK_ID, kTaskId);
     mTarget = createBufferStateLayer(targetMetadata);
     mFlinger.mutableCurrentState().layersSortedByZ.add(mTarget);
 

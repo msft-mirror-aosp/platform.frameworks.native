@@ -16,6 +16,7 @@
 
 #undef LOG_TAG
 #define LOG_TAG "LayerTraceGenerator"
+//#define LOG_NDEBUG 0
 
 #include <TestableSurfaceFlinger.h>
 #include <Tracing/TransactionProtoParser.h>
@@ -26,7 +27,6 @@
 #include <log/log.h>
 #include <mock/MockEventThread.h>
 #include <renderengine/ExternalTexture.h>
-#include <renderengine/mock/FakeExternalTexture.h>
 #include <renderengine/mock/RenderEngine.h>
 #include <utils/String16.h>
 #include <string>
@@ -46,42 +46,25 @@ public:
         return std::make_unique<scheduler::FakePhaseOffsets>();
     }
 
-    sp<SurfaceInterceptor> createSurfaceInterceptor() override {
-        return new android::impl::SurfaceInterceptor();
-    }
-
     sp<StartPropertySetThread> createStartPropertySetThread(
             bool /* timestampPropertyValue */) override {
-        return nullptr;
+        return sp<StartPropertySetThread>();
     }
 
     sp<DisplayDevice> createDisplayDevice(DisplayDeviceCreationArgs& /* creationArgs */) override {
-        return nullptr;
+        return sp<DisplayDevice>();
     }
 
     sp<GraphicBuffer> createGraphicBuffer(uint32_t /* width */, uint32_t /* height */,
                                           PixelFormat /* format */, uint32_t /* layerCount */,
                                           uint64_t /* usage */,
                                           std::string /* requestorName */) override {
-        return nullptr;
+        return sp<GraphicBuffer>();
     }
 
     void createBufferQueue(sp<IGraphicBufferProducer>* /* outProducer */,
                            sp<IGraphicBufferConsumer>* /* outConsumer */,
                            bool /* consumerIsSurfaceFlinger */) override {}
-
-    sp<IGraphicBufferProducer> createMonitoredProducer(
-            const sp<IGraphicBufferProducer>& /* producer */,
-            const sp<SurfaceFlinger>& /* flinger */, const wp<Layer>& /* layer */) override {
-        return nullptr;
-    }
-
-    sp<BufferLayerConsumer> createBufferLayerConsumer(
-            const sp<IGraphicBufferConsumer>& /* consumer */,
-            renderengine::RenderEngine& /* renderEngine */, uint32_t /* textureName */,
-            Layer* /* layer */) override {
-        return nullptr;
-    }
 
     std::unique_ptr<surfaceflinger::NativeWindowSurface> createNativeWindowSurface(
             const sp<IGraphicBufferProducer>& /* producer */) override {
@@ -92,21 +75,13 @@ public:
         return compositionengine::impl::createCompositionEngine();
     }
 
-    sp<ContainerLayer> createContainerLayer(const LayerCreationArgs& args) {
-        return sp<ContainerLayer>::make(args);
+    sp<Layer> createBufferStateLayer(const LayerCreationArgs& args) {
+        return sp<Layer>::make(args);
     }
 
-    sp<BufferStateLayer> createBufferStateLayer(const LayerCreationArgs& args) {
-        return new BufferStateLayer(args);
-    }
+    sp<Layer> createEffectLayer(const LayerCreationArgs& args) { return sp<Layer>::make(args); }
 
-    sp<EffectLayer> createEffectLayer(const LayerCreationArgs& args) {
-        return new EffectLayer(args);
-    }
-
-    sp<BufferQueueLayer> createBufferQueueLayer(const LayerCreationArgs&) override {
-        return nullptr;
-    }
+    sp<LayerFE> createLayerFE(const std::string& layerName) { return sp<LayerFE>::make(layerName); }
 
     std::unique_ptr<FrameTracer> createFrameTracer() override {
         return std::make_unique<testing::NiceMock<mock::FrameTracer>>();
@@ -119,18 +94,41 @@ public:
     }
 };
 
+class FakeExternalTexture : public renderengine::ExternalTexture {
+    const sp<GraphicBuffer> mNullBuffer = nullptr;
+    uint32_t mWidth;
+    uint32_t mHeight;
+    uint64_t mId;
+    PixelFormat mPixelFormat;
+    uint64_t mUsage;
+
+public:
+    FakeExternalTexture(uint32_t width, uint32_t height, uint64_t id, PixelFormat pixelFormat,
+                        uint64_t usage)
+          : mWidth(width), mHeight(height), mId(id), mPixelFormat(pixelFormat), mUsage(usage) {}
+    const sp<GraphicBuffer>& getBuffer() const { return mNullBuffer; }
+    bool hasSameBuffer(const renderengine::ExternalTexture& other) const override {
+        return getId() == other.getId();
+    }
+    uint32_t getWidth() const override { return mWidth; }
+    uint32_t getHeight() const override { return mHeight; }
+    uint64_t getId() const override { return mId; }
+    PixelFormat getPixelFormat() const override { return mPixelFormat; }
+    uint64_t getUsage() const override { return mUsage; }
+    ~FakeExternalTexture() = default;
+};
+
 class MockSurfaceFlinger : public SurfaceFlinger {
 public:
     MockSurfaceFlinger(Factory& factory)
           : SurfaceFlinger(factory, SurfaceFlinger::SkipInitialization) {}
     std::shared_ptr<renderengine::ExternalTexture> getExternalTextureFromBufferData(
-            const BufferData& bufferData, const char* /* layerName */) const override {
-        return std::make_shared<renderengine::mock::FakeExternalTexture>(bufferData.getWidth(),
-                                                                         bufferData.getHeight(),
-                                                                         bufferData.getId(),
-                                                                         bufferData
-                                                                                 .getPixelFormat(),
-                                                                         bufferData.getUsage());
+            BufferData& bufferData, const char* /* layerName */,
+            uint64_t /* transactionId */) override {
+        return std::make_shared<FakeExternalTexture>(bufferData.getWidth(), bufferData.getHeight(),
+                                                     bufferData.getId(),
+                                                     bufferData.getPixelFormat(),
+                                                     bufferData.getUsage());
     };
 
     // b/220017192 migrate from transact codes to ISurfaceComposer apis
@@ -140,6 +138,14 @@ public:
         data.writeInterfaceToken(String16("android.ui.ISurfaceComposer"));
         data.writeInt32(flags);
         transact(1033, data, &reply, 0 /* flags */);
+    }
+
+    void setLayerTraceSize(int32_t sizeInKb) {
+        Parcel data;
+        Parcel reply;
+        data.writeInterfaceToken(String16("android.ui.ISurfaceComposer"));
+        data.writeInt32(sizeInKb);
+        transact(1029, data, &reply, 0 /* flags */);
     }
 
     void startLayerTracing(int64_t traceStartTime) {
@@ -181,11 +187,12 @@ public:
 bool LayerTraceGenerator::generate(const proto::TransactionTraceFile& traceFile,
                                    const char* outputLayersTracePath) {
     if (traceFile.entry_size() == 0) {
+        ALOGD("Trace file is empty");
         return false;
     }
 
     Factory mFactory;
-    sp<MockSurfaceFlinger> flinger = new MockSurfaceFlinger(mFactory);
+    sp<MockSurfaceFlinger> flinger = sp<MockSurfaceFlinger>::make(mFactory);
     TestableSurfaceFlinger mFlinger(flinger);
     mFlinger.setupRenderEngine(
             std::make_unique<testing::NiceMock<renderengine::mock::RenderEngine>>());
@@ -205,32 +212,31 @@ bool LayerTraceGenerator::generate(const proto::TransactionTraceFile& traceFile,
     mFlinger.mutableMaxRenderTargetSize() = 16384;
 
     flinger->setLayerTracingFlags(LayerTracing::TRACE_INPUT | LayerTracing::TRACE_BUFFERS);
+    flinger->setLayerTraceSize(512 * 1024); // 512MB buffer size
     flinger->startLayerTracing(traceFile.entry(0).elapsed_realtime_nanos());
     std::unique_ptr<TraceGenFlingerDataMapper> mapper =
             std::make_unique<TraceGenFlingerDataMapper>();
     TraceGenFlingerDataMapper* dataMapper = mapper.get();
     TransactionProtoParser parser(std::move(mapper));
 
-    nsecs_t frameTime;
-    int64_t vsyncId;
     ALOGD("Generating %d transactions...", traceFile.entry_size());
     for (int i = 0; i < traceFile.entry_size(); i++) {
         proto::TransactionTraceEntry entry = traceFile.entry(i);
         ALOGV("    Entry %04d/%04d for time=%" PRId64 " vsyncid=%" PRId64
-              " layers +%d -%d transactions=%d",
+              " layers +%d -%d handles -%d transactions=%d",
               i, traceFile.entry_size(), entry.elapsed_realtime_nanos(), entry.vsync_id(),
-              entry.added_layers_size(), entry.removed_layers_size(), entry.transactions_size());
+              entry.added_layers_size(), entry.removed_layers_size(),
+              entry.removed_layer_handles_size(), entry.transactions_size());
 
         for (int j = 0; j < entry.added_layers_size(); j++) {
             // create layers
             TracingLayerCreationArgs tracingArgs;
             parser.fromProto(entry.added_layers(j), tracingArgs);
 
-            sp<IBinder> outHandle;
-            int32_t outLayerId;
+            gui::CreateSurfaceResult outResult;
             LayerCreationArgs args(mFlinger.flinger(), nullptr /* client */, tracingArgs.name,
-                                   tracingArgs.flags, LayerMetadata());
-            args.sequence = std::make_optional<int32_t>(tracingArgs.layerId);
+                                   tracingArgs.flags, LayerMetadata(),
+                                   std::make_optional<int32_t>(tracingArgs.layerId));
 
             if (tracingArgs.mirrorFromId == -1) {
                 sp<IBinder> parentHandle = nullptr;
@@ -238,40 +244,33 @@ bool LayerTraceGenerator::generate(const proto::TransactionTraceFile& traceFile,
                     (dataMapper->mLayerHandles.find(tracingArgs.parentId) ==
                      dataMapper->mLayerHandles.end())) {
                     args.addToRoot = false;
-                } else {
+                } else if (tracingArgs.parentId != -1) {
                     parentHandle = dataMapper->getLayerHandle(tracingArgs.parentId);
                 }
-                mFlinger.createLayer(args, &outHandle, parentHandle, &outLayerId,
-                                     nullptr /* parentLayer */, nullptr /* outTransformHint */);
+                mFlinger.createLayer(args, parentHandle, outResult);
             } else {
                 sp<IBinder> mirrorFromHandle = dataMapper->getLayerHandle(tracingArgs.mirrorFromId);
-                mFlinger.mirrorLayer(args, mirrorFromHandle, &outHandle, &outLayerId);
+                mFlinger.mirrorLayer(args, mirrorFromHandle, outResult);
             }
-            LOG_ALWAYS_FATAL_IF(outLayerId != tracingArgs.layerId,
+            LOG_ALWAYS_FATAL_IF(outResult.layerId != tracingArgs.layerId,
                                 "Could not create layer expected:%d actual:%d", tracingArgs.layerId,
-                                outLayerId);
-            dataMapper->mLayerHandles[tracingArgs.layerId] = outHandle;
+                                outResult.layerId);
+            dataMapper->mLayerHandles[tracingArgs.layerId] = outResult.handle;
         }
 
         for (int j = 0; j < entry.transactions_size(); j++) {
             // apply transactions
             TransactionState transaction = parser.fromProto(entry.transactions(j));
-            mFlinger.setTransactionState(transaction.frameTimelineInfo, transaction.states,
-                                         transaction.displays, transaction.flags,
-                                         transaction.applyToken, transaction.inputWindowCommands,
-                                         transaction.desiredPresentTime,
-                                         transaction.isAutoTimestamp, {},
-                                         transaction.hasListenerCallbacks,
-                                         transaction.listenerCallbacks, transaction.id);
+            mFlinger.setTransactionStateInternal(transaction);
         }
+
+        const auto frameTime = TimePoint::fromNs(entry.elapsed_realtime_nanos());
+        const auto vsyncId = VsyncId{entry.vsync_id()};
+        mFlinger.commit(frameTime, vsyncId);
 
         for (int j = 0; j < entry.removed_layer_handles_size(); j++) {
             dataMapper->mLayerHandles.erase(entry.removed_layer_handles(j));
         }
-
-        frameTime = entry.elapsed_realtime_nanos();
-        vsyncId = entry.vsync_id();
-        mFlinger.commit(frameTime, vsyncId);
     }
 
     flinger->stopLayerTracing(outputLayersTracePath);

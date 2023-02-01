@@ -38,11 +38,6 @@ TEST_F(OnInitializeDisplaysTest, onInitializeDisplaysSetsUpPrimaryDisplay) {
     // --------------------------------------------------------------------
     // Call Expectations
 
-    // We expect the surface interceptor to possibly be used, but we treat it as
-    // disabled since it is called as a side effect rather than directly by this
-    // function.
-    EXPECT_CALL(*mSurfaceInterceptor, isEnabled()).WillOnce(Return(false));
-
     // We expect a call to get the active display config.
     Case::Display::setupHwcGetActiveConfigCallExpectations(this);
 
@@ -78,19 +73,8 @@ TEST_F(OnInitializeDisplaysTest, onInitializeDisplaysSetsUpPrimaryDisplay) {
     auto displayDevice = primaryDisplay.mutableDisplayDevice();
     EXPECT_EQ(PowerMode::ON, displayDevice->getPowerMode());
 
-    // The display refresh period should be set in the orientedDisplaySpaceRect tracker.
-    FrameStats stats;
-    mFlinger.getAnimFrameTracker().getStats(&stats);
-    EXPECT_EQ(DEFAULT_VSYNC_PERIOD, stats.refreshPeriodNano);
-
     // The display transaction needed flag should be set.
     EXPECT_TRUE(hasTransactionFlagSet(eDisplayTransactionNeeded));
-
-    // The compositor timing should be set to default values
-    const auto& compositorTiming = mFlinger.getCompositorTiming();
-    EXPECT_EQ(-DEFAULT_VSYNC_PERIOD, compositorTiming.deadline);
-    EXPECT_EQ(DEFAULT_VSYNC_PERIOD, compositorTiming.interval);
-    EXPECT_EQ(DEFAULT_VSYNC_PERIOD, compositorTiming.presentLatency);
 }
 
 } // namespace

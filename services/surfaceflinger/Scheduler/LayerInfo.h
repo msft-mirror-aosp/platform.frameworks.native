@@ -28,7 +28,7 @@
 #include <scheduler/Seamlessness.h>
 
 #include "LayerHistory.h"
-#include "RefreshRateConfigs.h"
+#include "RefreshRateSelector.h"
 
 namespace android {
 
@@ -53,7 +53,7 @@ class LayerInfo {
     // Layer is considered frequent if the earliest value in the window of most recent present times
     // is within a threshold. If a layer is infrequent, its average refresh rate is disregarded in
     // favor of a low refresh rate.
-    static constexpr size_t kFrequentLayerWindowSize = 3;
+    static constexpr size_t kFrequentLayerWindowSize = 4;
     static constexpr Fps kMinFpsForFrequentLayer = 10_Hz;
     static constexpr auto kMaxPeriodForFrequentLayerNs =
             std::chrono::nanoseconds(kMinFpsForFrequentLayer.getPeriodNsecs()) + 1ms;
@@ -73,6 +73,8 @@ public:
     // the layer.
     enum class FrameRateCompatibility {
         Default, // Layer didn't specify any specific handling strategy
+
+        Min, // Layer needs the minimum frame rate.
 
         Exact, // Layer needs the exact frame rate.
 
@@ -160,7 +162,7 @@ public:
 
     uid_t getOwnerUid() const { return mOwnerUid; }
 
-    LayerVote getRefreshRateVote(const RefreshRateConfigs&, nsecs_t now);
+    LayerVote getRefreshRateVote(const RefreshRateSelector&, nsecs_t now);
 
     // Return the last updated time. If the present time is farther in the future than the
     // updated time, the updated time is the present time.
@@ -212,7 +214,10 @@ private:
         Fps reported;
         // Whether the last reported rate for LayerInfo::getRefreshRate()
         // was due to animation or infrequent updates
-        bool animatingOrInfrequent = false;
+        bool animating = false;
+        // Whether the last reported rate for LayerInfo::getRefreshRate()
+        // was due to infrequent updates
+        bool infrequent = false;
     };
 
     // Class to store past calculated refresh rate and determine whether
@@ -259,7 +264,7 @@ private:
     bool isFrequent(nsecs_t now) const;
     bool isAnimating(nsecs_t now) const;
     bool hasEnoughDataForHeuristic() const;
-    std::optional<Fps> calculateRefreshRateIfPossible(const RefreshRateConfigs&, nsecs_t now);
+    std::optional<Fps> calculateRefreshRateIfPossible(const RefreshRateSelector&, nsecs_t now);
     std::optional<nsecs_t> calculateAverageFrameTime() const;
     bool isFrameTimeValid(const FrameTimeData&) const;
 

@@ -23,6 +23,8 @@
 
 namespace android {
 
+// clang-format off
+
 // NOTE: If you add a new keycode here you must also add it to several other files.
 //       Refer to frameworks/base/core/java/android/view/KeyEvent.java for the full list.
 #define KEYCODES_SEQUENCE \
@@ -314,7 +316,31 @@ namespace android {
     DEFINE_KEYCODE(REFRESH), \
     DEFINE_KEYCODE(THUMBS_UP), \
     DEFINE_KEYCODE(THUMBS_DOWN), \
-    DEFINE_KEYCODE(PROFILE_SWITCH)
+    DEFINE_KEYCODE(PROFILE_SWITCH), \
+    DEFINE_KEYCODE(VIDEO_APP_1), \
+    DEFINE_KEYCODE(VIDEO_APP_2), \
+    DEFINE_KEYCODE(VIDEO_APP_3), \
+    DEFINE_KEYCODE(VIDEO_APP_4), \
+    DEFINE_KEYCODE(VIDEO_APP_5), \
+    DEFINE_KEYCODE(VIDEO_APP_6), \
+    DEFINE_KEYCODE(VIDEO_APP_7), \
+    DEFINE_KEYCODE(VIDEO_APP_8), \
+    DEFINE_KEYCODE(FEATURED_APP_1), \
+    DEFINE_KEYCODE(FEATURED_APP_2), \
+    DEFINE_KEYCODE(FEATURED_APP_3), \
+    DEFINE_KEYCODE(FEATURED_APP_4), \
+    DEFINE_KEYCODE(DEMO_APP_1), \
+    DEFINE_KEYCODE(DEMO_APP_2), \
+    DEFINE_KEYCODE(DEMO_APP_3), \
+    DEFINE_KEYCODE(DEMO_APP_4), \
+    DEFINE_KEYCODE(KEYBOARD_BACKLIGHT_DOWN), \
+    DEFINE_KEYCODE(KEYBOARD_BACKLIGHT_UP), \
+    DEFINE_KEYCODE(KEYBOARD_BACKLIGHT_TOGGLE), \
+    DEFINE_KEYCODE(STYLUS_BUTTON_PRIMARY), \
+    DEFINE_KEYCODE(STYLUS_BUTTON_SECONDARY), \
+    DEFINE_KEYCODE(STYLUS_BUTTON_TERTIARY), \
+    DEFINE_KEYCODE(STYLUS_BUTTON_TAIL), \
+    DEFINE_KEYCODE(RECENT_APPS)
 
 // NOTE: If you add a new axis here you must also add it to several other files.
 //       Refer to frameworks/base/core/java/android/view/MotionEvent.java for the full list.
@@ -366,8 +392,12 @@ namespace android {
     DEFINE_AXIS(GENERIC_13), \
     DEFINE_AXIS(GENERIC_14), \
     DEFINE_AXIS(GENERIC_15), \
-    DEFINE_AXIS(GENERIC_16)
-
+    DEFINE_AXIS(GENERIC_16), \
+    DEFINE_AXIS(GESTURE_X_OFFSET), \
+    DEFINE_AXIS(GESTURE_Y_OFFSET), \
+    DEFINE_AXIS(GESTURE_SCROLL_X_DISTANCE), \
+    DEFINE_AXIS(GESTURE_SCROLL_Y_DISTANCE), \
+    DEFINE_AXIS(GESTURE_PINCH_SCALE_FACTOR)
 
 // NOTE: If you add new LEDs here, you must also add them to Input.h
 #define LEDS_SEQUENCE \
@@ -393,6 +423,8 @@ namespace android {
     DEFINE_FLAG(GESTURE), \
     DEFINE_FLAG(WAKE)
 
+// clang-format on
+
 // --- InputEventLookup ---
 const std::unordered_map<std::string, int> InputEventLookup::KEYCODES = {KEYCODES_SEQUENCE};
 
@@ -406,11 +438,11 @@ const std::unordered_map<std::string, int> InputEventLookup::LEDS = {LEDS_SEQUEN
 
 const std::unordered_map<std::string, int> InputEventLookup::FLAGS = {FLAGS_SEQUENCE};
 
-int InputEventLookup::lookupValueByLabel(const std::unordered_map<std::string, int>& map,
-                                         const char* literal) {
+std::optional<int> InputEventLookup::lookupValueByLabel(
+        const std::unordered_map<std::string, int>& map, const char* literal) {
     std::string str(literal);
     auto it = map.find(str);
-    return it != map.end() ? it->second : 0;
+    return it != map.end() ? std::make_optional(it->second) : std::nullopt;
 }
 
 const char* InputEventLookup::lookupLabelByValue(const std::vector<InputEventLabel>& vec,
@@ -421,8 +453,8 @@ const char* InputEventLookup::lookupLabelByValue(const std::vector<InputEventLab
     return nullptr;
 }
 
-int32_t InputEventLookup::getKeyCodeByLabel(const char* label) {
-    return int32_t(lookupValueByLabel(KEYCODES, label));
+std::optional<int> InputEventLookup::getKeyCodeByLabel(const char* label) {
+    return lookupValueByLabel(KEYCODES, label);
 }
 
 const char* InputEventLookup::getLabelByKeyCode(int32_t keyCode) {
@@ -432,20 +464,20 @@ const char* InputEventLookup::getLabelByKeyCode(int32_t keyCode) {
     return nullptr;
 }
 
-uint32_t InputEventLookup::getKeyFlagByLabel(const char* label) {
-    return uint32_t(lookupValueByLabel(FLAGS, label));
+std::optional<int> InputEventLookup::getKeyFlagByLabel(const char* label) {
+    return lookupValueByLabel(FLAGS, label);
 }
 
-int32_t InputEventLookup::getAxisByLabel(const char* label) {
-    return int32_t(lookupValueByLabel(AXES, label));
+std::optional<int> InputEventLookup::getAxisByLabel(const char* label) {
+    return lookupValueByLabel(AXES, label);
 }
 
 const char* InputEventLookup::getAxisLabel(int32_t axisId) {
     return lookupLabelByValue(AXES_NAMES, axisId);
 }
 
-int32_t InputEventLookup::getLedByLabel(const char* label) {
-    return int32_t(lookupValueByLabel(LEDS, label));
+std::optional<int> InputEventLookup::getLedByLabel(const char* label) {
+    return lookupValueByLabel(LEDS, label);
 }
 
 } // namespace android

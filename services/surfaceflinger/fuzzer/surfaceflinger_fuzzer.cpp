@@ -103,7 +103,7 @@ static constexpr uint32_t kMaxCode = 1050;
 class SurfaceFlingerFuzzer {
 public:
     SurfaceFlingerFuzzer(const uint8_t *data, size_t size) : mFdp(data, size) {
-        mFlinger = mTestableFlinger.flinger();
+        mFlinger = sp<SurfaceFlinger>::fromExisting(mTestableFlinger.flinger());
     };
     void process(const uint8_t *data, size_t size);
 
@@ -130,7 +130,7 @@ void SurfaceFlingerFuzzer::invokeFlinger() {
     mFlinger->maxFrameBufferAcquiredBuffers = mFdp.ConsumeIntegral<int64_t>();
     mFlinger->maxGraphicsWidth = mFdp.ConsumeIntegral<uint32_t>();
     mFlinger->maxGraphicsHeight = mFdp.ConsumeIntegral<uint32_t>();
-    mFlinger->hasWideColorDisplay = mFdp.ConsumeBool();
+    mTestableFlinger.mutableSupportsWideColor() = mFdp.ConsumeBool();
     mFlinger->useContextPriority = mFdp.ConsumeBool();
 
     mFlinger->defaultCompositionDataspace = mFdp.PickValueInArray(kDataspaces);
@@ -150,8 +150,7 @@ void SurfaceFlingerFuzzer::invokeFlinger() {
 
     sp<IBinder> handle = defaultServiceManager()->checkService(
             String16(mFdp.ConsumeRandomLengthString().c_str()));
-    mFlinger->fromHandle(handle);
-    mFlinger->windowInfosReported();
+    LayerHandle::getLayer(handle);
     mFlinger->disableExpensiveRendering();
 }
 
@@ -238,7 +237,8 @@ void SurfaceFlingerFuzzer::process(const uint8_t *data, size_t size) {
 
     mTestableFlinger.enableHalVirtualDisplays(mFdp.ConsumeBool());
 
-    mTestableFlinger.commitTransactionsLocked(mFdp.ConsumeIntegral<uint32_t>());
+    FTL_FAKE_GUARD(kMainThreadContext,
+                   mTestableFlinger.commitTransactionsLocked(mFdp.ConsumeIntegral<uint32_t>()));
 
     mTestableFlinger.notifyPowerBoost(mFdp.ConsumeIntegral<int32_t>());
 

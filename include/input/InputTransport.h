@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef _LIBINPUT_INPUT_TRANSPORT_H
-#define _LIBINPUT_INPUT_TRANSPORT_H
+#pragma once
 
 #pragma GCC system_header
 
@@ -452,8 +451,11 @@ private:
  */
 class InputConsumer {
 public:
-    /* Creates a consumer associated with an input channel. */
+    /* Create a consumer associated with an input channel. */
     explicit InputConsumer(const std::shared_ptr<InputChannel>& channel);
+    /* Create a consumer associated with an input channel, override resampling system property */
+    explicit InputConsumer(const std::shared_ptr<InputChannel>& channel,
+                           bool enableTouchResampling);
 
     /* Destroys the consumer and releases its input channel. */
     ~InputConsumer();
@@ -671,5 +673,3 @@ private:
 };
 
 } // namespace android
-
-#endif // _LIBINPUT_INPUT_TRANSPORT_H

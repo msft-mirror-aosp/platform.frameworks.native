@@ -263,6 +263,12 @@ static_assert(static_cast<common::Axis>(AMOTION_EVENT_AXIS_GENERIC_13) == common
 static_assert(static_cast<common::Axis>(AMOTION_EVENT_AXIS_GENERIC_14) == common::Axis::GENERIC_14);
 static_assert(static_cast<common::Axis>(AMOTION_EVENT_AXIS_GENERIC_15) == common::Axis::GENERIC_15);
 static_assert(static_cast<common::Axis>(AMOTION_EVENT_AXIS_GENERIC_16) == common::Axis::GENERIC_16);
+// TODO(b/251196347): add GESTURE_{X,Y}_OFFSET, GESTURE_SCROLL_{X,Y}_DISTANCE, and
+// GESTURE_PINCH_SCALE_FACTOR.
+// If you added a new axis, consider whether this should also be exposed as a HAL axis. Update the
+// static_assert below and add the new axis here, or leave a comment summarizing your decision.
+static_assert(static_cast<common::Axis>(AMOTION_EVENT_MAXIMUM_VALID_AXIS_VALUE) ==
+              static_cast<common::Axis>(AMOTION_EVENT_AXIS_GESTURE_PINCH_SCALE_FACTOR));
 
 static common::VideoFrame getHalVideoFrame(const TouchVideoFrame& frame) {
     common::VideoFrame out;
@@ -299,8 +305,8 @@ static void getHalPropertiesAndCoords(const NotifyMotionArgs& args,
         common::PointerCoords coords;
         // OK to copy bits because we have static_assert for pointerCoords axes
         coords.bits = args.pointerCoords[i].bits;
-        coords.values = std::vector<float>(args.pointerCoords[i].values,
-                                           args.pointerCoords[i].values +
+        coords.values = std::vector<float>(args.pointerCoords[i].values.cbegin(),
+                                           args.pointerCoords[i].values.cbegin() +
                                                    BitSet64::count(args.pointerCoords[i].bits));
         outPointerCoords.push_back(coords);
     }

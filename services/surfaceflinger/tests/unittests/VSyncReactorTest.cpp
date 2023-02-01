@@ -50,6 +50,7 @@ public:
     MOCK_METHOD0(resetModel, void());
     MOCK_CONST_METHOD0(needsMoreSamples, bool());
     MOCK_CONST_METHOD2(isVSyncInPhase, bool(nsecs_t, Fps));
+    MOCK_METHOD(void, setDivisor, (unsigned), (override));
     MOCK_CONST_METHOD1(dump, void(std::string&));
 };
 
@@ -68,21 +69,13 @@ private:
     std::shared_ptr<Clock> const mClock;
 };
 
-struct MockVSyncDispatch : VSyncDispatch {
-    MOCK_METHOD(CallbackToken, registerCallback, (Callback, std::string), (override));
-    MOCK_METHOD(void, unregisterCallback, (CallbackToken), (override));
-    MOCK_METHOD(ScheduleResult, schedule, (CallbackToken, ScheduleTiming), (override));
-    MOCK_METHOD(CancelResult, cancel, (CallbackToken), (override));
-    MOCK_METHOD(void, dump, (std::string&), (const, override));
-};
-
 std::shared_ptr<android::FenceTime> generateInvalidFence() {
-    sp<Fence> fence = new Fence();
+    sp<Fence> fence = sp<Fence>::make();
     return std::make_shared<android::FenceTime>(fence);
 }
 
 std::shared_ptr<android::FenceTime> generatePendingFence() {
-    sp<Fence> fence = new Fence(dup(fileno(tmpfile())));
+    sp<Fence> fence = sp<Fence>::make(dup(fileno(tmpfile())));
     return std::make_shared<android::FenceTime>(fence);
 }
 
@@ -92,7 +85,7 @@ void signalFenceWithTime(std::shared_ptr<android::FenceTime> const& fence, nsecs
 }
 
 std::shared_ptr<android::FenceTime> generateSignalledFenceWithTime(nsecs_t time) {
-    sp<Fence> fence = new Fence(dup(fileno(tmpfile())));
+    sp<Fence> fence = sp<Fence>::make(dup(fileno(tmpfile())));
     std::shared_ptr<android::FenceTime> ft = std::make_shared<android::FenceTime>(fence);
     signalFenceWithTime(ft, time);
     return ft;
@@ -347,6 +340,23 @@ TEST_F(VSyncReactorTest, addResyncSamplePeriodChanges) {
         EXPECT_FALSE(mReactor.addHwVsyncTimestamp(time, std::nullopt, &periodFlushed));
         EXPECT_FALSE(periodFlushed);
     }
+}
+
+TEST_F(VSyncReactorTest, addHwVsyncTimestampDozePreempt) {
+    bool periodFlushed = false;
+    nsecs_t const newPeriod = 4000;
+
+    mReactor.startPeriodTransition(newPeriod);
+
+    auto time = 0;
+    // If the power mode is not DOZE or DOZE_SUSPEND, it is still collecting timestamps.
+    EXPECT_TRUE(mReactor.addHwVsyncTimestamp(time, std::nullopt, &periodFlushed));
+    EXPECT_FALSE(periodFlushed);
+
+    // Set power mode to DOZE to trigger period flushing.
+    mReactor.setDisplayPowerMode(hal::PowerMode::DOZE);
+    EXPECT_FALSE(mReactor.addHwVsyncTimestamp(time, std::nullopt, &periodFlushed));
+    EXPECT_TRUE(periodFlushed);
 }
 
 TEST_F(VSyncReactorTest, addPresentFenceWhileAwaitingPeriodConfirmationRequestsHwVsync) {

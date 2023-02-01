@@ -27,7 +27,6 @@
 #include "Clock.h"
 #include "Layer.h"
 #include "Scheduler/EventThread.h"
-#include "Scheduler/RefreshRateConfigs.h"
 #include "Scheduler/Scheduler.h"
 #include "Scheduler/VSyncTracker.h"
 #include "Scheduler/VsyncModulator.h"
@@ -79,22 +78,6 @@ public:
     sp<Layer> createClone() override { return nullptr; }
 };
 
-class FuzzImplVSyncSource : public VSyncSource {
-public:
-    const char* getName() const override { return "fuzz"; }
-
-    void setVSyncEnabled(bool /* enable */) override {}
-
-    void setCallback(Callback* /* callback */) override {}
-
-    void setDuration(std::chrono::nanoseconds /* workDuration */,
-                     std::chrono::nanoseconds /* readyDuration */) override {}
-
-    VSyncData getLatestVSyncData() const override { return {}; }
-
-    void dump(std::string& /* result */) const override {}
-};
-
 class FuzzImplVSyncTracker : public scheduler::VSyncTracker {
 public:
     FuzzImplVSyncTracker(nsecs_t period) { mPeriod = period; }
@@ -116,6 +99,8 @@ public:
     bool isVSyncInPhase(nsecs_t /* timePoint */, Fps /* frameRate */) const override {
         return true;
     }
+
+    void setDivisor(unsigned) override {}
 
     nsecs_t nextVSyncTime(nsecs_t timePoint) const {
         if (timePoint % mPeriod == 0) {

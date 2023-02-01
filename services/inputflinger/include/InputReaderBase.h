@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef _UI_INPUT_READER_BASE_H
-#define _UI_INPUT_READER_BASE_H
+#pragma once
 
 #include <android/os/IInputConstants.h>
 #include <input/DisplayViewport.h>
@@ -24,6 +23,7 @@
 #include <input/VelocityControl.h>
 #include <input/VelocityTracker.h>
 #include <stddef.h>
+#include <ui/Rotation.h>
 #include <unistd.h>
 #include <utils/Errors.h>
 #include <utils/RefBase.h>
@@ -88,6 +88,9 @@ public:
     virtual int32_t getSwitchState(int32_t deviceId, uint32_t sourceMask,
             int32_t sw) = 0;
 
+    virtual void addKeyRemapping(int32_t deviceId, int32_t fromKeyCode,
+                                 int32_t toKeyCode) const = 0;
+
     virtual int32_t getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const = 0;
 
     /* Toggle Caps Lock */
@@ -95,7 +98,7 @@ public:
 
     /* Determine whether physical keys exist for the given framework-domain key codes. */
     virtual bool hasKeys(int32_t deviceId, uint32_t sourceMask,
-            size_t numCodes, const int32_t* keyCodes, uint8_t* outFlags) = 0;
+                         const std::vector<int32_t>& keyCodes, uint8_t* outFlags) = 0;
 
     /* Requests that a reconfiguration of all input devices.
      * The changes flag is a bitfield that indicates what has changed and whether
@@ -114,6 +117,8 @@ public:
     virtual std::optional<int32_t> getBatteryCapacity(int32_t deviceId) = 0;
     /* Get battery status of a particular input device. */
     virtual std::optional<int32_t> getBatteryStatus(int32_t deviceId) = 0;
+    /* Get the device path for the battery of an input device. */
+    virtual std::optional<std::string> getBatteryDevicePath(int32_t deviceId) = 0;
 
     virtual std::vector<InputDeviceLightInfo> getLights(int32_t deviceId) = 0;
 
@@ -141,6 +146,9 @@ public:
     virtual std::optional<int32_t> getLightColor(int32_t deviceId, int32_t lightId) = 0;
     /* Get light player ID */
     virtual std::optional<int32_t> getLightPlayerId(int32_t deviceId, int32_t lightId) = 0;
+
+    /* Get the Bluetooth address of an input device, if known. */
+    virtual std::optional<std::string> getBluetoothAddress(int32_t deviceId) const = 0;
 };
 
 // --- InputReaderConfiguration ---
@@ -153,7 +161,7 @@ public:
 struct InputReaderConfiguration {
     // Describes changes that have occurred.
     enum {
-        // The pointer speed changed.
+        // The mouse pointer speed changed.
         CHANGE_POINTER_SPEED = 1 << 0,
 
         // The pointer gesture control changed.
@@ -183,6 +191,18 @@ struct InputReaderConfiguration {
         // The set of disabled input devices (disabledDevices) has changed.
         CHANGE_ENABLED_STATE = 1 << 9,
 
+        // The device type has been updated.
+        CHANGE_DEVICE_TYPE = 1 << 10,
+
+        // The keyboard layout association has changed.
+        CHANGE_KEYBOARD_LAYOUT_ASSOCIATION = 1 << 11,
+
+        // The stylus button reporting configurations has changed.
+        CHANGE_STYLUS_BUTTON_REPORTING = 1 << 12,
+
+        // The touchpad settings changed.
+        CHANGE_TOUCHPAD_SETTINGS = 1 << 13,
+
         // All devices must be reopened.
         CHANGE_MUST_REOPEN = 1 << 31,
     };
@@ -200,9 +220,17 @@ struct InputReaderConfiguration {
     // Used to determine which DisplayViewport should be tied to which InputDevice.
     std::unordered_map<std::string, uint8_t> portAssociations;
 
-    // The associations between input device names and display unique ids.
+    // The associations between input device physical port locations and display unique ids.
     // Used to determine which DisplayViewport should be tied to which InputDevice.
     std::unordered_map<std::string, std::string> uniqueIdAssociations;
+
+    // The associations between input device ports device types.
+    // This is used to determine which device type and source should be tied to which InputDevice.
+    std::unordered_map<std::string, std::string> deviceTypeAssociations;
+
+    // The map from the input device physical port location to the input device layout info.
+    // Can be used to determine the layout of the keyboard device.
+    std::unordered_map<std::string, KeyboardLayoutInfo> keyboardLayoutAssociations;
 
     // The suggested display ID to show the cursor.
     int32_t defaultPointerDisplayId;
@@ -284,8 +312,26 @@ struct InputReaderConfiguration {
     // The latest request to enable or disable Pointer Capture.
     PointerCaptureRequest pointerCaptureRequest;
 
+    // The touchpad pointer speed, as a number from -7 (slowest) to 7 (fastest).
+    int32_t touchpadPointerSpeed;
+
+    // True to invert the touchpad scrolling direction, so that moving two fingers downwards on the
+    // touchpad scrolls the content upwards.
+    bool touchpadNaturalScrollingEnabled;
+
+    // True to enable tap-to-click on touchpads.
+    bool touchpadTapToClickEnabled;
+
+    // True to enable a zone on the right-hand side of touchpads where clicks will be turned into
+    // context (a.k.a. "right") clicks.
+    bool touchpadRightClickZoneEnabled;
+
     // The set of currently disabled input devices.
     std::set<int32_t> disabledDevices;
+
+    // True if stylus button reporting through motion events should be enabled, in which case
+    // stylus button state changes are reported through motion events.
+    bool stylusButtonMotionEventsEnabled;
 
     InputReaderConfiguration()
           : virtualKeyQuietTime(0),
@@ -307,7 +353,12 @@ struct InputReaderConfiguration {
             pointerGestureMovementSpeedRatio(0.8f),
             pointerGestureZoomSpeedRatio(0.3f),
             showTouches(false),
-            pointerCaptureRequest() {}
+            pointerCaptureRequest(),
+            touchpadPointerSpeed(0),
+            touchpadNaturalScrollingEnabled(true),
+            touchpadTapToClickEnabled(true),
+            touchpadRightClickZoneEnabled(false),
+            stylusButtonMotionEventsEnabled(true) {}
 
     static std::string changesToString(uint32_t changes);
 
@@ -317,7 +368,6 @@ struct InputReaderConfiguration {
     std::optional<DisplayViewport> getDisplayViewportByPort(uint8_t physicalPort) const;
     std::optional<DisplayViewport> getDisplayViewportById(int32_t displayId) const;
     void setDisplayViewports(const std::vector<DisplayViewport>& viewports);
-
 
     void dump(std::string& dump) const;
     void dumpViewport(std::string& dump, const DisplayViewport& viewport) const;
@@ -391,9 +441,9 @@ public:
 
     /* Gets the affine calibration associated with the specified device. */
     virtual TouchAffineTransformation getTouchAffineTransformation(
-            const std::string& inputDeviceDescriptor, int32_t surfaceRotation) = 0;
+            const std::string& inputDeviceDescriptor, ui::Rotation surfaceRotation) = 0;
+    /* Notifies the input reader policy that a stylus gesture has started. */
+    virtual void notifyStylusGestureStarted(int32_t deviceId, nsecs_t eventTime) = 0;
 };
 
 } // namespace android
-
-#endif // _UI_INPUT_READER_COMMON_H

@@ -14,14 +14,13 @@
  * limitations under the License.
  */
 
-#ifndef _UI_INPUT_MANAGER_H
-#define _UI_INPUT_MANAGER_H
+#pragma once
 
 /**
  * Native input manager.
  */
 
-#include "InputClassifier.h"
+#include "InputProcessor.h"
 #include "InputReaderBase.h"
 #include "include/UnwantedInteractionBlockerInterface.h"
 
@@ -52,10 +51,11 @@ class InputDispatcherThread;
  *    this could be a palm on the screen. This stage would alter the event stream to remove either
  *    partially (some of the pointers) or fully (all touches) the unwanted interaction. The events
  *    are processed on the InputReader thread, without any additional queue. The events are then
- *    posted to the queue managed by the InputClassifier.
- * 3. The InputClassifier class starts a thread to communicate with the device-specific
- *    classifiers. It then waits on the queue of events from UnwantedInteractionBlocker, applies
- *    a classification to them, and queues them for the InputDispatcher.
+ *    posted to the queue managed by the InputProcessor.
+ * 3. The InputProcessor class starts a thread to communicate with the device-specific
+ *    IInputProcessor HAL. It then waits on the queue of events from UnwantedInteractionBlocker,
+ *    processes the events (for example, applies a classification to the events), and queues them
+ *    for the InputDispatcher.
  * 4. The InputDispatcher class starts a thread that waits for new events on the
  *    previous queue and asynchronously dispatches them to applications.
  *
@@ -83,10 +83,10 @@ public:
     virtual InputReaderInterface& getReader() = 0;
 
     /* Gets the unwanted interaction blocker. */
-    virtual UnwantedInteractionBlockerInterface& getUnwantedInteractionBlocker() = 0;
+    virtual UnwantedInteractionBlockerInterface& getBlocker() = 0;
 
-    /* Gets the input classifier */
-    virtual InputClassifierInterface& getClassifier() = 0;
+    /* Gets the input processor */
+    virtual InputProcessorInterface& getProcessor() = 0;
 
     /* Gets the input dispatcher. */
     virtual InputDispatcherInterface& getDispatcher() = 0;
@@ -108,8 +108,8 @@ public:
     status_t stop() override;
 
     InputReaderInterface& getReader() override;
-    UnwantedInteractionBlockerInterface& getUnwantedInteractionBlocker() override;
-    InputClassifierInterface& getClassifier() override;
+    UnwantedInteractionBlockerInterface& getBlocker() override;
+    InputProcessorInterface& getProcessor() override;
     InputDispatcherInterface& getDispatcher() override;
     void monitor() override;
 
@@ -123,11 +123,9 @@ private:
 
     std::unique_ptr<UnwantedInteractionBlockerInterface> mBlocker;
 
-    std::unique_ptr<InputClassifierInterface> mClassifier;
+    std::unique_ptr<InputProcessorInterface> mProcessor;
 
     std::unique_ptr<InputDispatcherInterface> mDispatcher;
 };
 
 } // namespace android
-
-#endif // _UI_INPUT_MANAGER_H

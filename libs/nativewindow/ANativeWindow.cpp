@@ -20,10 +20,15 @@
 // from nativewindow/includes/system/window.h
 // (not to be confused with the compatibility-only window.h from system/core/includes)
 #include <system/window.h>
+#include <android/native_window_aidl.h>
 
 #include <private/android/AHardwareBufferHelpers.h>
 
+#include <log/log.h>
 #include <ui/GraphicBuffer.h>
+#include <gui/Surface.h>
+#include <gui/view/Surface.h>
+#include <android/binder_libbinder.h>
 
 using namespace android;
 
@@ -58,6 +63,13 @@ static bool isDataSpaceValid(ANativeWindow* window, int32_t dataSpace) {
         default:
             return false;
     }
+}
+static sp<IGraphicBufferProducer> IGraphicBufferProducer_from_ANativeWindow(ANativeWindow* window) {
+    return Surface::getIGraphicBufferProducer(window);
+}
+
+static sp<IBinder> SurfaceControlHandle_from_ANativeWindow(ANativeWindow* window) {
+    return Surface::getSurfaceControlHandle(window);
 }
 
 /**************************************************************************************************
@@ -176,8 +188,8 @@ int32_t ANativeWindow_setBuffersDataSpace(ANativeWindow* window, int32_t dataSpa
         static_cast<int>(HAL_DATASPACE_BT2020_HLG));
     static_assert(static_cast<int>(ADATASPACE_BT2020_ITU_HLG) ==
         static_cast<int>(HAL_DATASPACE_BT2020_ITU_HLG));
-    static_assert(static_cast<int>(DEPTH) == static_cast<int>(HAL_DATASPACE_DEPTH));
-    static_assert(static_cast<int>(DYNAMIC_DEPTH) == static_cast<int>(HAL_DATASPACE_DYNAMIC_DEPTH));
+    static_assert(static_cast<int>(ADATASPACE_DEPTH) == static_cast<int>(HAL_DATASPACE_DEPTH));
+    static_assert(static_cast<int>(ADATASPACE_DYNAMIC_DEPTH) == static_cast<int>(HAL_DATASPACE_DYNAMIC_DEPTH));
 
     if (!window || !query(window, NATIVE_WINDOW_IS_VALID) ||
             !isDataSpaceValid(window, dataSpace)) {
@@ -191,6 +203,13 @@ int32_t ANativeWindow_getBuffersDataSpace(ANativeWindow* window) {
     if (!window || !query(window, NATIVE_WINDOW_IS_VALID))
         return -EINVAL;
     return query(window, NATIVE_WINDOW_DATASPACE);
+}
+
+int32_t ANativeWindow_getBuffersDefaultDataSpace(ANativeWindow* window) {
+    if (!window || !query(window, NATIVE_WINDOW_IS_VALID)) {
+        return -EINVAL;
+    }
+    return query(window, NATIVE_WINDOW_DEFAULT_DATASPACE);
 }
 
 int32_t ANativeWindow_setFrameRate(ANativeWindow* window, float frameRate, int8_t compatibility) {
@@ -332,6 +351,42 @@ int ANativeWindow_setAutoRefresh(ANativeWindow* window, bool autoRefresh) {
 
 int ANativeWindow_setAutoPrerotation(ANativeWindow* window, bool autoPrerotation) {
     return native_window_set_auto_prerotation(window, autoPrerotation);
+}
+
+binder_status_t ANativeWindow_readFromParcel(
+        const AParcel* _Nonnull parcel, ANativeWindow* _Nullable* _Nonnull outWindow) {
+    const Parcel* nativeParcel = AParcel_viewPlatformParcel(parcel);
+
+    // Use a android::view::Surface to unparcel the window
+    std::shared_ptr<android::view::Surface> shimSurface = std::shared_ptr<android::view::Surface>();
+    status_t ret = shimSurface->readFromParcel(nativeParcel);
+    if (ret != OK) {
+        ALOGE("%s: Error: Failed to create android::view::Surface from AParcel", __FUNCTION__);
+        return STATUS_BAD_VALUE;
+    }
+    sp<Surface> surface = sp<Surface>::make(
+            shimSurface->graphicBufferProducer, false, shimSurface->surfaceControlHandle);
+    ANativeWindow* anw = surface.get();
+    ANativeWindow_acquire(anw);
+    *outWindow = anw;
+    return STATUS_OK;
+}
+
+binder_status_t ANativeWindow_writeToParcel(
+        ANativeWindow* _Nonnull window, AParcel* _Nonnull parcel) {
+    int value;
+    int err = (*window->query)(window, NATIVE_WINDOW_CONCRETE_TYPE, &value);
+    if (err != OK || value != NATIVE_WINDOW_SURFACE) {
+        ALOGE("Error: ANativeWindow is not backed by Surface");
+        return STATUS_BAD_VALUE;
+    }
+    // Use a android::view::Surface to parcelize the window
+    std::shared_ptr<android::view::Surface> shimSurface = std::shared_ptr<android::view::Surface>();
+    shimSurface->graphicBufferProducer = IGraphicBufferProducer_from_ANativeWindow(window);
+    shimSurface->surfaceControlHandle = SurfaceControlHandle_from_ANativeWindow(window);
+
+    Parcel* nativeParcel = AParcel_viewPlatformParcel(parcel);
+    return shimSurface->writeToParcel(nativeParcel);
 }
 
 /**************************************************************************************************

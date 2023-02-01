@@ -50,13 +50,13 @@ protected:
     sp<NiceMock<MockIPower>> mMockHal = nullptr;
     sp<NiceMock<MockIPowerHintSession>> mMockSession = nullptr;
     void verifyAndClearExpectations();
-    void sendActualWorkDurationGroup(std::vector<WorkDuration> durations,
-                                     std::chrono::nanoseconds sleepBeforeLastSend);
+    void sendActualWorkDurationGroup(std::vector<WorkDuration> durations);
+    static constexpr std::chrono::duration kStaleTimeout = 100ms;
 };
 
 void AidlPowerHalWrapperTest::SetUp() {
-    mMockHal = new NiceMock<MockIPower>();
-    mMockSession = new NiceMock<MockIPowerHintSession>();
+    mMockHal = sp<NiceMock<MockIPower>>::make();
+    mMockSession = sp<NiceMock<MockIPowerHintSession>>::make();
     ON_CALL(*mMockHal.get(), getHintSessionPreferredRate(_)).WillByDefault(Return(Status::ok()));
     mWrapper = std::make_unique<AidlPowerHalWrapper>(mMockHal);
 }
@@ -66,21 +66,23 @@ void AidlPowerHalWrapperTest::verifyAndClearExpectations() {
     Mock::VerifyAndClearExpectations(mMockSession.get());
 }
 
-void AidlPowerHalWrapperTest::sendActualWorkDurationGroup(
-        std::vector<WorkDuration> durations, std::chrono::nanoseconds sleepBeforeLastSend) {
+void AidlPowerHalWrapperTest::sendActualWorkDurationGroup(std::vector<WorkDuration> durations) {
     for (size_t i = 0; i < durations.size(); i++) {
-        if (i == durations.size() - 1) {
-            std::this_thread::sleep_for(sleepBeforeLastSend);
-        }
         auto duration = durations[i];
-        mWrapper->sendActualWorkDuration(duration.durationNanos, duration.timeStampNanos);
+        mWrapper->sendActualWorkDuration(Duration::fromNs(duration.durationNanos),
+                                         TimePoint::fromNs(duration.timeStampNanos));
     }
 }
+
 WorkDuration toWorkDuration(std::chrono::nanoseconds durationNanos, int64_t timeStampNanos) {
     WorkDuration duration;
     duration.durationNanos = durationNanos.count();
     duration.timeStampNanos = timeStampNanos;
     return duration;
+}
+
+WorkDuration toWorkDuration(std::pair<std::chrono::nanoseconds, nsecs_t> timePair) {
+    return toWorkDuration(timePair.first, timePair.second);
 }
 
 std::string printWorkDurations(const ::std::vector<WorkDuration>& durations) {
@@ -112,7 +114,7 @@ TEST_F(AidlPowerHalWrapperTest, startPowerHintSession) {
     EXPECT_FALSE(mWrapper->startPowerHintSession());
 }
 
-TEST_F(AidlPowerHalWrapperTest, restartNewPoserHintSessionWithNewThreadIds) {
+TEST_F(AidlPowerHalWrapperTest, restartNewPowerHintSessionWithNewThreadIds) {
     ASSERT_TRUE(mWrapper->supportsPowerHintSession());
 
     std::vector<int32_t> threadIds = {1, 2};
@@ -149,22 +151,18 @@ TEST_F(AidlPowerHalWrapperTest, setTargetWorkDuration) {
 
     std::chrono::nanoseconds base = 100ms;
     // test cases with target work duration and whether it should update hint against baseline 100ms
-    const std::vector<std::pair<std::chrono::nanoseconds, bool>> testCases = {{0ms, false},
-                                                                              {-1ms, false},
-                                                                              {200ms, true},
-                                                                              {2ms, true},
-                                                                              {91ms, false},
-                                                                              {109ms, false}};
+    const std::vector<std::pair<std::chrono::nanoseconds, bool>> testCases =
+            {{0ms, true}, {-1ms, true}, {200ms, true}, {2ms, true}, {100ms, false}, {109ms, true}};
 
     for (const auto& test : testCases) {
         // reset to 100ms baseline
-        mWrapper->setTargetWorkDuration(1);
-        mWrapper->setTargetWorkDuration(base.count());
+        mWrapper->setTargetWorkDuration(1ns);
+        mWrapper->setTargetWorkDuration(base);
 
-        auto target = test.first;
+        std::chrono::nanoseconds target = test.first;
         EXPECT_CALL(*mMockSession.get(), updateTargetWorkDuration(target.count()))
                 .Times(test.second ? 1 : 0);
-        mWrapper->setTargetWorkDuration(target.count());
+        mWrapper->setTargetWorkDuration(target);
         verifyAndClearExpectations();
     }
 }
@@ -181,7 +179,7 @@ TEST_F(AidlPowerHalWrapperTest, setTargetWorkDuration_shouldReconnectOnError) {
 
     EXPECT_CALL(*mMockSession.get(), updateTargetWorkDuration(1))
             .WillOnce(Return(Status::fromExceptionCode(Status::Exception::EX_ILLEGAL_STATE)));
-    mWrapper->setTargetWorkDuration(1);
+    mWrapper->setTargetWorkDuration(1ns);
     EXPECT_TRUE(mWrapper->shouldReconnectHAL());
 }
 
@@ -200,91 +198,24 @@ TEST_F(AidlPowerHalWrapperTest, sendActualWorkDuration) {
     // 100ms
     const std::vector<std::pair<std::vector<std::pair<std::chrono::nanoseconds, nsecs_t>>, bool>>
             testCases = {{{{-1ms, 100}}, false},
-                         {{{91ms, 100}}, false},
-                         {{{109ms, 100}}, false},
+                         {{{50ms, 100}}, true},
                          {{{100ms, 100}, {200ms, 200}}, true},
                          {{{100ms, 500}, {100ms, 600}, {3ms, 600}}, true}};
 
     for (const auto& test : testCases) {
         // reset actual duration
-        sendActualWorkDurationGroup({base}, 80ms);
+        sendActualWorkDurationGroup({base});
 
         auto raw = test.first;
         std::vector<WorkDuration> durations(raw.size());
         std::transform(raw.begin(), raw.end(), durations.begin(),
-                       [](std::pair<std::chrono::nanoseconds, nsecs_t> d) {
-                           return toWorkDuration(d.first, d.second);
-                       });
-        EXPECT_CALL(*mMockSession.get(), reportActualWorkDuration(durations))
-                .Times(test.second ? 1 : 0);
-        sendActualWorkDurationGroup(durations, 0ms);
-        verifyAndClearExpectations();
-    }
-}
-
-TEST_F(AidlPowerHalWrapperTest, sendAdjustedActualWorkDuration) {
-    ASSERT_TRUE(mWrapper->supportsPowerHintSession());
-
-    std::vector<int32_t> threadIds = {1, 2};
-    mWrapper->setPowerHintSessionThreadIds(threadIds);
-    EXPECT_CALL(*mMockHal.get(), createHintSession(_, _, threadIds, _, _))
-            .WillOnce(DoAll(SetArgPointee<4>(mMockSession), Return(Status::ok())));
-    ASSERT_TRUE(mWrapper->startPowerHintSession());
-    verifyAndClearExpectations();
-
-    std::chrono::nanoseconds lastTarget = 100ms;
-    EXPECT_CALL(*mMockSession.get(), updateTargetWorkDuration(lastTarget.count())).Times(1);
-    mWrapper->setTargetWorkDuration(lastTarget.count());
-    std::chrono::nanoseconds newTarget = 105ms;
-    mWrapper->setTargetWorkDuration(newTarget.count());
-    EXPECT_CALL(*mMockSession.get(), updateTargetWorkDuration(newTarget.count())).Times(0);
-    std::chrono::nanoseconds actual = 21ms;
-    // 100 / 105 * 21ms = 20ms
-    std::chrono::nanoseconds expectedActualSent = 20ms;
-    std::vector<WorkDuration> expectedDurations = {toWorkDuration(expectedActualSent, 1)};
-
-    EXPECT_CALL(*mMockSession.get(), reportActualWorkDuration(_))
-            .WillOnce(DoAll(
-                    [expectedDurations](const ::std::vector<WorkDuration>& durationsSent) {
-                        EXPECT_EQ(expectedDurations, durationsSent)
-                                << base::StringPrintf("actual sent: %s vs expected: %s",
-                                                      printWorkDurations(durationsSent).c_str(),
-                                                      printWorkDurations(expectedDurations)
-                                                              .c_str());
-                    },
-                    Return(Status::ok())));
-    mWrapper->sendActualWorkDuration(actual.count(), 1);
-}
-
-TEST_F(AidlPowerHalWrapperTest, sendActualWorkDuration_exceedsStaleTime) {
-    ASSERT_TRUE(mWrapper->supportsPowerHintSession());
-
-    std::vector<int32_t> threadIds = {1, 2};
-    mWrapper->setPowerHintSessionThreadIds(threadIds);
-    EXPECT_CALL(*mMockHal.get(), createHintSession(_, _, threadIds, _, _))
-            .WillOnce(DoAll(SetArgPointee<4>(mMockSession), Return(Status::ok())));
-    ASSERT_TRUE(mWrapper->startPowerHintSession());
-    verifyAndClearExpectations();
-
-    auto base = toWorkDuration(100ms, 0);
-    // test cases with actual work durations and whether it should update hint against baseline
-    // 100ms
-    const std::vector<std::pair<std::vector<std::pair<std::chrono::nanoseconds, nsecs_t>>, bool>>
-            testCases = {{{{91ms, 100}}, true}, {{{109ms, 100}}, true}};
-
-    for (const auto& test : testCases) {
-        // reset actual duration
-        sendActualWorkDurationGroup({base}, 80ms);
-
-        auto raw = test.first;
-        std::vector<WorkDuration> durations(raw.size());
-        std::transform(raw.begin(), raw.end(), durations.begin(),
-                       [](std::pair<std::chrono::nanoseconds, nsecs_t> d) {
-                           return toWorkDuration(d.first, d.second);
-                       });
-        EXPECT_CALL(*mMockSession.get(), reportActualWorkDuration(durations))
-                .Times(test.second ? 1 : 0);
-        sendActualWorkDurationGroup(durations, 80ms);
+                       [](auto d) { return toWorkDuration(d); });
+        for (auto& duration : durations) {
+            EXPECT_CALL(*mMockSession.get(),
+                        reportActualWorkDuration(std::vector<WorkDuration>{duration}))
+                    .Times(test.second ? 1 : 0);
+        }
+        sendActualWorkDurationGroup(durations);
         verifyAndClearExpectations();
     }
 }
@@ -302,7 +233,7 @@ TEST_F(AidlPowerHalWrapperTest, sendActualWorkDuration_shouldReconnectOnError) {
     duration.durationNanos = 1;
     EXPECT_CALL(*mMockSession.get(), reportActualWorkDuration(_))
             .WillOnce(Return(Status::fromExceptionCode(Status::Exception::EX_ILLEGAL_STATE)));
-    sendActualWorkDurationGroup({duration}, 0ms);
+    sendActualWorkDurationGroup({duration});
     EXPECT_TRUE(mWrapper->shouldReconnectHAL());
 }
 

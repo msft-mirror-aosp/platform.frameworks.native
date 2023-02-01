@@ -3,6 +3,8 @@ service servicemanager /system/bin/servicemanager
     user system
     group system readproc
     critical
+    file /dev/kmsg w
+    onrestart setprop servicemanager.ready false
     onrestart restart apexd
     onrestart restart audioserver
     onrestart restart gatekeeperd

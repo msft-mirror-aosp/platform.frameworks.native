@@ -15,6 +15,7 @@
  */
 
 #include <gui/SurfaceComposerClient.h>
+#include <ui/Fence.h>
 #include <ui/Rect.h>
 
 #include "LayerProtoHelper.h"
@@ -87,10 +88,7 @@ proto::LayerState TransactionProtoParser::toProto(const layer_state_t& layer) {
     if (layer.what & layer_state_t::eLayerChanged) {
         proto.set_z(layer.z);
     }
-    if (layer.what & layer_state_t::eSizeChanged) {
-        proto.set_w(layer.w);
-        proto.set_h(layer.h);
-    }
+
     if (layer.what & layer_state_t::eLayerStackChanged) {
         proto.set_layer_stack(layer.layerStack.id);
     }
@@ -113,7 +111,7 @@ proto::LayerState TransactionProtoParser::toProto(const layer_state_t& layer) {
     }
 
     if (layer.what & layer_state_t::eAlphaChanged) {
-        proto.set_alpha(layer.alpha);
+        proto.set_alpha(layer.color.a);
     }
 
     if (layer.what & layer_state_t::eColorChanged) {
@@ -125,8 +123,8 @@ proto::LayerState TransactionProtoParser::toProto(const layer_state_t& layer) {
     if (layer.what & layer_state_t::eTransparentRegionChanged) {
         LayerProtoHelper::writeToProto(layer.transparentRegion, proto.mutable_transparent_region());
     }
-    if (layer.what & layer_state_t::eTransformChanged) {
-        proto.set_transform(layer.transform);
+    if (layer.what & layer_state_t::eBufferTransformChanged) {
+        proto.set_transform(layer.bufferTransform);
     }
     if (layer.what & layer_state_t::eTransformToDisplayInverseChanged) {
         proto.set_transform_to_display_inverse(layer.transformToDisplayInverse);
@@ -312,10 +310,10 @@ TransactionState TransactionProtoParser::fromProto(const proto::TransactionState
     int32_t layerCount = proto.layer_changes_size();
     t.states.reserve(static_cast<size_t>(layerCount));
     for (int i = 0; i < layerCount; i++) {
-        ComposerState s;
+        ResolvedComposerState s;
         s.state.what = 0;
         fromProto(proto.layer_changes(i), s.state);
-        t.states.add(s);
+        t.states.emplace_back(s);
     }
 
     int32_t displayCount = proto.display_changes_size();
@@ -375,10 +373,6 @@ void TransactionProtoParser::fromProto(const proto::LayerState& proto, layer_sta
     if (proto.what() & layer_state_t::eLayerChanged) {
         layer.z = proto.z();
     }
-    if (proto.what() & layer_state_t::eSizeChanged) {
-        layer.w = proto.w();
-        layer.h = proto.h();
-    }
     if (proto.what() & layer_state_t::eLayerStackChanged) {
         layer.layerStack.id = proto.layer_stack();
     }
@@ -401,7 +395,7 @@ void TransactionProtoParser::fromProto(const proto::LayerState& proto, layer_sta
     }
 
     if (proto.what() & layer_state_t::eAlphaChanged) {
-        layer.alpha = proto.alpha();
+        layer.color.a = proto.alpha();
     }
 
     if (proto.what() & layer_state_t::eColorChanged) {
@@ -413,8 +407,8 @@ void TransactionProtoParser::fromProto(const proto::LayerState& proto, layer_sta
     if (proto.what() & layer_state_t::eTransparentRegionChanged) {
         LayerProtoHelper::readFromProto(proto.transparent_region(), layer.transparentRegion);
     }
-    if (proto.what() & layer_state_t::eTransformChanged) {
-        layer.transform = proto.transform();
+    if (proto.what() & layer_state_t::eBufferTransformChanged) {
+        layer.bufferTransform = proto.transform();
     }
     if (proto.what() & layer_state_t::eTransformToDisplayInverseChanged) {
         layer.transformToDisplayInverse = proto.transform_to_display_inverse();
@@ -456,9 +450,9 @@ void TransactionProtoParser::fromProto(const proto::LayerState& proto, layer_sta
             layer.parentSurfaceControlForChild = nullptr;
         } else {
             layer.parentSurfaceControlForChild =
-                    new SurfaceControl(SurfaceComposerClient::getDefault(),
-                                       mMapper->getLayerHandle(static_cast<int32_t>(layerId)),
-                                       nullptr, static_cast<int32_t>(layerId));
+                    sp<SurfaceControl>::make(SurfaceComposerClient::getDefault(),
+                                             mMapper->getLayerHandle(static_cast<int32_t>(layerId)),
+                                             static_cast<int32_t>(layerId), "");
         }
     }
     if (proto.what() & layer_state_t::eRelativeLayerChanged) {
@@ -467,9 +461,9 @@ void TransactionProtoParser::fromProto(const proto::LayerState& proto, layer_sta
             layer.relativeLayerSurfaceControl = nullptr;
         } else {
             layer.relativeLayerSurfaceControl =
-                    new SurfaceControl(SurfaceComposerClient::getDefault(),
-                                       mMapper->getLayerHandle(static_cast<int32_t>(layerId)),
-                                       nullptr, static_cast<int32_t>(layerId));
+                    sp<SurfaceControl>::make(SurfaceComposerClient::getDefault(),
+                                             mMapper->getLayerHandle(static_cast<int32_t>(layerId)),
+                                             static_cast<int32_t>(layerId), "");
         }
         layer.z = proto.z();
     }
@@ -497,8 +491,13 @@ void TransactionProtoParser::fromProto(const proto::LayerState& proto, layer_sta
         inputInfo.replaceTouchableRegionWithCrop =
                 windowInfoProto.replace_touchable_region_with_crop();
         int64_t layerId = windowInfoProto.crop_layer_id();
-        inputInfo.touchableRegionCropHandle =
-                mMapper->getLayerHandle(static_cast<int32_t>(layerId));
+        if (layerId != -1) {
+            inputInfo.touchableRegionCropHandle =
+                    mMapper->getLayerHandle(static_cast<int32_t>(layerId));
+        } else {
+            inputInfo.touchableRegionCropHandle = wp<IBinder>();
+        }
+
         layer.windowInfoHandle = sp<gui::WindowInfoHandle>::make(inputInfo);
     }
     if (proto.what() & layer_state_t::eBackgroundColorChanged) {

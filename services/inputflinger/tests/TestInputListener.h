@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#ifndef _UI_TEST_INPUT_LISTENER_H
-#define _UI_TEST_INPUT_LISTENER_H
+#pragma once
 
 #include <android-base/thread_annotations.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "InputListener.h"
 
@@ -33,6 +33,8 @@ public:
                       std::chrono::milliseconds eventDidNotHappenTimeout = 0ms);
     virtual ~TestInputListener();
 
+    using TimePoint = std::chrono::time_point<std::chrono::system_clock>;
+
     void assertNotifyConfigurationChangedWasCalled(
             NotifyConfigurationChangedArgs* outEventArgs = nullptr);
 
@@ -44,11 +46,17 @@ public:
 
     void assertNotifyKeyWasCalled(NotifyKeyArgs* outEventArgs = nullptr);
 
+    void assertNotifyKeyWasCalled(const ::testing::Matcher<NotifyKeyArgs>& matcher);
+
     void assertNotifyKeyWasNotCalled();
 
-    void assertNotifyMotionWasCalled(NotifyMotionArgs* outEventArgs = nullptr);
+    void assertNotifyMotionWasCalled(NotifyMotionArgs* outEventArgs = nullptr,
+                                     std::optional<TimePoint> waitUntil = {});
 
-    void assertNotifyMotionWasNotCalled();
+    void assertNotifyMotionWasCalled(const ::testing::Matcher<NotifyMotionArgs>& matcher,
+                                     std::optional<TimePoint> waitUntil = {});
+
+    void assertNotifyMotionWasNotCalled(std::optional<TimePoint> waitUntil = {});
 
     void assertNotifySwitchWasCalled(NotifySwitchArgs* outEventArgs = nullptr);
 
@@ -59,13 +67,14 @@ public:
 
 private:
     template <class NotifyArgsType>
-    void assertCalled(NotifyArgsType* outEventArgs, std::string message);
+    void assertCalled(NotifyArgsType* outEventArgs, std::string message,
+                      std::optional<TimePoint> waitUntil = {});
 
     template <class NotifyArgsType>
-    void assertNotCalled(std::string message);
+    void assertNotCalled(std::string message, std::optional<TimePoint> timeout = {});
 
     template <class NotifyArgsType>
-    void notify(const NotifyArgsType* args);
+    void addToQueue(const NotifyArgsType* args);
 
     virtual void notifyConfigurationChanged(const NotifyConfigurationChangedArgs* args) override;
 
@@ -100,4 +109,3 @@ private:
 };
 
 } // namespace android
-#endif

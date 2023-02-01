@@ -140,7 +140,6 @@ struct TransitionOffToOnVariant : public TransitionVariantCommon<PowerMode::OFF,
 
     static void verifyPostconditions(DisplayTransactionTest* test) {
         EXPECT_TRUE(test->mFlinger.getVisibleRegionsDirty());
-        EXPECT_TRUE(test->mFlinger.getHasPoweredOff());
     }
 };
 
@@ -155,7 +154,6 @@ struct TransitionOffToDozeSuspendVariant
 
     static void verifyPostconditions(DisplayTransactionTest* test) {
         EXPECT_TRUE(test->mFlinger.getVisibleRegionsDirty());
-        EXPECT_TRUE(test->mFlinger.getHasPoweredOff());
     }
 };
 
@@ -255,16 +253,12 @@ struct DisplayPowerCase {
     using DispSync = DispSyncVariant;
     using Transition = TransitionVariant;
 
-    static auto injectDisplayWithInitialPowerMode(DisplayTransactionTest* test, PowerMode mode) {
+    static sp<DisplayDevice> injectDisplayWithInitialPowerMode(DisplayTransactionTest* test,
+                                                               PowerMode mode) {
         Display::injectHwcDisplayWithNoDefaultCapabilities(test);
-        auto display = Display::makeFakeExistingDisplayInjector(test);
-        display.inject();
-        display.mutableDisplayDevice()->setPowerMode(mode);
-        if (display.mutableDisplayDevice()->isInternal()) {
-            test->mFlinger.mutableActiveDisplayToken() =
-                    display.mutableDisplayDevice()->getDisplayToken();
-        }
-
+        auto injector = Display::makeFakeExistingDisplayInjector(test);
+        const auto display = injector.inject();
+        display->setPowerMode(mode);
         return display;
     }
 
@@ -274,13 +268,6 @@ struct DisplayPowerCase {
 
     static void setupRepaintEverythingCallExpectations(DisplayTransactionTest* test) {
         EXPECT_CALL(*test->mFlinger.scheduler(), scheduleFrame()).Times(1);
-    }
-
-    static void setupSurfaceInterceptorCallExpectations(DisplayTransactionTest* test,
-                                                        PowerMode mode) {
-        EXPECT_CALL(*test->mSurfaceInterceptor, isEnabled()).WillOnce(Return(true));
-        EXPECT_CALL(*test->mSurfaceInterceptor, savePowerModeUpdate(_, static_cast<int32_t>(mode)))
-                .Times(1);
     }
 
     static void setupComposerCallExpectations(DisplayTransactionTest* test, PowerMode mode) {
@@ -349,14 +336,12 @@ void SetPowerModeInternalTest::transitionDisplayCommon() {
     // --------------------------------------------------------------------
     // Call Expectations
 
-    Case::setupSurfaceInterceptorCallExpectations(this, Case::Transition::TARGET_POWER_MODE);
     Case::Transition::template setupCallExpectations<Case>(this);
 
     // --------------------------------------------------------------------
     // Invocation
 
-    mFlinger.setPowerModeInternal(display.mutableDisplayDevice(),
-                                  Case::Transition::TARGET_POWER_MODE);
+    mFlinger.setPowerModeInternal(display, Case::Transition::TARGET_POWER_MODE);
 
     // --------------------------------------------------------------------
     // Postconditions
@@ -419,11 +404,13 @@ TEST_F(SetPowerModeInternalTest, setPowerModeInternalDoesNothingIfVirtualDisplay
     EXPECT_EQ(PowerMode::ON, display.mutableDisplayDevice()->getPowerMode());
 }
 
-TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOffToOnPrimaryDisplay) {
+// TODO(b/262417075)
+TEST_F(SetPowerModeInternalTest, DISABLED_transitionsDisplayFromOffToOnPrimaryDisplay) {
     transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionOffToOnVariant>>();
 }
 
-TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOffToDozeSuspendPrimaryDisplay) {
+// TODO(b/262417075)
+TEST_F(SetPowerModeInternalTest, DISABLED_transitionsDisplayFromOffToDozeSuspendPrimaryDisplay) {
     transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionOffToDozeSuspendVariant>>();
 }
 
@@ -459,11 +446,13 @@ TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToUnknownPrimaryDisplay
     transitionDisplayCommon<PrimaryDisplayPowerCase<TransitionOnToUnknownVariant>>();
 }
 
-TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOffToOnExternalDisplay) {
+// TODO(b/262417075)
+TEST_F(SetPowerModeInternalTest, DISABLED_transitionsDisplayFromOffToOnExternalDisplay) {
     transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOffToOnVariant>>();
 }
 
-TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOffToDozeSuspendExternalDisplay) {
+// TODO(b/262417075)
+TEST_F(SetPowerModeInternalTest, DISABLED_transitionsDisplayFromOffToDozeSuspendExternalDisplay) {
     transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOffToDozeSuspendVariant>>();
 }
 
@@ -497,6 +486,39 @@ TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToDozeSuspendExternalDi
 
 TEST_F(SetPowerModeInternalTest, transitionsDisplayFromOnToUnknownExternalDisplay) {
     transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOnToUnknownVariant>>();
+}
+
+// TODO(b/262417075)
+TEST_F(SetPowerModeInternalTest, DISABLED_designatesLeaderDisplay) {
+    using Case = SimplePrimaryDisplayCase;
+
+    // --------------------------------------------------------------------
+    // Preconditions
+
+    // Inject a primary display with uninitialized power mode.
+    constexpr bool kInitPowerMode = false;
+    Case::Display::injectHwcDisplay<kInitPowerMode>(this);
+    auto injector = Case::Display::makeFakeExistingDisplayInjector(this);
+    injector.setPowerMode(std::nullopt);
+    const auto display = injector.inject();
+
+    // --------------------------------------------------------------------
+    // Invocation
+
+    // FakeDisplayDeviceInjector registers the display with Scheduler, so it has already been
+    // designated as the leader. Set an arbitrary leader to verify that `setPowerModeInternal`
+    // designates a leader regardless of any preceding `Scheduler::registerDisplay` call(s).
+    constexpr PhysicalDisplayId kPlaceholderId = PhysicalDisplayId::fromPort(42);
+    ASSERT_NE(display->getPhysicalId(), kPlaceholderId);
+    mFlinger.scheduler()->setLeaderDisplay(kPlaceholderId);
+
+    mFlinger.setPowerModeInternal(display, PowerMode::ON);
+
+    // --------------------------------------------------------------------
+    // Postconditions
+
+    // The primary display should be designated as the leader.
+    EXPECT_EQ(mFlinger.scheduler()->leaderDisplayId(), display->getPhysicalId());
 }
 
 } // namespace

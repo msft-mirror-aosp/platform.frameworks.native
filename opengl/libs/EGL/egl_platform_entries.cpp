@@ -937,6 +937,8 @@ EGLContext eglCreateContextImpl(EGLDisplay dpy, EGLConfig config, EGLContext sha
                 android::GraphicsEnv::getInstance().setTargetStats(
                         android::GpuStatsInfo::Stats::GLES_1_IN_USE);
             }
+            android::GraphicsEnv::getInstance().setTargetStats(
+                    android::GpuStatsInfo::Stats::CREATED_GLES_CONTEXT);
             egl_context_t* c = new egl_context_t(dpy, context, config, cnx, version);
             return c;
         }
@@ -1453,7 +1455,11 @@ EGLBoolean eglSurfaceAttribImpl(EGLDisplay dpy, EGLSurface surface, EGLint attri
             setError(EGL_BAD_SURFACE, EGL_FALSE);
         }
         int err = native_window_set_auto_refresh(s->getNativeWindow(), value != 0);
-        return (err == 0) ? EGL_TRUE : setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        if (err != 0) {
+            return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        } else if (!s->cnx->useAngle) {
+            return EGL_TRUE;
+        } // else if ANGLE, fall through to the call to the driver (i.e. ANGLE) below
     }
 
     if (attribute == EGL_TIMESTAMPS_ANDROID) {
@@ -1463,7 +1469,11 @@ EGLBoolean eglSurfaceAttribImpl(EGLDisplay dpy, EGLSurface surface, EGLint attri
             return EGL_TRUE;
         }
         int err = native_window_enable_frame_timestamps(s->getNativeWindow(), value != 0);
-        return (err == 0) ? EGL_TRUE : setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        if (err != 0) {
+            return setError(EGL_BAD_SURFACE, (EGLBoolean)EGL_FALSE);
+        } else if (!s->cnx->useAngle) {
+            return EGL_TRUE;
+        } // else if ANGLE, fall through to the call to the driver (i.e. ANGLE) below
     }
 
     if (s->setSmpte2086Attribute(attribute, value)) {

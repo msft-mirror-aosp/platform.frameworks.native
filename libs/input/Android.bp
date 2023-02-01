@@ -26,7 +26,6 @@ package {
 filegroup {
     name: "inputconstants_aidl",
     srcs: [
-        "android/os/BlockUntrustedTouchesMode.aidl",
         "android/os/IInputConstants.aidl",
         "android/os/InputEventInjectionResult.aidl",
         "android/os/InputEventInjectionSync.aidl",
@@ -42,6 +41,7 @@ cc_library {
         "-Wall",
         "-Wextra",
         "-Werror",
+        "-Wno-unused-parameter",
     ],
     srcs: [
         "Input.cpp",
@@ -50,23 +50,30 @@ cc_library {
         "Keyboard.cpp",
         "KeyCharacterMap.cpp",
         "KeyLayoutMap.cpp",
+        "MotionPredictor.cpp",
         "PrintTools.cpp",
         "PropertyMap.cpp",
+        "TfLiteMotionPredictor.cpp",
         "TouchVideoFrame.cpp",
         "VelocityControl.cpp",
         "VelocityTracker.cpp",
         "VirtualKeyMap.cpp",
     ],
 
-    clang: true,
-
-    header_libs: ["jni_headers"],
+    header_libs: [
+        "flatbuffer_headers",
+        "jni_headers",
+        "tensorflow_headers",
+    ],
     export_header_lib_headers: ["jni_headers"],
 
     shared_libs: [
         "libbase",
-        "liblog",
         "libcutils",
+        "liblog",
+        "libPlatformProperties",
+        "libvintf",
+        "libtflite",
     ],
 
     static_libs: [
@@ -90,7 +97,6 @@ cc_library {
             shared_libs: [
                 "libutils",
                 "libbinder",
-                "libui",
             ],
 
             static_libs: [
@@ -104,6 +110,10 @@ cc_library {
             sanitize: {
                 misc_undefined: ["integer"],
             },
+
+            required: [
+                "motion_predictor_model_prebuilt",
+            ],
         },
         host: {
             shared: {

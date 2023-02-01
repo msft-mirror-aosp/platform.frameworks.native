@@ -27,7 +27,7 @@
 #include <utility>
 #include <vector>
 
-#include "RefreshRateConfigs.h"
+#include "RefreshRateSelector.h"
 
 namespace android {
 
@@ -39,13 +39,13 @@ class LayerInfo;
 
 class LayerHistory {
 public:
-    using LayerVoteType = RefreshRateConfigs::LayerVoteType;
+    using LayerVoteType = RefreshRateSelector::LayerVoteType;
 
     LayerHistory();
     ~LayerHistory();
 
     // Layers are unregistered when the weak reference expires.
-    void registerLayer(Layer*, LayerVoteType type);
+    void registerLayer(Layer*, bool contentDetectionEnabled);
 
     // Sets the display size. Client is responsible for synchronization.
     void setDisplayArea(uint32_t displayArea) { mDisplayArea = displayArea; }
@@ -63,10 +63,14 @@ public:
     // Marks the layer as active, and records the given state to its history.
     void record(Layer*, nsecs_t presentTime, nsecs_t now, LayerUpdateType updateType);
 
-    using Summary = std::vector<RefreshRateConfigs::LayerRequirement>;
+    // Updates the default frame rate compatibility which takes effect when the app
+    // does not set a preference for refresh rate.
+    void setDefaultFrameRateCompatibility(Layer*, bool contentDetectionEnabled);
+
+    using Summary = std::vector<RefreshRateSelector::LayerRequirement>;
 
     // Rebuilds sets of active/inactive layers, and accumulates stats for active layers.
-    Summary summarize(const RefreshRateConfigs&, nsecs_t now);
+    Summary summarize(const RefreshRateSelector&, nsecs_t now);
 
     void clear();
 

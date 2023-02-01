@@ -22,12 +22,12 @@
 #include <cutils/native_handle.h>
 #include <utils/Errors.h>
 #include <utils/RefBase.h>
-#include <utils/Vector.h>
 #include <utils/Timers.h>
+#include <utils/Vector.h>
 
-#include <binder/Parcel.h>
 #include <binder/IInterface.h>
 #include <binder/IResultReceiver.h>
+#include <binder/Parcel.h>
 
 #include <sensor/Sensor.h>
 #include <sensor/ISensorEventConnection.h>
@@ -42,6 +42,7 @@ enum {
     GET_DYNAMIC_SENSOR_LIST,
     CREATE_SENSOR_DIRECT_CONNECTION,
     SET_OPERATION_PARAMETER,
+    GET_RUNTIME_SENSOR_LIST,
 };
 
 class BpSensorServer : public BpInterface<ISensorServer>
@@ -78,6 +79,25 @@ public:
         data.writeInterfaceToken(ISensorServer::getInterfaceDescriptor());
         data.writeString16(opPackageName);
         remote()->transact(GET_DYNAMIC_SENSOR_LIST, data, &reply);
+        Sensor s;
+        Vector<Sensor> v;
+        uint32_t n = reply.readUint32();
+        v.setCapacity(n);
+        while (n) {
+            n--;
+            reply.read(s);
+            v.add(s);
+        }
+        return v;
+    }
+
+    virtual Vector<Sensor> getRuntimeSensorList(const String16& opPackageName, int deviceId)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(ISensorServer::getInterfaceDescriptor());
+        data.writeString16(opPackageName);
+        data.writeInt32(deviceId);
+        remote()->transact(GET_RUNTIME_SENSOR_LIST, data, &reply);
         Sensor s;
         Vector<Sensor> v;
         uint32_t n = reply.readUint32();
@@ -194,6 +214,18 @@ status_t BnSensorServer::onTransact(
             }
             return NO_ERROR;
         }
+        case GET_RUNTIME_SENSOR_LIST: {
+            CHECK_INTERFACE(ISensorServer, data, reply);
+            const String16& opPackageName = data.readString16();
+            const int deviceId = data.readInt32();
+            Vector<Sensor> v(getRuntimeSensorList(opPackageName, deviceId));
+            size_t n = v.size();
+            reply->writeUint32(static_cast<uint32_t>(n));
+            for (size_t i = 0; i < n; i++) {
+                reply->write(v[i]);
+            }
+            return NO_ERROR;
+        }
         case CREATE_SENSOR_DIRECT_CONNECTION: {
             CHECK_INTERFACE(ISensorServer, data, reply);
             const String16& opPackageName = data.readString16();
@@ -205,9 +237,10 @@ status_t BnSensorServer::onTransact(
             if (resource == nullptr) {
                 return BAD_VALUE;
             }
+            native_handle_set_fdsan_tag(resource);
             sp<ISensorEventConnection> ch =
                     createSensorDirectConnection(opPackageName, size, type, format, resource);
-            native_handle_close(resource);
+            native_handle_close_with_tag(resource);
             native_handle_delete(resource);
             reply->writeStrongBinder(IInterface::asBinder(ch));
             return NO_ERROR;

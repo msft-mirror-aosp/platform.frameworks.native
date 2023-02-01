@@ -40,6 +40,7 @@
 
 #include "DisplayDevice.h"
 #include "DisplayRenderArea.h"
+#include "FrontEnd/LayerCreationArgs.h"
 #include "Layer.h"
 #include "Scheduler/VsyncController.h"
 #include "SurfaceFlinger.h"
@@ -129,12 +130,12 @@ RegionSamplingThread::~RegionSamplingThread() {
     }
 }
 
-void RegionSamplingThread::addListener(const Rect& samplingArea, const wp<Layer>& stopLayer,
+void RegionSamplingThread::addListener(const Rect& samplingArea, uint32_t stopLayerId,
                                        const sp<IRegionSamplingListener>& listener) {
     sp<IBinder> asBinder = IInterface::asBinder(listener);
-    asBinder->linkToDeath(this);
+    asBinder->linkToDeath(sp<DeathRecipient>::fromExisting(this));
     std::lock_guard lock(mSamplingMutex);
-    mDescriptors.emplace(wp<IBinder>(asBinder), Descriptor{samplingArea, stopLayer, listener});
+    mDescriptors.emplace(wp<IBinder>(asBinder), Descriptor{samplingArea, stopLayerId, listener});
 }
 
 void RegionSamplingThread::removeListener(const sp<IRegionSamplingListener>& listener) {
@@ -203,25 +204,14 @@ float sampleArea(const uint32_t* data, int32_t width, int32_t height, int32_t st
         return 0.0f;
     }
 
-    // (b/133849373) ROT_90 screencap images produced upside down
-    auto area = sample_area;
-    if (orientation & ui::Transform::ROT_90) {
-        area.top = height - area.top;
-        area.bottom = height - area.bottom;
-        std::swap(area.top, area.bottom);
-
-        area.left = width - area.left;
-        area.right = width - area.right;
-        std::swap(area.left, area.right);
-    }
-
-    const uint32_t pixelCount = (area.bottom - area.top) * (area.right - area.left);
+    const uint32_t pixelCount =
+            (sample_area.bottom - sample_area.top) * (sample_area.right - sample_area.left);
     uint32_t accumulatedLuma = 0;
 
     // Calculates luma with approximation of Rec. 709 primaries
-    for (int32_t row = area.top; row < area.bottom; ++row) {
+    for (int32_t row = sample_area.top; row < sample_area.bottom; ++row) {
         const uint32_t* rowBase = data + row * stride;
-        for (int32_t column = area.left; column < area.right; ++column) {
+        for (int32_t column = sample_area.left; column < sample_area.right; ++column) {
             uint32_t pixel = rowBase[column];
             const uint32_t r = pixel & 0xFF;
             const uint32_t g = (pixel >> 8) & 0xFF;
@@ -302,8 +292,8 @@ void RegionSamplingThread::captureSample() {
             if (stopLayerFound) return;
 
             // Likewise if we just found a stop layer, set the flag and abort
-            for (const auto& [area, stopLayer, listener] : descriptors) {
-                if (layer == stopLayer.promote().get()) {
+            for (const auto& [area, stopLayerId, listener] : descriptors) {
+                if (stopLayerId != UNASSIGNED_LAYER_ID && layer->getSequence() == stopLayerId) {
                     stopLayerFound = true;
                     return;
                 }
@@ -344,8 +334,8 @@ void RegionSamplingThread::captureSample() {
         const uint32_t usage =
                 GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
         sp<GraphicBuffer> graphicBuffer =
-                new GraphicBuffer(sampledBounds.getWidth(), sampledBounds.getHeight(),
-                                  PIXEL_FORMAT_RGBA_8888, 1, usage, "RegionSamplingThread");
+                sp<GraphicBuffer>::make(sampledBounds.getWidth(), sampledBounds.getHeight(),
+                                        PIXEL_FORMAT_RGBA_8888, 1, usage, "RegionSamplingThread");
         const status_t bufferStatus = graphicBuffer->initCheck();
         LOG_ALWAYS_FATAL_IF(bufferStatus != OK, "captureSample: Buffer failed to allocate: %d",
                             bufferStatus);
@@ -354,12 +344,13 @@ void RegionSamplingThread::captureSample() {
                                                      renderengine::impl::ExternalTexture::Usage::
                                                              WRITEABLE);
     }
+    auto getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
 
     constexpr bool kRegionSampling = true;
     constexpr bool kGrayscale = false;
 
     if (const auto fenceResult =
-                mFlinger.captureScreenCommon(std::move(renderAreaFuture), traverseLayers, buffer,
+                mFlinger.captureScreenCommon(std::move(renderAreaFuture), getLayerSnapshots, buffer,
                                              kRegionSampling, kGrayscale, nullptr)
                         .get();
         fenceResult.ok()) {

@@ -126,7 +126,20 @@ static const std::string getSystemNativeLibraries(NativeLibrary type) {
 }
 
 bool GraphicsEnv::isDebuggable() {
-    return prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) > 0;
+    // This flag determines if the application is marked debuggable
+    bool appDebuggable = prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) > 0;
+
+    // This flag is set only in `debuggable` builds of the platform
+#if defined(ANDROID_DEBUGGABLE)
+    bool platformDebuggable = true;
+#else
+    bool platformDebuggable = false;
+#endif
+
+    ALOGV("GraphicsEnv::isDebuggable returning appDebuggable=%s || platformDebuggable=%s",
+          appDebuggable ? "true" : "false", platformDebuggable ? "true" : "false");
+
+    return appDebuggable || platformDebuggable;
 }
 
 void GraphicsEnv::setDriverPathAndSphalLibraries(const std::string path,
@@ -246,6 +259,57 @@ void GraphicsEnv::setDriverLoaded(GpuStatsInfo::Api api, bool isDriverLoaded,
     sendGpuStatsLocked(api, isDriverLoaded, driverLoadingTime);
 }
 
+// Hash function to calculate hash for null-terminated Vulkan extension names
+// We store hash values of the extensions, rather than the actual names or
+// indices to be able to support new extensions easily, avoid creating
+// a table of 'known' extensions inside Android and reduce the runtime overhead.
+static uint64_t calculateExtensionHash(const char* word) {
+    if (!word) {
+        return 0;
+    }
+    const size_t wordLen = strlen(word);
+    const uint32_t seed = 167;
+    uint64_t hash = 0;
+    for (size_t i = 0; i < wordLen; i++) {
+        hash = (hash * seed) + word[i];
+    }
+    return hash;
+}
+
+void GraphicsEnv::setVulkanInstanceExtensions(uint32_t enabledExtensionCount,
+                                              const char* const* ppEnabledExtensionNames) {
+    ATRACE_CALL();
+    if (enabledExtensionCount == 0 || ppEnabledExtensionNames == nullptr) {
+        return;
+    }
+
+    const uint32_t maxNumStats = android::GpuStatsAppInfo::MAX_NUM_EXTENSIONS;
+    uint64_t extensionHashes[maxNumStats];
+    const uint32_t numStats = std::min(enabledExtensionCount, maxNumStats);
+    for(uint32_t i = 0; i < numStats; i++) {
+        extensionHashes[i] = calculateExtensionHash(ppEnabledExtensionNames[i]);
+    }
+    setTargetStatsArray(android::GpuStatsInfo::Stats::VULKAN_INSTANCE_EXTENSION,
+                        extensionHashes, numStats);
+}
+
+void GraphicsEnv::setVulkanDeviceExtensions(uint32_t enabledExtensionCount,
+                                            const char* const* ppEnabledExtensionNames) {
+    ATRACE_CALL();
+    if (enabledExtensionCount == 0 || ppEnabledExtensionNames == nullptr) {
+        return;
+    }
+
+    const uint32_t maxNumStats = android::GpuStatsAppInfo::MAX_NUM_EXTENSIONS;
+    uint64_t extensionHashes[maxNumStats];
+    const uint32_t numStats = std::min(enabledExtensionCount, maxNumStats);
+    for(uint32_t i = 0; i < numStats; i++) {
+        extensionHashes[i] = calculateExtensionHash(ppEnabledExtensionNames[i]);
+    }
+    setTargetStatsArray(android::GpuStatsInfo::Stats::VULKAN_DEVICE_EXTENSION,
+                        extensionHashes, numStats);
+}
+
 static sp<IGpuService> getGpuService() {
     static const sp<IBinder> binder = defaultServiceManager()->checkService(String16("gpu"));
     if (!binder) {
@@ -263,6 +327,11 @@ bool GraphicsEnv::readyToSendGpuStatsLocked() {
 }
 
 void GraphicsEnv::setTargetStats(const GpuStatsInfo::Stats stats, const uint64_t value) {
+    return setTargetStatsArray(stats, &value, 1);
+}
+
+void GraphicsEnv::setTargetStatsArray(const GpuStatsInfo::Stats stats, const uint64_t* values,
+                                      const uint32_t valueCount) {
     ATRACE_CALL();
 
     std::lock_guard<std::mutex> lock(mStatsLock);
@@ -270,8 +339,8 @@ void GraphicsEnv::setTargetStats(const GpuStatsInfo::Stats stats, const uint64_t
 
     const sp<IGpuService> gpuService = getGpuService();
     if (gpuService) {
-        gpuService->setTargetStats(mGpuStats.appPackageName, mGpuStats.driverVersionCode, stats,
-                                   value);
+        gpuService->setTargetStatsArray(mGpuStats.appPackageName, mGpuStats.driverVersionCode,
+                                        stats, values, valueCount);
     }
 }
 
@@ -364,26 +433,61 @@ bool GraphicsEnv::shouldUseAngle() {
     return (mUseAngle == YES) ? true : false;
 }
 
+bool GraphicsEnv::angleIsSystemDriver() {
+    // Make sure we are init'ed
+    if (mAngleAppName.empty()) {
+        ALOGV("App name is empty. setAngleInfo() has not been called to enable ANGLE.");
+        return false;
+    }
+
+    return (mAngleIsSystemDriver == YES) ? true : false;
+}
+
+bool GraphicsEnv::shouldForceLegacyDriver() {
+    // Make sure we are init'ed
+    if (mAngleAppName.empty()) {
+        ALOGV("App name is empty. setAngleInfo() has not been called to enable ANGLE.");
+        return false;
+    }
+
+    return (mAngleIsSystemDriver == YES && mUseAngle == NO) ? true : false;
+}
+
+std::string GraphicsEnv::getLegacySuffix() {
+    return mLegacyDriverSuffix;
+}
+
 void GraphicsEnv::updateUseAngle() {
     mUseAngle = NO;
 
     const char* ANGLE_PREFER_ANGLE = "angle";
+    const char* ANGLE_PREFER_LEGACY = "legacy";
+    // The following is a deprecated version of "legacy"
     const char* ANGLE_PREFER_NATIVE = "native";
 
     mUseAngle = NO;
     if (mAngleDeveloperOptIn == ANGLE_PREFER_ANGLE) {
-        ALOGV("User set \"Developer Options\" to force the use of ANGLE");
+        ALOGI("Using ANGLE, the %s GLES driver for package '%s'",
+              mAngleIsSystemDriver == YES ? "system" : "optional", mAngleAppName.c_str());
         mUseAngle = YES;
-    } else if (mAngleDeveloperOptIn == ANGLE_PREFER_NATIVE) {
-        ALOGV("User set \"Developer Options\" to force the use of Native");
+    } else if (mAngleDeveloperOptIn == ANGLE_PREFER_LEGACY ||
+               mAngleDeveloperOptIn == ANGLE_PREFER_NATIVE) {
+        ALOGI("Using the (%s) Legacy GLES driver for package '%s'",
+              mAngleIsSystemDriver == YES ? "optional" : "system", mAngleAppName.c_str());
     } else {
         ALOGV("User set invalid \"Developer Options\": '%s'", mAngleDeveloperOptIn.c_str());
     }
 }
 
 void GraphicsEnv::setAngleInfo(const std::string path, const std::string appName,
-                               const std::string developerOptIn,
+                               const bool angleIsSystemDriver, const std::string developerOptIn,
                                const std::vector<std::string> eglFeatures) {
+    // Set whether ANGLE is the system driver:
+    mAngleIsSystemDriver = angleIsSystemDriver ? YES : NO;
+
+    // Note: Given the current logic and lack of the old rules file processing,
+    // there seems to be little chance that mUseAngle != UNKNOWN.  Leave this
+    // for now, even though it seems outdated.
     if (mUseAngle != UNKNOWN) {
         // We've already figured out an answer for this app, so just return.
         ALOGV("Already evaluated the rules file for '%s': use ANGLE = %s", appName.c_str(),
@@ -399,6 +503,25 @@ void GraphicsEnv::setAngleInfo(const std::string path, const std::string appName
     mAngleAppName = appName;
     ALOGV("setting ANGLE application opt-in to '%s'", developerOptIn.c_str());
     mAngleDeveloperOptIn = developerOptIn;
+
+    // Update the current status of whether we should use ANGLE or not
+    updateUseAngle();
+}
+
+void GraphicsEnv::setLegacyDriverInfo(const std::string appName, const bool angleIsSystemDriver,
+                                      const std::string legacyDriverName) {
+    ALOGV("setting legacy app name to '%s'", appName.c_str());
+    mAngleAppName = appName;
+
+    // Force the use of the legacy driver instead of ANGLE
+    const char* ANGLE_PREFER_LEGACY = "legacy";
+    mAngleDeveloperOptIn = ANGLE_PREFER_LEGACY;
+    ALOGV("setting ANGLE application opt-in to 'legacy'");
+
+    // Set whether ANGLE is the system driver:
+    mAngleIsSystemDriver = angleIsSystemDriver ? YES : NO;
+
+    mLegacyDriverSuffix = legacyDriverName;
 
     // Update the current status of whether we should use ANGLE or not
     updateUseAngle();

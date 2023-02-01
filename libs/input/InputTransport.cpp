@@ -51,7 +51,7 @@ static const nsecs_t NANOS_PER_MS = 1000000;
 
 // Latency added during resampling.  A few milliseconds doesn't hurt much but
 // reduces the impact of mispredicted touch positions.
-static const nsecs_t RESAMPLE_LATENCY = 5 * NANOS_PER_MS;
+const std::chrono::duration RESAMPLE_LATENCY = 5ms;
 
 // Minimum time difference between consecutive samples before attempting to resample.
 static const nsecs_t RESAMPLE_MIN_DELTA = 2 * NANOS_PER_MS;
@@ -267,6 +267,8 @@ void InputMessage::getSanitizedCopy(InputMessage* msg) const {
                 memcpy(&msg->body.motion.pointers[i].coords.values[0],
                         &body.motion.pointers[i].coords.values[0],
                         count * (sizeof(body.motion.pointers[i].coords.values[0])));
+                msg->body.motion.pointers[i].coords.isResampled =
+                        body.motion.pointers[i].coords.isResampled;
             }
             break;
         }
@@ -721,7 +723,11 @@ android::base::Result<InputPublisher::ConsumerResponse> InputPublisher::receiveC
 // --- InputConsumer ---
 
 InputConsumer::InputConsumer(const std::shared_ptr<InputChannel>& channel)
-      : mResampleTouch(isTouchResamplingEnabled()), mChannel(channel), mMsgDeferred(false) {}
+      : InputConsumer(channel, isTouchResamplingEnabled()) {}
+
+InputConsumer::InputConsumer(const std::shared_ptr<InputChannel>& channel,
+                             bool enableTouchResampling)
+      : mResampleTouch(enableTouchResampling), mChannel(channel), mMsgDeferred(false) {}
 
 InputConsumer::~InputConsumer() {
 }
@@ -751,7 +757,10 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
             // Receive a fresh message.
             status_t result = mChannel->receiveMessage(&mMsg);
             if (result == OK) {
-                mConsumeTimes.emplace(mMsg.header.seq, systemTime(SYSTEM_TIME_MONOTONIC));
+                const auto [_, inserted] =
+                        mConsumeTimes.emplace(mMsg.header.seq, systemTime(SYSTEM_TIME_MONOTONIC));
+                LOG_ALWAYS_FATAL_IF(!inserted, "Already have a consume time for seq=%" PRIu32,
+                                    mMsg.header.seq);
             }
             if (result) {
                 // Consume the next batched event unless batches are being held for later.
@@ -918,7 +927,7 @@ status_t InputConsumer::consumeBatch(InputEventFactoryInterface* factory,
 
         nsecs_t sampleTime = frameTime;
         if (mResampleTouch) {
-            sampleTime -= RESAMPLE_LATENCY;
+            sampleTime -= std::chrono::nanoseconds(RESAMPLE_LATENCY).count();
         }
         ssize_t split = findSampleNoLaterThan(batch, sampleTime);
         if (split < 0) {
@@ -1072,6 +1081,7 @@ void InputConsumer::rewriteMessage(TouchState& state, InputMessage& msg) {
 #endif
                 msgCoords.setAxisValue(AMOTION_EVENT_AXIS_X, resampleCoords.getX());
                 msgCoords.setAxisValue(AMOTION_EVENT_AXIS_Y, resampleCoords.getY());
+                msgCoords.isResampled = true;
             } else {
                 state.lastResample.idBits.clearBit(id);
             }
@@ -1166,6 +1176,11 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
         return;
     }
 
+    if (current->eventTime == sampleTime) {
+        // Prevents having 2 events with identical times and coordinates.
+        return;
+    }
+
     // Resample touch coordinates.
     History oldLastResample;
     oldLastResample.initializeFrom(touchState.lastResample);
@@ -1179,6 +1194,8 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
             // We maintain the previously resampled value for this pointer (stored in
             // oldLastResample) when the coordinates for this pointer haven't changed since then.
             // This way we don't introduce artificial jitter when pointers haven't actually moved.
+            // The isResampled flag isn't cleared as the values don't reflect what the device is
+            // actually reporting.
 
             // We know here that the coordinates for the pointer haven't changed because we
             // would've cleared the resampled bit in rewriteMessage if they had. We can't modify
@@ -1197,6 +1214,7 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
                     lerp(currentCoords.getX(), otherCoords.getX(), alpha));
             resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_Y,
                     lerp(currentCoords.getY(), otherCoords.getY(), alpha));
+            resampledCoords.isResampled = true;
 #if DEBUG_RESAMPLING
             ALOGD("[%d] - out (%0.3f, %0.3f), cur (%0.3f, %0.3f), "
                     "other (%0.3f, %0.3f), alpha %0.3f",

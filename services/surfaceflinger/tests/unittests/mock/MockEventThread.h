@@ -24,16 +24,17 @@ namespace android::mock {
 
 class EventThread : public android::EventThread {
 public:
+    static constexpr auto kCallingUid = static_cast<uid_t>(0);
+
     EventThread();
     ~EventThread() override;
 
     MOCK_CONST_METHOD2(createEventConnection,
-                       sp<EventThreadConnection>(ResyncCallback,
-                                                 ISurfaceComposer::EventRegistrationFlags));
+                       sp<EventThreadConnection>(ResyncCallback, EventRegistrationFlags));
     MOCK_METHOD0(onScreenReleased, void());
     MOCK_METHOD0(onScreenAcquired, void());
     MOCK_METHOD2(onHotplugReceived, void(PhysicalDisplayId, bool));
-    MOCK_METHOD1(onModeChanged, void(DisplayModePtr));
+    MOCK_METHOD1(onModeChanged, void(const scheduler::FrameRateMode &));
     MOCK_METHOD2(onFrameRateOverridesChanged,
                  void(PhysicalDisplayId, std::vector<FrameRateOverride>));
     MOCK_CONST_METHOD1(dump, void(std::string&));

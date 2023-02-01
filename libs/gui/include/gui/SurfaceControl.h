@@ -24,11 +24,12 @@
 #include <utils/RefBase.h>
 #include <utils/threads.h>
 
+#include <android/gui/ISurfaceComposerClient.h>
+
 #include <ui/FrameStats.h>
 #include <ui/PixelFormat.h>
 #include <ui/Region.h>
 
-#include <gui/ISurfaceComposerClient.h>
 #include <math/vec3.h>
 
 namespace android {
@@ -77,6 +78,7 @@ public:
     sp<IBinder> getHandle() const;
     sp<IBinder> getLayerStateHandle() const;
     int32_t getLayerId() const;
+    const std::string& getName() const;
 
     sp<IGraphicBufferProducer> getIGraphicBufferProducer();
 
@@ -93,9 +95,9 @@ public:
     explicit SurfaceControl(const sp<SurfaceControl>& other);
 
     SurfaceControl(const sp<SurfaceComposerClient>& client, const sp<IBinder>& handle,
-                   const sp<IGraphicBufferProducer>& gbp, int32_t layerId,
-                   uint32_t width = 0, uint32_t height = 0, PixelFormat format = 0,
-                   uint32_t transformHint = 0, uint32_t flags = 0);
+                   int32_t layerId, const std::string& layerName, uint32_t width = 0,
+                   uint32_t height = 0, PixelFormat format = 0, uint32_t transformHint = 0,
+                   uint32_t flags = 0);
 
     sp<SurfaceControl> getParentingLayer();
 
@@ -115,13 +117,13 @@ private:
     status_t validate() const;
 
     sp<SurfaceComposerClient>   mClient;
-    sp<IBinder>                 mHandle;
-    sp<IGraphicBufferProducer>  mGraphicBufferProducer;
+    sp<IBinder> mHandle;
     mutable Mutex               mLock;
     mutable sp<Surface>         mSurfaceData;
     mutable sp<BLASTBufferQueue> mBbq;
     mutable sp<SurfaceControl> mBbqChild;
     int32_t mLayerId = 0;
+    std::string mName;
     uint32_t mTransformHint = 0;
     uint32_t mWidth = 0;
     uint32_t mHeight = 0;

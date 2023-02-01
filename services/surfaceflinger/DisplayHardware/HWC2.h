@@ -43,6 +43,7 @@
 #include <aidl/android/hardware/graphics/composer3/Color.h>
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
+#include <aidl/android/hardware/graphics/composer3/OverlayProperties.h>
 
 namespace android {
 
@@ -70,7 +71,7 @@ namespace hal = android::hardware::graphics::composer::hal;
 struct ComposerCallback {
     virtual void onComposerHalHotplug(hal::HWDisplayId, hal::Connection) = 0;
     virtual void onComposerHalRefresh(hal::HWDisplayId) = 0;
-    virtual void onComposerHalVsync(hal::HWDisplayId, int64_t timestamp,
+    virtual void onComposerHalVsync(hal::HWDisplayId, nsecs_t timestamp,
                                     std::optional<hal::VsyncPeriodNanos>) = 0;
     virtual void onComposerHalVsyncPeriodTimingChanged(hal::HWDisplayId,
                                                        const hal::VsyncPeriodChangeTimeline&) = 0;
@@ -88,7 +89,7 @@ public:
 
     virtual hal::HWDisplayId getId() const = 0;
     virtual bool isConnected() const = 0;
-    virtual void setConnected(bool connected) = 0; // For use by Device only
+    virtual void setConnected(bool connected) = 0; // For use by HWComposer only
     virtual bool hasCapability(
             aidl::android::hardware::graphics::composer3::DisplayCapability) const = 0;
     virtual bool isVsyncPeriodSwitchSupported() const = 0;
@@ -117,6 +118,9 @@ public:
     [[nodiscard]] virtual hal::Error supportsDoze(bool* outSupport) const = 0;
     [[nodiscard]] virtual hal::Error getHdrCapabilities(
             android::HdrCapabilities* outCapabilities) const = 0;
+    [[nodiscard]] virtual hal::Error getOverlaySupport(
+            aidl::android::hardware::graphics::composer3::OverlayProperties* outProperties)
+            const = 0;
     [[nodiscard]] virtual hal::Error getDisplayedContentSamplingAttributes(
             hal::PixelFormat* outFormat, hal::Dataspace* outDataspace,
             uint8_t* outComponentMask) const = 0;
@@ -204,6 +208,8 @@ public:
     hal::Error getConnectionType(ui::DisplayConnectionType*) const override;
     hal::Error supportsDoze(bool* outSupport) const override EXCLUDES(mDisplayCapabilitiesMutex);
     hal::Error getHdrCapabilities(android::HdrCapabilities* outCapabilities) const override;
+    hal::Error getOverlaySupport(aidl::android::hardware::graphics::composer3::OverlayProperties*
+                                         outProperties) const override;
     hal::Error getDisplayedContentSamplingAttributes(hal::PixelFormat* outFormat,
                                                      hal::Dataspace* outDataspace,
                                                      uint8_t* outComponentMask) const override;
@@ -253,7 +259,7 @@ public:
     // Other Display methods
     hal::HWDisplayId getId() const override { return mId; }
     bool isConnected() const override { return mIsConnected; }
-    void setConnected(bool connected) override; // For use by Device only
+    void setConnected(bool connected) override;
     bool hasCapability(aidl::android::hardware::graphics::composer3::DisplayCapability)
             const override EXCLUDES(mDisplayCapabilitiesMutex);
     bool isVsyncPeriodSwitchSupported() const override;
@@ -271,7 +277,7 @@ private:
 
     // Member variables
 
-    // These are references to data owned by HWC2::Device, which will outlive
+    // These are references to data owned by HWComposer, which will outlive
     // this HWC2::Display, so these references are guaranteed to be valid for
     // the lifetime of this object.
     android::Hwc2::Composer& mComposer;
@@ -304,6 +310,8 @@ public:
     [[nodiscard]] virtual hal::Error setBuffer(uint32_t slot,
                                                const android::sp<android::GraphicBuffer>& buffer,
                                                const android::sp<android::Fence>& acquireFence) = 0;
+    [[nodiscard]] virtual hal::Error setBufferSlotsToClear(
+            const std::vector<uint32_t>& slotsToClear, uint32_t activeBufferSlot) = 0;
     [[nodiscard]] virtual hal::Error setSurfaceDamage(const android::Region& damage) = 0;
 
     [[nodiscard]] virtual hal::Error setBlendMode(hal::BlendMode mode) = 0;
@@ -354,6 +362,8 @@ public:
     hal::Error setCursorPosition(int32_t x, int32_t y) override;
     hal::Error setBuffer(uint32_t slot, const android::sp<android::GraphicBuffer>& buffer,
                          const android::sp<android::Fence>& acquireFence) override;
+    hal::Error setBufferSlotsToClear(const std::vector<uint32_t>& slotsToClear,
+                                     uint32_t activeBufferSlot) override;
     hal::Error setSurfaceDamage(const android::Region& damage) override;
 
     hal::Error setBlendMode(hal::BlendMode mode) override;
@@ -383,7 +393,7 @@ public:
     hal::Error setBlockingRegion(const android::Region& region) override;
 
 private:
-    // These are references to data owned by HWC2::Device, which will outlive
+    // These are references to data owned by HWComposer, which will outlive
     // this HWC2::Layer, so these references are guaranteed to be valid for
     // the lifetime of this object.
     android::Hwc2::Composer& mComposer;

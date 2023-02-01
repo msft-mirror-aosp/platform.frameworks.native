@@ -15,21 +15,23 @@
  */
 #pragma once
 
+#include <android-base/threads.h>
 #include <android-base/unique_fd.h>
 #include <binder/IBinder.h>
+#include <binder/RpcThreads.h>
 #include <binder/RpcTransport.h>
 #include <utils/Errors.h>
 #include <utils/RefBase.h>
 
 #include <map>
 #include <optional>
-#include <thread>
 #include <vector>
 
 namespace android {
 
 class Parcel;
 class RpcServer;
+class RpcServerTrusty;
 class RpcSocketAddress;
 class RpcState;
 class RpcTransport;
@@ -37,7 +39,13 @@ class FdTrigger;
 
 constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION_NEXT = 1;
 constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION_EXPERIMENTAL = 0xF0000000;
-constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION = 0;
+constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION = RPC_WIRE_PROTOCOL_VERSION_EXPERIMENTAL;
+
+// Starting with this version:
+//
+// * RpcWireReply is larger (4 bytes -> 20).
+// * RpcWireTransaction and RpcWireReplyV1 include the parcel data size.
+constexpr uint32_t RPC_WIRE_PROTOCOL_VERSION_RPC_HEADER_FEATURE_EXPLICIT_PARCEL_SIZE = 1;
 
 /**
  * This represents a session (group of connections) between a client
@@ -88,11 +96,30 @@ public:
     [[nodiscard]] bool setProtocolVersion(uint32_t version);
     std::optional<uint32_t> getProtocolVersion();
 
+    enum class FileDescriptorTransportMode : uint8_t {
+        NONE = 0,
+        // Send file descriptors via unix domain socket ancillary data.
+        UNIX = 1,
+        // Send file descriptors as Trusty IPC handles.
+        TRUSTY = 2,
+    };
+
+    /**
+     * Set the transport for sending and receiving file descriptors.
+     */
+    void setFileDescriptorTransportMode(FileDescriptorTransportMode mode);
+    FileDescriptorTransportMode getFileDescriptorTransportMode();
+
     /**
      * This should be called once per thread, matching 'join' in the remote
      * process.
      */
     [[nodiscard]] status_t setupUnixDomainClient(const char* path);
+
+    /**
+     * Connects to an RPC server over a nameless Unix domain socket pair.
+     */
+    [[nodiscard]] status_t setupUnixDomainSocketBootstrapClient(base::unique_fd bootstrap);
 
     /**
      * Connects to an RPC server at the CVD & port.
@@ -169,6 +196,11 @@ public:
      */
     [[nodiscard]] status_t sendDecStrong(const BpBinder* binder);
 
+    /**
+     * Whether any requests are currently being processed.
+     */
+    bool hasActiveRequests();
+
     ~RpcSession();
 
     /**
@@ -183,8 +215,13 @@ public:
 private:
     friend sp<RpcSession>;
     friend RpcServer;
+    friend RpcServerTrusty;
     friend RpcState;
     explicit RpcSession(std::unique_ptr<RpcTransportCtx> ctx);
+
+    // internal version of setProtocolVersion that
+    // optionally skips the mStartedSetup check
+    [[nodiscard]] bool setProtocolVersionInternal(uint32_t version, bool checkStarted);
 
     // for 'target', see RpcState::sendDecStrongToTarget
     [[nodiscard]] status_t sendDecStrongToTarget(uint64_t address, size_t target);
@@ -199,10 +236,11 @@ private:
     public:
         void onSessionAllIncomingThreadsEnded(const sp<RpcSession>& session) override;
         void onSessionIncomingThreadEnded() override;
-        void waitForShutdown(std::unique_lock<std::mutex>& lock, const sp<RpcSession>& session);
+        void waitForShutdown(RpcMutexUniqueLock& lock, const sp<RpcSession>& session);
 
     private:
-        std::condition_variable mCv;
+        RpcConditionVariable mCv;
+        std::atomic<size_t> mShutdownCount = 0;
     };
     friend WaitForShutdownListener;
 
@@ -211,7 +249,7 @@ private:
 
         // whether this or another thread is currently using this fd to make
         // or receive transactions.
-        std::optional<pid_t> exclusiveTid;
+        std::optional<uint64_t> exclusiveTid;
 
         bool allowNested = false;
     };
@@ -225,7 +263,7 @@ private:
     //
     // transfer ownership of thread (usually done while a lock is taken on the
     // structure which originally owns the thread)
-    void preJoinThreadOwnership(std::thread thread);
+    void preJoinThreadOwnership(RpcMaybeThread thread);
     // pass FD to thread and read initial connection information
     struct PreJoinSetupResult {
         // Server connection object associated with this
@@ -244,7 +282,7 @@ private:
     [[nodiscard]] status_t setupOneSocketConnection(const RpcSocketAddress& address,
                                                     const std::vector<uint8_t>& sessionId,
                                                     bool incoming);
-    [[nodiscard]] status_t initAndAddConnection(base::unique_fd fd,
+    [[nodiscard]] status_t initAndAddConnection(RpcTransportFd fd,
                                                 const std::vector<uint8_t>& sessionId,
                                                 bool incoming);
     [[nodiscard]] status_t addIncomingConnection(std::unique_ptr<RpcTransport> rpcTransport);
@@ -257,8 +295,14 @@ private:
     sp<RpcConnection> assignIncomingConnectionToThisThread(
             std::unique_ptr<RpcTransport> rpcTransport);
     [[nodiscard]] bool removeIncomingConnection(const sp<RpcConnection>& connection);
+    void clearConnectionTid(const sp<RpcConnection>& connection);
 
     [[nodiscard]] status_t initShutdownTrigger();
+
+    /**
+     * Checks whether any connection is active (Not polling on fd)
+     */
+    bool hasActiveConnection(const std::vector<sp<RpcConnection>>& connections);
 
     enum class ConnectionUse {
         CLIENT,
@@ -276,7 +320,7 @@ private:
         const sp<RpcConnection>& get() { return mConnection; }
 
     private:
-        static void findConnection(pid_t tid, sp<RpcConnection>* exclusive,
+        static void findConnection(uint64_t tid, sp<RpcConnection>* exclusive,
                                    sp<RpcConnection>* available,
                                    std::vector<sp<RpcConnection>>& sockets,
                                    size_t socketsIndexHint);
@@ -306,7 +350,7 @@ private:
     // For a more complicated case, the client might itself open up a thread to
     // serve calls to the server at all times (e.g. if it hosts a callback)
 
-    wp<RpcServer> mForServer; // maybe null, for client sessions
+    wp<RpcServer> mForServer;                      // maybe null, for client sessions
     sp<WaitForShutdownListener> mShutdownListener; // used for client sessions
     wp<EventListener> mEventListener; // mForServer if server, mShutdownListener if client
 
@@ -320,22 +364,27 @@ private:
 
     std::unique_ptr<RpcState> mRpcBinderState;
 
-    std::mutex mMutex; // for all below
+    RpcMutex mMutex; // for all below
 
+    bool mStartedSetup = false;
     size_t mMaxIncomingThreads = 0;
     size_t mMaxOutgoingThreads = kDefaultMaxOutgoingThreads;
     std::optional<uint32_t> mProtocolVersion;
+    FileDescriptorTransportMode mFileDescriptorTransportMode = FileDescriptorTransportMode::NONE;
 
-    std::condition_variable mAvailableConnectionCv; // for mWaitingThreads
+    RpcConditionVariable mAvailableConnectionCv; // for mWaitingThreads
+
+    std::unique_ptr<RpcTransport> mBootstrapTransport;
 
     struct ThreadState {
         size_t mWaitingThreads = 0;
         // hint index into clients, ++ when sending an async transaction
         size_t mOutgoingOffset = 0;
         std::vector<sp<RpcConnection>> mOutgoing;
+        // max size of mIncoming. Once any thread starts down, no more can be started.
         size_t mMaxIncoming = 0;
         std::vector<sp<RpcConnection>> mIncoming;
-        std::map<std::thread::id, std::thread> mThreads;
+        std::map<RpcMaybeThread::id, RpcMaybeThread> mThreads;
     } mConnections;
 };
 

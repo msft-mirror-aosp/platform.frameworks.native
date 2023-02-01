@@ -84,6 +84,8 @@ public:
     void dump(std::string& result) const;
 
 private:
+    nsecs_t adjustVsyncIfNeeded(VSyncTracker& tracker, nsecs_t nextVsyncTime) const;
+
     const std::string mName;
     const VSyncDispatch::Callback mCallback;
 
@@ -125,6 +127,7 @@ public:
     CallbackToken registerCallback(Callback, std::string callbackName) final;
     void unregisterCallback(CallbackToken) final;
     ScheduleResult schedule(CallbackToken, ScheduleTiming) final;
+    ScheduleResult update(CallbackToken, ScheduleTiming) final;
     CancelResult cancel(CallbackToken) final;
     void dump(std::string&) const final;
 
@@ -141,6 +144,7 @@ private:
     void rearmTimerSkippingUpdateFor(nsecs_t now, CallbackMap::iterator const& skipUpdate)
             REQUIRES(mMutex);
     void cancelTimer() REQUIRES(mMutex);
+    ScheduleResult scheduleLocked(CallbackToken, ScheduleTiming) REQUIRES(mMutex);
 
     static constexpr nsecs_t kInvalidTime = std::numeric_limits<int64_t>::max();
     std::unique_ptr<TimeKeeper> const mTimeKeeper;

@@ -17,6 +17,7 @@
 #define LOG_TAG "PropertyMap"
 
 #include <input/PropertyMap.h>
+#include <log/log.h>
 
 // Enables debug output for the parser.
 #define DEBUG_PARSER 0
@@ -39,25 +40,25 @@ void PropertyMap::clear() {
     mProperties.clear();
 }
 
-void PropertyMap::addProperty(const String8& key, const String8& value) {
-    mProperties.add(key, value);
+void PropertyMap::addProperty(const std::string& key, const std::string& value) {
+    mProperties.emplace(key, value);
 }
 
-bool PropertyMap::hasProperty(const String8& key) const {
-    return mProperties.indexOfKey(key) >= 0;
+bool PropertyMap::hasProperty(const std::string& key) const {
+    return mProperties.find(key) != mProperties.end();
 }
 
-bool PropertyMap::tryGetProperty(const String8& key, String8& outValue) const {
-    ssize_t index = mProperties.indexOfKey(key);
-    if (index < 0) {
+bool PropertyMap::tryGetProperty(const std::string& key, std::string& outValue) const {
+    auto it = mProperties.find(key);
+    if (it == mProperties.end()) {
         return false;
     }
 
-    outValue = mProperties.valueAt(index);
+    outValue = it->second;
     return true;
 }
 
-bool PropertyMap::tryGetProperty(const String8& key, bool& outValue) const {
+bool PropertyMap::tryGetProperty(const std::string& key, bool& outValue) const {
     int32_t intValue;
     if (!tryGetProperty(key, intValue)) {
         return false;
@@ -67,34 +68,34 @@ bool PropertyMap::tryGetProperty(const String8& key, bool& outValue) const {
     return true;
 }
 
-bool PropertyMap::tryGetProperty(const String8& key, int32_t& outValue) const {
-    String8 stringValue;
+bool PropertyMap::tryGetProperty(const std::string& key, int32_t& outValue) const {
+    std::string stringValue;
     if (!tryGetProperty(key, stringValue) || stringValue.length() == 0) {
         return false;
     }
 
     char* end;
-    int value = strtol(stringValue.string(), &end, 10);
+    int32_t value = static_cast<int32_t>(strtol(stringValue.c_str(), &end, 10));
     if (*end != '\0') {
-        ALOGW("Property key '%s' has invalid value '%s'.  Expected an integer.", key.string(),
-              stringValue.string());
+        ALOGW("Property key '%s' has invalid value '%s'.  Expected an integer.", key.c_str(),
+              stringValue.c_str());
         return false;
     }
     outValue = value;
     return true;
 }
 
-bool PropertyMap::tryGetProperty(const String8& key, float& outValue) const {
-    String8 stringValue;
+bool PropertyMap::tryGetProperty(const std::string& key, float& outValue) const {
+    std::string stringValue;
     if (!tryGetProperty(key, stringValue) || stringValue.length() == 0) {
         return false;
     }
 
     char* end;
-    float value = strtof(stringValue.string(), &end);
+    float value = strtof(stringValue.c_str(), &end);
     if (*end != '\0') {
-        ALOGW("Property key '%s' has invalid value '%s'.  Expected a float.", key.string(),
-              stringValue.string());
+        ALOGW("Property key '%s' has invalid value '%s'.  Expected a float.", key.c_str(),
+              stringValue.c_str());
         return false;
     }
     outValue = value;
@@ -102,8 +103,8 @@ bool PropertyMap::tryGetProperty(const String8& key, float& outValue) const {
 }
 
 void PropertyMap::addAll(const PropertyMap* map) {
-    for (size_t i = 0; i < map->mProperties.size(); i++) {
-        mProperties.add(map->mProperties.keyAt(i), map->mProperties.valueAt(i));
+    for (const auto& [key, value] : map->mProperties) {
+        mProperties.emplace(key, value);
     }
 }
 
@@ -115,25 +116,24 @@ android::base::Result<std::unique_ptr<PropertyMap>> PropertyMap::load(const char
 
     Tokenizer* rawTokenizer;
     status_t status = Tokenizer::open(String8(filename), &rawTokenizer);
-    std::unique_ptr<Tokenizer> tokenizer(rawTokenizer);
     if (status) {
-        ALOGE("Error %d opening property file %s.", status, filename);
-    } else {
-#if DEBUG_PARSER_PERFORMANCE
-            nsecs_t startTime = systemTime(SYSTEM_TIME_MONOTONIC);
-#endif
-            Parser parser(outMap.get(), tokenizer.get());
-            status = parser.parse();
-#if DEBUG_PARSER_PERFORMANCE
-            nsecs_t elapsedTime = systemTime(SYSTEM_TIME_MONOTONIC) - startTime;
-            ALOGD("Parsed property file '%s' %d lines in %0.3fms.",
-                  tokenizer->getFilename().string(), tokenizer->getLineNumber(),
-                  elapsedTime / 1000000.0);
-#endif
-            if (status) {
-                return android::base::Error(BAD_VALUE) << "Could not parse " << filename;
-            }
+        return android::base::Error(-status) << "Could not open file: " << filename;
     }
+#if DEBUG_PARSER_PERFORMANCE
+    nsecs_t startTime = systemTime(SYSTEM_TIME_MONOTONIC);
+#endif
+    std::unique_ptr<Tokenizer> tokenizer(rawTokenizer);
+    Parser parser(outMap.get(), tokenizer.get());
+    status = parser.parse();
+#if DEBUG_PARSER_PERFORMANCE
+    nsecs_t elapsedTime = systemTime(SYSTEM_TIME_MONOTONIC) - startTime;
+    ALOGD("Parsed property file '%s' %d lines in %0.3fms.", tokenizer->getFilename().string(),
+          tokenizer->getLineNumber(), elapsedTime / 1000000.0);
+#endif
+    if (status) {
+        return android::base::Error(BAD_VALUE) << "Could not parse " << filename;
+    }
+
     return std::move(outMap);
 }
 
@@ -184,13 +184,13 @@ status_t PropertyMap::Parser::parse() {
                 return BAD_VALUE;
             }
 
-            if (mMap->hasProperty(keyToken)) {
+            if (mMap->hasProperty(keyToken.string())) {
                 ALOGE("%s: Duplicate property value for key '%s'.",
                       mTokenizer->getLocation().string(), keyToken.string());
                 return BAD_VALUE;
             }
 
-            mMap->addProperty(keyToken, valueToken);
+            mMap->addProperty(keyToken.string(), valueToken.string());
         }
 
         mTokenizer->nextLine();

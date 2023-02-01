@@ -47,7 +47,7 @@ public:
     bool isEnabled() const;
     status_t writeToFile();
     LayersTraceFileProto createTraceFileProto() const;
-    void notify(bool visibleRegionDirty, int64_t time);
+    void notify(bool visibleRegionDirty, int64_t time, int64_t vsyncId);
 
     enum : uint32_t {
         TRACE_INPUT = 1 << 1,
@@ -55,6 +55,7 @@ public:
         TRACE_EXTRA = 1 << 3,
         TRACE_HWC = 1 << 4,
         TRACE_BUFFERS = 1 << 5,
+        TRACE_VIRTUAL_DISPLAYS = 1 << 6,
         TRACE_ALL = TRACE_INPUT | TRACE_COMPOSITION | TRACE_EXTRA,
     };
     void setTraceFlags(uint32_t flags);

@@ -19,6 +19,7 @@
 #define LOG_TAG "VSyncReactor"
 //#define LOG_NDEBUG 0
 
+#include <assert.h>
 #include <cutils/properties.h>
 #include <log/log.h>
 #include <utils/Trace.h>
@@ -128,7 +129,7 @@ void VSyncReactor::endPeriodTransition() {
 }
 
 void VSyncReactor::startPeriodTransition(nsecs_t period) {
-    ATRACE_INT64("VSR-setPeriod", period);
+    ATRACE_INT64("VSR-startPeriodTransition", period);
     std::lock_guard lock(mMutex);
     mLastHwVsync.reset();
 
@@ -144,6 +145,11 @@ void VSyncReactor::startPeriodTransition(nsecs_t period) {
 bool VSyncReactor::periodConfirmed(nsecs_t vsync_timestamp, std::optional<nsecs_t> HwcVsyncPeriod) {
     if (!mPeriodConfirmationInProgress) {
         return false;
+    }
+
+    if (mDisplayPowerMode == hal::PowerMode::DOZE ||
+        mDisplayPowerMode == hal::PowerMode::DOZE_SUSPEND) {
+        return true;
     }
 
     if (!mLastHwVsync && !HwcVsyncPeriod) {
@@ -204,6 +210,11 @@ bool VSyncReactor::addHwVsyncTimestamp(nsecs_t timestamp, std::optional<nsecs_t>
         setIgnorePresentFencesInternal(false);
     }
     return mMoreSamplesNeeded;
+}
+
+void VSyncReactor::setDisplayPowerMode(hal::PowerMode powerMode) {
+    std::scoped_lock lock(mMutex);
+    mDisplayPowerMode = powerMode;
 }
 
 void VSyncReactor::dump(std::string& result) const {

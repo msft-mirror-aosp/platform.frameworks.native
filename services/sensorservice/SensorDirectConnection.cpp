@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "SensorDevice.h"
 #include "SensorDirectConnection.h"
 #include <android/util/ProtoOutputStream.h>
 #include <frameworks/base/core/proto/android/service/sensor_service.proto.h>
 #include <hardware/sensors.h>
+#include "SensorDevice.h"
 
 #define UNUSED(x) (void)(x)
 
@@ -51,7 +51,7 @@ void SensorService::SensorDirectConnection::destroy() {
     stopAll();
     mService->cleanupConnection(this);
     if (mMem.handle != nullptr) {
-        native_handle_close(mMem.handle);
+        native_handle_close_with_tag(mMem.handle);
         native_handle_delete(const_cast<struct native_handle*>(mMem.handle));
     }
     mDestroyed = true;
@@ -151,7 +151,7 @@ int32_t SensorService::SensorDirectConnection::configureChannel(int handle, int 
         return PERMISSION_DENIED;
     }
 
-    sp<SensorInterface> si = mService->getSensorInterfaceFromHandle(handle);
+    std::shared_ptr<SensorInterface> si = mService->getSensorInterfaceFromHandle(handle);
     if (si == nullptr) {
         return NAME_NOT_FOUND;
     }
@@ -228,7 +228,7 @@ void SensorService::SensorDirectConnection::capRates() {
     for (auto &i : existingConnections) {
         int handle = i.first;
         int rateLevel = i.second;
-        sp<SensorInterface> si = mService->getSensorInterfaceFromHandle(handle);
+        std::shared_ptr<SensorInterface> si = mService->getSensorInterfaceFromHandle(handle);
         if (si != nullptr) {
             const Sensor& s = si->getSensor();
             if (mService->isSensorInCappedSet(s.getType()) &&
