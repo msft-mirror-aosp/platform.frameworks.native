@@ -19,10 +19,11 @@
 #include <memory>
 #include <string>
 
+#include <ThreadContext.h>
 #include <ftl/enum.h>
+#include <ftl/optional.h>
 #include <scheduler/Features.h>
 #include <scheduler/Time.h>
-#include <ui/DisplayId.h>
 
 namespace android {
 class EventThreadTest;
@@ -47,67 +48,79 @@ using VsyncTracker = VSyncTracker;
 // Schedule that synchronizes to hardware VSYNC of a physical display.
 class VsyncSchedule {
 public:
-    VsyncSchedule(PhysicalDisplayId, FeatureFlags);
+    explicit VsyncSchedule(FeatureFlags);
     ~VsyncSchedule();
 
     Period period() const;
     TimePoint vsyncDeadlineAfter(TimePoint) const;
+
+    // Inform the schedule that the period is changing and the schedule needs to recalibrate
+    // itself. The schedule will end the period transition internally. This will
+    // enable hardware VSYNCs in order to calibrate.
+    //
+    // \param [in] period   The period that the system is changing into.
+    void startPeriodTransition(ISchedulerCallback&, Period period);
+
+    // Pass a VSYNC sample to VsyncController. Return true if
+    // VsyncController detected that the VSYNC period changed. Enable or disable
+    // hardware VSYNCs depending on whether more samples are needed.
+    bool addResyncSample(ISchedulerCallback&, TimePoint timestamp,
+                         ftl::Optional<Period> hwcVsyncPeriod);
 
     // TODO(b/185535769): Hide behind API.
     const VsyncTracker& getTracker() const { return *mTracker; }
     VsyncTracker& getTracker() { return *mTracker; }
     VsyncController& getController() { return *mController; }
 
-    // TODO(b/185535769): Once these are hidden behind the API, they may no
-    // longer need to be shared_ptrs.
-    using DispatchPtr = std::shared_ptr<VsyncDispatch>;
-    using TrackerPtr = std::shared_ptr<VsyncTracker>;
-
     // TODO(b/185535769): Remove once VsyncSchedule owns all registrations.
-    DispatchPtr getDispatch() { return mDispatch; }
+    VsyncDispatch& getDispatch() { return *mDispatch; }
 
     void dump(std::string&) const;
 
-    // Turn on hardware vsyncs, unless mHwVsyncState is Disallowed, in which
+    // Turn on hardware VSYNCs, unless mHwVsyncState is Disallowed, in which
     // case this call is ignored.
     void enableHardwareVsync(ISchedulerCallback&) EXCLUDES(mHwVsyncLock);
 
-    // Disable hardware vsyncs. If `disallow` is true, future calls to
+    // Disable hardware VSYNCs. If `disallow` is true, future calls to
     // enableHardwareVsync are ineffective until allowHardwareVsync is called.
     void disableHardwareVsync(ISchedulerCallback&, bool disallow) EXCLUDES(mHwVsyncLock);
 
-    // Restore the ability to enable hardware vsync.
-    void allowHardwareVsync() EXCLUDES(mHwVsyncLock);
-
-    // If true, enableHardwareVsync can enable hardware vsync (if not already
+    // If true, enableHardwareVsync can enable hardware VSYNC (if not already
     // enabled). If false, enableHardwareVsync does nothing.
-    bool isHardwareVsyncAllowed() const EXCLUDES(mHwVsyncLock);
+    bool isHardwareVsyncAllowed(bool makeAllowed) EXCLUDES(mHwVsyncLock);
 
-protected:
-    using ControllerPtr = std::unique_ptr<VsyncController>;
+    void setPendingHardwareVsyncState(bool enabled) REQUIRES(kMainThreadContext);
 
-    // For tests.
-    VsyncSchedule(PhysicalDisplayId, TrackerPtr, DispatchPtr, ControllerPtr);
+    bool getPendingHardwareVsyncState() const REQUIRES(kMainThreadContext);
 
 private:
     friend class TestableScheduler;
     friend class android::EventThreadTest;
     friend class android::fuzz::SchedulerFuzzer;
 
-    static TrackerPtr createTracker(PhysicalDisplayId);
-    static DispatchPtr createDispatch(TrackerPtr);
-    static ControllerPtr createController(PhysicalDisplayId, VsyncTracker&, FeatureFlags);
+    using TrackerPtr = std::unique_ptr<VsyncTracker>;
+    using DispatchPtr = std::unique_ptr<VsyncDispatch>;
+    using ControllerPtr = std::unique_ptr<VsyncController>;
+
+    // For tests.
+    VsyncSchedule(TrackerPtr, DispatchPtr, ControllerPtr);
+
+    static TrackerPtr createTracker();
+    static DispatchPtr createDispatch(VsyncTracker&);
+    static ControllerPtr createController(VsyncTracker&, FeatureFlags);
+
+    void enableHardwareVsyncLocked(ISchedulerCallback&) REQUIRES(mHwVsyncLock);
 
     mutable std::mutex mHwVsyncLock;
     enum class HwVsyncState {
-        // Hardware vsyncs are currently enabled.
+        // Hardware VSYNCs are currently enabled.
         Enabled,
 
-        // Hardware vsyncs are currently disabled. They can be enabled by a call
+        // Hardware VSYNCs are currently disabled. They can be enabled by a call
         // to `enableHardwareVsync`.
         Disabled,
 
-        // Hardware vsyncs are not currently allowed (e.g. because the display
+        // Hardware VSYNCs are not currently allowed (e.g. because the display
         // is off).
         Disallowed,
 
@@ -115,19 +128,17 @@ private:
     };
     HwVsyncState mHwVsyncState GUARDED_BY(mHwVsyncLock) = HwVsyncState::Disallowed;
 
-    // The last state, which may be the current state, or the state prior to setting to Disallowed.
-    HwVsyncState mLastHwVsyncState GUARDED_BY(mHwVsyncLock) = HwVsyncState::Disabled;
+    // Pending state, in case an attempt is made to set the state while the
+    // device is off.
+    HwVsyncState mPendingHwVsyncState GUARDED_BY(kMainThreadContext) = HwVsyncState::Disabled;
 
     class PredictedVsyncTracer;
     using TracerPtr = std::unique_ptr<PredictedVsyncTracer>;
 
-    const PhysicalDisplayId mId;
-
-    // Effectively const except in move constructor.
-    TrackerPtr mTracker;
-    DispatchPtr mDispatch;
-    ControllerPtr mController;
-    TracerPtr mTracer;
+    const TrackerPtr mTracker;
+    const DispatchPtr mDispatch;
+    const ControllerPtr mController;
+    const TracerPtr mTracer;
 };
 
 } // namespace android::scheduler

@@ -33,8 +33,7 @@ void TouchState::reset() {
 
 void TouchState::removeTouchedPointer(int32_t pointerId) {
     for (TouchedWindow& touchedWindow : windows) {
-        touchedWindow.pointerIds.reset(pointerId);
-        touchedWindow.pilferedPointerIds.reset(pointerId);
+        touchedWindow.removeTouchingPointer(pointerId);
     }
 }
 
@@ -42,8 +41,7 @@ void TouchState::removeTouchedPointerFromWindow(
         int32_t pointerId, const sp<android::gui::WindowInfoHandle>& windowHandle) {
     for (TouchedWindow& touchedWindow : windows) {
         if (touchedWindow.windowHandle == windowHandle) {
-            touchedWindow.pointerIds.reset(pointerId);
-            touchedWindow.pilferedPointerIds.reset(pointerId);
+            touchedWindow.removeTouchingPointer(pointerId);
             return;
         }
     }
@@ -164,17 +162,7 @@ void TouchState::cancelPointersForNonPilferingWindows() {
     std::for_each(windows.begin(), windows.end(), [&allPilferedPointerIds](TouchedWindow& w) {
         std::bitset<MAX_POINTER_ID + 1> pilferedByOtherWindows =
                 w.pilferedPointerIds ^ allPilferedPointerIds;
-        // TODO(b/211379801) : convert pointerIds to use std::bitset, which would allow us to
-        // replace the loop below with a bitwise operation. Currently, the XOR operation above is
-        // redundant, but is done to make the code more explicit / easier to convert later.
-        for (std::size_t i = 0; i < pilferedByOtherWindows.size(); i++) {
-            if (pilferedByOtherWindows.test(i) && !w.pilferedPointerIds.test(i)) {
-                // Pointer is pilfered by other windows, but not by this one! Remove it from here.
-                // We could call 'removeTouchedPointerFromWindow' here, but it's faster to directly
-                // manipulate it.
-                w.pointerIds.reset(i);
-            }
-        }
+        w.pointerIds &= ~pilferedByOtherWindows;
     });
     std::erase_if(windows, [](const TouchedWindow& w) { return w.pointerIds.none(); });
 }

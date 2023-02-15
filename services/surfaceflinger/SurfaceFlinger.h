@@ -105,6 +105,7 @@
 #include <vector>
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
+#include <aidl/android/hardware/graphics/composer3/RefreshRateChangedDebugData.h>
 #include "Client.h"
 
 using namespace android::surfaceflinger;
@@ -128,6 +129,7 @@ class FrameTracer;
 class ScreenCapturer;
 class WindowInfosListenerInvoker;
 
+using ::aidl::android::hardware::graphics::composer3::RefreshRateChangedDebugData;
 using frontend::TransactionHandler;
 using gui::CaptureArgs;
 using gui::DisplayCaptureArgs;
@@ -556,7 +558,8 @@ private:
     status_t clearBootDisplayMode(const sp<IBinder>& displayToken);
     status_t getHdrConversionCapabilities(
             std::vector<gui::HdrConversionCapability>* hdrConversionCapaabilities) const;
-    status_t setHdrConversionStrategy(const gui::HdrConversionStrategy& hdrConversionStrategy);
+    status_t setHdrConversionStrategy(const gui::HdrConversionStrategy& hdrConversionStrategy,
+                                      int32_t*);
     status_t getHdrOutputConversionSupport(bool* outSupport) const;
     void setAutoLowLatencyMode(const sp<IBinder>& displayToken, bool on);
     void setGameContentType(const sp<IBinder>& displayToken, bool on);
@@ -631,6 +634,7 @@ private:
                                                const hal::VsyncPeriodChangeTimeline&) override;
     void onComposerHalSeamlessPossible(hal::HWDisplayId) override;
     void onComposerHalVsyncIdle(hal::HWDisplayId) override;
+    void onRefreshRateChangedDebug(const RefreshRateChangedDebugData&) override;
 
     // ICompositor overrides:
     void configure() override;
@@ -642,7 +646,7 @@ private:
 
     // Toggles hardware VSYNC by calling into HWC.
     // TODO(b/241286146): Rename for self-explanatory API.
-    void setVsyncEnabled(PhysicalDisplayId, bool) override;
+    void setVsyncEnabled(bool) override;
     void requestDisplayModes(std::vector<display::DisplayModeRequest>) override;
     void kernelTimerChanged(bool expired) override;
     void triggerOnFrameRateOverridesChanged() override;
@@ -1130,15 +1134,7 @@ private:
     pid_t mPid;
     std::future<void> mRenderEnginePrimeCacheFuture;
 
-    // mStateLock has conventions related to the current thread, because only
-    // the main thread should modify variables protected by mStateLock.
-    // - read access from a non-main thread must lock mStateLock, since the main
-    // thread may modify these variables.
-    // - write access from a non-main thread is not permitted.
-    // - read access from the main thread can use an ftl::FakeGuard, since other
-    // threads must not modify these variables.
-    // - write access from the main thread must lock mStateLock, since another
-    // thread may be reading these variables.
+    // access must be protected by mStateLock
     mutable Mutex mStateLock;
     State mCurrentState{LayerVector::StateSet::Current};
     std::atomic<int32_t> mTransactionFlags = 0;
@@ -1466,8 +1462,8 @@ public:
     binder::Status getOverlaySupport(gui::OverlayProperties* outProperties) override;
     binder::Status getHdrConversionCapabilities(
             std::vector<gui::HdrConversionCapability>*) override;
-    binder::Status setHdrConversionStrategy(
-            const gui::HdrConversionStrategy& hdrConversionStrategy) override;
+    binder::Status setHdrConversionStrategy(const gui::HdrConversionStrategy& hdrConversionStrategy,
+                                            int32_t*) override;
     binder::Status getHdrOutputConversionSupport(bool* outSupport) override;
     binder::Status setAutoLowLatencyMode(const sp<IBinder>& display, bool on) override;
     binder::Status setGameContentType(const sp<IBinder>& display, bool on) override;

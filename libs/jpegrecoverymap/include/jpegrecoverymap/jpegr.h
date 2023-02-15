@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef ANDROID_JPEGRECOVERYMAP_RECOVERYMAP_H
-#define ANDROID_JPEGRECOVERYMAP_RECOVERYMAP_H
+#ifndef ANDROID_JPEGRECOVERYMAP_JPEGR_H
+#define ANDROID_JPEGRECOVERYMAP_JPEGR_H
 
 #include "jpegrerrorcode.h"
 
-namespace android::recoverymap {
+namespace android::jpegrecoverymap {
 
 // Color gamuts for image data
 typedef enum {
@@ -88,6 +88,8 @@ struct jpegr_metadata {
   uint32_t version;
   // Max Content Boost for the map
   float maxContentBoost;
+  // Min Content Boost for the map
+  float minContentBoost;
 };
 
 typedef struct jpegr_uncompressed_struct* jr_uncompressed_ptr;
@@ -96,7 +98,7 @@ typedef struct jpegr_exif_struct* jr_exif_ptr;
 typedef struct jpegr_metadata* jr_metadata_ptr;
 typedef struct jpegr_info_struct* jr_info_ptr;
 
-class RecoveryMap {
+class JpegR {
 public:
     /*
      * Encode API-0
@@ -219,17 +221,7 @@ public:
     */
     status_t getJPEGRInfo(jr_compressed_ptr compressed_jpegr_image,
                           jr_info_ptr jpegr_info);
-private:
-    /*
-     * This method is called in the encoding pipeline. It will encode the recovery map.
-     *
-     * @param uncompressed_recovery_map uncompressed recovery map
-     * @param dest encoded recover map
-     * @return NO_ERROR if encoding succeeds, error code if error occurs.
-     */
-    status_t compressRecoveryMap(jr_uncompressed_ptr uncompressed_recovery_map,
-                               jr_compressed_ptr dest);
-
+protected:
     /*
      * This method is called in the encoding pipeline. It will take the uncompressed 8-bit and
      * 10-bit yuv images as input, and calculate the uncompressed recovery map. The input images
@@ -264,6 +256,17 @@ private:
                               jr_uncompressed_ptr uncompressed_recovery_map,
                               jr_metadata_ptr metadata,
                               jr_uncompressed_ptr dest);
+
+private:
+    /*
+     * This method is called in the encoding pipeline. It will encode the recovery map.
+     *
+     * @param uncompressed_recovery_map uncompressed recovery map
+     * @param dest encoded recover map
+     * @return NO_ERROR if encoding succeeds, error code if error occurs.
+     */
+    status_t compressRecoveryMap(jr_uncompressed_ptr uncompressed_recovery_map,
+                               jr_compressed_ptr dest);
 
     /*
      * This methoud is called to separate primary image and recovery map image from JPEGR
@@ -320,6 +323,6 @@ private:
                      jr_uncompressed_ptr dest);
 };
 
-} // namespace android::recoverymap
+} // namespace android::jpegrecoverymap
 
-#endif // ANDROID_JPEGRECOVERYMAP_RECOVERYMAP_H
+#endif // ANDROID_JPEGRECOVERYMAP_JPEGR_H

@@ -141,6 +141,8 @@ public:
 
         uint64_t frameNumber;
         ui::Transform transform;
+
+        uint32_t producerId = 0;
         uint32_t bufferTransform;
         bool transformToDisplayInverse;
         Region transparentRegionHint;
@@ -618,7 +620,7 @@ public:
      * doTransaction - process the transaction. This is a good place to figure
      * out which attributes of the surface have changed.
      */
-    virtual uint32_t doTransaction(uint32_t transactionFlags);
+    virtual uint32_t doTransaction(uint32_t transactionFlags, nsecs_t currentLatchTime);
 
     /*
      * Remove relative z for the layer if its relative parent is not part of the
@@ -838,6 +840,10 @@ public:
                                         std::unordered_set<Layer*>& visited);
     bool willPresentCurrentTransaction() const;
 
+    void callReleaseBufferCallback(const sp<ITransactionCompletedListener>& listener,
+                                   const sp<GraphicBuffer>& buffer, uint64_t framenumber,
+                                   const sp<Fence>& releaseFence);
+
 protected:
     // For unit tests
     friend class TestableSurfaceFlinger;
@@ -851,7 +857,7 @@ protected:
     void preparePerFrameCompositionState();
     void preparePerFrameBufferCompositionState();
     void preparePerFrameEffectsCompositionState();
-    virtual void commitTransaction(State& stateToCommit);
+    virtual void commitTransaction(State& stateToCommit, nsecs_t currentLatchTime = 0);
     void gatherBufferInfo();
     void onSurfaceFrameCreated(const std::shared_ptr<frametimeline::SurfaceFrame>&);
 
@@ -1047,6 +1053,10 @@ private:
                                    const sp<Fence>& releaseFence,
                                    uint32_t currentMaxAcquiredBufferCount);
 
+    // Returns true if the transformed buffer size does not match the layer size and we need
+    // to apply filtering.
+    bool bufferNeedsFiltering() const;
+
     // Returns true if there is a valid color to fill.
     bool fillsColor() const;
     // Returns true if this layer has a blur value.
@@ -1063,6 +1073,11 @@ private:
     bool hasSomethingToDraw() const { return hasEffect() || hasBufferOrSidebandStream(); }
 
     void updateChildrenSnapshots(bool updateGeometry);
+
+    // Fills the provided vector with the currently available JankData and removes the processed
+    // JankData from the pending list.
+    void transferAvailableJankData(const std::deque<sp<CallbackHandle>>& handles,
+                                   std::vector<JankData>& jankData);
 
     // Cached properties computed from drawing state
     // Effective transform taking into account parent transforms and any parent scaling, which is
