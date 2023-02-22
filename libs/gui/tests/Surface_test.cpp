@@ -701,7 +701,7 @@ public:
                                  const sp<IBinder>& /*applyToken*/,
                                  const InputWindowCommands& /*inputWindowCommands*/,
                                  int64_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/,
-                                 const client_cache_t& /*cachedBuffer*/,
+                                 const std::vector<client_cache_t>& /*cachedBuffer*/,
                                  bool /*hasListenerCallbacks*/,
                                  const std::vector<ListenerCallbacks>& /*listenerCallbacks*/,
                                  uint64_t /*transactionId*/) override {
@@ -827,7 +827,8 @@ public:
     }
 
     binder::Status setHdrConversionStrategy(
-            const gui::HdrConversionStrategy& /*hdrConversionStrategy*/) override {
+            const gui::HdrConversionStrategy& /*hdrConversionStrategy*/,
+            int32_t* /*outPreferredHdrOutputType*/) override {
         return binder::Status::ok();
     }
 

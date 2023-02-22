@@ -47,6 +47,7 @@ cc_library {
         "Input.cpp",
         "InputDevice.cpp",
         "InputEventLabels.cpp",
+        "InputVerifier.cpp",
         "Keyboard.cpp",
         "KeyCharacterMap.cpp",
         "KeyLayoutMap.cpp",
@@ -57,6 +58,7 @@ cc_library {
         "TouchVideoFrame.cpp",
         "VelocityControl.cpp",
         "VelocityTracker.cpp",
+        "VirtualInputDevice.cpp",
         "VirtualKeyMap.cpp",
     ],
 
@@ -124,6 +126,8 @@ cc_library {
                 enabled: false,
             },
             include_dirs: [
+                "bionic/libc/kernel/android/uapi/",
+                "bionic/libc/kernel/uapi",
                 "frameworks/native/libs/arect/include",
             ],
         },

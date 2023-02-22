@@ -146,7 +146,7 @@ Layer::Layer(const LayerCreationArgs& args)
         mLayerCreationFlags(args.flags),
         mBorderEnabled(false),
         mTextureName(args.textureName),
-        mLayerFE(args.flinger->getFactory().createLayerFE(mName)) {
+        mLegacyLayerFE(args.flinger->getFactory().createLayerFE(mName)) {
     ALOGV("Creating Layer %s", getDebugName());
 
     uint32_t layerFlags = 0;
@@ -393,14 +393,22 @@ void Layer::updateTrustedPresentationState(const DisplayDevice* display,
 
     if (!leaveState) {
         const auto outputLayer = findOutputLayerForDisplay(display);
-        if (outputLayer != nullptr && snapshot != nullptr) {
-            mLastComputedTrustedPresentationState =
-                    computeTrustedPresentationState(snapshot->geomLayerBounds,
-                                                    snapshot->sourceBounds(),
-                                                    outputLayer->getState().coveredRegion,
-                                                    snapshot->transformedBounds, snapshot->alpha,
-                                                    snapshot->geomLayerTransform,
-                                                    mTrustedPresentationThresholds);
+        if (outputLayer != nullptr) {
+            if (outputLayer->getState().coveredRegionExcludingDisplayOverlays) {
+                Region coveredRegion =
+                        *outputLayer->getState().coveredRegionExcludingDisplayOverlays;
+                mLastComputedTrustedPresentationState =
+                        computeTrustedPresentationState(snapshot->geomLayerBounds,
+                                                        snapshot->sourceBounds(), coveredRegion,
+                                                        snapshot->transformedBounds,
+                                                        snapshot->alpha,
+                                                        snapshot->geomLayerTransform,
+                                                        mTrustedPresentationThresholds);
+            } else {
+                ALOGE("CoveredRegionExcludingDisplayOverlays was not set for %s. Don't compute "
+                      "TrustedPresentationState",
+                      getDebugName());
+            }
         }
     }
     const bool newState = mLastComputedTrustedPresentationState;
@@ -457,10 +465,15 @@ bool Layer::computeTrustedPresentationState(const FloatRect& bounds, const Float
     float boundsOverSourceH = bounds.getHeight() / (float)sourceBounds.getHeight();
     fractionRendered *= boundsOverSourceW * boundsOverSourceH;
 
-    Rect coveredBounds = coveredRegion.bounds();
-    fractionRendered *= (1 -
-                         ((coveredBounds.width() / (float)screenBounds.getWidth()) *
-                          coveredBounds.height() / (float)screenBounds.getHeight()));
+    Region tJunctionFreeRegion = Region::createTJunctionFreeRegion(coveredRegion);
+    // Compute the size of all the rects since they may be disconnected.
+    float coveredSize = 0;
+    for (auto rect = tJunctionFreeRegion.begin(); rect < tJunctionFreeRegion.end(); rect++) {
+        float size = rect->width() * rect->height();
+        coveredSize += size;
+    }
+
+    fractionRendered *= (1 - (coveredSize / (screenBounds.getWidth() * screenBounds.getHeight())));
 
     if (fractionRendered < thresholds.minFractionRendered) {
         return false;
@@ -553,6 +566,7 @@ void Layer::prepareBasicGeometryCompositionState() {
                                         : Hwc2::IComposerClient::BlendMode::COVERAGE;
     }
 
+    // Please keep in sync with LayerSnapshotBuilder
     auto* snapshot = editLayerSnapshot();
     snapshot->outputFilter = getOutputFilter();
     snapshot->isVisible = isVisible();
@@ -579,6 +593,7 @@ void Layer::prepareGeometryCompositionState() {
     const auto& drawingState{getDrawingState()};
     auto* snapshot = editLayerSnapshot();
 
+    // Please keep in sync with LayerSnapshotBuilder
     snapshot->geomBufferSize = getBufferSize(drawingState);
     snapshot->geomContentCrop = getBufferCrop();
     snapshot->geomCrop = getCrop(drawingState);
@@ -611,6 +626,7 @@ void Layer::prepareGeometryCompositionState() {
 
 void Layer::preparePerFrameCompositionState() {
     const auto& drawingState{getDrawingState()};
+    // Please keep in sync with LayerSnapshotBuilder
     auto* snapshot = editLayerSnapshot();
 
     snapshot->forceClientComposition = false;
@@ -624,6 +640,7 @@ void Layer::preparePerFrameCompositionState() {
     snapshot->dimmingEnabled = isDimmingEnabled();
     snapshot->currentSdrHdrRatio = getCurrentSdrHdrRatio();
     snapshot->desiredSdrHdrRatio = getDesiredSdrHdrRatio();
+    snapshot->cachingHint = getCachingHint();
 
     const bool usesRoundedCorners = hasRoundedCorners();
 
@@ -653,8 +670,9 @@ void Layer::preparePerFrameCompositionState() {
 }
 
 void Layer::preparePerFrameBufferCompositionState() {
-    // Sideband layers
+    // Please keep in sync with LayerSnapshotBuilder
     auto* snapshot = editLayerSnapshot();
+    // Sideband layers
     if (snapshot->sidebandStream.get() && !snapshot->sidebandStreamHasFrame) {
         snapshot->compositionType =
                 aidl::android::hardware::graphics::composer3::Composition::SIDEBAND;
@@ -677,6 +695,7 @@ void Layer::preparePerFrameBufferCompositionState() {
 }
 
 void Layer::preparePerFrameEffectsCompositionState() {
+    // Please keep in sync with LayerSnapshotBuilder
     auto* snapshot = editLayerSnapshot();
     snapshot->color = getColor();
     snapshot->compositionType =
@@ -685,6 +704,7 @@ void Layer::preparePerFrameEffectsCompositionState() {
 
 void Layer::prepareCursorCompositionState() {
     const State& drawingState{getDrawingState()};
+    // Please keep in sync with LayerSnapshotBuilder
     auto* snapshot = editLayerSnapshot();
 
     // Apply the layer's transform, followed by the display's global transform
@@ -770,7 +790,7 @@ void Layer::transferAvailableJankData(const std::deque<sp<CallbackHandle>>& hand
 // transaction
 // ----------------------------------------------------------------------------
 
-uint32_t Layer::doTransaction(uint32_t flags) {
+uint32_t Layer::doTransaction(uint32_t flags, nsecs_t latchTime) {
     ATRACE_CALL();
 
     // TODO: This is unfortunate.
@@ -798,23 +818,24 @@ uint32_t Layer::doTransaction(uint32_t flags) {
         mFlinger->mUpdateInputInfo = true;
     }
 
-    commitTransaction(mDrawingState);
+    commitTransaction(mDrawingState, latchTime);
 
     return flags;
 }
 
-void Layer::commitTransaction(State&) {
+void Layer::commitTransaction(State&, nsecs_t currentLatchTime) {
     // Set the present state for all bufferlessSurfaceFramesTX to Presented. The
     // bufferSurfaceFrameTX will be presented in latchBuffer.
     for (auto& [token, surfaceFrame] : mDrawingState.bufferlessSurfaceFramesTX) {
         if (surfaceFrame->getPresentState() != PresentState::Presented) {
             // With applyPendingStates, we could end up having presented surfaceframes from previous
             // states
-            surfaceFrame->setPresentState(PresentState::Presented);
+            surfaceFrame->setPresentState(PresentState::Presented, mLastLatchTime);
             mFlinger->mFrameTimeline->addSurfaceFrame(surfaceFrame);
         }
     }
     mDrawingState.bufferlessSurfaceFramesTX.clear();
+    mLastLatchTime = currentLatchTime;
 }
 
 uint32_t Layer::clearTransactionFlags(uint32_t mask) {
@@ -3077,6 +3098,14 @@ bool Layer::setExtendedRangeBrightness(float currentBufferRatio, float desiredRa
     return true;
 }
 
+bool Layer::setCachingHint(gui::CachingHint cachingHint) {
+    if (mDrawingState.cachingHint == cachingHint) return false;
+    mDrawingState.cachingHint = cachingHint;
+    mDrawingState.modified = true;
+    setTransactionFlags(eTransactionNeeded);
+    return true;
+}
+
 bool Layer::setHdrMetadata(const HdrMetadata& hdrMetadata) {
     if (mDrawingState.hdrMetadata == hdrMetadata) return false;
     mDrawingState.hdrMetadata = hdrMetadata;
@@ -3119,14 +3148,13 @@ bool Layer::setSidebandStream(const sp<NativeHandle>& sidebandStream) {
     return true;
 }
 
-bool Layer::setTransactionCompletedListeners(const std::vector<sp<CallbackHandle>>& handles) {
+bool Layer::setTransactionCompletedListeners(const std::vector<sp<CallbackHandle>>& handles,
+                                             bool willPresent) {
     // If there is no handle, we will not send a callback so reset mReleasePreviousBuffer and return
     if (handles.empty()) {
         mReleasePreviousBuffer = false;
         return false;
     }
-
-    const bool willPresent = willPresentCurrentTransaction();
 
     std::deque<sp<CallbackHandle>> remainingHandles;
     for (const auto& handle : handles) {
@@ -3210,11 +3238,10 @@ bool Layer::fenceHasSignaled() const {
     return fenceSignaled;
 }
 
-bool Layer::onPreComposition(nsecs_t refreshStartTime) {
+void Layer::onPreComposition(nsecs_t refreshStartTime) {
     for (const auto& handle : mDrawingState.callbackHandles) {
         handle->refreshStartTime = refreshStartTime;
     }
-    return hasReadyFrame();
 }
 
 void Layer::setAutoRefresh(bool autoRefresh) {
@@ -3600,7 +3627,7 @@ bool Layer::isHdrY410() const {
 
 sp<LayerFE> Layer::getCompositionEngineLayerFE() const {
     // There's no need to get a CE Layer if the layer isn't going to draw anything.
-    return hasSomethingToDraw() ? mLayerFE : nullptr;
+    return hasSomethingToDraw() ? mLegacyLayerFE : nullptr;
 }
 
 const LayerSnapshot* Layer::getLayerSnapshot() const {
@@ -3611,14 +3638,34 @@ LayerSnapshot* Layer::editLayerSnapshot() {
     return mSnapshot.get();
 }
 
+std::unique_ptr<frontend::LayerSnapshot> Layer::stealLayerSnapshot() {
+    return std::move(mSnapshot);
+}
+
+void Layer::updateLayerSnapshot(std::unique_ptr<frontend::LayerSnapshot> snapshot) {
+    mSnapshot = std::move(snapshot);
+}
+
 const compositionengine::LayerFECompositionState* Layer::getCompositionState() const {
     return mSnapshot.get();
 }
 
 sp<LayerFE> Layer::copyCompositionEngineLayerFE() const {
-    auto result = mFlinger->getFactory().createLayerFE(mLayerFE->getDebugName());
+    auto result = mFlinger->getFactory().createLayerFE(mName);
     result->mSnapshot = std::make_unique<LayerSnapshot>(*mSnapshot);
     return result;
+}
+
+sp<LayerFE> Layer::getCompositionEngineLayerFE(
+        const frontend::LayerHierarchy::TraversalPath& path) {
+    for (auto& [p, layerFE] : mLayerFEs) {
+        if (p == path) {
+            return layerFE;
+        }
+    }
+    auto layerFE = mFlinger->getFactory().createLayerFE(mName);
+    mLayerFEs.emplace_back(path, layerFE);
+    return layerFE;
 }
 
 void Layer::useSurfaceDamage() {
@@ -3974,6 +4021,7 @@ void Layer::updateSnapshot(bool updateGeometry) {
     snapshot->bufferSize = getBufferSize(mDrawingState);
     snapshot->externalTexture = mBufferInfo.mBuffer;
     snapshot->hasReadyFrame = hasReadyFrame();
+    snapshot->isInternalDisplayOverlay = isInternalDisplayOverlay();
     preparePerFrameCompositionState();
 }
 
@@ -4014,28 +4062,6 @@ void Layer::updateRelativeMetadataSnapshot(const LayerMetadata& relativeLayerMet
         }
         relative->updateRelativeMetadataSnapshot(childRelativeLayerMetadata, visited);
     }
-}
-
-LayerSnapshotGuard::LayerSnapshotGuard(Layer* layer) : mLayer(layer) {
-    if (mLayer) {
-        mLayer->mLayerFE->mSnapshot = std::move(mLayer->mSnapshot);
-    }
-}
-
-LayerSnapshotGuard::~LayerSnapshotGuard() {
-    if (mLayer) {
-        mLayer->mSnapshot = std::move(mLayer->mLayerFE->mSnapshot);
-    }
-}
-
-LayerSnapshotGuard::LayerSnapshotGuard(LayerSnapshotGuard&& other) : mLayer(other.mLayer) {
-    other.mLayer = nullptr;
-}
-
-LayerSnapshotGuard& LayerSnapshotGuard::operator=(LayerSnapshotGuard&& other) {
-    mLayer = other.mLayer;
-    other.mLayer = nullptr;
-    return *this;
 }
 
 void Layer::setTrustedPresentationInfo(TrustedPresentationThresholds const& thresholds,

@@ -518,6 +518,10 @@ aidl_interface {
             enabled: false,
         },
     },
+    visibility: [
+        ":__subpackages__",
+        "//system/tools/aidl:__subpackages__",
+    ],
 }
 
 // TODO(b/184872979): remove once the Rust API is created.
@@ -543,7 +547,8 @@ cc_library {
     // Do not expand the visibility.
     visibility: [
         ":__subpackages__",
-        "//packages/modules/Virtualization:__subpackages__",
+        "//packages/modules/Virtualization/javalib/jni",
+        "//packages/modules/Virtualization/vm_payload",
         "//device/google/cuttlefish/shared/minidroid:__subpackages__",
     ],
 }

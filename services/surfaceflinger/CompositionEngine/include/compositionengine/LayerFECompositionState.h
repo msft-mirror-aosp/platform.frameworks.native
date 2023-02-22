@@ -18,6 +18,7 @@
 
 #include <cstdint>
 
+#include <android/gui/CachingHint.h>
 #include <gui/HdrMetadata.h>
 #include <math/mat4.h>
 #include <ui/BlurRegion.h>
@@ -211,6 +212,9 @@ struct LayerFECompositionState {
 
     float currentSdrHdrRatio = 1.f;
     float desiredSdrHdrRatio = 1.f;
+
+    bool isInternalDisplayOverlay = false;
+    gui::CachingHint cachingHint = gui::CachingHint::Enabled;
 
     virtual ~LayerFECompositionState();
 

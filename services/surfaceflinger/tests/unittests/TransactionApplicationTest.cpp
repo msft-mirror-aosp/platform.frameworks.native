@@ -33,15 +33,12 @@
 #include "FrontEnd/TransactionHandler.h"
 #include "TestableSurfaceFlinger.h"
 #include "TransactionState.h"
-#include "mock/MockEventThread.h"
-#include "mock/MockVsyncController.h"
 
 namespace android {
 
 using testing::_;
 using testing::Return;
 
-using FakeHwcDisplayInjector = TestableSurfaceFlinger::FakeHwcDisplayInjector;
 using frontend::TransactionHandler;
 
 constexpr nsecs_t TRANSACTION_TIMEOUT = s2ns(5);
@@ -52,7 +49,9 @@ public:
                 ::testing::UnitTest::GetInstance()->current_test_info();
         ALOGD("**** Setting up for %s.%s\n", test_info->test_case_name(), test_info->name());
 
-        setupScheduler();
+        mFlinger.setupComposer(std::make_unique<Hwc2::mock::Composer>());
+        mFlinger.setupMockScheduler();
+        mFlinger.flinger()->addTransactionReadyFilters();
     }
 
     ~TransactionApplicationTest() {
@@ -61,37 +60,7 @@ public:
         ALOGD("**** Tearing down after %s.%s\n", test_info->test_case_name(), test_info->name());
     }
 
-    void setupScheduler() {
-        auto eventThread = std::make_unique<mock::EventThread>();
-        auto sfEventThread = std::make_unique<mock::EventThread>();
-
-        EXPECT_CALL(*eventThread, registerDisplayEventConnection(_));
-        EXPECT_CALL(*eventThread, createEventConnection(_, _))
-                .WillOnce(Return(sp<EventThreadConnection>::make(eventThread.get(),
-                                                                 mock::EventThread::kCallingUid,
-                                                                 ResyncCallback())));
-
-        EXPECT_CALL(*sfEventThread, registerDisplayEventConnection(_));
-        EXPECT_CALL(*sfEventThread, createEventConnection(_, _))
-                .WillOnce(Return(sp<EventThreadConnection>::make(sfEventThread.get(),
-                                                                 mock::EventThread::kCallingUid,
-                                                                 ResyncCallback())));
-
-        EXPECT_CALL(*mVSyncTracker, nextAnticipatedVSyncTimeFrom(_)).WillRepeatedly(Return(0));
-        EXPECT_CALL(*mVSyncTracker, currentPeriod())
-                .WillRepeatedly(Return(FakeHwcDisplayInjector::DEFAULT_VSYNC_PERIOD));
-
-        mFlinger.setupComposer(std::make_unique<Hwc2::mock::Composer>());
-        mFlinger.setupScheduler(std::unique_ptr<mock::VsyncController>(mVsyncController),
-                                std::unique_ptr<mock::VSyncTracker>(mVSyncTracker),
-                                std::move(eventThread), std::move(sfEventThread));
-        mFlinger.flinger()->addTransactionReadyFilters();
-    }
-
     TestableSurfaceFlinger mFlinger;
-
-    mock::VsyncController* mVsyncController = new mock::VsyncController();
-    mock::VSyncTracker* mVSyncTracker = new mock::VSyncTracker();
 
     struct TransactionInfo {
         Vector<ComposerState> states;
@@ -102,7 +71,7 @@ public:
         int64_t desiredPresentTime = 0;
         bool isAutoTimestamp = true;
         FrameTimelineInfo frameTimelineInfo;
-        client_cache_t uncacheBuffer;
+        std::vector<client_cache_t> uncacheBuffers;
         uint64_t id = static_cast<uint64_t>(-1);
         static_assert(0xffffffffffffffff == static_cast<uint64_t>(-1));
     };
@@ -138,7 +107,7 @@ public:
                                      transaction.displays, transaction.flags,
                                      transaction.applyToken, transaction.inputWindowCommands,
                                      transaction.desiredPresentTime, transaction.isAutoTimestamp,
-                                     transaction.uncacheBuffer, mHasListenerCallbacks, mCallbacks,
+                                     transaction.uncacheBuffers, mHasListenerCallbacks, mCallbacks,
                                      transaction.id);
 
         // If transaction is synchronous, SF applyTransactionState should time out (5s) wating for
@@ -165,7 +134,7 @@ public:
                                      transaction.displays, transaction.flags,
                                      transaction.applyToken, transaction.inputWindowCommands,
                                      transaction.desiredPresentTime, transaction.isAutoTimestamp,
-                                     transaction.uncacheBuffer, mHasListenerCallbacks, mCallbacks,
+                                     transaction.uncacheBuffers, mHasListenerCallbacks, mCallbacks,
                                      transaction.id);
 
         nsecs_t returnedTime = systemTime();
@@ -196,7 +165,7 @@ public:
                                      transactionA.displays, transactionA.flags,
                                      transactionA.applyToken, transactionA.inputWindowCommands,
                                      transactionA.desiredPresentTime, transactionA.isAutoTimestamp,
-                                     transactionA.uncacheBuffer, mHasListenerCallbacks, mCallbacks,
+                                     transactionA.uncacheBuffers, mHasListenerCallbacks, mCallbacks,
                                      transactionA.id);
 
         // This thread should not have been blocked by the above transaction
@@ -211,7 +180,7 @@ public:
                                      transactionB.displays, transactionB.flags,
                                      transactionB.applyToken, transactionB.inputWindowCommands,
                                      transactionB.desiredPresentTime, transactionB.isAutoTimestamp,
-                                     transactionB.uncacheBuffer, mHasListenerCallbacks, mCallbacks,
+                                     transactionB.uncacheBuffers, mHasListenerCallbacks, mCallbacks,
                                      transactionB.id);
 
         // this thread should have been blocked by the above transaction
@@ -248,7 +217,7 @@ TEST_F(TransactionApplicationTest, AddToPendingQueue) {
     mFlinger.setTransactionState(transactionA.frameTimelineInfo, transactionA.states,
                                  transactionA.displays, transactionA.flags, transactionA.applyToken,
                                  transactionA.inputWindowCommands, transactionA.desiredPresentTime,
-                                 transactionA.isAutoTimestamp, transactionA.uncacheBuffer,
+                                 transactionA.isAutoTimestamp, transactionA.uncacheBuffers,
                                  mHasListenerCallbacks, mCallbacks, transactionA.id);
 
     auto& transactionQueue = mFlinger.getTransactionQueue();
@@ -268,7 +237,7 @@ TEST_F(TransactionApplicationTest, Flush_RemovesFromQueue) {
     mFlinger.setTransactionState(transactionA.frameTimelineInfo, transactionA.states,
                                  transactionA.displays, transactionA.flags, transactionA.applyToken,
                                  transactionA.inputWindowCommands, transactionA.desiredPresentTime,
-                                 transactionA.isAutoTimestamp, transactionA.uncacheBuffer,
+                                 transactionA.isAutoTimestamp, transactionA.uncacheBuffers,
                                  mHasListenerCallbacks, mCallbacks, transactionA.id);
 
     auto& transactionQueue = mFlinger.getTransactionQueue();
@@ -282,7 +251,7 @@ TEST_F(TransactionApplicationTest, Flush_RemovesFromQueue) {
     mFlinger.setTransactionState(empty.frameTimelineInfo, empty.states, empty.displays, empty.flags,
                                  empty.applyToken, empty.inputWindowCommands,
                                  empty.desiredPresentTime, empty.isAutoTimestamp,
-                                 empty.uncacheBuffer, mHasListenerCallbacks, mCallbacks, empty.id);
+                                 empty.uncacheBuffers, mHasListenerCallbacks, mCallbacks, empty.id);
 
     // flush transaction queue should flush as desiredPresentTime has
     // passed
@@ -379,8 +348,7 @@ public:
                                               transaction.applyToken,
                                               transaction.inputWindowCommands,
                                               transaction.desiredPresentTime,
-                                              transaction.isAutoTimestamp,
-                                              transaction.uncacheBuffer, systemTime(), 0,
+                                              transaction.isAutoTimestamp, {}, systemTime(), 0,
                                               mHasListenerCallbacks, mCallbacks, getpid(),
                                               static_cast<int>(getuid()), transaction.id);
             mFlinger.setTransactionStateInternal(transactionState);
