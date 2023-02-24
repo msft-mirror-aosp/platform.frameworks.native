@@ -252,7 +252,10 @@ public:
 
         mScheduler->initVsync(mScheduler->getVsyncSchedule().getDispatch(), *mTokenManager, 0ms);
 
-        mFlinger->mAppConnectionHandle = mScheduler->createConnection(std::move(appEventThread));
+        mScheduler->mutableAppConnectionHandle() =
+                mScheduler->createConnection(std::move(appEventThread));
+
+        mFlinger->mAppConnectionHandle = mScheduler->mutableAppConnectionHandle();
         mFlinger->mSfConnectionHandle = mScheduler->createConnection(std::move(sfEventThread));
         resetScheduler(mScheduler);
     }
@@ -852,6 +855,11 @@ public:
             return *this;
         }
 
+        auto& skipRegisterDisplay() {
+            mRegisterDisplay = false;
+            return *this;
+        }
+
         sp<DisplayDevice> inject() NO_THREAD_SAFETY_ANALYSIS {
             const auto displayId = mCreationArgs.compositionDisplay->getDisplayId();
 
@@ -915,7 +923,7 @@ public:
                                                                       ui::ColorModes(),
                                                                       std::nullopt);
 
-                if (mFlinger.scheduler()) {
+                if (mFlinger.scheduler() && mRegisterDisplay) {
                     mFlinger.scheduler()->registerDisplay(physicalId,
                                                           display->holdRefreshRateSelector());
                 }
@@ -934,6 +942,7 @@ public:
         sp<BBinder> mDisplayToken = sp<BBinder>::make();
         DisplayDeviceCreationArgs mCreationArgs;
         DisplayModes mDisplayModes;
+        bool mRegisterDisplay = true;
         const std::optional<ui::DisplayConnectionType> mConnectionType;
         const std::optional<hal::HWDisplayId> mHwcDisplayId;
     };
