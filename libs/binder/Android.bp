@@ -76,7 +76,6 @@ cc_defaults {
 
     srcs: [
         "Binder.cpp",
-        "BinderRecordReplay.cpp",
         "BpBinder.cpp",
         "Debug.cpp",
         "FdTrigger.cpp",
@@ -84,6 +83,7 @@ cc_defaults {
         "IResultReceiver.cpp",
         "Parcel.cpp",
         "ParcelFileDescriptor.cpp",
+        "RecordedTransaction.cpp",
         "RpcSession.cpp",
         "RpcServer.cpp",
         "RpcState.cpp",
@@ -195,18 +195,26 @@ cc_defaults {
     ],
 }
 
-cc_library_shared {
-    name: "libbinder_on_trusty_mock",
-    defaults: ["libbinder_common_defaults"],
+cc_library_headers {
+    name: "trusty_mock_headers",
+    host_supported: true,
 
-    srcs: [
-        // Trusty-specific files
-        "trusty/logging.cpp",
-        "trusty/OS.cpp",
-        "trusty/RpcServerTrusty.cpp",
-        "trusty/RpcTransportTipcTrusty.cpp",
-        "trusty/TrustyStatus.cpp",
-        "trusty/socket.cpp",
+    export_include_dirs: [
+        "trusty/include",
+        "trusty/include_mock",
+    ],
+
+    visibility: [
+        ":__subpackages__",
+    ],
+}
+
+cc_defaults {
+    name: "trusty_mock_defaults",
+    host_supported: true,
+
+    header_libs: [
+        "trusty_mock_headers",
     ],
 
     cflags: [
@@ -227,13 +235,26 @@ cc_library_shared {
     ],
     rtti: false,
 
-    local_include_dirs: [
-        "trusty/include",
-        "trusty/include_mock",
-    ],
-
     visibility: [
         ":__subpackages__",
+    ],
+}
+
+cc_library_shared {
+    name: "libbinder_on_trusty_mock",
+    defaults: [
+        "libbinder_common_defaults",
+        "trusty_mock_defaults",
+    ],
+
+    srcs: [
+        // Trusty-specific files
+        "trusty/logging.cpp",
+        "trusty/OS.cpp",
+        "trusty/RpcServerTrusty.cpp",
+        "trusty/RpcTransportTipcTrusty.cpp",
+        "trusty/TrustyStatus.cpp",
+        "trusty/socket.cpp",
     ],
 }
 
@@ -263,6 +284,14 @@ cc_defaults {
     cflags: [
         "-DBINDER_WITH_KERNEL_IPC",
     ],
+    arch: {
+        // TODO(b/254713216): undefined symbol in BufferedTextOutput::getBuffer
+        riscv64: {
+            lto: {
+                thin: false,
+            },
+        },
+    },
 }
 
 cc_library {
@@ -491,6 +520,10 @@ aidl_interface {
             enabled: false,
         },
     },
+    visibility: [
+        ":__subpackages__",
+        "//system/tools/aidl:__subpackages__",
+    ],
 }
 
 // TODO(b/184872979): remove once the Rust API is created.
@@ -516,7 +549,10 @@ cc_library {
     // Do not expand the visibility.
     visibility: [
         ":__subpackages__",
-        "//packages/modules/Virtualization:__subpackages__",
+        "//packages/modules/Virtualization/javalib/jni",
+        "//packages/modules/Virtualization/vm_payload",
+        "//device/google/cuttlefish/shared/minidroid:__subpackages__",
+        "//system/software_defined_vehicle:__subpackages__",
     ],
 }
 
