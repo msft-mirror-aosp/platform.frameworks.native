@@ -770,6 +770,9 @@ private:
             REQUIRES(mStateLock);
     // flush pending transaction that was presented after desiredPresentTime.
     bool flushTransactionQueues(int64_t vsyncId);
+
+    std::vector<TransactionState> flushTransactions();
+
     // Returns true if there is at least one transaction that needs to be flushed
     bool transactionFlushNeeded();
 
@@ -818,7 +821,8 @@ private:
                                size_t totalTXapplied) const;
     bool stopTransactionProcessing(const std::unordered_set<sp<IBinder>, SpHash<IBinder>>&
                                            applyTokensWithUnsignaledTransactions) const;
-    bool applyTransactions(std::vector<TransactionState>& transactions, int64_t vsyncId)
+    bool applyTransactions(std::vector<TransactionState>& transactions, int64_t vsyncId);
+    bool applyTransactionsLocked(std::vector<TransactionState>& transactions, int64_t vsyncId)
             REQUIRES(mStateLock);
     uint32_t setDisplayStateLocked(const DisplayState& s) REQUIRES(mStateLock);
     uint32_t addInputWindowCommands(const InputWindowCommands& inputWindowCommands)
@@ -1085,7 +1089,8 @@ private:
     /*
      * Debugging & dumpsys
      */
-    void dumpAllLocked(const DumpArgs& args, std::string& result) const REQUIRES(mStateLock);
+    void dumpAllLocked(const DumpArgs& args, const std::string& compositionLayers,
+                       std::string& result) const REQUIRES(mStateLock);
 
     void appendSfConfigString(std::string& result) const;
     void listLayersLocked(std::string& result) const;
@@ -1436,12 +1441,12 @@ private:
         return mScheduler->getLayerFramerate(now, id);
     }
 
+    bool mPowerHintSessionEnabled;
+
     struct {
-        bool sessionEnabled = false;
-        nsecs_t commitStart;
-        nsecs_t compositeStart;
-        nsecs_t presentEnd;
-    } mPowerHintSessionData GUARDED_BY(kMainThreadContext);
+        bool late = false;
+        bool early = false;
+    } mPowerHintSessionMode;
 
     nsecs_t mAnimationTransactionTimeout = s2ns(5);
 

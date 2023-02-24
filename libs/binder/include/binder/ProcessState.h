@@ -38,6 +38,8 @@ public:
     static sp<ProcessState> self();
     static sp<ProcessState> selfOrNull();
 
+    static bool isVndservicemanagerEnabled();
+
     /* initWithDriver() can be used to configure libbinder to use
      * a different binder driver dev node. It must be called *before*
      * any call to ProcessState::self(). The default is /dev/vndbinder
@@ -50,6 +52,7 @@ public:
 
     sp<IBinder> getContextObject(const sp<IBinder>& caller);
 
+    // For main functions - dangerous for libraries to use
     void startThreadPool();
 
     bool becomeContextManager();
@@ -57,10 +60,17 @@ public:
     sp<IBinder> getStrongProxyForHandle(int32_t handle);
     void expungeHandle(int32_t handle, IBinder* binder);
 
+    // TODO: deprecate.
     void spawnPooledThread(bool isMain);
 
+    // For main functions - dangerous for libraries to use
     status_t setThreadPoolMaxThreadCount(size_t maxThreads);
     status_t enableOnewaySpamDetection(bool enable);
+
+    // Set the name of the current thread to look like a threadpool
+    // thread. Typically this is called before joinThreadPool.
+    //
+    // TODO: remove this API, and automatically set it intelligently.
     void giveThreadPoolName();
 
     String8 getDriverName();
@@ -93,6 +103,11 @@ public:
      * threads if used.
      */
     size_t getThreadPoolMaxTotalThreadCount() const;
+
+    /**
+     * Check to see if the thread pool has started.
+     */
+    bool isThreadPoolStarted() const;
 
     enum class DriverFeature {
         ONEWAY_SPAM_DETECTION,

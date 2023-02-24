@@ -185,6 +185,7 @@ void add_mountinfo();
 #define SYSTEM_TRACE_SNAPSHOT "/data/misc/perfetto-traces/bugreport/systrace.pftrace"
 #define CGROUPFS_DIR "/sys/fs/cgroup"
 #define SDK_EXT_INFO "/apex/com.android.sdkext/bin/derive_sdk"
+#define DROPBOX_DIR "/data/system/dropbox"
 
 // TODO(narayan): Since this information has to be kept in sync
 // with tombstoned, we should just put it in a common header.
@@ -522,6 +523,15 @@ static bool skip_not_stat(const char *path) {
         return false;
     }
     return strcmp(path + len - sizeof(stat) + 1, stat); /* .../stat? */
+}
+
+static bool skip_wtf_strictmode(const char *path) {
+    if (strstr(path, "_wtf")) {
+        return true;
+    } else if (strstr(path, "_strictmode")) {
+        return true;
+    }
+    return false;
 }
 
 static bool skip_none(const char* path __attribute__((unused))) {
@@ -1888,6 +1898,11 @@ Dumpstate::RunStatus Dumpstate::DumpstateDefaultAfterCritical() {
     DumpIpTablesAsRoot();
     DumpDynamicPartitionInfo();
     ds.AddDir(OTA_METADATA_DIR, true);
+    if (!PropertiesHelper::IsUserBuild()) {
+        // Include dropbox entry files inside ZIP, but exclude
+        // noisy WTF and StrictMode entries
+        dump_files("", DROPBOX_DIR, skip_wtf_strictmode, _add_file_from_fd);
+    }
 
     // Capture any IPSec policies in play. No keys are exposed here.
     RunCommand("IP XFRM POLICY", {"ip", "xfrm", "policy"}, CommandOptions::WithTimeout(10).Build());
@@ -3244,6 +3259,15 @@ void Dumpstate::MaybeSnapshotSystemTrace() {
 }
 
 void Dumpstate::MaybeSnapshotWinTrace() {
+    // Include the proto logging from WMShell.
+    RunCommand(
+        // Empty name because it's not intended to be classified as a bugreport section.
+        // Actual logging files can be found as "/data/misc/wmtrace/shell_log.winscope"
+        // in the bugreport.
+        "", {"dumpsys", "activity", "service", "SystemUIService",
+             "WMShell", "protolog", "save-for-bugreport"},
+        CommandOptions::WithTimeout(10).Always().DropRoot().RedirectStderr().Build());
+
     // Currently WindowManagerService and InputMethodManagerSerivice support WinScope protocol.
     for (const auto& service : {"window", "input_method"}) {
         RunCommand(
