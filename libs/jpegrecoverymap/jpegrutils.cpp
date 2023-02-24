@@ -15,19 +15,18 @@
  */
 
 #include <jpegrecoverymap/jpegrutils.h>
-#include <utils/Log.h>
 #include <image_io/xml/xml_reader.h>
 #include <image_io/xml/xml_writer.h>
 #include <image_io/base/message_handler.h>
 #include <image_io/xml/xml_element_rules.h>
 #include <image_io/xml/xml_handler.h>
 #include <image_io/xml/xml_rule.h>
-#include <cmath>
 
 using namespace photos_editing_formats::image_io;
 using namespace std;
 
 namespace android::jpegrecoverymap {
+
 /*
  * Helper function used for generating XMP metadata.
  *
@@ -35,60 +34,10 @@ namespace android::jpegrecoverymap {
  * @param suffix The suffix part of the name.
  * @return A name of the form "prefix:suffix".
  */
-static inline string Name(const string &prefix, const string &suffix) {
+string Name(const string &prefix, const string &suffix) {
   std::stringstream ss;
   ss << prefix << ":" << suffix;
   return ss.str();
-}
-
-DataStruct::DataStruct(int s) {
-    data = malloc(s);
-    length = s;
-    memset(data, 0, s);
-    writePos = 0;
-}
-
-DataStruct::~DataStruct() {
-    if (data != nullptr) {
-        free(data);
-    }
-}
-
-void* DataStruct::getData() {
-    return data;
-}
-
-int DataStruct::getLength() {
-    return length;
-}
-
-int DataStruct::getBytesWritten() {
-    return writePos;
-}
-
-bool DataStruct::write8(uint8_t value) {
-    uint8_t v = value;
-    return write(&v, 1);
-}
-
-bool DataStruct::write16(uint16_t value) {
-    uint16_t v = value;
-    return write(&v, 2);
-}
-bool DataStruct::write32(uint32_t value) {
-    uint32_t v = value;
-    return write(&v, 4);
-}
-
-bool DataStruct::write(const void* src, int size) {
-    if (writePos + size > length) {
-        ALOGE("Writing out of boundary: write position: %d, size: %d, capacity: %d",
-                writePos, size, length);
-        return false;
-    }
-    memcpy((uint8_t*) data + writePos, src, size);
-    writePos += size;
-    return true;
 }
 
 /*
@@ -109,7 +58,7 @@ class XMPXmlHandler : public XmlHandler {
 public:
 
     XMPXmlHandler() : XmlHandler() {
-        state = NotStrarted;
+        gContainerItemState = NotStrarted;
     }
 
     enum ParseState {
@@ -121,11 +70,11 @@ public:
     virtual DataMatchResult StartElement(const XmlTokenContext& context) {
         string val;
         if (context.BuildTokenValue(&val)) {
-            if (!val.compare(containerName)) {
-                state = Started;
+            if (!val.compare(gContainerItemName)) {
+                gContainerItemState = Started;
             } else {
-                if (state != Done) {
-                    state = NotStrarted;
+                if (gContainerItemState != Done) {
+                    gContainerItemState = NotStrarted;
                 }
             }
         }
@@ -133,8 +82,8 @@ public:
     }
 
     virtual DataMatchResult FinishElement(const XmlTokenContext& context) {
-        if (state == Started) {
-            state = Done;
+        if (gContainerItemState == Started) {
+            gContainerItemState = Done;
             lastAttributeName = "";
         }
         return context.GetResult();
@@ -142,7 +91,7 @@ public:
 
     virtual DataMatchResult AttributeName(const XmlTokenContext& context) {
         string val;
-        if (state == Started) {
+        if (gContainerItemState == Started) {
             if (context.BuildTokenValue(&val)) {
                 if (!val.compare(maxContentBoostAttrName)) {
                     lastAttributeName = maxContentBoostAttrName;
@@ -158,7 +107,7 @@ public:
 
     virtual DataMatchResult AttributeValue(const XmlTokenContext& context) {
         string val;
-        if (state == Started) {
+        if (gContainerItemState == Started) {
             if (context.BuildTokenValue(&val, true)) {
                 if (!lastAttributeName.compare(maxContentBoostAttrName)) {
                     maxContentBoostStr = val;
@@ -171,11 +120,11 @@ public:
     }
 
     bool getMaxContentBoost(float* max_content_boost) {
-        if (state == Done) {
+        if (gContainerItemState == Done) {
             stringstream ss(maxContentBoostStr);
             float val;
             if (ss >> val) {
-                *max_content_boost = exp2(val);
+                *max_content_boost = val;
                 return true;
             } else {
                 return false;
@@ -186,11 +135,11 @@ public:
     }
 
     bool getMinContentBoost(float* min_content_boost) {
-        if (state == Done) {
+        if (gContainerItemState == Done) {
             stringstream ss(minContentBoostStr);
             float val;
             if (ss >> val) {
-                *min_content_boost = exp2(val);
+                *min_content_boost = val;
                 return true;
             } else {
                 return false;
@@ -201,13 +150,13 @@ public:
     }
 
 private:
-    static const string containerName;
+    static const string gContainerItemName;
     static const string maxContentBoostAttrName;
     string              maxContentBoostStr;
     static const string minContentBoostAttrName;
     string              minContentBoostStr;
     string              lastAttributeName;
-    ParseState          state;
+    ParseState          gContainerItemState;
 };
 
 // GContainer XMP constants - URI and namespace prefix
@@ -219,7 +168,8 @@ const string kConDirectory            = Name(kContainerPrefix, "Directory");
 const string kConItem                 = Name(kContainerPrefix, "Item");
 
 // GContainer XMP constants - names for XMP handlers
-const string XMPXmlHandler::containerName = "rdf:Description";
+const string XMPXmlHandler::gContainerItemName = kConItem;
+
 // Item XMP constants - URI and namespace prefix
 const string kItemUri        = "http://ns.google.com/photos/1.0/container/item/";
 const string kItemPrefix     = "Item";
@@ -235,23 +185,17 @@ const string kSemanticRecoveryMap = "RecoveryMap";
 const string kMimeImageJpeg       = "image/jpeg";
 
 // RecoveryMap XMP constants - URI and namespace prefix
-const string kRecoveryMapUri      = "http://ns.adobe.com/hdr-gain-map/1.0/";
-const string kRecoveryMapPrefix   = "hdrgm";
+const string kRecoveryMapUri      = "http://ns.google.com/photos/1.0/recoverymap/";
+const string kRecoveryMapPrefix   = "RecoveryMap";
 
 // RecoveryMap XMP constants - element and attribute names
+const string kMapMaxContentBoost  = Name(kRecoveryMapPrefix, "MaxContentBoost");
+const string kMapMinContentBoost  = Name(kRecoveryMapPrefix, "MinContentBoost");
 const string kMapVersion          = Name(kRecoveryMapPrefix, "Version");
-const string kMapGainMapMin       = Name(kRecoveryMapPrefix, "GainMapMin");
-const string kMapGainMapMax       = Name(kRecoveryMapPrefix, "GainMapMax");
-const string kMapGamma            = Name(kRecoveryMapPrefix, "Gamma");
-const string kMapOffsetSdr        = Name(kRecoveryMapPrefix, "OffsetSDR");
-const string kMapOffsetHdr        = Name(kRecoveryMapPrefix, "OffsetHDR");
-const string kMapHDRCapacityMin   = Name(kRecoveryMapPrefix, "HDRCapacityMin");
-const string kMapHDRCapacityMax   = Name(kRecoveryMapPrefix, "HDRCapacityMax");
-const string kMapBaseRendition    = Name(kRecoveryMapPrefix, "BaseRendition");
 
 // RecoveryMap XMP constants - names for XMP handlers
-const string XMPXmlHandler::minContentBoostAttrName = kMapGainMapMin;
-const string XMPXmlHandler::maxContentBoostAttrName = kMapGainMapMax;
+const string XMPXmlHandler::maxContentBoostAttrName = kMapMaxContentBoost;
+const string XMPXmlHandler::minContentBoostAttrName = kMapMinContentBoost;
 
 bool getMetadataFromXMP(uint8_t* xmp_data, size_t xmp_size, jpegr_metadata* metadata) {
     string nameSpace = "http://ns.adobe.com/xap/1.0/\0";
@@ -299,7 +243,7 @@ bool getMetadataFromXMP(uint8_t* xmp_data, size_t xmp_size, jpegr_metadata* meta
     return true;
 }
 
-string generateXmpForPrimaryImage(int secondary_image_length) {
+string generateXmp(int secondary_image_length, jpegr_metadata& metadata) {
   const vector<string> kConDirSeq({kConDirectory, string("rdf:Seq")});
   const vector<string> kLiItem({string("rdf:li"), kConItem});
 
@@ -313,6 +257,7 @@ string generateXmpForPrimaryImage(int secondary_image_length) {
   writer.StartWritingElement("rdf:Description");
   writer.WriteXmlns(kContainerPrefix, kContainerUri);
   writer.WriteXmlns(kItemPrefix, kItemUri);
+  writer.WriteXmlns(kRecoveryMapPrefix, kRecoveryMapUri);
   writer.StartWritingElements(kConDirSeq);
   size_t item_depth = writer.StartWritingElements(kLiItem);
   writer.WriteAttributeNameAndValue(kItemSemantic, kSemanticPrimary);
@@ -322,33 +267,9 @@ string generateXmpForPrimaryImage(int secondary_image_length) {
   writer.WriteAttributeNameAndValue(kItemSemantic, kSemanticRecoveryMap);
   writer.WriteAttributeNameAndValue(kItemMime, kMimeImageJpeg);
   writer.WriteAttributeNameAndValue(kItemLength, secondary_image_length);
-  writer.FinishWriting();
-
-  return ss.str();
-}
-
-string generateXmpForSecondaryImage(jpegr_metadata& metadata) {
-  const vector<string> kConDirSeq({kConDirectory, string("rdf:Seq")});
-  const vector<string> kLiItem({string("rdf:li"), kConItem});
-
-  std::stringstream ss;
-  photos_editing_formats::image_io::XmlWriter writer(ss);
-  writer.StartWritingElement("x:xmpmeta");
-  writer.WriteXmlns("x", "adobe:ns:meta/");
-  writer.WriteAttributeNameAndValue("x:xmptk", "Adobe XMP Core 5.1.2");
-  writer.StartWritingElement("rdf:RDF");
-  writer.WriteXmlns("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#");
-  writer.StartWritingElement("rdf:Description");
-  writer.WriteXmlns(kRecoveryMapPrefix, kRecoveryMapUri);
   writer.WriteAttributeNameAndValue(kMapVersion, metadata.version);
-  writer.WriteAttributeNameAndValue(kMapGainMapMin, log2(metadata.minContentBoost));
-  writer.WriteAttributeNameAndValue(kMapGainMapMax, log2(metadata.maxContentBoost));
-  writer.WriteAttributeNameAndValue(kMapGamma, "1");
-  writer.WriteAttributeNameAndValue(kMapOffsetSdr, "0");
-  writer.WriteAttributeNameAndValue(kMapOffsetHdr, "0");
-  writer.WriteAttributeNameAndValue(kMapHDRCapacityMin, "0");
-  writer.WriteAttributeNameAndValue(kMapHDRCapacityMax, "2.3");
-  writer.WriteAttributeNameAndValue(kMapBaseRendition, "SDR");
+  writer.WriteAttributeNameAndValue(kMapMaxContentBoost, metadata.maxContentBoost);
+  writer.WriteAttributeNameAndValue(kMapMinContentBoost, metadata.minContentBoost);
   writer.FinishWriting();
 
   return ss.str();

@@ -293,10 +293,7 @@ std::list<NotifyArgs> TouchInputMapper::configure(nsecs_t when,
 
     mConfig = *config;
 
-    // Full configuration should happen the first time configure is called and
-    // when the device type is changed. Changing a device type can affect
-    // various other parameters so should result in a reconfiguration.
-    if (!changes || (changes & InputReaderConfiguration::CHANGE_DEVICE_TYPE)) {
+    if (!changes) { // first time only
         // Configure basic parameters.
         configureParameters();
 
@@ -331,8 +328,7 @@ std::list<NotifyArgs> TouchInputMapper::configure(nsecs_t when,
           InputReaderConfiguration::CHANGE_POINTER_CAPTURE |
           InputReaderConfiguration::CHANGE_POINTER_GESTURE_ENABLEMENT |
           InputReaderConfiguration::CHANGE_SHOW_TOUCHES |
-          InputReaderConfiguration::CHANGE_EXTERNAL_STYLUS_PRESENCE |
-          InputReaderConfiguration::CHANGE_DEVICE_TYPE))) {
+          InputReaderConfiguration::CHANGE_EXTERNAL_STYLUS_PRESENCE))) {
         // Configure device sources, display dimensions, orientation and
         // scaling factors.
         configureInputDevice(when, &resetNeeded);

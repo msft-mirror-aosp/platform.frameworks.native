@@ -54,8 +54,7 @@ std::list<NotifyArgs> InputMapperTest::configureDevice(uint32_t changes) {
     if (!changes ||
         (changes &
          (InputReaderConfiguration::CHANGE_DISPLAY_INFO |
-          InputReaderConfiguration::CHANGE_POINTER_CAPTURE |
-          InputReaderConfiguration::CHANGE_DEVICE_TYPE))) {
+          InputReaderConfiguration::CHANGE_POINTER_CAPTURE))) {
         mReader->requestRefreshConfiguration(changes);
         mReader->loopOnce();
     }
