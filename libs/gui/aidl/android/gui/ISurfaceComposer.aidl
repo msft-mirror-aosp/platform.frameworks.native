@@ -68,9 +68,15 @@ interface ISurfaceComposer {
 
     /**
      * Create a display event connection
+     *
+     * layerHandle
+     *     Optional binder handle representing a Layer in SF to associate the new
+     *     DisplayEventConnection with. This handle can be found inside a surface control after
+     *     surface creation, see ISurfaceComposerClient::createSurface. Set to null if no layer
+     *     association should be made.
      */
     @nullable IDisplayEventConnection createDisplayEventConnection(VsyncSource vsyncSource,
-            EventRegistration eventRegistration);
+            EventRegistration eventRegistration, @nullable IBinder layerHandle);
 
     /**
      * Create a connection with SurfaceFlinger.
@@ -185,10 +191,12 @@ interface ISurfaceComposer {
 
      /**
       * Sets the HDR conversion strategy of the device.
+      * Returns the preferred HDR output type of the device, in case when HdrConversionStrategy has
+      * autoAllowedHdrTypes set. Returns Hdr::INVALID in other cases.
       *
       * Requires the ACCESS_SURFACE_FLINGER permission.
       */
-     void setHdrConversionStrategy(in HdrConversionStrategy hdrConversionStrategy);
+     int setHdrConversionStrategy(in HdrConversionStrategy hdrConversionStrategy);
 
      /**
       * Gets whether HDR output conversion operations are supported on the device.

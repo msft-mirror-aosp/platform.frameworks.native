@@ -35,10 +35,15 @@ namespace android::surfaceflinger::frontend {
 // snapshots when there are only buffer updates.
 class LayerSnapshotBuilder {
 public:
+    enum class ForceUpdateFlags {
+        NONE,
+        ALL,
+        HIERARCHY,
+    };
     struct Args {
-        const LayerHierarchy& root;
+        LayerHierarchy root;
         const LayerLifecycleManager& layerLifecycleManager;
-        bool forceUpdate = false;
+        ForceUpdateFlags forceUpdate = ForceUpdateFlags::NONE;
         bool includeMetadata = false;
         const display::DisplayMap<ui::LayerStack, frontend::DisplayInfo>& displays;
         // Set to true if there were display changes since last update.
@@ -46,6 +51,10 @@ public:
         const renderengine::ShadowSettings& globalShadowSettings;
         bool supportsBlur = true;
         bool forceFullDamage = false;
+        std::optional<FloatRect> parentCrop = std::nullopt;
+        std::unordered_set<uint32_t> excludeLayerIds;
+        const std::unordered_map<std::string, bool>& supportedLayerGenericMetadata;
+        const std::unordered_map<std::string, uint32_t>& genericLayerMetadataKeyMap;
     };
     LayerSnapshotBuilder();
 
@@ -64,6 +73,9 @@ public:
 
     // Visit each visible snapshot in z-order
     void forEachVisibleSnapshot(const ConstVisitor& visitor) const;
+
+    // Visit each visible snapshot in z-order
+    void forEachVisibleSnapshot(const ConstVisitor& visitor, const LayerHierarchy& root) const;
 
     typedef std::function<void(std::unique_ptr<LayerSnapshot>& snapshot)> Visitor;
     // Visit each visible snapshot in z-order and move the snapshot if needed
@@ -87,8 +99,7 @@ private:
                                                     LayerHierarchy::TraversalPath& traversalPath,
                                                     const LayerSnapshot& parentSnapshot);
     void updateSnapshot(LayerSnapshot&, const Args&, const RequestedLayerState&,
-                        const LayerSnapshot& parentSnapshot, const LayerHierarchy::TraversalPath&,
-                        bool newSnapshot);
+                        const LayerSnapshot& parentSnapshot, const LayerHierarchy::TraversalPath&);
     static void updateRelativeState(LayerSnapshot& snapshot, const LayerSnapshot& parentSnapshot,
                                     bool parentIsRelative, const Args& args);
     static void resetRelativeState(LayerSnapshot& snapshot);
@@ -101,17 +112,19 @@ private:
     void updateInput(LayerSnapshot& snapshot, const RequestedLayerState& requested,
                      const LayerSnapshot& parentSnapshot, const LayerHierarchy::TraversalPath& path,
                      const Args& args);
-    void sortSnapshotsByZ(const Args& args);
+    // Return true if there are unreachable snapshots
+    bool sortSnapshotsByZ(const Args& args);
     LayerSnapshot* createSnapshot(const LayerHierarchy::TraversalPath& id,
-                                  const RequestedLayerState& layer);
+                                  const RequestedLayerState& layer,
+                                  const LayerSnapshot& parentSnapshot);
     void updateChildState(LayerSnapshot& snapshot, const LayerSnapshot& childSnapshot,
                           const Args& args);
 
     struct TraversalPathHash {
         std::size_t operator()(const LayerHierarchy::TraversalPath& key) const {
             uint32_t hashCode = key.id * 31;
-            for (auto mirrorRoot : key.mirrorRootIds) {
-                hashCode += mirrorRoot * 31;
+            if (key.mirrorRootId != UNASSIGNED_LAYER_ID) {
+                hashCode += key.mirrorRootId * 31;
             }
             return std::hash<size_t>{}(hashCode);
         }

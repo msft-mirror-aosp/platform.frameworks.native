@@ -25,49 +25,53 @@ cc_test {
     name: "libjpegrecoverymap_test",
     test_suites: ["device-tests"],
     srcs: [
-        "recoverymap_test.cpp",
+        "jpegr_test.cpp",
         "recoverymapmath_test.cpp",
     ],
     shared_libs: [
-        "libjpeg",
-        "libjpegrecoverymap",
         "libimage_io",
+        "libjpeg",
         "liblog",
     ],
     static_libs: [
         "libgmock",
         "libgtest",
-    ],
-}
-
-cc_test {
-    name: "libjpegencoder_test",
-    test_suites: ["device-tests"],
-    srcs: [
-        "jpegencoder_test.cpp",
-    ],
-    shared_libs: [
-        "libjpeg",
-        "libjpegencoder",
-        "liblog",
-    ],
-    static_libs: [
-        "libgtest",
-    ],
-}
-
-cc_test {
-    name: "libjpegdecoder_test",
-    test_suites: ["device-tests"],
-    srcs: [
-        "jpegdecoder_test.cpp",
-    ],
-    shared_libs: [
-        "libjpeg",
         "libjpegdecoder",
+        "libjpegencoder",
+        "libjpegrecoverymap",
+        "libskia",
+        "libutils",
+    ],
+}
+
+cc_test {
+    name: "libjpegencoderhelper_test",
+    test_suites: ["device-tests"],
+    srcs: [
+        "jpegencoderhelper_test.cpp",
+    ],
+    shared_libs: [
+        "libjpeg",
         "liblog",
     ],
     static_libs: [
         "libgtest",
+        "libjpegencoder",
+    ],
+}
+
+cc_test {
+    name: "libjpegdecoderhelper_test",
+    test_suites: ["device-tests"],
+    srcs: [
+        "jpegdecoderhelper_test.cpp",
+    ],
+    shared_libs: [
+        "libjpeg",
+        "liblog",
+    ],
+    static_libs: [
+        "libgtest",
+        "libjpegdecoder",
     ],
 }

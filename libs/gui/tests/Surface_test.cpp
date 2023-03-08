@@ -725,6 +725,7 @@ public:
 
     binder::Status createDisplayEventConnection(
             VsyncSource /*vsyncSource*/, EventRegistration /*eventRegistration*/,
+            const sp<IBinder>& /*layerHandle*/,
             sp<gui::IDisplayEventConnection>* outConnection) override {
         *outConnection = nullptr;
         return binder::Status::ok();
@@ -826,7 +827,8 @@ public:
     }
 
     binder::Status setHdrConversionStrategy(
-            const gui::HdrConversionStrategy& /*hdrConversionStrategy*/) override {
+            const gui::HdrConversionStrategy& /*hdrConversionStrategy*/,
+            int32_t* /*outPreferredHdrOutputType*/) override {
         return binder::Status::ok();
     }
 

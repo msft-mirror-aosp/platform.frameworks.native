@@ -64,7 +64,7 @@ public:
     MOCK_METHOD(binder::Status, bootFinished, (), (override));
     MOCK_METHOD(binder::Status, createDisplayEventConnection,
                 (gui::ISurfaceComposer::VsyncSource, gui::ISurfaceComposer::EventRegistration,
-                 sp<gui::IDisplayEventConnection>*),
+                 const sp<IBinder>& /*layerHandle*/, sp<gui::IDisplayEventConnection>*),
                 (override));
     MOCK_METHOD(binder::Status, createConnection, (sp<gui::ISurfaceComposerClient>*), (override));
     MOCK_METHOD(binder::Status, createDisplay, (const std::string&, bool, float, sp<IBinder>*),
@@ -93,8 +93,8 @@ public:
     MOCK_METHOD(binder::Status, getBootDisplayModeSupport, (bool*), (override));
     MOCK_METHOD(binder::Status, getHdrConversionCapabilities,
                 (std::vector<gui::HdrConversionCapability>*), (override));
-    MOCK_METHOD(binder::Status, setHdrConversionStrategy, (const gui::HdrConversionStrategy&),
-                (override));
+    MOCK_METHOD(binder::Status, setHdrConversionStrategy,
+                (const gui::HdrConversionStrategy&, int32_t*), (override));
     MOCK_METHOD(binder::Status, getHdrOutputConversionSupport, (bool*), (override));
     MOCK_METHOD(binder::Status, setAutoLowLatencyMode, (const sp<IBinder>&, bool), (override));
     MOCK_METHOD(binder::Status, setGameContentType, (const sp<IBinder>&, bool), (override));

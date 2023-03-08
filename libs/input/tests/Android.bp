@@ -19,6 +19,7 @@ cc_test {
         "InputEvent_test.cpp",
         "InputPublisherAndConsumer_test.cpp",
         "MotionPredictor_test.cpp",
+        "RingBuffer_test.cpp",
         "TfLiteMotionPredictor_test.cpp",
         "TouchResampling_test.cpp",
         "TouchVideoFrame_test.cpp",
@@ -33,6 +34,7 @@ cc_test {
         "libgmock",
         "libgui_window_info_static",
         "libinput",
+        "libtflite_static",
         "libui-types",
     ],
     cflags: [
@@ -41,13 +43,19 @@ cc_test {
         "-Werror",
         "-Wno-unused-parameter",
     ],
+    sanitize: {
+        undefined: true,
+        all_undefined: true,
+        diag: {
+            undefined: true,
+        },
+    },
     shared_libs: [
         "libbase",
         "libbinder",
         "libcutils",
         "liblog",
         "libPlatformProperties",
-        "libtflite",
         "libutils",
         "libvintf",
     ],

@@ -28,10 +28,6 @@ InputState::InputState(const IdGenerator& idGenerator) : mIdGenerator(idGenerato
 
 InputState::~InputState() {}
 
-bool InputState::isNeutral() const {
-    return mKeyMementos.empty() && mMotionMementos.empty();
-}
-
 bool InputState::isHovering(int32_t deviceId, uint32_t source, int32_t displayId) const {
     for (const MotionMemento& memento : mMotionMementos) {
         if (memento.deviceId == deviceId && memento.source == source &&
@@ -251,10 +247,19 @@ void InputState::addMotionMemento(const MotionEntry& entry, int32_t flags, bool 
 }
 
 void InputState::MotionMemento::setPointers(const MotionEntry& entry) {
-    pointerCount = entry.pointerCount;
+    pointerCount = 0;
     for (uint32_t i = 0; i < entry.pointerCount; i++) {
-        pointerProperties[i].copyFrom(entry.pointerProperties[i]);
-        pointerCoords[i].copyFrom(entry.pointerCoords[i]);
+        if (MotionEvent::getActionMasked(entry.action) == AMOTION_EVENT_ACTION_POINTER_UP) {
+            // In POINTER_UP events, the pointer is leaving. Since the action is not stored,
+            // this departing pointer should not be recorded.
+            const uint8_t actionIndex = MotionEvent::getActionIndex(entry.action);
+            if (i == actionIndex) {
+                continue;
+            }
+        }
+        pointerProperties[pointerCount].copyFrom(entry.pointerProperties[i]);
+        pointerCoords[pointerCount].copyFrom(entry.pointerCoords[i]);
+        pointerCount++;
     }
 }
 
@@ -374,7 +379,8 @@ std::vector<std::unique_ptr<EventEntry>> InputState::synthesizePointerDownEvents
 }
 
 std::vector<std::unique_ptr<MotionEntry>> InputState::synthesizeCancelationEventsForPointers(
-        const MotionMemento& memento, const BitSet32 pointerIds, nsecs_t currentTime) {
+        const MotionMemento& memento, std::bitset<MAX_POINTER_ID + 1> pointerIds,
+        nsecs_t currentTime) {
     std::vector<std::unique_ptr<MotionEntry>> events;
     std::vector<uint32_t> canceledPointerIndices;
     std::vector<PointerProperties> pointerProperties(MAX_POINTERS);
@@ -383,7 +389,7 @@ std::vector<std::unique_ptr<MotionEntry>> InputState::synthesizeCancelationEvent
         uint32_t pointerId = uint32_t(memento.pointerProperties[pointerIdx].id);
         pointerProperties[pointerIdx].copyFrom(memento.pointerProperties[pointerIdx]);
         pointerCoords[pointerIdx].copyFrom(memento.pointerCoords[pointerIdx]);
-        if (pointerIds.hasBit(pointerId)) {
+        if (pointerIds.test(pointerId)) {
             canceledPointerIndices.push_back(pointerIdx);
         }
     }
