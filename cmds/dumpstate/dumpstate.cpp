@@ -816,6 +816,8 @@ void Dumpstate::PrintHeader() const {
     printf("Kernel: ");
     DumpFileToFd(STDOUT_FILENO, "", "/proc/version");
     printf("Command line: %s\n", strtok(cmdline_buf, "\n"));
+    printf("Bootconfig: ");
+    DumpFileToFd(STDOUT_FILENO, "", "/proc/bootconfig");
     printf("Uptime: ");
     RunCommandToFd(STDOUT_FILENO, "", {"uptime", "-p"},
                    CommandOptions::WithTimeout(1).Always().Build());
@@ -1254,7 +1256,8 @@ static Dumpstate::RunStatus RunDumpsysTextByPriority(const std::string& title, i
              dumpsys.writeDumpHeader(STDOUT_FILENO, service, priority);
              dumpsys.writeDumpFooter(STDOUT_FILENO, service, std::chrono::milliseconds(1));
         } else {
-             status_t status = dumpsys.startDumpThread(Dumpsys::TYPE_DUMP | Dumpsys::TYPE_PID,
+             status_t status = dumpsys.startDumpThread(Dumpsys::TYPE_DUMP | Dumpsys::TYPE_PID |
+                                                       Dumpsys::TYPE_CLIENTS | Dumpsys::TYPE_THREAD,
                                                        service, args);
              if (status == OK) {
                 dumpsys.writeDumpHeader(STDOUT_FILENO, service, priority);
