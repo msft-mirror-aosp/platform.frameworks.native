@@ -2532,8 +2532,6 @@ bool SurfaceFlinger::commit(TimePoint frameTime, VsyncId vsyncId, TimePoint expe
     }
 
     updateCursorAsync();
-    updateInputFlinger();
-
     if (mLayerTracingEnabled && !mLayerTracing.flagIsSet(LayerTracing::TRACE_COMPOSITION)) {
         // This will block and tracing should only be enabled for debugging.
         addToLayerTracing(mVisibleRegionsDirty, frameTime.ns(), vsyncId.value);
@@ -2763,7 +2761,7 @@ bool SurfaceFlinger::isHdrLayer(const frontend::LayerSnapshot& snapshot) const {
     // RANGE_EXTENDED layers may identify themselves as being "HDR" via a desired sdr/hdr ratio
     if ((snapshot.dataspace & (int32_t)Dataspace::RANGE_MASK) ==
                 (int32_t)Dataspace::RANGE_EXTENDED &&
-        snapshot.desiredSdrHdrRatio > 1.01f) {
+        snapshot.desiredHdrSdrRatio > 1.01f) {
         return true;
     }
     return false;
@@ -2863,6 +2861,11 @@ void SurfaceFlinger::postComposition(nsecs_t callTime) {
         layer->releasePendingBuffer(presentTime.ns());
     }
 
+    mTransactionCallbackInvoker.addPresentFence(std::move(presentFence));
+    mTransactionCallbackInvoker.sendCallbacks(false /* onCommitOnly */);
+    mTransactionCallbackInvoker.clearCompletedTransactions();
+    updateInputFlinger();
+
     std::vector<std::pair<std::shared_ptr<compositionengine::Display>, sp<HdrLayerInfoReporter>>>
             hdrInfoListeners;
     bool haveNewListeners = false;
@@ -2900,11 +2903,9 @@ void SurfaceFlinger::postComposition(nsecs_t callTime) {
                         const auto* outputLayer =
                             compositionDisplay->getOutputLayerForLayer(layerFe);
                         if (outputLayer) {
-                            // TODO(b/267350616): Rename SdrHdrRatio -> HdrSdrRatio
-                            // everywhere
-                            const float desiredHdrSdrRatio = snapshot.desiredSdrHdrRatio <= 1.f
+                            const float desiredHdrSdrRatio = snapshot.desiredHdrSdrRatio <= 1.f
                                     ? std::numeric_limits<float>::infinity()
-                                    : snapshot.desiredSdrHdrRatio;
+                                    : snapshot.desiredHdrSdrRatio;
                             info.mergeDesiredRatio(desiredHdrSdrRatio);
                             info.numberOfHdrLayers++;
                             const auto displayFrame = outputLayer->getState().displayFrame;
@@ -2923,10 +2924,6 @@ void SurfaceFlinger::postComposition(nsecs_t callTime) {
     }
 
     mHdrLayerInfoChanged = false;
-
-    mTransactionCallbackInvoker.addPresentFence(std::move(presentFence));
-    mTransactionCallbackInvoker.sendCallbacks(false /* onCommitOnly */);
-    mTransactionCallbackInvoker.clearCompletedTransactions();
 
     mTimeStats->incrementTotalFrames();
     mTimeStats->setPresentFenceGlobal(presentFenceTime);
@@ -4962,7 +4959,7 @@ uint32_t SurfaceFlinger::setClientStateLocked(const FrameTimelineInfo& frameTime
         if (layer->setDimmingEnabled(s.dimmingEnabled)) flags |= eTraversalNeeded;
     }
     if (what & layer_state_t::eExtendedRangeBrightnessChanged) {
-        if (layer->setExtendedRangeBrightness(s.currentSdrHdrRatio, s.desiredSdrHdrRatio)) {
+        if (layer->setExtendedRangeBrightness(s.currentHdrSdrRatio, s.desiredHdrSdrRatio)) {
             flags |= eTraversalNeeded;
         }
     }
