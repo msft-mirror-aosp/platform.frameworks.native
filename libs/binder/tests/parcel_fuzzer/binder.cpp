@@ -374,8 +374,7 @@ std::vector<ParcelRead<::android::Parcel>> BINDER_PARCEL_READ_FUNCTIONS {
         parcelables::GenericDataParcelable genericDataParcelable;
         status_t status = genericDataParcelable.readFromParcel(&p);
         FUZZ_LOG() << " status: " << status;
-        std::string toString = genericDataParcelable.toString();
-        FUZZ_LOG() << " toString() result: " << toString;
+        FUZZ_LOG() << " toString() result: " << genericDataParcelable.toString();
     },
 };
 // clang-format on

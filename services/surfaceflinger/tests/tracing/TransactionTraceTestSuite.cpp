@@ -22,7 +22,6 @@
 #include <string>
 #include <unordered_map>
 
-#include <LayerProtoHelper.h>
 #include <LayerTraceGenerator.h>
 #include <Tracing/TransactionProtoParser.h>
 #include <layerproto/LayerProtoHeader.h>
@@ -95,14 +94,11 @@ struct LayerInfo {
     float y;
     uint32_t bufferWidth;
     uint32_t bufferHeight;
-    Rect touchableRegionBounds;
 };
 
 bool operator==(const LayerInfo& lh, const LayerInfo& rh) {
-    return std::make_tuple(lh.id, lh.name, lh.parent, lh.z, lh.curr_frame, lh.bufferWidth,
-                           lh.bufferHeight, lh.touchableRegionBounds) ==
-            std::make_tuple(rh.id, rh.name, rh.parent, rh.z, rh.curr_frame, rh.bufferWidth,
-                            rh.bufferHeight, rh.touchableRegionBounds);
+    return std::make_tuple(lh.id, lh.name, lh.parent, lh.z, lh.curr_frame) ==
+            std::make_tuple(rh.id, rh.name, rh.parent, rh.z, rh.curr_frame);
 }
 
 bool compareById(const LayerInfo& a, const LayerInfo& b) {
@@ -113,9 +109,7 @@ inline void PrintTo(const LayerInfo& info, ::std::ostream* os) {
     *os << "Layer [" << info.id << "] name=" << info.name << " parent=" << info.parent
         << " z=" << info.z << " curr_frame=" << info.curr_frame << " x=" << info.x
         << " y=" << info.y << " bufferWidth=" << info.bufferWidth
-        << " bufferHeight=" << info.bufferHeight << "touchableRegionBounds={"
-        << info.touchableRegionBounds.left << "," << info.touchableRegionBounds.top << ","
-        << info.touchableRegionBounds.right << "," << info.touchableRegionBounds.bottom << "}";
+        << " bufferHeight=" << info.bufferHeight;
 }
 
 struct find_id : std::unary_function<LayerInfo, bool> {
@@ -125,17 +119,6 @@ struct find_id : std::unary_function<LayerInfo, bool> {
 };
 
 static LayerInfo getLayerInfoFromProto(::android::surfaceflinger::LayerProto& proto) {
-    Rect touchableRegionBounds = Rect::INVALID_RECT;
-    // ignore touchable region for layers without buffers, the new fe aggressively avoids
-    // calculating state for layers that are not visible which could lead to mismatches
-    if (proto.has_input_window_info() && proto.input_window_info().has_touchable_region() &&
-        proto.has_active_buffer()) {
-        Region touchableRegion;
-        LayerProtoHelper::readFromProto(proto.input_window_info().touchable_region(),
-                                        touchableRegion);
-        touchableRegionBounds = touchableRegion.bounds();
-    }
-
     return {proto.id(),
             proto.name(),
             proto.parent(),
@@ -144,8 +127,7 @@ static LayerInfo getLayerInfoFromProto(::android::surfaceflinger::LayerProto& pr
             proto.has_position() ? proto.position().x() : -1,
             proto.has_position() ? proto.position().y() : -1,
             proto.has_active_buffer() ? proto.active_buffer().width() : 0,
-            proto.has_active_buffer() ? proto.active_buffer().height() : 0,
-            touchableRegionBounds};
+            proto.has_active_buffer() ? proto.active_buffer().height() : 0};
 }
 
 TEST_P(TransactionTraceTestSuite, validateEndState) {

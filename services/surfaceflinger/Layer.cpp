@@ -643,8 +643,8 @@ void Layer::preparePerFrameCompositionState() {
     snapshot->surfaceDamage = surfaceDamageRegion;
     snapshot->hasProtectedContent = isProtected();
     snapshot->dimmingEnabled = isDimmingEnabled();
-    snapshot->currentHdrSdrRatio = getCurrentHdrSdrRatio();
-    snapshot->desiredHdrSdrRatio = getDesiredHdrSdrRatio();
+    snapshot->currentSdrHdrRatio = getCurrentSdrHdrRatio();
+    snapshot->desiredSdrHdrRatio = getDesiredSdrHdrRatio();
     snapshot->cachingHint = getCachingHint();
 
     const bool usesRoundedCorners = hasRoundedCorners();
@@ -3145,11 +3145,11 @@ bool Layer::setDataspace(ui::Dataspace dataspace) {
 }
 
 bool Layer::setExtendedRangeBrightness(float currentBufferRatio, float desiredRatio) {
-    if (mDrawingState.currentHdrSdrRatio == currentBufferRatio &&
-        mDrawingState.desiredHdrSdrRatio == desiredRatio)
+    if (mDrawingState.currentSdrHdrRatio == currentBufferRatio &&
+        mDrawingState.desiredSdrHdrRatio == desiredRatio)
         return false;
-    mDrawingState.currentHdrSdrRatio = currentBufferRatio;
-    mDrawingState.desiredHdrSdrRatio = desiredRatio;
+    mDrawingState.currentSdrHdrRatio = currentBufferRatio;
+    mDrawingState.desiredSdrHdrRatio = desiredRatio;
     mDrawingState.modified = true;
     setTransactionFlags(eTransactionNeeded);
     return true;
@@ -3404,8 +3404,8 @@ void Layer::gatherBufferInfo() {
     if (lastDataspace != mBufferInfo.mDataspace) {
         mFlinger->mHdrLayerInfoChanged = true;
     }
-    if (mBufferInfo.mDesiredHdrSdrRatio != mDrawingState.desiredHdrSdrRatio) {
-        mBufferInfo.mDesiredHdrSdrRatio = mDrawingState.desiredHdrSdrRatio;
+    if (mBufferInfo.mDesiredSdrHdrRatio != mDrawingState.desiredSdrHdrRatio) {
+        mBufferInfo.mDesiredSdrHdrRatio = mDrawingState.desiredSdrHdrRatio;
         mFlinger->mHdrLayerInfoChanged = true;
     }
     mBufferInfo.mCrop = computeBufferCrop(mDrawingState);
@@ -3691,9 +3691,9 @@ bool Layer::simpleBufferUpdate(const layer_state_t& s) const {
     }
 
     if (s.what & layer_state_t::eExtendedRangeBrightnessChanged) {
-        if (mDrawingState.currentHdrSdrRatio != s.currentHdrSdrRatio ||
-            mDrawingState.desiredHdrSdrRatio != s.desiredHdrSdrRatio) {
-            ALOGV("%s: false [eExtendedRangeBrightnessChanged changed]", __func__);
+        if (mDrawingState.currentSdrHdrRatio != s.currentSdrHdrRatio ||
+            mDrawingState.desiredSdrHdrRatio != s.desiredSdrHdrRatio) {
+            ALOGV("%s: false [eDimmingEnabledChanged changed]", __func__);
             return false;
         }
     }

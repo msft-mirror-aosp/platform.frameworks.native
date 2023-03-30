@@ -24,7 +24,7 @@ package {
 cc_library {
     name: "libjpegrecoverymap",
     host_supported: true,
-    vendor_available: true,
+
     export_include_dirs: ["include"],
     local_include_dirs: ["include"],
 
@@ -49,12 +49,10 @@ cc_library {
 cc_library {
     name: "libjpegencoder",
     host_supported: true,
-    vendor_available: true,
 
     shared_libs: [
         "libjpeg",
         "liblog",
-        "libutils",
     ],
 
     export_include_dirs: ["include"],
@@ -67,12 +65,10 @@ cc_library {
 cc_library {
     name: "libjpegdecoder",
     host_supported: true,
-    vendor_available: true,
 
     shared_libs: [
         "libjpeg",
         "liblog",
-        "libutils",
     ],
 
     export_include_dirs: ["include"],

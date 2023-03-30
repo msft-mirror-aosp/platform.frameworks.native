@@ -720,8 +720,8 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
         snapshot.sidebandStream = requested.sidebandStream;
         snapshot.transparentRegionHint = requested.transparentRegion;
         snapshot.color.rgb = requested.getColor().rgb;
-        snapshot.currentHdrSdrRatio = requested.currentHdrSdrRatio;
-        snapshot.desiredHdrSdrRatio = requested.desiredHdrSdrRatio;
+        snapshot.currentSdrHdrRatio = requested.currentSdrHdrRatio;
+        snapshot.desiredSdrHdrRatio = requested.desiredSdrHdrRatio;
     }
 
     if (snapshot.isHiddenByPolicyFromParent &&

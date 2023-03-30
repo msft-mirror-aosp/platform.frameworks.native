@@ -16,14 +16,6 @@
 package parcelables;
 
 parcelable GenericDataParcelable {
-    enum JustSomeEnum {
-        SOME_ENUMERATOR,
-        ANOTHER_ENUMERATOR,
-        MAYBE_ONE_MORE_ENUMERATOR,
-    }
-
-    const int COOL_CONSTANT = 0x1234;
-
     int data;
     float majorVersion;
     float minorVersion;
@@ -33,6 +25,4 @@ parcelable GenericDataParcelable {
     String greatString;
     @utf8InCpp
     String greaterString;
-    @nullable String nullableString;
-    JustSomeEnum gretEnum = JustSomeEnum.ANOTHER_ENUMERATOR;
 }
