@@ -79,25 +79,6 @@ const char* motionClassificationToString(MotionClassification classification) {
     }
 }
 
-const char* motionToolTypeToString(int32_t toolType) {
-    switch (toolType) {
-        case AMOTION_EVENT_TOOL_TYPE_UNKNOWN:
-            return "UNKNOWN";
-        case AMOTION_EVENT_TOOL_TYPE_FINGER:
-            return "FINGER";
-        case AMOTION_EVENT_TOOL_TYPE_STYLUS:
-            return "STYLUS";
-        case AMOTION_EVENT_TOOL_TYPE_MOUSE:
-            return "MOUSE";
-        case AMOTION_EVENT_TOOL_TYPE_ERASER:
-            return "ERASER";
-        case AMOTION_EVENT_TOOL_TYPE_PALM:
-            return "PALM";
-        default:
-            return "INVALID";
-    }
-}
-
 // --- IdGenerator ---
 #if defined(__ANDROID__)
 [[maybe_unused]]
@@ -151,10 +132,23 @@ int32_t IdGenerator::nextId() const {
 
 // --- InputEvent ---
 
+// Due to precision limitations when working with floating points, transforming - namely
+// scaling - floating points can lead to minute errors. We round transformed values to approximately
+// three decimal places so that values like 0.99997 show up as 1.0.
+inline float roundTransformedCoords(float val) {
+    // Use a power to two to approximate three decimal places to potentially reduce some cycles.
+    // This should be at least as precise as MotionEvent::ROUNDING_PRECISION.
+    return std::round(val * 1024.f) / 1024.f;
+}
+
+inline vec2 roundTransformedCoords(vec2 p) {
+    return {roundTransformedCoords(p.x), roundTransformedCoords(p.y)};
+}
+
 vec2 transformWithoutTranslation(const ui::Transform& transform, const vec2& xy) {
     const vec2 transformedXy = transform.transform(xy);
     const vec2 transformedOrigin = transform.transform(0, 0);
-    return transformedXy - transformedOrigin;
+    return roundTransformedCoords(transformedXy - transformedOrigin);
 }
 
 float transformAngle(const ui::Transform& transform, float angleRadians) {
@@ -243,8 +237,8 @@ bool isFromSource(uint32_t source, uint32_t test) {
     return (source & test) == test;
 }
 
-bool isStylusToolType(uint32_t toolType) {
-    return toolType == AMOTION_EVENT_TOOL_TYPE_STYLUS || toolType == AMOTION_EVENT_TOOL_TYPE_ERASER;
+bool isStylusToolType(ToolType toolType) {
+    return toolType == ToolType::STYLUS || toolType == ToolType::ERASER;
 }
 
 VerifiedKeyEvent verifiedKeyEventFromKeyEvent(const KeyEvent& event) {
@@ -299,7 +293,7 @@ const char* KeyEvent::getLabel(int32_t keyCode) {
     return InputEventLookup::getLabelByKeyCode(keyCode);
 }
 
-int32_t KeyEvent::getKeyCodeFromLabel(const char* label) {
+std::optional<int> KeyEvent::getKeyCodeFromLabel(const char* label) {
     return InputEventLookup::getKeyCodeByLabel(label);
 }
 
@@ -341,6 +335,28 @@ const char* KeyEvent::actionToString(int32_t action) {
             return "MULTIPLE";
     }
     return "UNKNOWN";
+}
+
+std::ostream& operator<<(std::ostream& out, const KeyEvent& event) {
+    out << "KeyEvent { action=" << KeyEvent::actionToString(event.getAction());
+
+    out << ", keycode=" << event.getKeyCode() << "(" << KeyEvent::getLabel(event.getKeyCode())
+        << ")";
+
+    if (event.getMetaState() != 0) {
+        out << ", metaState=" << event.getMetaState();
+    }
+
+    out << ", eventTime=" << event.getEventTime();
+    out << ", downTime=" << event.getDownTime();
+    out << ", flags=" << std::hex << event.getFlags() << std::dec;
+    out << ", repeatCount=" << event.getRepeatCount();
+    out << ", deviceId=" << event.getDeviceId();
+    out << ", source=" << inputEventSourceToString(event.getSource());
+    out << ", displayId=" << event.getDisplayId();
+    out << ", eventId=" << event.getId();
+    out << "}";
+    return out;
 }
 
 // --- PointerCoords ---
@@ -584,12 +600,12 @@ std::optional<ui::Rotation> MotionEvent::getSurfaceRotation() const {
 
 float MotionEvent::getXCursorPosition() const {
     vec2 vals = mTransform.transform(getRawXCursorPosition(), getRawYCursorPosition());
-    return vals.x;
+    return roundTransformedCoords(vals.x);
 }
 
 float MotionEvent::getYCursorPosition() const {
     vec2 vals = mTransform.transform(getRawXCursorPosition(), getRawYCursorPosition());
-    return vals.y;
+    return roundTransformedCoords(vals.y);
 }
 
 void MotionEvent::setCursorPosition(float x, float y) {
@@ -775,7 +791,7 @@ status_t MotionEvent::readFromParcel(Parcel* parcel) {
         mPointerProperties.push_back({});
         PointerProperties& properties = mPointerProperties.back();
         properties.id = parcel->readInt32();
-        properties.toolType = parcel->readInt32();
+        properties.toolType = static_cast<ToolType>(parcel->readInt32());
     }
 
     while (sampleCount > 0) {
@@ -831,7 +847,7 @@ status_t MotionEvent::writeToParcel(Parcel* parcel) const {
     for (size_t i = 0; i < pointerCount; i++) {
         const PointerProperties& properties = mPointerProperties[i];
         parcel->writeInt32(properties.id);
-        parcel->writeInt32(properties.toolType);
+        parcel->writeInt32(static_cast<int32_t>(properties.toolType));
     }
 
     const PointerCoords* pc = mSamplePointerCoords.data();
@@ -869,7 +885,7 @@ const char* MotionEvent::getLabel(int32_t axis) {
     return InputEventLookup::getAxisLabel(axis);
 }
 
-int32_t MotionEvent::getAxisFromLabel(const char* label) {
+std::optional<int> MotionEvent::getAxisFromLabel(const char* label) {
     return InputEventLookup::getAxisByLabel(label);
 }
 
@@ -911,7 +927,7 @@ std::string MotionEvent::actionToString(int32_t action) {
 static inline vec2 calculateTransformedXYUnchecked(uint32_t source, const ui::Transform& transform,
                                                    const vec2& xy) {
     return shouldDisregardOffset(source) ? transformWithoutTranslation(transform, xy)
-                                         : transform.transform(xy);
+                                         : roundTransformedCoords(transform.transform(xy));
 }
 
 vec2 MotionEvent::calculateTransformedXY(uint32_t source, const ui::Transform& transform,
@@ -995,9 +1011,9 @@ std::ostream& operator<<(std::ostream& out, const MotionEvent& event) {
             out << ", x[" << i << "]=" << x;
             out << ", y[" << i << "]=" << y;
         }
-        int toolType = event.getToolType(i);
-        if (toolType != AMOTION_EVENT_TOOL_TYPE_FINGER) {
-            out << ", toolType[" << i << "]=" << toolType;
+        ToolType toolType = event.getToolType(i);
+        if (toolType != ToolType::FINGER) {
+            out << ", toolType[" << i << "]=" << ftl::enum_string(toolType);
         }
     }
     if (event.getButtonState() != 0) {

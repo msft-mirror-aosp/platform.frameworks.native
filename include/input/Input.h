@@ -216,7 +216,21 @@ std::string inputEventSourceToString(int32_t source);
 
 bool isFromSource(uint32_t source, uint32_t test);
 
-bool isStylusToolType(uint32_t toolType);
+/**
+ * The pointer tool type.
+ */
+enum class ToolType {
+    UNKNOWN = AMOTION_EVENT_TOOL_TYPE_UNKNOWN,
+    FINGER = AMOTION_EVENT_TOOL_TYPE_FINGER,
+    STYLUS = AMOTION_EVENT_TOOL_TYPE_STYLUS,
+    MOUSE = AMOTION_EVENT_TOOL_TYPE_MOUSE,
+    ERASER = AMOTION_EVENT_TOOL_TYPE_ERASER,
+    PALM = AMOTION_EVENT_TOOL_TYPE_PALM,
+    ftl_first = UNKNOWN,
+    ftl_last = PALM,
+};
+
+bool isStylusToolType(ToolType toolType);
 
 /*
  * Flags that flow alongside events in the input dispatch system to help with certain
@@ -319,8 +333,6 @@ enum class MotionClassification : uint8_t {
  * String representation of MotionClassification
  */
 const char* motionClassificationToString(MotionClassification classification);
-
-const char* motionToolTypeToString(int32_t toolType);
 
 /**
  * Portion of FrameMetrics timeline of interest to input code.
@@ -448,11 +460,11 @@ struct PointerProperties {
     int32_t id;
 
     // The pointer tool type.
-    int32_t toolType;
+    ToolType toolType;
 
     inline void clear() {
         id = -1;
-        toolType = 0;
+        toolType = ToolType::UNKNOWN;
     }
 
     bool operator==(const PointerProperties& other) const;
@@ -529,7 +541,7 @@ public:
     inline nsecs_t getEventTime() const { return mEventTime; }
 
     static const char* getLabel(int32_t keyCode);
-    static int32_t getKeyCodeFromLabel(const char* label);
+    static std::optional<int> getKeyCodeFromLabel(const char* label);
 
     void initialize(int32_t id, int32_t deviceId, uint32_t source, int32_t displayId,
                     std::array<uint8_t, 32> hmac, int32_t action, int32_t flags, int32_t keyCode,
@@ -549,6 +561,8 @@ protected:
     nsecs_t mDownTime;
     nsecs_t mEventTime;
 };
+
+std::ostream& operator<<(std::ostream& out, const KeyEvent& event);
 
 /*
  * Motion events.
@@ -636,7 +650,7 @@ public:
         return mPointerProperties[pointerIndex].id;
     }
 
-    inline int32_t getToolType(size_t pointerIndex) const {
+    inline ToolType getToolType(size_t pointerIndex) const {
         return mPointerProperties[pointerIndex].toolType;
     }
 
@@ -840,7 +854,7 @@ public:
     }
 
     static const char* getLabel(int32_t axis);
-    static int32_t getAxisFromLabel(const char* label);
+    static std::optional<int> getAxisFromLabel(const char* label);
 
     static std::string actionToString(int32_t action);
 
@@ -853,6 +867,8 @@ public:
                                                const PointerCoords&);
     static PointerCoords calculateTransformedCoords(uint32_t source, const ui::Transform&,
                                                     const PointerCoords&);
+    // The rounding precision for transformed motion events.
+    static constexpr float ROUNDING_PRECISION = 0.001f;
 
 protected:
     int32_t mAction;
@@ -1111,6 +1127,7 @@ public:
 enum class PointerIconStyle : int32_t {
     TYPE_CUSTOM = -1,
     TYPE_NULL = 0,
+    TYPE_NOT_SPECIFIED = 1,
     TYPE_ARROW = 1000,
     TYPE_CONTEXT_MENU = 1001,
     TYPE_HAND = 1002,

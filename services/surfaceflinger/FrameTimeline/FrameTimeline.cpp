@@ -885,15 +885,17 @@ void FrameTimeline::DisplayFrame::setGpuFence(const std::shared_ptr<FenceTime>& 
 
 void FrameTimeline::DisplayFrame::classifyJank(nsecs_t& deadlineDelta, nsecs_t& deltaToVsync,
                                                nsecs_t previousPresentTime) {
-    if (mPredictionState == PredictionState::Expired ||
-        mSurfaceFlingerActuals.presentTime == Fence::SIGNAL_TIME_INVALID) {
+    const bool presentTimeValid =
+            mSurfaceFlingerActuals.presentTime >= mSurfaceFlingerActuals.startTime;
+    if (mPredictionState == PredictionState::Expired || !presentTimeValid) {
         // Cannot do jank classification with expired predictions or invalid signal times. Set the
         // deltas to 0 as both negative and positive deltas are used as real values.
         mJankType = JankType::Unknown;
         deadlineDelta = 0;
         deltaToVsync = 0;
-        if (mSurfaceFlingerActuals.presentTime == Fence::SIGNAL_TIME_INVALID) {
+        if (!presentTimeValid) {
             mSurfaceFlingerActuals.presentTime = mSurfaceFlingerActuals.endTime;
+            mJankType |= JankType::DisplayHAL;
         }
 
         return;
@@ -1095,6 +1097,12 @@ void FrameTimeline::DisplayFrame::traceActuals(pid_t surfaceFlingerPid,
 }
 
 void FrameTimeline::DisplayFrame::trace(pid_t surfaceFlingerPid, nsecs_t monoBootOffset) const {
+    if (mSurfaceFrames.empty()) {
+        // We don't want to trace display frames without any surface frames updates as this cannot
+        // be janky
+        return;
+    }
+
     if (mToken == FrameTimelineInfo::INVALID_VSYNC_ID) {
         // DisplayFrame should not have an invalid token.
         ALOGE("Cannot trace DisplayFrame with invalid token");

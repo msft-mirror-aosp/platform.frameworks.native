@@ -27,6 +27,8 @@
 #include <utility>
 #include <vector>
 
+#include "EventThread.h"
+
 #include "RefreshRateSelector.h"
 
 namespace android {
@@ -36,6 +38,7 @@ class Layer;
 namespace scheduler {
 
 class LayerInfo;
+struct LayerProps;
 
 class LayerHistory {
 public:
@@ -61,7 +64,8 @@ public:
     };
 
     // Marks the layer as active, and records the given state to its history.
-    void record(Layer*, nsecs_t presentTime, nsecs_t now, LayerUpdateType updateType);
+    void record(int32_t id, const LayerProps& props, nsecs_t presentTime, nsecs_t now,
+                LayerUpdateType updateType);
 
     // Updates the default frame rate compatibility which takes effect when the app
     // does not set a preference for refresh rate.
@@ -79,6 +83,9 @@ public:
 
     // return the frames per second of the layer with the given sequence id.
     float getLayerFramerate(nsecs_t now, int32_t id) const;
+
+    void attachChoreographer(int32_t layerId,
+                             const sp<EventThreadConnection>& choreographerConnection);
 
 private:
     friend class LayerHistoryTest;
@@ -116,6 +123,10 @@ private:
     // validity of each map.
     LayerInfos mActiveLayerInfos GUARDED_BY(mLock);
     LayerInfos mInactiveLayerInfos GUARDED_BY(mLock);
+
+    // Map keyed by layer ID (sequence) to choreographer connections.
+    std::unordered_multimap<int32_t, wp<EventThreadConnection>> mAttachedChoreographers
+            GUARDED_BY(mLock);
 
     uint32_t mDisplayArea = 0;
 

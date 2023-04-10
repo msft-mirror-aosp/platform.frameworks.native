@@ -43,6 +43,7 @@ cc_test {
         "LayerRenderTypeTransaction_test.cpp",
         "LayerState_test.cpp",
         "LayerTransaction_test.cpp",
+        "LayerTrustedPresentationListener_test.cpp",
         "LayerTypeAndRenderTypeTransaction_test.cpp",
         "LayerTypeTransaction_test.cpp",
         "LayerUpdate_test.cpp",
@@ -56,6 +57,7 @@ cc_test {
         "SetFrameRateOverride_test.cpp",
         "SetGeometry_test.cpp",
         "Stress_test.cpp",
+        "TextureFiltering_test.cpp",
         "VirtualDisplay_test.cpp",
         "WindowInfosListener_test.cpp",
     ],
@@ -123,6 +125,9 @@ cc_test {
     ],
     cpp_std: "experimental",
     gnu_extensions: false,
+    data: [
+        ":SurfaceFlinger_test",
+    ],
 }
 
 subdirs = [

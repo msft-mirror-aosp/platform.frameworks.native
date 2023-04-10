@@ -61,36 +61,6 @@ static bool isSupportedScanCode(int32_t scanCode) {
             scanCode >= BTN_WHEEL;
 }
 
-static bool isMediaKey(int32_t keyCode) {
-    switch (keyCode) {
-        case AKEYCODE_MEDIA_PLAY:
-        case AKEYCODE_MEDIA_PAUSE:
-        case AKEYCODE_MEDIA_PLAY_PAUSE:
-        case AKEYCODE_MUTE:
-        case AKEYCODE_HEADSETHOOK:
-        case AKEYCODE_MEDIA_STOP:
-        case AKEYCODE_MEDIA_NEXT:
-        case AKEYCODE_MEDIA_PREVIOUS:
-        case AKEYCODE_MEDIA_REWIND:
-        case AKEYCODE_MEDIA_RECORD:
-        case AKEYCODE_MEDIA_FAST_FORWARD:
-        case AKEYCODE_MEDIA_SKIP_FORWARD:
-        case AKEYCODE_MEDIA_SKIP_BACKWARD:
-        case AKEYCODE_MEDIA_STEP_FORWARD:
-        case AKEYCODE_MEDIA_STEP_BACKWARD:
-        case AKEYCODE_MEDIA_AUDIO_TRACK:
-        case AKEYCODE_VOLUME_UP:
-        case AKEYCODE_VOLUME_DOWN:
-        case AKEYCODE_VOLUME_MUTE:
-        case AKEYCODE_TV_AUDIO_DESCRIPTION:
-        case AKEYCODE_TV_AUDIO_DESCRIPTION_MIX_UP:
-        case AKEYCODE_TV_AUDIO_DESCRIPTION_MIX_DOWN:
-            return true;
-        default:
-            return false;
-    }
-}
-
 // --- KeyboardInputMapper ---
 
 KeyboardInputMapper::KeyboardInputMapper(InputDeviceContext& deviceContext, uint32_t source,
@@ -115,18 +85,18 @@ int32_t KeyboardInputMapper::getDisplayId() {
     return ADISPLAY_ID_NONE;
 }
 
-void KeyboardInputMapper::populateDeviceInfo(InputDeviceInfo* info) {
+void KeyboardInputMapper::populateDeviceInfo(InputDeviceInfo& info) {
     InputMapper::populateDeviceInfo(info);
 
-    info->setKeyboardType(mKeyboardType);
-    info->setKeyCharacterMap(getDeviceContext().getKeyCharacterMap());
+    info.setKeyboardType(mKeyboardType);
+    info.setKeyCharacterMap(getDeviceContext().getKeyCharacterMap());
 
     if (mKeyboardLayoutInfo) {
-        info->setKeyboardLayoutInfo(*mKeyboardLayoutInfo);
+        info.setKeyboardLayoutInfo(*mKeyboardLayoutInfo);
     } else {
         std::optional<RawLayoutInfo> layoutInfo = getDeviceContext().getRawLayoutInfo();
         if (layoutInfo) {
-            info->setKeyboardLayoutInfo(
+            info.setKeyboardLayoutInfo(
                     KeyboardLayoutInfo(layoutInfo->languageTag, layoutInfo->layoutType));
         }
     }
@@ -161,10 +131,10 @@ std::optional<DisplayViewport> KeyboardInputMapper::findViewport(
     return std::nullopt;
 }
 
-std::list<NotifyArgs> KeyboardInputMapper::configure(nsecs_t when,
-                                                     const InputReaderConfiguration* config,
-                                                     uint32_t changes) {
-    std::list<NotifyArgs> out = InputMapper::configure(when, config, changes);
+std::list<NotifyArgs> KeyboardInputMapper::reconfigure(nsecs_t when,
+                                                       const InputReaderConfiguration* config,
+                                                       uint32_t changes) {
+    std::list<NotifyArgs> out = InputMapper::reconfigure(when, config, changes);
 
     if (!changes) { // first time only
         // Configure basic parameters.
@@ -184,15 +154,10 @@ std::list<NotifyArgs> KeyboardInputMapper::configure(nsecs_t when,
 }
 
 void KeyboardInputMapper::configureParameters() {
-    mParameters.orientationAware = false;
     const PropertyMap& config = getDeviceContext().getConfiguration();
-    config.tryGetProperty("keyboard.orientationAware", mParameters.orientationAware);
-
-    mParameters.handlesKeyRepeat = false;
-    config.tryGetProperty("keyboard.handlesKeyRepeat", mParameters.handlesKeyRepeat);
-
-    mParameters.doNotWakeByDefault = false;
-    config.tryGetProperty("keyboard.doNotWakeByDefault", mParameters.doNotWakeByDefault);
+    mParameters.orientationAware = config.getBool("keyboard.orientationAware").value_or(false);
+    mParameters.handlesKeyRepeat = config.getBool("keyboard.handlesKeyRepeat").value_or(false);
+    mParameters.doNotWakeByDefault = config.getBool("keyboard.doNotWakeByDefault").value_or(false);
 }
 
 void KeyboardInputMapper::dumpParameters(std::string& dump) const {
@@ -295,14 +260,12 @@ std::list<NotifyArgs> KeyboardInputMapper::processKey(nsecs_t when, nsecs_t read
         keyMetaState = mMetaState;
     }
 
-    // Key down on external an keyboard should wake the device.
+    // Any key down on an external keyboard should wake the device.
     // We don't do this for internal keyboards to prevent them from waking up in your pocket.
     // For internal keyboards and devices for which the default wake behavior is explicitly
     // prevented (e.g. TV remotes), the key layout file should specify the policy flags for each
     // wake key individually.
-    // TODO: Use the input device configuration to control this behavior more finely.
-    if (down && getDeviceContext().isExternal() && !mParameters.doNotWakeByDefault &&
-        !isMediaKey(keyCode)) {
+    if (down && getDeviceContext().isExternal() && !mParameters.doNotWakeByDefault) {
         policyFlags |= POLICY_FLAG_WAKE;
     }
 
@@ -440,7 +403,7 @@ std::list<NotifyArgs> KeyboardInputMapper::cancelAllDownKeys(nsecs_t when) {
     for (size_t i = 0; i < n; i++) {
         out.emplace_back(NotifyKeyArgs(getContext()->getNextId(), when,
                                        systemTime(SYSTEM_TIME_MONOTONIC), getDeviceId(), mSource,
-                                       getDisplayId(), 0 /*policyFlags*/, AKEY_EVENT_ACTION_UP,
+                                       getDisplayId(), /*policyFlags=*/0, AKEY_EVENT_ACTION_UP,
                                        AKEY_EVENT_FLAG_FROM_SYSTEM | AKEY_EVENT_FLAG_CANCELED,
                                        mKeyDowns[i].keyCode, mKeyDowns[i].scanCode, AMETA_NONE,
                                        mKeyDowns[i].downTime));

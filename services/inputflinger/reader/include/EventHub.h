@@ -19,6 +19,8 @@
 #include <bitset>
 #include <climits>
 #include <filesystem>
+#include <ostream>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -76,6 +78,8 @@ struct RawAbsoluteAxisInfo {
 
     inline void clear() { *this = RawAbsoluteAxisInfo(); }
 };
+
+std::ostream& operator<<(std::ostream& out, const RawAbsoluteAxisInfo& info);
 
 /*
  * Input device classes.
@@ -259,7 +263,13 @@ public:
 
     virtual int32_t getDeviceControllerNumber(int32_t deviceId) const = 0;
 
-    virtual void getConfiguration(int32_t deviceId, PropertyMap* outConfiguration) const = 0;
+    /**
+     * Get the PropertyMap for the provided EventHub device, if available.
+     * This acquires the device lock, so a copy is returned rather than the raw pointer
+     * to the device's PropertyMap. A std::nullopt may be returned if the device could
+     * not be found, or if it doesn't have any configuration.
+     */
+    virtual std::optional<PropertyMap> getConfiguration(int32_t deviceId) const = 0;
 
     virtual status_t getAbsoluteAxisInfo(int32_t deviceId, int axis,
                                          RawAbsoluteAxisInfo* outAxisInfo) const = 0;
@@ -378,6 +388,10 @@ public:
 
     /* Disable an input device. Closes file descriptor to that device. */
     virtual status_t disableDevice(int32_t deviceId) = 0;
+
+    /* Sysfs node changed. Reopen the Eventhub device if any new Peripheral like Light, Battery,
+     * etc. is detected. */
+    virtual void sysfsNodeChanged(const std::string& sysfsNodePath) = 0;
 };
 
 template <std::size_t BITS>
@@ -460,7 +474,7 @@ public:
 
     int32_t getDeviceControllerNumber(int32_t deviceId) const override final;
 
-    void getConfiguration(int32_t deviceId, PropertyMap* outConfiguration) const override final;
+    std::optional<PropertyMap> getConfiguration(int32_t deviceId) const override final;
 
     status_t getAbsoluteAxisInfo(int32_t deviceId, int axis,
                                  RawAbsoluteAxisInfo* outAxisInfo) const override final;
@@ -557,6 +571,8 @@ public:
 
     status_t disableDevice(int32_t deviceId) override final;
 
+    void sysfsNodeChanged(const std::string& sysfsNodePath) override final;
+
     ~EventHub() override;
 
 private:
@@ -568,6 +584,7 @@ private:
         std::unordered_map<int32_t /*lightId*/, RawLightInfo> lightInfos;
         std::optional<RawLayoutInfo> layoutInfo;
 
+        bool isChanged() const;
         bool operator==(const AssociatedDevice&) const = default;
         bool operator!=(const AssociatedDevice&) const = default;
         std::string dump() const;

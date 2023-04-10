@@ -39,6 +39,7 @@ filegroup {
         "EventHub.cpp",
         "InputDevice.cpp",
         "InputReader.cpp",
+        "Macros.cpp",
         "TouchVideoDevice.cpp",
         "controller/PeripheralController.cpp",
         "mapper/CursorInputMapper.cpp",
@@ -64,6 +65,7 @@ filegroup {
         "mapper/gestures/GestureConverter.cpp",
         "mapper/gestures/GesturesLogging.cpp",
         "mapper/gestures/HardwareStateConverter.cpp",
+        "mapper/gestures/PropertyProvider.cpp",
     ],
 }
 

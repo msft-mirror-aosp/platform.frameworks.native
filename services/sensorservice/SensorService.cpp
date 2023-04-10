@@ -116,16 +116,17 @@ int32_t nextRuntimeSensorHandle() {
     return nextHandle++;
 }
 
-class RuntimeSensorCallbackProxy : public RuntimeSensor::StateChangeCallback {
+class RuntimeSensorCallbackProxy : public RuntimeSensor::SensorCallback {
  public:
-    RuntimeSensorCallbackProxy(sp<SensorService::RuntimeSensorStateChangeCallback> callback)
+    RuntimeSensorCallbackProxy(sp<SensorService::RuntimeSensorCallback> callback)
         : mCallback(std::move(callback)) {}
-    void onStateChanged(bool enabled, int64_t samplingPeriodNs,
-                        int64_t batchReportLatencyNs) override {
-        mCallback->onStateChanged(enabled, samplingPeriodNs, batchReportLatencyNs);
+    status_t onConfigurationChanged(int handle, bool enabled, int64_t samplingPeriodNs,
+                                    int64_t batchReportLatencyNs) override {
+        return mCallback->onConfigurationChanged(handle, enabled, samplingPeriodNs,
+                batchReportLatencyNs);
     }
  private:
-    sp<SensorService::RuntimeSensorStateChangeCallback> mCallback;
+    sp<SensorService::RuntimeSensorCallback> mCallback;
 };
 
 } // namespace
@@ -166,7 +167,7 @@ SensorService::SensorService()
 }
 
 int SensorService::registerRuntimeSensor(
-    const sensor_t& sensor, int deviceId, sp<RuntimeSensorStateChangeCallback> callback) {
+        const sensor_t& sensor, int deviceId, sp<RuntimeSensorCallback> callback) {
     int handle = 0;
     while (handle == 0 || !mSensors.isNewHandle(handle)) {
         handle = nextRuntimeSensorHandle();
@@ -179,8 +180,8 @@ int SensorService::registerRuntimeSensor(
     ALOGI("Registering runtime sensor handle 0x%x, type %d, name %s",
             handle, sensor.type, sensor.name);
 
-    sp<RuntimeSensor::StateChangeCallback> runtimeSensorCallback(
-        new RuntimeSensorCallbackProxy(std::move(callback)));
+    sp<RuntimeSensor::SensorCallback> runtimeSensorCallback(
+            new RuntimeSensorCallbackProxy(callback));
     sensor_t runtimeSensor = sensor;
     // force the handle to be consistent
     runtimeSensor.handle = handle;
@@ -192,11 +193,15 @@ int SensorService::registerRuntimeSensor(
         return mSensors.getNonSensor().getHandle();
     }
 
+    if (mRuntimeSensorCallbacks.find(deviceId) == mRuntimeSensorCallbacks.end()) {
+        mRuntimeSensorCallbacks.emplace(deviceId, callback);
+    }
     return handle;
 }
 
 status_t SensorService::unregisterRuntimeSensor(int handle) {
     ALOGI("Unregistering runtime sensor handle 0x%x disconnected", handle);
+    int deviceId = getDeviceIdFromHandle(handle);
     {
         Mutex::Autolock _l(mLock);
         if (!unregisterDynamicSensorLocked(handle)) {
@@ -208,6 +213,20 @@ status_t SensorService::unregisterRuntimeSensor(int handle) {
     ConnectionSafeAutolock connLock = mConnectionHolder.lock(mLock);
     for (const sp<SensorEventConnection>& connection : connLock.getActiveConnections()) {
         connection->removeSensor(handle);
+    }
+
+    // If this was the last sensor for this device, remove its callback.
+    bool deviceHasSensors = false;
+    mSensors.forEachEntry(
+            [&deviceId, &deviceHasSensors] (const SensorServiceUtil::SensorList::Entry& e) -> bool {
+                if (e.deviceId == deviceId) {
+                    deviceHasSensors = true;
+                    return false;  // stop iterating
+                }
+                return true;
+            });
+    if (!deviceHasSensors) {
+        mRuntimeSensorCallbacks.erase(deviceId);
     }
     return OK;
 }
@@ -1516,7 +1535,7 @@ int SensorService::isDataInjectionEnabled() {
 }
 
 sp<ISensorEventConnection> SensorService::createSensorDirectConnection(
-        const String16& opPackageName, uint32_t size, int32_t type, int32_t format,
+        const String16& opPackageName, int deviceId, uint32_t size, int32_t type, int32_t format,
         const native_handle *resource) {
     resetTargetSdkVersionCache(opPackageName);
     ConnectionSafeAutolock connLock = mConnectionHolder.lock(mLock);
@@ -1592,14 +1611,25 @@ sp<ISensorEventConnection> SensorService::createSensorDirectConnection(
     native_handle_set_fdsan_tag(clone);
 
     sp<SensorDirectConnection> conn;
-    SensorDevice& dev(SensorDevice::getInstance());
-    int channelHandle = dev.registerDirectChannel(&mem);
+    int channelHandle = 0;
+    if (deviceId == RuntimeSensor::DEFAULT_DEVICE_ID) {
+        SensorDevice& dev(SensorDevice::getInstance());
+        channelHandle = dev.registerDirectChannel(&mem);
+    } else {
+        auto runtimeSensorCallback = mRuntimeSensorCallbacks.find(deviceId);
+        if (runtimeSensorCallback == mRuntimeSensorCallbacks.end()) {
+            ALOGE("Runtime sensor callback for deviceId %d not found", deviceId);
+        } else {
+            int fd = dup(clone->data[0]);
+            channelHandle = runtimeSensorCallback->second->onDirectChannelCreated(fd);
+        }
+    }
 
     if (channelHandle <= 0) {
         ALOGE("SensorDevice::registerDirectChannel returns %d", channelHandle);
     } else {
         mem.handle = clone;
-        conn = new SensorDirectConnection(this, uid, &mem, channelHandle, opPackageName);
+        conn = new SensorDirectConnection(this, uid, &mem, channelHandle, opPackageName, deviceId);
     }
 
     if (conn == nullptr) {
@@ -1611,6 +1641,24 @@ sp<ISensorEventConnection> SensorService::createSensorDirectConnection(
         mConnectionHolder.addDirectConnection(conn);
     }
     return conn;
+}
+
+int SensorService::configureRuntimeSensorDirectChannel(
+        int sensorHandle, const SensorDirectConnection* c, const sensors_direct_cfg_t* config) {
+    int deviceId = c->getDeviceId();
+    int sensorDeviceId = getDeviceIdFromHandle(sensorHandle);
+    if (sensorDeviceId != c->getDeviceId()) {
+        ALOGE("Cannot configure direct channel created for device %d with a sensor that belongs "
+              "to device %d", c->getDeviceId(), sensorDeviceId);
+        return BAD_VALUE;
+    }
+    auto runtimeSensorCallback = mRuntimeSensorCallbacks.find(deviceId);
+    if (runtimeSensorCallback == mRuntimeSensorCallbacks.end()) {
+        ALOGE("Runtime sensor callback for deviceId %d not found", deviceId);
+        return BAD_VALUE;
+    }
+    return runtimeSensorCallback->second->onDirectChannelConfigured(
+            c->getHalChannelHandle(), sensorHandle, config->rate_level);
 }
 
 int SensorService::setOperationParameter(
@@ -1768,8 +1816,18 @@ void SensorService::cleanupConnection(SensorEventConnection* c) {
 void SensorService::cleanupConnection(SensorDirectConnection* c) {
     Mutex::Autolock _l(mLock);
 
-    SensorDevice& dev(SensorDevice::getInstance());
-    dev.unregisterDirectChannel(c->getHalChannelHandle());
+    int deviceId = c->getDeviceId();
+    if (deviceId == RuntimeSensor::DEFAULT_DEVICE_ID) {
+        SensorDevice& dev(SensorDevice::getInstance());
+        dev.unregisterDirectChannel(c->getHalChannelHandle());
+    } else {
+        auto runtimeSensorCallback = mRuntimeSensorCallbacks.find(deviceId);
+        if (runtimeSensorCallback != mRuntimeSensorCallbacks.end()) {
+            runtimeSensorCallback->second->onDirectChannelDestroyed(c->getHalChannelHandle());
+        } else {
+            ALOGE("Runtime sensor callback for deviceId %d not found", deviceId);
+        }
+    }
     mConnectionHolder.removeDirectConnection(c);
 }
 
@@ -1845,6 +1903,19 @@ status_t SensorService::removeProximityActiveListener(
 
 std::shared_ptr<SensorInterface> SensorService::getSensorInterfaceFromHandle(int handle) const {
     return mSensors.getInterface(handle);
+}
+
+int SensorService::getDeviceIdFromHandle(int handle) const {
+    int deviceId = RuntimeSensor::DEFAULT_DEVICE_ID;
+    mSensors.forEachEntry(
+            [&deviceId, handle] (const SensorServiceUtil::SensorList::Entry& e) -> bool {
+                if (e.si->getSensor().getHandle() == handle) {
+                    deviceId = e.deviceId;
+                    return false;  // stop iterating
+                }
+                return true;
+            });
+    return deviceId;
 }
 
 status_t SensorService::enable(const sp<SensorEventConnection>& connection,

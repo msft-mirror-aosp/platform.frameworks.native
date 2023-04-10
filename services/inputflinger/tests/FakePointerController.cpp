@@ -37,17 +37,8 @@ void FakePointerController::setPosition(float x, float y) {
     mY = y;
 }
 
-void FakePointerController::setButtonState(int32_t buttonState) {
-    mButtonState = buttonState;
-}
-
-int32_t FakePointerController::getButtonState() const {
-    return mButtonState;
-}
-
-void FakePointerController::getPosition(float* outX, float* outY) const {
-    *outX = mX;
-    *outY = mY;
+FloatPoint FakePointerController::getPosition() const {
+    return {mX, mY};
 }
 
 int32_t FakePointerController::getDisplayId() const {
@@ -59,19 +50,17 @@ void FakePointerController::setDisplayViewport(const DisplayViewport& viewport) 
 }
 
 void FakePointerController::assertPosition(float x, float y) {
-    float actualX, actualY;
-    getPosition(&actualX, &actualY);
+    const auto [actualX, actualY] = getPosition();
     ASSERT_NEAR(x, actualX, 1);
     ASSERT_NEAR(y, actualY, 1);
 }
 
-bool FakePointerController::getBounds(float* outMinX, float* outMinY, float* outMaxX,
-                                      float* outMaxY) const {
-    *outMinX = mMinX;
-    *outMinY = mMinY;
-    *outMaxX = mMaxX;
-    *outMaxY = mMaxY;
-    return mHaveBounds;
+bool FakePointerController::isPointerShown() {
+    return mIsPointerShown;
+}
+
+std::optional<FloatRect> FakePointerController::getBounds() const {
+    return mHaveBounds ? std::make_optional<FloatRect>(mMinX, mMinY, mMaxX, mMaxY) : std::nullopt;
 }
 
 void FakePointerController::move(float deltaX, float deltaY) {
@@ -81,6 +70,13 @@ void FakePointerController::move(float deltaX, float deltaY) {
     mY += deltaY;
     if (mY < mMinY) mY = mMinY;
     if (mY > mMaxY) mY = mMaxY;
+}
+
+void FakePointerController::fade(Transition) {
+    mIsPointerShown = false;
+}
+void FakePointerController::unfade(Transition) {
+    mIsPointerShown = true;
 }
 
 void FakePointerController::setSpots(const PointerCoords*, const uint32_t*, BitSet32 spotIdBits,

@@ -346,8 +346,9 @@ public:
     Error getHdrConversionCapabilities(
             std::vector<aidl::android::hardware::graphics::common::HdrConversionCapability>*)
             override;
-    Error setHdrConversionStrategy(
-            aidl::android::hardware::graphics::common::HdrConversionStrategy) override;
+    Error setHdrConversionStrategy(aidl::android::hardware::graphics::common::HdrConversionStrategy,
+                                   Hdr*) override;
+    Error setRefreshRateChangedCallbackDebugEnabled(Display, bool) override;
 
 private:
     class CommandWriter : public CommandWriterBase {

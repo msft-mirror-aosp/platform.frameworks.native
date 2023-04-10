@@ -18,6 +18,7 @@
 
 #include <cstdint>
 
+#include <android/gui/CachingHint.h>
 #include <gui/HdrMetadata.h>
 #include <math/mat4.h>
 #include <ui/BlurRegion.h>
@@ -209,6 +210,10 @@ struct LayerFECompositionState {
     // The dimming flag
     bool dimmingEnabled{true};
 
+    float currentHdrSdrRatio = 1.f;
+    float desiredHdrSdrRatio = 1.f;
+
+    gui::CachingHint cachingHint = gui::CachingHint::Enabled;
     virtual ~LayerFECompositionState();
 
     // Debugging

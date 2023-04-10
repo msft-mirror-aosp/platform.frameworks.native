@@ -61,12 +61,6 @@ uint32_t SensorInputMapper::getSources() const {
     return AINPUT_SOURCE_SENSOR;
 }
 
-template <typename T>
-bool SensorInputMapper::tryGetProperty(std::string keyName, T& outValue) {
-    const auto& config = getDeviceContext().getConfiguration();
-    return config.tryGetProperty(keyName, outValue);
-}
-
 void SensorInputMapper::parseSensorConfiguration(InputDeviceSensorType sensorType, int32_t absCode,
                                                  int32_t sensorDataIndex, const Axis& axis) {
     auto it = mSensors.find(sensorType);
@@ -79,12 +73,12 @@ void SensorInputMapper::parseSensorConfiguration(InputDeviceSensorType sensorTyp
     }
 }
 
-void SensorInputMapper::populateDeviceInfo(InputDeviceInfo* info) {
+void SensorInputMapper::populateDeviceInfo(InputDeviceInfo& info) {
     InputMapper::populateDeviceInfo(info);
 
     for (const auto& [sensorType, sensor] : mSensors) {
-        info->addSensorInfo(sensor.sensorInfo);
-        info->setHasSensor(true);
+        info.addSensorInfo(sensor.sensorInfo);
+        info.setHasSensor(true);
     }
 }
 
@@ -122,10 +116,10 @@ void SensorInputMapper::dump(std::string& dump) {
     }
 }
 
-std::list<NotifyArgs> SensorInputMapper::configure(nsecs_t when,
-                                                   const InputReaderConfiguration* config,
-                                                   uint32_t changes) {
-    std::list<NotifyArgs> out = InputMapper::configure(when, config, changes);
+std::list<NotifyArgs> SensorInputMapper::reconfigure(nsecs_t when,
+                                                     const InputReaderConfiguration* config,
+                                                     uint32_t changes) {
+    std::list<NotifyArgs> out = InputMapper::reconfigure(when, config, changes);
 
     if (!changes) { // first time only
         mDeviceEnabled = true;
@@ -201,6 +195,17 @@ std::list<NotifyArgs> SensorInputMapper::reset(nsecs_t when) {
 SensorInputMapper::Sensor SensorInputMapper::createSensor(InputDeviceSensorType sensorType,
                                                           const Axis& axis) {
     InputDeviceIdentifier identifier = getDeviceContext().getDeviceIdentifier();
+    const auto& config = getDeviceContext().getConfiguration();
+
+    std::string prefix = "sensor." + ftl::enum_string(sensorType);
+    transform(prefix.begin(), prefix.end(), prefix.begin(), ::tolower);
+
+    int32_t flags = 0;
+    std::optional<int32_t> reportingMode = config.getInt(prefix + ".reportingMode");
+    if (reportingMode.has_value()) {
+        flags |= (*reportingMode & REPORTING_MODE_MASK) << REPORTING_MODE_SHIFT;
+    }
+
     // Sensor Id will be assigned to device Id to distinguish same sensor from multiple input
     // devices, in such a way that the sensor Id will be same as input device Id.
     // The sensorType is to distinguish different sensors within one device.
@@ -208,29 +213,16 @@ SensorInputMapper::Sensor SensorInputMapper::createSensor(InputDeviceSensorType 
     InputDeviceSensorInfo sensorInfo(identifier.name, std::to_string(identifier.vendor),
                                      identifier.version, sensorType,
                                      InputDeviceSensorAccuracy::ACCURACY_HIGH,
-                                     axis.max /* maxRange */, axis.scale /* resolution */,
-                                     0.0f /* power */, 0 /* minDelay */,
-                                     0 /* fifoReservedEventCount */, 0 /* fifoMaxEventCount */,
-                                     ftl::enum_string(sensorType), 0 /* maxDelay */, 0 /* flags */,
-                                     getDeviceId());
-
-    std::string prefix = "sensor." + ftl::enum_string(sensorType);
-    transform(prefix.begin(), prefix.end(), prefix.begin(), ::tolower);
-
-    int32_t reportingMode = 0;
-    if (!tryGetProperty(prefix + ".reportingMode", reportingMode)) {
-        sensorInfo.flags |= (reportingMode & REPORTING_MODE_MASK) << REPORTING_MODE_SHIFT;
-    }
-
-    tryGetProperty(prefix + ".maxDelay", sensorInfo.maxDelay);
-
-    tryGetProperty(prefix + ".minDelay", sensorInfo.minDelay);
-
-    tryGetProperty(prefix + ".power", sensorInfo.power);
-
-    tryGetProperty(prefix + ".fifoReservedEventCount", sensorInfo.fifoReservedEventCount);
-
-    tryGetProperty(prefix + ".fifoMaxEventCount", sensorInfo.fifoMaxEventCount);
+                                     /*maxRange=*/axis.max, /*resolution=*/axis.scale,
+                                     /*power=*/config.getFloat(prefix + ".power").value_or(0.0f),
+                                     /*minDelay=*/config.getInt(prefix + ".minDelay").value_or(0),
+                                     /*fifoReservedEventCount=*/
+                                     config.getInt(prefix + ".fifoReservedEventCount").value_or(0),
+                                     /*fifoMaxEventCount=*/
+                                     config.getInt(prefix + ".fifoMaxEventCount").value_or(0),
+                                     ftl::enum_string(sensorType),
+                                     /*maxDelay=*/config.getInt(prefix + ".maxDelay").value_or(0),
+                                     /*flags=*/flags, getDeviceId());
 
     return Sensor(sensorInfo);
 }
@@ -277,7 +269,7 @@ std::list<NotifyArgs> SensorInputMapper::process(const RawEvent* rawEvent) {
                         Axis& axis = pair.second;
                         axis.currentValue = axis.newValue;
                     }
-                    out += sync(rawEvent->when, false /*force*/);
+                    out += sync(rawEvent->when, /*force=*/false);
                     break;
             }
             break;
@@ -344,7 +336,7 @@ bool SensorInputMapper::enableSensor(InputDeviceSensorType sensorType,
               maxBatchReportLatency.count());
     }
 
-    if (!setSensorEnabled(sensorType, true /* enabled */)) {
+    if (!setSensorEnabled(sensorType, /*enabled=*/true)) {
         return false;
     }
 
@@ -367,7 +359,7 @@ void SensorInputMapper::disableSensor(InputDeviceSensorType sensorType) {
         ALOGD("Disable Sensor %s", ftl::enum_string(sensorType).c_str());
     }
 
-    if (!setSensorEnabled(sensorType, false /* enabled */)) {
+    if (!setSensorEnabled(sensorType, /*enabled=*/false)) {
         return;
     }
 
@@ -413,9 +405,9 @@ std::list<NotifyArgs> SensorInputMapper::sync(nsecs_t when, bool force) {
             out.push_back(NotifySensorArgs(getContext()->getNextId(), when, getDeviceId(),
                                            AINPUT_SOURCE_SENSOR, sensorType,
                                            sensor.sensorInfo.accuracy,
-                                           sensor.accuracy !=
-                                                   sensor.sensorInfo.accuracy /* accuracyChanged */,
-                                           timestamp /* hwTimestamp */, values));
+                                           /*accuracyChanged=*/sensor.accuracy !=
+                                                   sensor.sensorInfo.accuracy,
+                                           /*hwTimestamp=*/timestamp, values));
             sensor.lastSampleTimeNs = timestamp;
             sensor.accuracy = sensor.sensorInfo.accuracy;
         }

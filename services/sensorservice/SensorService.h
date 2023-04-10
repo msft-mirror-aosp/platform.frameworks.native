@@ -147,12 +147,17 @@ public:
         virtual void onProximityActive(bool isActive) = 0;
     };
 
-    class RuntimeSensorStateChangeCallback : public virtual RefBase {
+    class RuntimeSensorCallback : public virtual RefBase {
     public:
         // Note that the callback is invoked from an async thread and can interact with the
         // SensorService directly.
-        virtual void onStateChanged(bool enabled, int64_t samplingPeriodNanos,
-                                    int64_t batchReportLatencyNanos) = 0;
+        virtual status_t onConfigurationChanged(int handle, bool enabled,
+                                                int64_t samplingPeriodNanos,
+                                                int64_t batchReportLatencyNanos) = 0;
+        virtual int onDirectChannelCreated(int fd) = 0;
+        virtual void onDirectChannelDestroyed(int channelHandle) = 0;
+        virtual int onDirectChannelConfigured(int channelHandle, int sensorHandle,
+                                              int rateLevel) = 0;
     };
 
     static char const* getServiceName() ANDROID_API { return "sensorservice"; }
@@ -182,9 +187,12 @@ public:
     status_t removeProximityActiveListener(const sp<ProximityActiveListener>& callback) ANDROID_API;
 
     int registerRuntimeSensor(const sensor_t& sensor, int deviceId,
-                              sp<RuntimeSensorStateChangeCallback> callback) ANDROID_API;
+                              sp<RuntimeSensorCallback> callback) ANDROID_API;
     status_t unregisterRuntimeSensor(int handle) ANDROID_API;
     status_t sendRuntimeSensorEvent(const sensors_event_t& event) ANDROID_API;
+
+    int configureRuntimeSensorDirectChannel(int sensorHandle, const SensorDirectConnection* c,
+                                            const sensors_direct_cfg_t* config);
 
     // Returns true if a sensor should be throttled according to our rate-throttling rules.
     static bool isSensorInCappedSet(int sensorType);
@@ -369,7 +377,8 @@ private:
             int requestedMode, const String16& opPackageName, const String16& attributionTag);
     virtual int isDataInjectionEnabled();
     virtual sp<ISensorEventConnection> createSensorDirectConnection(const String16& opPackageName,
-            uint32_t size, int32_t type, int32_t format, const native_handle *resource);
+            int deviceId, uint32_t size, int32_t type, int32_t format,
+            const native_handle *resource);
     virtual int setOperationParameter(
             int32_t handle, int32_t type, const Vector<float> &floats, const Vector<int32_t> &ints);
     virtual status_t dump(int fd, const Vector<String16>& args);
@@ -379,6 +388,7 @@ private:
     String8 getSensorStringType(int handle) const;
     bool isVirtualSensor(int handle) const;
     std::shared_ptr<SensorInterface> getSensorInterfaceFromHandle(int handle) const;
+    int getDeviceIdFromHandle(int handle) const;
     bool isWakeUpSensor(int type) const;
     void recordLastValueLocked(sensors_event_t const* buffer, size_t count);
     static void sortEventBuffer(sensors_event_t* buffer, size_t count);
@@ -516,6 +526,7 @@ private:
     std::unordered_map<int, SensorServiceUtil::RecentEventLogger*> mRecentEvent;
     Mode mCurrentOperatingMode;
     std::queue<sensors_event_t> mRuntimeSensorEventQueue;
+    std::unordered_map</*deviceId*/int, sp<RuntimeSensorCallback>> mRuntimeSensorCallbacks;
 
     // true if the head tracker sensor type is currently restricted to system usage only
     // (can only be unrestricted for testing, via shell cmd)

@@ -521,6 +521,49 @@ void ASurfaceTransaction_setHdrMetadata_cta861_3(ASurfaceTransaction* transactio
                                                  __INTRODUCED_IN(29);
 
 /**
+ * Sets the desired extended range brightness for the layer. This only applies for layers whose
+ * dataspace has RANGE_EXTENDED set on it.
+ *
+ * Available since API level 34.
+ *
+ * @param surface_control The layer whose extended range brightness is being specified
+ * @param currentBufferRatio The current hdr/sdr ratio of the current buffer as represented as
+ *                           peakHdrBrightnessInNits / targetSdrWhitePointInNits. For example if the
+ *                           buffer was rendered with a target SDR whitepoint of 100nits and a max
+ *                           display brightness of 200nits, this should be set to 2.0f.
+ *
+ *                           Default value is 1.0f.
+ *
+ *                           Transfer functions that encode their own brightness ranges, such as
+ *                           HLG or PQ, should also set this to 1.0f and instead communicate
+ *                           extended content brightness information via metadata such as CTA861_3
+ *                           or SMPTE2086.
+ *
+ *                           Must be finite && >= 1.0f
+ *
+ * @param desiredRatio The desired hdr/sdr ratio as represented as peakHdrBrightnessInNits /
+ *                     targetSdrWhitePointInNits. This can be used to communicate the max desired
+ *                     brightness range. This is similar to the "max luminance" value in other
+ *                     HDR metadata formats, but represented as a ratio of the target SDR whitepoint
+ *                     to the max display brightness. The system may not be able to, or may choose
+ *                     not to, deliver the requested range.
+ *
+ *                     If unspecified, the system will attempt to provide the best range it can
+ *                     for the given ambient conditions & device state. However, voluntarily
+ *                     reducing the requested range can help improve battery life as well as can
+ *                     improve quality by ensuring greater bit depth is allocated to the luminance
+ *                     range in use.
+ *
+ *                     Must be finite && >= 1.0f
+ *
+ * Available since API level 34.
+ */
+void ASurfaceTransaction_setExtendedRangeBrightness(ASurfaceTransaction* transaction,
+                                            ASurfaceControl* surface_control,
+                                            float currentBufferRatio,
+                                            float desiredRatio) __INTRODUCED_IN(__ANDROID_API_U__);
+
+/**
  * Same as ASurfaceTransaction_setFrameRateWithChangeStrategy(transaction, surface_control,
  * frameRate, compatibility, ANATIVEWINDOW_CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS).
  *
@@ -614,6 +657,8 @@ void ASurfaceTransaction_clearFrameRate(ASurfaceTransaction* transaction,
  * and pushing buffers earlier for server side queuing will be advantageous
  * in such cases.
  *
+ * Available since API level 31.
+ *
  * \param transaction The transaction in which to make the change.
  * \param surface_control The ASurfaceControl on which to control buffer backpressure behavior.
  * \param enableBackPressure Whether to enable back pressure.
@@ -634,6 +679,8 @@ void ASurfaceTransaction_setEnableBackPressure(ASurfaceTransaction* transaction,
  * To receive frame timelines, a callback must be posted to Choreographer using
  * AChoreographer_postVsyncCallback(). The \c vsyncId can then be extracted from the
  * callback payload using AChoreographerFrameCallbackData_getFrameTimelineVsyncId().
+ *
+ * Available since API level 33.
  *
  * \param vsyncId The vsync ID received from AChoreographer, setting the frame's presentation target
  * to the corresponding expected presentation time and deadline from the frame to be rendered. A

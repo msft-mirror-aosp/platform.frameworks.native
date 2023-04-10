@@ -24,14 +24,16 @@ package {
 cc_library {
     name: "libjpegrecoverymap",
     host_supported: true,
-
+    vendor_available: true,
     export_include_dirs: ["include"],
     local_include_dirs: ["include"],
 
     srcs: [
-        "recoverymap.cpp",
+        "icc.cpp",
+        "jpegr.cpp",
         "recoverymapmath.cpp",
-        "recoverymaputils.cpp",
+        "jpegrutils.cpp",
+        "multipictureformat.cpp",
     ],
 
     shared_libs: [
@@ -40,37 +42,42 @@ cc_library {
         "libjpegencoder",
         "libjpegdecoder",
         "liblog",
+        "libutils",
     ],
 }
 
 cc_library {
     name: "libjpegencoder",
     host_supported: true,
+    vendor_available: true,
 
     shared_libs: [
         "libjpeg",
         "liblog",
+        "libutils",
     ],
 
     export_include_dirs: ["include"],
 
     srcs: [
-        "jpegencoder.cpp",
+        "jpegencoderhelper.cpp",
     ],
 }
 
 cc_library {
     name: "libjpegdecoder",
     host_supported: true,
+    vendor_available: true,
 
     shared_libs: [
         "libjpeg",
         "liblog",
+        "libutils",
     ],
 
     export_include_dirs: ["include"],
 
     srcs: [
-        "jpegdecoder.cpp",
+        "jpegdecoderhelper.cpp",
     ],
 }

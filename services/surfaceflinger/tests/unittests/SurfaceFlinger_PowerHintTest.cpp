@@ -28,9 +28,7 @@
 #include "TestableSurfaceFlinger.h"
 #include "mock/DisplayHardware/MockComposer.h"
 #include "mock/DisplayHardware/MockPowerAdvisor.h"
-#include "mock/MockEventThread.h"
 #include "mock/MockTimeStats.h"
-#include "mock/MockVsyncController.h"
 #include "mock/system/window/MockNativeWindow.h"
 
 using namespace android;
@@ -53,8 +51,6 @@ class SurfaceFlingerPowerHintTest : public Test {
 public:
     void SetUp() override;
 
-    void setupScheduler();
-
 protected:
     TestableSurfaceFlinger mFlinger;
     renderengine::mock::RenderEngine* mRenderEngine = new renderengine::mock::RenderEngine();
@@ -68,13 +64,12 @@ protected:
 };
 
 void SurfaceFlingerPowerHintTest::SetUp() {
-    setupScheduler();
+    mFlinger.setupMockScheduler({.displayId = DEFAULT_DISPLAY_ID});
     mComposer = new Hwc2::mock::Composer();
     mPowerAdvisor = new Hwc2::mock::PowerAdvisor();
     mFlinger.setupRenderEngine(std::unique_ptr<renderengine::RenderEngine>(mRenderEngine));
     mFlinger.setupTimeStats(std::shared_ptr<TimeStats>(mTimeStats));
     mFlinger.setupComposer(std::unique_ptr<Hwc2::Composer>(mComposer));
-    mFlinger.setPowerHintSessionMode(true, true);
     mFlinger.setupPowerAdvisor(std::unique_ptr<Hwc2::PowerAdvisor>(mPowerAdvisor));
     static constexpr bool kIsPrimary = true;
     FakeHwcDisplayInjector(DEFAULT_DISPLAY_ID, hal::DisplayType::PHYSICAL, kIsPrimary)
@@ -96,43 +91,15 @@ void SurfaceFlingerPowerHintTest::SetUp() {
                     .setDisplaySurface(mDisplaySurface)
                     .setNativeWindow(mNativeWindow)
                     .setPowerMode(hal::PowerMode::ON)
+                    .setRefreshRateSelector(mFlinger.scheduler()->refreshRateSelector())
+                    .skipRegisterDisplay()
                     .inject();
-}
-
-void SurfaceFlingerPowerHintTest::setupScheduler() {
-    auto eventThread = std::make_unique<mock::EventThread>();
-    auto sfEventThread = std::make_unique<mock::EventThread>();
-
-    EXPECT_CALL(*eventThread, registerDisplayEventConnection(_));
-    EXPECT_CALL(*eventThread, createEventConnection(_, _))
-            .WillOnce(Return(sp<EventThreadConnection>::make(eventThread.get(),
-                                                             mock::EventThread::kCallingUid,
-                                                             ResyncCallback())));
-
-    EXPECT_CALL(*sfEventThread, registerDisplayEventConnection(_));
-    EXPECT_CALL(*sfEventThread, createEventConnection(_, _))
-            .WillOnce(Return(sp<EventThreadConnection>::make(sfEventThread.get(),
-                                                             mock::EventThread::kCallingUid,
-                                                             ResyncCallback())));
-
-    auto vsyncController = std::make_unique<mock::VsyncController>();
-    auto vsyncTracker = std::make_unique<mock::VSyncTracker>();
-
-    EXPECT_CALL(*vsyncTracker, nextAnticipatedVSyncTimeFrom(_)).WillRepeatedly(Return(0));
-    EXPECT_CALL(*vsyncTracker, currentPeriod())
-            .WillRepeatedly(Return(FakeHwcDisplayInjector::DEFAULT_VSYNC_PERIOD));
-    EXPECT_CALL(*vsyncTracker, nextAnticipatedVSyncTimeFrom(_)).WillRepeatedly(Return(0));
-
-    mFlinger.setupScheduler(std::move(vsyncController), std::move(vsyncTracker),
-                            std::move(eventThread), std::move(sfEventThread),
-                            TestableSurfaceFlinger::SchedulerCallbackImpl::kNoOp,
-                            TestableSurfaceFlinger::kTwoDisplayModes);
 }
 
 TEST_F(SurfaceFlingerPowerHintTest, sendDurationsIncludingHwcWaitTime) {
     ON_CALL(*mPowerAdvisor, usePowerHintSession()).WillByDefault(Return(true));
 
-    EXPECT_CALL(*mPowerAdvisor, setTargetWorkDuration(_)).Times(1);
+    EXPECT_CALL(*mPowerAdvisor, updateTargetWorkDuration(_)).Times(1);
     EXPECT_CALL(*mDisplaySurface,
                 prepareFrame(compositionengine::DisplaySurface::CompositionType::Hwc))
             .Times(1);
@@ -141,7 +108,7 @@ TEST_F(SurfaceFlingerPowerHintTest, sendDurationsIncludingHwcWaitTime) {
         std::this_thread::sleep_for(kMockHwcRunTime);
         return hardware::graphics::composer::V2_1::Error::NONE;
     });
-    EXPECT_CALL(*mPowerAdvisor, sendActualWorkDuration()).Times(1);
+    EXPECT_CALL(*mPowerAdvisor, reportActualWorkDuration()).Times(1);
 
     const TimePoint frameTime = scheduler::SchedulerClock::now();
     constexpr Period kMockVsyncPeriod = 15ms;
@@ -153,7 +120,7 @@ TEST_F(SurfaceFlingerPowerHintTest, inactiveOnDisplayDoze) {
 
     mDisplay->setPowerMode(hal::PowerMode::DOZE);
 
-    EXPECT_CALL(*mPowerAdvisor, setTargetWorkDuration(_)).Times(0);
+    EXPECT_CALL(*mPowerAdvisor, updateTargetWorkDuration(_)).Times(0);
     EXPECT_CALL(*mDisplaySurface,
                 prepareFrame(compositionengine::DisplaySurface::CompositionType::Hwc))
             .Times(1);
@@ -162,7 +129,7 @@ TEST_F(SurfaceFlingerPowerHintTest, inactiveOnDisplayDoze) {
         std::this_thread::sleep_for(kMockHwcRunTime);
         return hardware::graphics::composer::V2_1::Error::NONE;
     });
-    EXPECT_CALL(*mPowerAdvisor, sendActualWorkDuration()).Times(0);
+    EXPECT_CALL(*mPowerAdvisor, reportActualWorkDuration()).Times(0);
 
     const TimePoint frameTime = scheduler::SchedulerClock::now();
     constexpr Period kMockVsyncPeriod = 15ms;

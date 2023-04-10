@@ -16,6 +16,7 @@
 
 #include <android-base/file.h>
 #include <android-base/logging.h>
+#include <android-base/scopeguard.h>
 #include <android-base/unique_fd.h>
 #include <binder/RecordedTransaction.h>
 #include <sys/mman.h>
@@ -123,11 +124,10 @@ std::optional<RecordedTransaction> RecordedTransaction::fromDetails(
                        static_cast<int32_t>(timestamp.tv_nsec),
                        0};
 
-    t.mData.mInterfaceName = String8(interfaceName);
-    if (interfaceName.size() != t.mData.mInterfaceName.bytes()) {
+    t.mData.mInterfaceName = std::string(String8(interfaceName).string());
+    if (interfaceName.size() != t.mData.mInterfaceName.size()) {
         LOG(ERROR) << "Interface Name is not valid. Contains characters that aren't single byte "
-                      "utf-8: "
-                   << interfaceName;
+                      "utf-8.";
         return std::nullopt;
     }
 
@@ -176,13 +176,33 @@ std::optional<RecordedTransaction> RecordedTransaction::fromFile(const unique_fd
     RecordedTransaction t;
     ChunkDescriptor chunk;
     const long pageSize = sysconf(_SC_PAGE_SIZE);
+    struct stat fileStat;
+    if (fstat(fd.get(), &fileStat) != 0) {
+        LOG(ERROR) << "Unable to get file information";
+        return std::nullopt;
+    }
+
+    off_t fdCurrentPosition = lseek(fd.get(), 0, SEEK_CUR);
+    if (fdCurrentPosition == -1) {
+        LOG(ERROR) << "Invalid offset in file descriptor.";
+        return std::nullopt;
+    }
     do {
+        if (fileStat.st_size < (fdCurrentPosition + (off_t)sizeof(ChunkDescriptor))) {
+            LOG(ERROR) << "Not enough file remains to contain expected chunk descriptor";
+            return std::nullopt;
+        }
         transaction_checksum_t checksum = 0;
         if (NO_ERROR != readChunkDescriptor(fd, &chunk, &checksum)) {
             LOG(ERROR) << "Failed to read chunk descriptor.";
             return std::nullopt;
         }
-        off_t fdCurrentPosition = lseek(fd.get(), 0, SEEK_CUR);
+
+        fdCurrentPosition = lseek(fd.get(), 0, SEEK_CUR);
+        if (fdCurrentPosition == -1) {
+            LOG(ERROR) << "Invalid offset in file descriptor.";
+            return std::nullopt;
+        }
         off_t mmapPageAlignedStart = (fdCurrentPosition / pageSize) * pageSize;
         off_t mmapPayloadStartOffset = fdCurrentPosition - mmapPageAlignedStart;
 
@@ -194,14 +214,24 @@ std::optional<RecordedTransaction> RecordedTransaction::fromFile(const unique_fd
         size_t chunkPayloadSize =
                 chunk.dataSize + PADDING8(chunk.dataSize) + sizeof(transaction_checksum_t);
 
+        if (chunkPayloadSize > (size_t)(fileStat.st_size - fdCurrentPosition)) {
+            LOG(ERROR) << "Chunk payload exceeds remaining file size.";
+            return std::nullopt;
+        }
+
         if (PADDING8(chunkPayloadSize) != 0) {
             LOG(ERROR) << "Invalid chunk size, not aligned " << chunkPayloadSize;
             return std::nullopt;
         }
 
-        transaction_checksum_t* payloadMap = reinterpret_cast<transaction_checksum_t*>(
-                mmap(NULL, chunkPayloadSize + mmapPayloadStartOffset, PROT_READ, MAP_SHARED,
-                     fd.get(), mmapPageAlignedStart));
+        size_t memoryMappedSize = chunkPayloadSize + mmapPayloadStartOffset;
+        void* mappedMemory =
+                mmap(NULL, memoryMappedSize, PROT_READ, MAP_SHARED, fd.get(), mmapPageAlignedStart);
+        auto mmap_guard = android::base::make_scope_guard(
+                [mappedMemory, memoryMappedSize] { munmap(mappedMemory, memoryMappedSize); });
+
+        transaction_checksum_t* payloadMap =
+                reinterpret_cast<transaction_checksum_t*>(mappedMemory);
         payloadMap += mmapPayloadStartOffset /
                 sizeof(transaction_checksum_t); // Skip chunk descriptor and required mmap
                                                 // page-alignment
@@ -218,7 +248,12 @@ std::optional<RecordedTransaction> RecordedTransaction::fromFile(const unique_fd
             LOG(ERROR) << "Checksum failed.";
             return std::nullopt;
         }
-        lseek(fd.get(), chunkPayloadSize, SEEK_CUR);
+
+        fdCurrentPosition = lseek(fd.get(), chunkPayloadSize, SEEK_CUR);
+        if (fdCurrentPosition == -1) {
+            LOG(ERROR) << "Invalid offset in file descriptor.";
+            return std::nullopt;
+        }
 
         switch (chunk.chunkType) {
             case HEADER_CHUNK: {
@@ -231,7 +266,8 @@ std::optional<RecordedTransaction> RecordedTransaction::fromFile(const unique_fd
                 break;
             }
             case INTERFACE_NAME_CHUNK: {
-                t.mData.mInterfaceName.setTo(reinterpret_cast<char*>(payloadMap), chunk.dataSize);
+                t.mData.mInterfaceName =
+                        std::string(reinterpret_cast<char*>(payloadMap), chunk.dataSize);
                 break;
             }
             case DATA_PARCEL_CHUNK: {
@@ -254,7 +290,7 @@ std::optional<RecordedTransaction> RecordedTransaction::fromFile(const unique_fd
                 break;
             default:
                 LOG(INFO) << "Unrecognized chunk.";
-                continue;
+                break;
         }
     } while (chunk.chunkType != END_CHUNK);
 
@@ -308,7 +344,7 @@ android::status_t RecordedTransaction::dumpToFile(const unique_fd& fd) const {
     }
     if (NO_ERROR !=
         writeChunk(fd, INTERFACE_NAME_CHUNK, mData.mInterfaceName.size() * sizeof(uint8_t),
-                   reinterpret_cast<const uint8_t*>(mData.mInterfaceName.string()))) {
+                   reinterpret_cast<const uint8_t*>(mData.mInterfaceName.c_str()))) {
         LOG(INFO) << "Failed to write Interface Name Chunk to fd " << fd.get();
         return UNKNOWN_ERROR;
     }
@@ -328,7 +364,7 @@ android::status_t RecordedTransaction::dumpToFile(const unique_fd& fd) const {
     return NO_ERROR;
 }
 
-const android::String8& RecordedTransaction::getInterfaceName() const {
+const std::string& RecordedTransaction::getInterfaceName() const {
     return mData.mInterfaceName;
 }
 

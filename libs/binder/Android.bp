@@ -191,6 +191,7 @@ cc_defaults {
         "google-*",
         "misc-*",
         "performance*",
+        "-performance-move-const-arg", // b/273486801
         "portability*",
     ],
 }
@@ -211,6 +212,7 @@ cc_library_headers {
 
 cc_defaults {
     name: "trusty_mock_defaults",
+    host_supported: true,
 
     header_libs: [
         "trusty_mock_headers",
@@ -283,6 +285,14 @@ cc_defaults {
     cflags: [
         "-DBINDER_WITH_KERNEL_IPC",
     ],
+    arch: {
+        // TODO(b/254713216): undefined symbol in BufferedTextOutput::getBuffer
+        riscv64: {
+            lto: {
+                thin: false,
+            },
+        },
+    },
 }
 
 cc_library {
@@ -345,6 +355,7 @@ cc_library {
 
 cc_library_static {
     name: "libbinder_rpc_no_kernel",
+    vendor_available: true,
     defaults: [
         "libbinder_common_defaults",
         "libbinder_android_defaults",
@@ -397,6 +408,7 @@ cc_defaults {
 cc_defaults {
     name: "libbinder_tls_defaults",
     defaults: ["libbinder_tls_shared_deps"],
+    vendor_available: true,
     host_supported: true,
 
     header_libs: [
@@ -423,7 +435,7 @@ cc_library_shared {
     defaults: ["libbinder_tls_defaults"],
 }
 
-cc_library_shared {
+cc_library {
     name: "libbinder_trusty",
     vendor: true,
     srcs: [
@@ -505,6 +517,10 @@ aidl_interface {
             enabled: false,
         },
     },
+    visibility: [
+        ":__subpackages__",
+        "//system/tools/aidl:__subpackages__",
+    ],
 }
 
 // TODO(b/184872979): remove once the Rust API is created.
@@ -530,8 +546,10 @@ cc_library {
     // Do not expand the visibility.
     visibility: [
         ":__subpackages__",
-        "//packages/modules/Virtualization:__subpackages__",
+        "//packages/modules/Virtualization/javalib/jni",
+        "//packages/modules/Virtualization/vm_payload",
         "//device/google/cuttlefish/shared/minidroid:__subpackages__",
+        "//system/software_defined_vehicle:__subpackages__",
     ],
 }
 

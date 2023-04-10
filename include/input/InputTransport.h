@@ -38,6 +38,7 @@
 #include <binder/IBinder.h>
 #include <binder/Parcelable.h>
 #include <input/Input.h>
+#include <input/InputVerifier.h>
 #include <sys/stat.h>
 #include <ui/Transform.h>
 #include <utils/BitSet.h>
@@ -444,6 +445,7 @@ public:
 
 private:
     std::shared_ptr<InputChannel> mChannel;
+    InputVerifier mInputVerifier;
 };
 
 /*
@@ -667,7 +669,6 @@ private:
     static void addSample(MotionEvent* event, const InputMessage* msg);
     static bool canAddSample(const Batch& batch, const InputMessage* msg);
     static ssize_t findSampleNoLaterThan(const Batch& batch, nsecs_t time);
-    static bool shouldResampleTool(int32_t toolType);
 
     static bool isTouchResamplingEnabled();
 };

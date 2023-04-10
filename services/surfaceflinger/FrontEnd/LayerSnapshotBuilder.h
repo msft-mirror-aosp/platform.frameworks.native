@@ -35,15 +35,26 @@ namespace android::surfaceflinger::frontend {
 // snapshots when there are only buffer updates.
 class LayerSnapshotBuilder {
 public:
+    enum class ForceUpdateFlags {
+        NONE,
+        ALL,
+        HIERARCHY,
+    };
     struct Args {
-        const LayerHierarchy& root;
+        LayerHierarchy root;
         const LayerLifecycleManager& layerLifecycleManager;
-        bool forceUpdate = false;
+        ForceUpdateFlags forceUpdate = ForceUpdateFlags::NONE;
         bool includeMetadata = false;
         const display::DisplayMap<ui::LayerStack, frontend::DisplayInfo>& displays;
         // Set to true if there were display changes since last update.
         bool displayChanges = false;
         const renderengine::ShadowSettings& globalShadowSettings;
+        bool supportsBlur = true;
+        bool forceFullDamage = false;
+        std::optional<FloatRect> parentCrop = std::nullopt;
+        std::unordered_set<uint32_t> excludeLayerIds;
+        const std::unordered_map<std::string, bool>& supportedLayerGenericMetadata;
+        const std::unordered_map<std::string, uint32_t>& genericLayerMetadataKeyMap;
     };
     LayerSnapshotBuilder();
 
@@ -56,11 +67,26 @@ public:
     // change flags.
     void update(const Args&);
     std::vector<std::unique_ptr<LayerSnapshot>>& getSnapshots();
+    LayerSnapshot* getSnapshot(uint32_t layerId) const;
+    LayerSnapshot* getSnapshot(const LayerHierarchy::TraversalPath& id) const;
+
+    typedef std::function<void(const LayerSnapshot& snapshot)> ConstVisitor;
+
+    // Visit each visible snapshot in z-order
+    void forEachVisibleSnapshot(const ConstVisitor& visitor) const;
+
+    // Visit each visible snapshot in z-order
+    void forEachVisibleSnapshot(const ConstVisitor& visitor, const LayerHierarchy& root) const;
+
+    typedef std::function<void(std::unique_ptr<LayerSnapshot>& snapshot)> Visitor;
+    // Visit each visible snapshot in z-order and move the snapshot if needed
+    void forEachVisibleSnapshot(const Visitor& visitor);
+
+    // Visit each snapshot interesting to input reverse z-order
+    void forEachInputSnapshot(const ConstVisitor& visitor) const;
 
 private:
     friend class LayerSnapshotTest;
-    LayerSnapshot* getSnapshot(uint32_t layerId) const;
-    LayerSnapshot* getSnapshot(const LayerHierarchy::TraversalPath& id) const;
     static LayerSnapshot getRootSnapshot();
 
     // return true if we were able to successfully update the snapshots via
@@ -69,42 +95,42 @@ private:
 
     void updateSnapshots(const Args& args);
 
-    void updateSnapshotsInHierarchy(const Args&, const LayerHierarchy& hierarchy,
-                                    LayerHierarchy::TraversalPath& traversalPath,
-                                    const LayerSnapshot& parentSnapshot);
-    void updateSnapshot(LayerSnapshot& snapshot, const Args& args, const RequestedLayerState&,
-                        const LayerSnapshot& parentSnapshot,
-                        const LayerHierarchy::TraversalPath& path);
+    const LayerSnapshot& updateSnapshotsInHierarchy(const Args&, const LayerHierarchy& hierarchy,
+                                                    LayerHierarchy::TraversalPath& traversalPath,
+                                                    const LayerSnapshot& parentSnapshot);
+    void updateSnapshot(LayerSnapshot&, const Args&, const RequestedLayerState&,
+                        const LayerSnapshot& parentSnapshot, const LayerHierarchy::TraversalPath&);
     static void updateRelativeState(LayerSnapshot& snapshot, const LayerSnapshot& parentSnapshot,
                                     bool parentIsRelative, const Args& args);
     static void resetRelativeState(LayerSnapshot& snapshot);
     static void updateRoundedCorner(LayerSnapshot& snapshot, const RequestedLayerState& layerState,
                                     const LayerSnapshot& parentSnapshot);
-    static void updateLayerBounds(LayerSnapshot& snapshot, const RequestedLayerState& layerState,
-                                  const LayerSnapshot& parentSnapshot,
-                                  uint32_t displayRotationFlags);
+    void updateLayerBounds(LayerSnapshot& snapshot, const RequestedLayerState& layerState,
+                           const LayerSnapshot& parentSnapshot, uint32_t displayRotationFlags);
     static void updateShadows(LayerSnapshot& snapshot, const RequestedLayerState& requested,
                               const renderengine::ShadowSettings& globalShadowSettings);
     void updateInput(LayerSnapshot& snapshot, const RequestedLayerState& requested,
-                     const LayerSnapshot& parentSnapshot, const frontend::DisplayInfo& displayInfo,
-                     bool noValidDisplay, const LayerHierarchy::TraversalPath& path);
-    void sortSnapshotsByZ(const Args& args);
-    LayerSnapshot* getOrCreateSnapshot(const LayerHierarchy::TraversalPath& id,
-                                       const RequestedLayerState& layer);
+                     const LayerSnapshot& parentSnapshot, const LayerHierarchy::TraversalPath& path,
+                     const Args& args);
+    // Return true if there are unreachable snapshots
+    bool sortSnapshotsByZ(const Args& args);
+    LayerSnapshot* createSnapshot(const LayerHierarchy::TraversalPath& id,
+                                  const RequestedLayerState& layer,
+                                  const LayerSnapshot& parentSnapshot);
+    void updateChildState(LayerSnapshot& snapshot, const LayerSnapshot& childSnapshot,
+                          const Args& args);
+    void updateTouchableRegionCrop(const Args& args);
 
-    struct TraversalPathHash {
-        std::size_t operator()(const LayerHierarchy::TraversalPath& key) const {
-            uint32_t hashCode = key.id * 31;
-            for (auto mirrorRoot : key.mirrorRootIds) {
-                hashCode += mirrorRoot * 31;
-            }
-            return std::hash<size_t>{}(hashCode);
-        }
-    };
-    std::unordered_map<LayerHierarchy::TraversalPath, LayerSnapshot*, TraversalPathHash>
+    std::unordered_map<LayerHierarchy::TraversalPath, LayerSnapshot*,
+                       LayerHierarchy::TraversalPathHash>
             mIdToSnapshot;
+    // Track snapshots that needs touchable region crop from other snapshots
+    std::unordered_set<LayerHierarchy::TraversalPath, LayerHierarchy::TraversalPathHash>
+            mNeedsTouchableRegionCrop;
     std::vector<std::unique_ptr<LayerSnapshot>> mSnapshots;
     LayerSnapshot mRootSnapshot;
+    bool mResortSnapshots = false;
+    int mNumInterestingSnapshots = 0;
 };
 
 } // namespace android::surfaceflinger::frontend

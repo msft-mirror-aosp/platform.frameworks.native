@@ -209,9 +209,14 @@ void InputDevice::addEventHubDevice(int32_t eventHubId, bool populateMappers) {
 
     // Touchscreens and touchpad devices.
     static const bool ENABLE_TOUCHPAD_GESTURES_LIBRARY =
-            sysprop::InputProperties::enable_touchpad_gestures_library().value_or(false);
+            sysprop::InputProperties::enable_touchpad_gestures_library().value_or(true);
+    // TODO(b/272518665): Fix the new touchpad stack for Sony DualShock 4 (5c4, 9cc) touchpads, or
+    // at least load this setting from the IDC file.
+    const InputDeviceIdentifier identifier = contextPtr->getDeviceIdentifier();
+    const bool isSonyDualShock4Touchpad = identifier.vendor == 0x054c &&
+            (identifier.product == 0x05c4 || identifier.product == 0x09cc);
     if (ENABLE_TOUCHPAD_GESTURES_LIBRARY && classes.test(InputDeviceClass::TOUCHPAD) &&
-        classes.test(InputDeviceClass::TOUCH_MT)) {
+        classes.test(InputDeviceClass::TOUCH_MT) && !isSonyDualShock4Touchpad) {
         mappers.push_back(std::make_unique<TouchpadInputMapper>(*contextPtr));
     } else if (classes.test(InputDeviceClass::TOUCH_MT)) {
         mappers.push_back(std::make_unique<MultiTouchInputMapper>(*contextPtr));
@@ -271,12 +276,18 @@ std::list<NotifyArgs> InputDevice::configure(nsecs_t when, const InputReaderConf
     mHasMic = mClasses.test(InputDeviceClass::MIC);
 
     if (!isIgnored()) {
-        if (!changes) { // first time only
+        // Full configuration should happen the first time configure is called
+        // and when the device type is changed. Changing a device type can
+        // affect various other parameters so should result in a
+        // reconfiguration.
+        if (!changes || (changes & InputReaderConfiguration::CHANGE_DEVICE_TYPE)) {
             mConfiguration.clear();
             for_each_subdevice([this](InputDeviceContext& context) {
-                PropertyMap configuration;
-                context.getConfiguration(&configuration);
-                mConfiguration.addAll(&configuration);
+                std::optional<PropertyMap> configuration =
+                        getEventHub()->getConfiguration(context.getEventHubId());
+                if (configuration) {
+                    mConfiguration.addAll(&(*configuration));
+                }
             });
 
             mAssociatedDeviceType =
@@ -374,7 +385,7 @@ std::list<NotifyArgs> InputDevice::configure(nsecs_t when, const InputReaderConf
         }
 
         for_each_mapper([this, when, &config, changes, &out](InputMapper& mapper) {
-            out += mapper.configure(when, config, changes);
+            out += mapper.reconfigure(when, config, changes);
             mSources |= mapper.getSources();
         });
 
@@ -406,22 +417,21 @@ std::list<NotifyArgs> InputDevice::process(const RawEvent* rawEvents, size_t cou
     // in the order received.
     std::list<NotifyArgs> out;
     for (const RawEvent* rawEvent = rawEvents; count != 0; rawEvent++) {
-        if (DEBUG_RAW_EVENTS) {
-            ALOGD("Input event: device=%d type=0x%04x code=0x%04x value=0x%08x when=%" PRId64,
-                  rawEvent->deviceId, rawEvent->type, rawEvent->code, rawEvent->value,
-                  rawEvent->when);
+        if (debugRawEvents()) {
+            const auto [type, code, value] =
+                    InputEventLookup::getLinuxEvdevLabel(rawEvent->type, rawEvent->code,
+                                                         rawEvent->value);
+            ALOGD("Input event: eventHubDevice=%d type=%s code=%s value=%s when=%" PRId64,
+                  rawEvent->deviceId, type.c_str(), code.c_str(), value.c_str(), rawEvent->when);
         }
 
         if (mDropUntilNextSync) {
             if (rawEvent->type == EV_SYN && rawEvent->code == SYN_REPORT) {
                 mDropUntilNextSync = false;
-                if (DEBUG_RAW_EVENTS) {
-                    ALOGD("Recovered from input event buffer overrun.");
-                }
+                ALOGD_IF(debugRawEvents(), "Recovered from input event buffer overrun.");
             } else {
-                if (DEBUG_RAW_EVENTS) {
-                    ALOGD("Dropped input event while waiting for next input sync.");
-                }
+                ALOGD_IF(debugRawEvents(),
+                         "Dropped input event while waiting for next input sync.");
             }
         } else if (rawEvent->type == EV_SYN && rawEvent->code == SYN_DROPPED) {
             ALOGI("Detected input event buffer overrun for device %s.", getName().c_str());
@@ -455,7 +465,7 @@ InputDeviceInfo InputDevice::getDeviceInfo() {
                              mHasMic, getAssociatedDisplayId().value_or(ADISPLAY_ID_NONE));
 
     for_each_mapper(
-            [&outDeviceInfo](InputMapper& mapper) { mapper.populateDeviceInfo(&outDeviceInfo); });
+            [&outDeviceInfo](InputMapper& mapper) { mapper.populateDeviceInfo(outDeviceInfo); });
 
     if (mController) {
         mController->populateDeviceInfo(&outDeviceInfo);

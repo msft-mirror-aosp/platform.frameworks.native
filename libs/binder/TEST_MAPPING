@@ -52,6 +52,9 @@
       "name": "memunreachable_binder_test"
     },
     {
+      "name": "resolv_integration_test"
+    },
+    {
       "name": "libbinderthreadstateutils_test"
     },
     {
@@ -76,11 +79,23 @@
     },
     {
       "name": "rustBinderSerializationTest"
+    },
+    {
+      "name": "libbinder_ndk_bindgen_test"
+    },
+    {
+      "name": "libbinder_rpc_unstable_bindgen_test"
     }
   ],
   "presubmit-large": [
     {
       "name": "binderRpcTest"
+    },
+    {
+      "name": "CtsRootRollbackManagerHostTestCases"
+    },
+    {
+      "name": "StagedRollbackTest"
     },
     {
       "name": "binderRpcTestNoKernel"
@@ -95,6 +110,25 @@
   "hwasan-presubmit": [
     {
       "name": "binderLibTest"
+    }
+  ],
+  "kernel-presubmit": [
+    {
+      "name": "binderDriverInterfaceTest"
+    },
+    {
+      "name": "binderLibTest"
+    },
+    {
+      "name": "binderSafeInterfaceTest"
+    },
+    {
+      "name": "memunreachable_binder_test"
+    }
+  ],
+  "imports": [
+    {
+      "path": "packages/modules/Virtualization"
     }
   ]
 }

@@ -20,6 +20,7 @@
 #include <renderengine/LayerSettings.h>
 #include "LayerHierarchy.h"
 #include "RequestedLayerState.h"
+#include "Scheduler/LayerInfo.h"
 #include "android-base/stringprintf.h"
 
 namespace android::surfaceflinger::frontend {
@@ -39,6 +40,10 @@ struct RoundedCornerState {
     }
 };
 
+struct ChildState {
+    bool hasValidFrameRate = false;
+};
+
 // LayerSnapshot stores Layer state used by CompositionEngine and RenderEngine. Composition
 // Engine uses a pointer to LayerSnapshot (as LayerFECompositionState*) and the LayerSettings
 // passed to Render Engine are created using properties stored on this struct.
@@ -52,6 +57,12 @@ struct LayerSnapshot : public compositionengine::LayerFECompositionState {
     bool isHiddenByPolicyFromParent = false;
     bool isHiddenByPolicyFromRelativeParent = false;
     ftl::Flags<RequestedLayerState::Changes> changes;
+    // Some consumers of this snapshot (input, layer traces) rely on each snapshot to be unique.
+    // For mirrored layers, snapshots will have the same sequence so this unique id provides
+    // an alternative identifier when needed.
+    uint32_t uniqueSequence;
+    // Layer id used to create this snapshot. Multiple snapshots will have the same sequence if they
+    // generated from the same layer, for example when mirroring.
     int32_t sequence;
     std::string name;
     uint32_t textureName;
@@ -59,10 +70,10 @@ struct LayerSnapshot : public compositionengine::LayerFECompositionState {
     bool layerOpaqueFlagSet;
     RoundedCornerState roundedCorner;
     FloatRect transformedBounds;
+    Rect transformedBoundsWithoutTransparentRegion;
     renderengine::ShadowSettings shadowSettings;
     bool premultipliedAlpha;
     bool isHdrY410;
-    bool bufferNeedsFiltering;
     ui::Transform parentTransform;
     Rect bufferSize;
     Rect croppedBufferSize;
@@ -75,6 +86,18 @@ struct LayerSnapshot : public compositionengine::LayerFECompositionState {
     ui::Transform localTransform;
     gui::DropInputMode dropInputMode;
     bool isTrustedOverlay;
+    gui::GameMode gameMode;
+    scheduler::LayerInfo::FrameRate frameRate;
+    ui::Transform::RotationFlags fixedTransformHint;
+    std::optional<ui::Transform::RotationFlags> transformHint;
+    bool handleSkipScreenshotFlag = false;
+    int32_t frameRateSelectionPriority;
+    LayerHierarchy::TraversalPath mirrorRootPath;
+    bool unreachable = true;
+    uint32_t touchCropId;
+    uid_t uid;
+    pid_t pid;
+    ChildState childState;
 
     static bool isOpaqueFormat(PixelFormat format);
     static bool isTransformValid(const ui::Transform& t);
@@ -91,6 +114,8 @@ struct LayerSnapshot : public compositionengine::LayerFECompositionState {
     bool isHiddenByPolicy() const;
     std::string getDebugString() const;
     std::string getIsVisibleReason() const;
+    bool hasInputInfo() const;
+    FloatRect sourceBounds() const;
 };
 
 } // namespace android::surfaceflinger::frontend

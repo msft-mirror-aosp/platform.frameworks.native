@@ -20,6 +20,7 @@
 #include "Entry.h"
 
 #include <utils/Timers.h>
+#include <bitset>
 
 namespace android {
 namespace inputdispatcher {
@@ -32,9 +33,6 @@ class InputState {
 public:
     explicit InputState(const IdGenerator& idGenerator);
     ~InputState();
-
-    // Returns true if there is no state to be canceled.
-    bool isNeutral() const;
 
     // Returns true if the specified source is known to have received a hover enter
     // motion event.
@@ -128,7 +126,8 @@ private:
 
     // Synthesizes pointer cancel events for a particular set of pointers.
     std::vector<std::unique_ptr<MotionEntry>> synthesizeCancelationEventsForPointers(
-            const MotionMemento& memento, const BitSet32 pointerIds, nsecs_t currentTime);
+            const MotionMemento& memento, std::bitset<MAX_POINTER_ID + 1> pointerIds,
+            nsecs_t currentTime);
 };
 
 } // namespace inputdispatcher

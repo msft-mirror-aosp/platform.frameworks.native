@@ -14,17 +14,29 @@
  * limitations under the License.
  */
 
+#include <chrono>
+
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <gui/constants.h>
 #include <input/Input.h>
 #include <input/MotionPredictor.h>
 
+using namespace std::literals::chrono_literals;
+
 namespace android {
+
+using ::testing::IsEmpty;
+using ::testing::SizeIs;
+using ::testing::UnorderedElementsAre;
 
 constexpr int32_t DOWN = AMOTION_EVENT_ACTION_DOWN;
 constexpr int32_t MOVE = AMOTION_EVENT_ACTION_MOVE;
+constexpr int32_t UP = AMOTION_EVENT_ACTION_UP;
+constexpr nsecs_t NSEC_PER_MSEC = 1'000'000;
 
-static MotionEvent getMotionEvent(int32_t action, float x, float y, nsecs_t eventTime) {
+static MotionEvent getMotionEvent(int32_t action, float x, float y,
+                                  std::chrono::nanoseconds eventTime, int32_t deviceId = 0) {
     MotionEvent event;
     constexpr size_t pointerCount = 1;
     std::vector<PointerProperties> pointerProperties;
@@ -33,6 +45,7 @@ static MotionEvent getMotionEvent(int32_t action, float x, float y, nsecs_t even
         PointerProperties properties;
         properties.clear();
         properties.id = i;
+        properties.toolType = ToolType::STYLUS;
         pointerProperties.push_back(properties);
         PointerCoords coords;
         coords.clear();
@@ -42,48 +55,14 @@ static MotionEvent getMotionEvent(int32_t action, float x, float y, nsecs_t even
     }
 
     ui::Transform identityTransform;
-    event.initialize(InputEvent::nextId(), /*deviceId=*/0, AINPUT_SOURCE_STYLUS,
-                     ADISPLAY_ID_DEFAULT, {0}, action, /*actionButton=*/0, /*flags=*/0,
-                     AMOTION_EVENT_EDGE_FLAG_NONE, AMETA_NONE, /*buttonState=*/0,
-                     MotionClassification::NONE, identityTransform, /*xPrecision=*/0.1,
+    event.initialize(InputEvent::nextId(), deviceId, AINPUT_SOURCE_STYLUS, ADISPLAY_ID_DEFAULT, {0},
+                     action, /*actionButton=*/0, /*flags=*/0, AMOTION_EVENT_EDGE_FLAG_NONE,
+                     AMETA_NONE, /*buttonState=*/0, MotionClassification::NONE, identityTransform,
+                     /*xPrecision=*/0.1,
                      /*yPrecision=*/0.2, /*xCursorPosition=*/280, /*yCursorPosition=*/540,
-                     identityTransform, /*downTime=*/100, eventTime, pointerCount,
+                     identityTransform, /*downTime=*/100, eventTime.count(), pointerCount,
                      pointerProperties.data(), pointerCoords.data());
     return event;
-}
-
-/**
- * A linear motion should be predicted to be linear in the future
- */
-TEST(MotionPredictorTest, LinearPrediction) {
-    MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/0,
-                              []() { return true /*enable prediction*/; });
-
-    predictor.record(getMotionEvent(DOWN, 0, 1, 0));
-    predictor.record(getMotionEvent(MOVE, 1, 3, 10));
-    predictor.record(getMotionEvent(MOVE, 2, 5, 20));
-    predictor.record(getMotionEvent(MOVE, 3, 7, 30));
-    std::vector<std::unique_ptr<MotionEvent>> predicted = predictor.predict(40);
-    ASSERT_EQ(1u, predicted.size());
-    ASSERT_EQ(predicted[0]->getX(0), 4);
-    ASSERT_EQ(predicted[0]->getY(0), 9);
-}
-
-/**
- * A still motion should be predicted to remain still
- */
-TEST(MotionPredictorTest, StationaryPrediction) {
-    MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/0,
-                              []() { return true /*enable prediction*/; });
-
-    predictor.record(getMotionEvent(DOWN, 0, 1, 0));
-    predictor.record(getMotionEvent(MOVE, 0, 1, 10));
-    predictor.record(getMotionEvent(MOVE, 0, 1, 20));
-    predictor.record(getMotionEvent(MOVE, 0, 1, 30));
-    std::vector<std::unique_ptr<MotionEvent>> predicted = predictor.predict(40);
-    ASSERT_EQ(1u, predicted.size());
-    ASSERT_EQ(predicted[0]->getX(0), 0);
-    ASSERT_EQ(predicted[0]->getY(0), 1);
 }
 
 TEST(MotionPredictorTest, IsPredictionAvailable) {
@@ -96,20 +75,65 @@ TEST(MotionPredictorTest, IsPredictionAvailable) {
 TEST(MotionPredictorTest, Offset) {
     MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/1,
                               []() { return true /*enable prediction*/; });
-    predictor.record(getMotionEvent(DOWN, 0, 1, 30));
-    predictor.record(getMotionEvent(MOVE, 0, 1, 35));
-    std::vector<std::unique_ptr<MotionEvent>> predicted = predictor.predict(40);
-    ASSERT_EQ(1u, predicted.size());
-    ASSERT_GE(predicted[0]->getEventTime(), 41);
+    predictor.record(getMotionEvent(DOWN, 0, 1, 30ms));
+    predictor.record(getMotionEvent(MOVE, 0, 2, 35ms));
+    std::unique_ptr<MotionEvent> predicted = predictor.predict(40 * NSEC_PER_MSEC);
+    ASSERT_NE(nullptr, predicted);
+    ASSERT_GE(predicted->getEventTime(), 41);
+}
+
+TEST(MotionPredictorTest, FollowsGesture) {
+    MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/0,
+                              []() { return true /*enable prediction*/; });
+
+    // MOVE without a DOWN is ignored.
+    predictor.record(getMotionEvent(MOVE, 1, 3, 10ms));
+    EXPECT_EQ(nullptr, predictor.predict(20 * NSEC_PER_MSEC));
+
+    predictor.record(getMotionEvent(DOWN, 2, 5, 20ms));
+    predictor.record(getMotionEvent(MOVE, 2, 7, 30ms));
+    predictor.record(getMotionEvent(MOVE, 3, 9, 40ms));
+    EXPECT_NE(nullptr, predictor.predict(50 * NSEC_PER_MSEC));
+
+    predictor.record(getMotionEvent(UP, 4, 11, 50ms));
+    EXPECT_EQ(nullptr, predictor.predict(20 * NSEC_PER_MSEC));
+}
+
+TEST(MotionPredictorTest, MultipleDevicesNotSupported) {
+    MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/0,
+                              []() { return true /*enable prediction*/; });
+
+    ASSERT_TRUE(predictor.record(getMotionEvent(DOWN, 1, 3, 0ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 1, 3, 10ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 2, 5, 20ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 3, 7, 30ms, /*deviceId=*/0)).ok());
+
+    ASSERT_FALSE(predictor.record(getMotionEvent(DOWN, 100, 300, 40ms, /*deviceId=*/1)).ok());
+    ASSERT_FALSE(predictor.record(getMotionEvent(MOVE, 100, 300, 50ms, /*deviceId=*/1)).ok());
+}
+
+TEST(MotionPredictorTest, IndividualGesturesFromDifferentDevicesAreSupported) {
+    MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/0,
+                              []() { return true /*enable prediction*/; });
+
+    ASSERT_TRUE(predictor.record(getMotionEvent(DOWN, 1, 3, 0ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 1, 3, 10ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 2, 5, 20ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(UP, 2, 5, 30ms, /*deviceId=*/0)).ok());
+
+    // Now, send a gesture from a different device. Since we have no active gesture, the new gesture
+    // should be processed correctly.
+    ASSERT_TRUE(predictor.record(getMotionEvent(DOWN, 100, 300, 40ms, /*deviceId=*/1)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 100, 300, 50ms, /*deviceId=*/1)).ok());
 }
 
 TEST(MotionPredictorTest, FlagDisablesPrediction) {
     MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/0,
                               []() { return false /*disable prediction*/; });
-    predictor.record(getMotionEvent(DOWN, 0, 1, 30));
-    predictor.record(getMotionEvent(MOVE, 0, 1, 35));
-    std::vector<std::unique_ptr<MotionEvent>> predicted = predictor.predict(40);
-    ASSERT_EQ(0u, predicted.size());
+    predictor.record(getMotionEvent(DOWN, 0, 1, 30ms));
+    predictor.record(getMotionEvent(MOVE, 0, 1, 35ms));
+    std::unique_ptr<MotionEvent> predicted = predictor.predict(40 * NSEC_PER_MSEC);
+    ASSERT_EQ(nullptr, predicted);
     ASSERT_FALSE(predictor.isPredictionAvailable(/*deviceId=*/1, AINPUT_SOURCE_STYLUS));
     ASSERT_FALSE(predictor.isPredictionAvailable(/*deviceId=*/1, AINPUT_SOURCE_TOUCHSCREEN));
 }

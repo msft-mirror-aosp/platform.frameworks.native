@@ -186,6 +186,7 @@ void add_mountinfo();
 #define SYSTEM_TRACE_SNAPSHOT "/data/misc/perfetto-traces/bugreport/systrace.pftrace"
 #define CGROUPFS_DIR "/sys/fs/cgroup"
 #define SDK_EXT_INFO "/apex/com.android.sdkext/bin/derive_sdk"
+#define DROPBOX_DIR "/data/system/dropbox"
 
 // TODO(narayan): Since this information has to be kept in sync
 // with tombstoned, we should just put it in a common header.
@@ -526,6 +527,15 @@ static bool skip_not_stat(const char *path) {
     return strcmp(path + len - sizeof(stat) + 1, stat); /* .../stat? */
 }
 
+static bool skip_wtf_strictmode(const char *path) {
+    if (strstr(path, "_wtf")) {
+        return true;
+    } else if (strstr(path, "_strictmode")) {
+        return true;
+    }
+    return false;
+}
+
 static bool skip_none(const char* path __attribute__((unused))) {
     return false;
 }
@@ -806,6 +816,8 @@ void Dumpstate::PrintHeader() const {
     printf("Kernel: ");
     DumpFileToFd(STDOUT_FILENO, "", "/proc/version");
     printf("Command line: %s\n", strtok(cmdline_buf, "\n"));
+    printf("Bootconfig: ");
+    DumpFileToFd(STDOUT_FILENO, "", "/proc/bootconfig");
     printf("Uptime: ");
     RunCommandToFd(STDOUT_FILENO, "", {"uptime", "-p"},
                    CommandOptions::WithTimeout(1).Always().Build());
@@ -1244,8 +1256,10 @@ static Dumpstate::RunStatus RunDumpsysTextByPriority(const std::string& title, i
              dumpsys.writeDumpHeader(STDOUT_FILENO, service, priority);
              dumpsys.writeDumpFooter(STDOUT_FILENO, service, std::chrono::milliseconds(1));
         } else {
-            status_t status = dumpsys.startDumpThread(Dumpsys::TYPE_DUMP, service, args);
-            if (status == OK) {
+             status_t status = dumpsys.startDumpThread(Dumpsys::TYPE_DUMP | Dumpsys::TYPE_PID |
+                                                       Dumpsys::TYPE_CLIENTS | Dumpsys::TYPE_THREAD,
+                                                       service, args);
+             if (status == OK) {
                 dumpsys.writeDumpHeader(STDOUT_FILENO, service, priority);
                 std::chrono::duration<double> elapsed_seconds;
                 if (priority == IServiceManager::DUMP_FLAG_PRIORITY_HIGH &&
@@ -1262,6 +1276,9 @@ static Dumpstate::RunStatus RunDumpsysTextByPriority(const std::string& title, i
                 dumpsys.writeDumpFooter(STDOUT_FILENO, service, elapsed_seconds);
                 bool dump_complete = (status == OK);
                 dumpsys.stopDumpThread(dump_complete);
+            } else {
+                MYLOGE("Failed to start dump thread for service: %s, status: %d",
+                       String8(service).c_str(), status);
             }
         }
 
@@ -1892,9 +1909,17 @@ Dumpstate::RunStatus Dumpstate::DumpstateDefaultAfterCritical() {
     }
     ds.AddDir(PREREBOOT_DATA_DIR, false);
     add_mountinfo();
+    for (const char* path : {"/proc/cpuinfo", "/proc/meminfo"}) {
+        ds.AddZipEntry(ZIP_ROOT_DIR + path, path);
+    }
     DumpIpTablesAsRoot();
     DumpDynamicPartitionInfo();
     ds.AddDir(OTA_METADATA_DIR, true);
+    if (!PropertiesHelper::IsUserBuild()) {
+        // Include dropbox entry files inside ZIP, but exclude
+        // noisy WTF and StrictMode entries
+        dump_files("", DROPBOX_DIR, skip_wtf_strictmode, _add_file_from_fd);
+    }
 
     // Capture any IPSec policies in play. No keys are exposed here.
     RunCommand("IP XFRM POLICY", {"ip", "xfrm", "policy"}, CommandOptions::WithTimeout(10).Build());
@@ -2046,6 +2071,10 @@ static void DumpstateTelephonyOnly(const std::string& calling_package) {
     RunDumpsys("DUMPSYS", {"network_management"}, CommandOptions::WithTimeout(90).Build(),
                SEC_TO_MSEC(10));
     RunDumpsys("DUMPSYS", {"telephony.registry"}, CommandOptions::WithTimeout(90).Build(),
+               SEC_TO_MSEC(10));
+    RunDumpsys("DUMPSYS", {"isub"}, CommandOptions::WithTimeout(90).Build(),
+               SEC_TO_MSEC(10));
+    RunDumpsys("DUMPSYS", {"telecom"}, CommandOptions::WithTimeout(90).Build(),
                SEC_TO_MSEC(10));
     if (include_sensitive_info) {
         // Contains raw IP addresses, omit from reports on user builds.
@@ -2207,8 +2236,7 @@ Dumpstate::RunStatus Dumpstate::DumpTraces(const char** path) {
 
         const uint64_t start = Nanotime();
         const int ret = dump_backtrace_to_file_timeout(
-            pid, is_java_process ? kDebuggerdJavaBacktrace : kDebuggerdNativeBacktrace,
-            is_java_process ? 5 : 20, fd);
+            pid, is_java_process ? kDebuggerdJavaBacktrace : kDebuggerdNativeBacktrace, 3, fd);
 
         if (ret == -1) {
             // For consistency, the header and footer to this message match those
@@ -2787,6 +2815,7 @@ static void SetOptionsFromMode(Dumpstate::BugreportMode mode, Dumpstate::DumpOpt
             options->do_screenshot = false;
             break;
         case Dumpstate::BugreportMode::BUGREPORT_WEAR:
+            options->do_vibrate = false;
             options->do_progress_updates = true;
             options->do_screenshot = is_screenshot_requested;
             break;
@@ -2825,6 +2854,7 @@ void Dumpstate::DumpOptions::Initialize(BugreportMode bugreport_mode,
                                         const android::base::unique_fd& screenshot_fd_in,
                                         bool is_screenshot_requested) {
     this->use_predumped_ui_data = bugreport_flags & BugreportFlag::BUGREPORT_USE_PREDUMPED_UI_DATA;
+    this->is_consent_deferred = bugreport_flags & BugreportFlag::BUGREPORT_FLAG_DEFER_CONSENT;
     // Duplicate the fds because the passed in fds don't outlive the binder transaction.
     bugreport_fd.reset(fcntl(bugreport_fd_in.get(), F_DUPFD_CLOEXEC, 0));
     screenshot_fd.reset(fcntl(screenshot_fd_in.get(), F_DUPFD_CLOEXEC, 0));
@@ -2907,10 +2937,64 @@ void Dumpstate::Initialize() {
 
 Dumpstate::RunStatus Dumpstate::Run(int32_t calling_uid, const std::string& calling_package) {
     Dumpstate::RunStatus status = RunInternal(calling_uid, calling_package);
-    if (listener_ != nullptr) {
+    HandleRunStatus(status);
+    return status;
+}
+
+Dumpstate::RunStatus Dumpstate::Retrieve(int32_t calling_uid, const std::string& calling_package) {
+    Dumpstate::RunStatus status = RetrieveInternal(calling_uid, calling_package);
+    HandleRunStatus(status);
+    return status;
+}
+
+Dumpstate::RunStatus  Dumpstate::RetrieveInternal(int32_t calling_uid,
+                                                  const std::string& calling_package) {
+  consent_callback_ = new ConsentCallback();
+  const String16 incidentcompanion("incidentcompanion");
+  sp<android::IBinder> ics(
+      defaultServiceManager()->checkService(incidentcompanion));
+  android::String16 package(calling_package.c_str());
+  if (ics != nullptr) {
+    MYLOGD("Checking user consent via incidentcompanion service\n");
+    android::interface_cast<android::os::IIncidentCompanion>(ics)->authorizeReport(
+        calling_uid, package, String16(), String16(),
+        0x1 /* FLAG_CONFIRMATION_DIALOG */, consent_callback_.get());
+  } else {
+    MYLOGD(
+        "Unable to check user consent; incidentcompanion service unavailable\n");
+    return RunStatus::USER_CONSENT_TIMED_OUT;
+  }
+  UserConsentResult consent_result = consent_callback_->getResult();
+  int timeout_ms = 30 * 1000;
+  while (consent_result == UserConsentResult::UNAVAILABLE &&
+      consent_callback_->getElapsedTimeMs() < timeout_ms) {
+    sleep(1);
+    consent_result = consent_callback_->getResult();
+  }
+  if (consent_result == UserConsentResult::DENIED) {
+    return RunStatus::USER_CONSENT_DENIED;
+  }
+  if (consent_result == UserConsentResult::UNAVAILABLE) {
+    MYLOGD("Canceling user consent request via incidentcompanion service\n");
+    android::interface_cast<android::os::IIncidentCompanion>(ics)->cancelAuthorization(
+        consent_callback_.get());
+    return RunStatus::USER_CONSENT_TIMED_OUT;
+  }
+
+  bool copy_succeeded =
+      android::os::CopyFileToFd(path_, options_->bugreport_fd.get());
+  if (copy_succeeded) {
+    android::os::UnlinkAndLogOnError(path_);
+  }
+  return copy_succeeded ? Dumpstate::RunStatus::OK
+                        : Dumpstate::RunStatus::ERROR;
+}
+
+void Dumpstate::HandleRunStatus(Dumpstate::RunStatus status) {
+      if (listener_ != nullptr) {
         switch (status) {
             case Dumpstate::RunStatus::OK:
-                listener_->onFinished();
+                listener_->onFinished(path_.c_str());
                 break;
             case Dumpstate::RunStatus::HELP:
                 break;
@@ -2928,9 +3012,7 @@ Dumpstate::RunStatus Dumpstate::Run(int32_t calling_uid, const std::string& call
                 break;
         }
     }
-    return status;
 }
-
 void Dumpstate::Cancel() {
     CleanupTmpFiles();
     android::os::UnlinkAndLogOnError(log_path_);
@@ -3181,7 +3263,7 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
 
     // Share the final file with the caller if the user has consented or Shell is the caller.
     Dumpstate::RunStatus status = Dumpstate::RunStatus::OK;
-    if (CalledByApi()) {
+    if (CalledByApi() && !options_->is_consent_deferred) {
         status = CopyBugreportIfUserConsented(calling_uid);
         if (status != Dumpstate::RunStatus::OK &&
             status != Dumpstate::RunStatus::USER_CONSENT_TIMED_OUT) {
@@ -3270,8 +3352,16 @@ void Dumpstate::MaybeSnapshotUiTraces() {
         return;
     }
 
-    // Currently WindowManagerService and InputMethodManagerSerivice support WinScope protocol.
-    for (const auto& service : {"input_method", "window"}) {
+    // Include the proto logging from WMShell.
+    RunCommand(
+        // Empty name because it's not intended to be classified as a bugreport section.
+        // Actual logging files can be found as "/data/misc/wmtrace/shell_log.winscope"
+        // in the bugreport.
+        "", {"dumpsys", "activity", "service", "SystemUIService",
+             "WMShell", "protolog", "save-for-bugreport"},
+        CommandOptions::WithTimeout(10).Always().DropRoot().RedirectStderr().Build());
+
+    for (const auto& service : {"input_method", "window", "window shell"}) {
         RunCommand(
             // Empty name because it's not intended to be classified as a bugreport section.
             // Actual tracing files can be found in "/data/misc/wmtrace/" in the bugreport.
@@ -3326,9 +3416,11 @@ void Dumpstate::onUiIntensiveBugreportDumpsFinished(int32_t calling_uid) {
 }
 
 void Dumpstate::MaybeCheckUserConsent(int32_t calling_uid, const std::string& calling_package) {
-    if (multiuser_get_app_id(calling_uid) == AID_SHELL || !CalledByApi()) {
-        // No need to get consent for shell triggered dumpstates, or not through
-        // bugreporting API (i.e. no fd to copy back).
+    if (multiuser_get_app_id(calling_uid) == AID_SHELL ||
+        !CalledByApi() || options_->is_consent_deferred) {
+        // No need to get consent for shell triggered dumpstates, or not
+        // through bugreporting API (i.e. no fd to copy back), or when consent
+        // is deferred.
         return;
     }
     consent_callback_ = new ConsentCallback();

@@ -208,6 +208,12 @@ public:
         return ::ndk::ScopedAStatus::ok();
     }
 
+    ::ndk::ScopedAStatus onRefreshRateChangedDebug(
+            const RefreshRateChangedDebugData& refreshRateChangedDebugData) override {
+        mCallback.onRefreshRateChangedDebug(refreshRateChangedDebugData);
+        return ::ndk::ScopedAStatus::ok();
+    }
+
 private:
     HWC2::ComposerCallback& mCallback;
 };
@@ -1411,10 +1417,25 @@ Error AidlComposer::getHdrConversionCapabilities(
     return Error::NONE;
 }
 
-Error AidlComposer::setHdrConversionStrategy(AidlHdrConversionStrategy hdrConversionStrategy) {
-    const auto status = mAidlComposerClient->setHdrConversionStrategy(hdrConversionStrategy);
+Error AidlComposer::setHdrConversionStrategy(AidlHdrConversionStrategy hdrConversionStrategy,
+                                             Hdr* outPreferredHdrOutputType) {
+    const auto status = mAidlComposerClient->setHdrConversionStrategy(hdrConversionStrategy,
+                                                                      outPreferredHdrOutputType);
     if (!status.isOk()) {
         ALOGE("setHdrConversionStrategy failed %s", status.getDescription().c_str());
+        return static_cast<Error>(status.getServiceSpecificError());
+    }
+    return Error::NONE;
+}
+
+Error AidlComposer::setRefreshRateChangedCallbackDebugEnabled(Display displayId, bool enabled) {
+    const auto status =
+            mAidlComposerClient->setRefreshRateChangedCallbackDebugEnabled(translate<int64_t>(
+                                                                                   displayId),
+                                                                           enabled);
+    if (!status.isOk()) {
+        ALOGE("setRefreshRateChangedCallbackDebugEnabled failed %s",
+              status.getDescription().c_str());
         return static_cast<Error>(status.getServiceSpecificError());
     }
     return Error::NONE;
@@ -1526,6 +1547,8 @@ void AidlComposer::onHotplugDisconnect(Display display) {
 }
 
 bool AidlComposer::hasMultiThreadedPresentSupport(Display display) {
+#if 0
+    // TODO (b/259132483): Reenable
     const auto displayId = translate<int64_t>(display);
     std::vector<AidlDisplayCapability> capabilities;
     const auto status = mAidlComposerClient->getDisplayCapabilities(displayId, &capabilities);
@@ -1535,6 +1558,10 @@ bool AidlComposer::hasMultiThreadedPresentSupport(Display display) {
     }
     return std::find(capabilities.begin(), capabilities.end(),
                      AidlDisplayCapability::MULTI_THREADED_PRESENT) != capabilities.end();
+#else
+    (void) display;
+    return false;
+#endif
 }
 
 void AidlComposer::addReader(Display display) {

@@ -99,7 +99,7 @@ public:
                 ::testing::UnitTest::GetInstance()->current_test_info();
         ALOGD("**** Setting up for %s.%s\n", test_info->test_case_name(), test_info->name());
 
-        setupScheduler();
+        mFlinger.setupMockScheduler({.displayId = DEFAULT_DISPLAY_ID});
 
         EXPECT_CALL(*mNativeWindow, query(NATIVE_WINDOW_WIDTH, _))
                 .WillRepeatedly(DoAll(SetArgPointee<1>(DEFAULT_DISPLAY_WIDTH), Return(0)));
@@ -120,36 +120,6 @@ public:
         const ::testing::TestInfo* const test_info =
                 ::testing::UnitTest::GetInstance()->current_test_info();
         ALOGD("**** Tearing down after %s.%s\n", test_info->test_case_name(), test_info->name());
-    }
-
-    void setupScheduler() {
-        auto eventThread = std::make_unique<mock::EventThread>();
-        auto sfEventThread = std::make_unique<mock::EventThread>();
-
-        EXPECT_CALL(*eventThread, registerDisplayEventConnection(_));
-        EXPECT_CALL(*eventThread, createEventConnection(_, _))
-                .WillOnce(Return(sp<EventThreadConnection>::make(eventThread.get(),
-                                                                 mock::EventThread::kCallingUid,
-                                                                 ResyncCallback())));
-
-        EXPECT_CALL(*sfEventThread, registerDisplayEventConnection(_));
-        EXPECT_CALL(*sfEventThread, createEventConnection(_, _))
-                .WillOnce(Return(sp<EventThreadConnection>::make(sfEventThread.get(),
-                                                                 mock::EventThread::kCallingUid,
-                                                                 ResyncCallback())));
-
-        auto vsyncController = std::make_unique<mock::VsyncController>();
-        auto vsyncTracker = std::make_unique<mock::VSyncTracker>();
-
-        EXPECT_CALL(*vsyncTracker, nextAnticipatedVSyncTimeFrom(_)).WillRepeatedly(Return(0));
-        EXPECT_CALL(*vsyncTracker, currentPeriod())
-                .WillRepeatedly(Return(FakeHwcDisplayInjector::DEFAULT_VSYNC_PERIOD));
-        EXPECT_CALL(*vsyncTracker, nextAnticipatedVSyncTimeFrom(_)).WillRepeatedly(Return(0));
-
-        mFlinger.setupScheduler(std::move(vsyncController), std::move(vsyncTracker),
-                                std::move(eventThread), std::move(sfEventThread),
-                                TestableSurfaceFlinger::SchedulerCallbackImpl::kNoOp,
-                                TestableSurfaceFlinger::kTwoDisplayModes);
     }
 
     void setupForceGeometryDirty() {
@@ -176,7 +146,6 @@ public:
     bool mDisplayOff = false;
     TestableSurfaceFlinger mFlinger;
     sp<DisplayDevice> mDisplay;
-    sp<DisplayDevice> mExternalDisplay;
     sp<compositionengine::mock::DisplaySurface> mDisplaySurface =
             sp<compositionengine::mock::DisplaySurface>::make();
     sp<mock::NativeWindow> mNativeWindow = sp<mock::NativeWindow>::make();
@@ -235,8 +204,10 @@ void CompositionTest::captureScreenComposition() {
 
     auto traverseLayers = [this](const LayerVector::Visitor& visitor) {
         return mFlinger.traverseLayersInLayerStack(mDisplay->getLayerStack(),
-                                                   CaptureArgs::UNSET_UID, visitor);
+                                                   CaptureArgs::UNSET_UID, {}, visitor);
     };
+
+    auto getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
 
     const uint32_t usage = GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN |
             GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
@@ -246,7 +217,7 @@ void CompositionTest::captureScreenComposition() {
                                                                       HAL_PIXEL_FORMAT_RGBA_8888, 1,
                                                                       usage);
 
-    auto future = mFlinger.renderScreenImpl(std::move(renderArea), traverseLayers,
+    auto future = mFlinger.renderScreenImpl(std::move(renderArea), getLayerSnapshots,
                                             mCaptureScreenBuffer, forSystem, regionSampling);
     ASSERT_TRUE(future.valid());
     const auto fenceResult = future.get();
@@ -313,13 +284,16 @@ struct BaseDisplayVariant {
         constexpr auto kDisplayConnectionType = ui::DisplayConnectionType::Internal;
         constexpr bool kIsPrimary = true;
 
-        test->mDisplay = FakeDisplayDeviceInjector(test->mFlinger, compositionDisplay,
-                                                   kDisplayConnectionType, HWC_DISPLAY, kIsPrimary)
-                                 .setDisplaySurface(test->mDisplaySurface)
-                                 .setNativeWindow(test->mNativeWindow)
-                                 .setSecure(Derived::IS_SECURE)
-                                 .setPowerMode(Derived::INIT_POWER_MODE)
-                                 .inject();
+        test->mDisplay =
+                FakeDisplayDeviceInjector(test->mFlinger, compositionDisplay,
+                                          kDisplayConnectionType, HWC_DISPLAY, kIsPrimary)
+                        .setDisplaySurface(test->mDisplaySurface)
+                        .setNativeWindow(test->mNativeWindow)
+                        .setSecure(Derived::IS_SECURE)
+                        .setPowerMode(Derived::INIT_POWER_MODE)
+                        .setRefreshRateSelector(test->mFlinger.scheduler()->refreshRateSelector())
+                        .skipRegisterDisplay()
+                        .inject();
         Mock::VerifyAndClear(test->mNativeWindow.get());
 
         constexpr bool kIsInternal = kDisplayConnectionType == ui::DisplayConnectionType::Internal;
@@ -631,7 +605,7 @@ struct BaseLayerProperties {
                     EXPECT_EQ(false, layer.source.buffer.isOpaque);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.x);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.y);
-                    EXPECT_EQ(ui::Dataspace::UNKNOWN, layer.sourceDataspace);
+                    EXPECT_EQ(ui::Dataspace::V0_SRGB, layer.sourceDataspace);
                     EXPECT_EQ(LayerProperties::COLOR[3], layer.alpha);
                     return resultFuture;
                 });
@@ -680,7 +654,7 @@ struct BaseLayerProperties {
                               layer.source.solidColor);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.x);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.y);
-                    EXPECT_EQ(ui::Dataspace::UNKNOWN, layer.sourceDataspace);
+                    EXPECT_EQ(ui::Dataspace::V0_SRGB, layer.sourceDataspace);
                     EXPECT_EQ(LayerProperties::COLOR[3], layer.alpha);
                     return resultFuture;
                 });
@@ -757,7 +731,7 @@ struct CommonSecureLayerProperties : public BaseLayerProperties<LayerProperties>
                     EXPECT_EQ(half3(0.0f, 0.0f, 0.0f), layer.source.solidColor);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.x);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.y);
-                    EXPECT_EQ(ui::Dataspace::UNKNOWN, layer.sourceDataspace);
+                    EXPECT_EQ(ui::Dataspace::V0_SRGB, layer.sourceDataspace);
                     EXPECT_EQ(1.0f, layer.alpha);
                     return resultFuture;
                 });

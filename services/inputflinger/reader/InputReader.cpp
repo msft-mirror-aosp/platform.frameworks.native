@@ -146,7 +146,7 @@ void InputReader::loopOnce() {
         if (mNextTimeout != LLONG_MAX) {
             nsecs_t now = systemTime(SYSTEM_TIME_MONOTONIC);
             if (now >= mNextTimeout) {
-                if (DEBUG_RAW_EVENTS) {
+                if (debugRawEvents()) {
                     ALOGD("Timeout expired, latency=%0.3fms", (now - mNextTimeout) * 0.000001f);
                 }
                 mNextTimeout = LLONG_MAX;
@@ -199,7 +199,7 @@ std::list<NotifyArgs> InputReader::processEventsLocked(const RawEvent* rawEvents
                 }
                 batchSize += 1;
             }
-            if (DEBUG_RAW_EVENTS) {
+            if (debugRawEvents()) {
                 ALOGD("BatchSize: %zu Count: %zu", batchSize, count);
             }
             out += processEventsForDeviceLocked(deviceId, rawEvent, batchSize);
@@ -926,6 +926,10 @@ bool InputReader::canDispatchToDisplay(int32_t deviceId, int32_t displayId) {
     }
 
     return *associatedDisplayId == displayId;
+}
+
+void InputReader::sysfsNodeChanged(const std::string& sysfsNodePath) {
+    mEventHub->sysfsNodeChanged(sysfsNodePath);
 }
 
 void InputReader::dump(std::string& dump) {

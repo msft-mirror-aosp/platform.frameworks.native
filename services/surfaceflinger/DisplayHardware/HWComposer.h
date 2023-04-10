@@ -44,6 +44,7 @@
 #include "Hal.h"
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
+#include <aidl/android/hardware/graphics/common/Hdr.h>
 #include <aidl/android/hardware/graphics/common/HdrConversionCapability.h>
 #include <aidl/android/hardware/graphics/common/HdrConversionStrategy.h>
 #include <aidl/android/hardware/graphics/composer3/Capability.h>
@@ -142,17 +143,16 @@ public:
     // expected.
     virtual status_t getDeviceCompositionChanges(
             HalDisplayId, bool frameUsesClientComposition,
-            std::chrono::steady_clock::time_point earliestPresentTime,
-            const std::shared_ptr<FenceTime>& previousPresentFence, nsecs_t expectedPresentTime,
-            std::optional<DeviceRequestedChanges>* outChanges) = 0;
+            std::optional<std::chrono::steady_clock::time_point> earliestPresentTime,
+            nsecs_t expectedPresentTime, std::optional<DeviceRequestedChanges>* outChanges) = 0;
 
     virtual status_t setClientTarget(HalDisplayId, uint32_t slot, const sp<Fence>& acquireFence,
                                      const sp<GraphicBuffer>& target, ui::Dataspace) = 0;
 
     // Present layers to the display and read releaseFences.
     virtual status_t presentAndGetReleaseFences(
-            HalDisplayId, std::chrono::steady_clock::time_point earliestPresentTime,
-            const std::shared_ptr<FenceTime>& previousPresentFence) = 0;
+            HalDisplayId,
+            std::optional<std::chrono::steady_clock::time_point> earliestPresentTime) = 0;
 
     // set power mode
     virtual status_t setPowerMode(PhysicalDisplayId, hal::PowerMode) = 0;
@@ -221,7 +221,10 @@ public:
     // TODO(b/157555476): Remove when the framework has proper support for headless mode
     virtual bool updatesDeviceProductInfoOnHotplugReconnect() const = 0;
 
-    virtual bool onVsync(hal::HWDisplayId, nsecs_t timestamp) = 0;
+    // Called when a vsync happens. If the vsync is valid, returns the
+    // corresponding PhysicalDisplayId. Otherwise returns nullopt.
+    virtual std::optional<PhysicalDisplayId> onVsync(hal::HWDisplayId, nsecs_t timestamp) = 0;
+
     virtual void setVsyncEnabled(PhysicalDisplayId, hal::Vsync enabled) = 0;
 
     virtual bool isConnected(PhysicalDisplayId) const = 0;
@@ -291,7 +294,9 @@ public:
     virtual std::vector<aidl::android::hardware::graphics::common::HdrConversionCapability>
     getHdrConversionCapabilities() const = 0;
     virtual status_t setHdrConversionStrategy(
-            aidl::android::hardware::graphics::common::HdrConversionStrategy) = 0;
+            aidl::android::hardware::graphics::common::HdrConversionStrategy,
+            aidl::android::hardware::graphics::common::Hdr*) = 0;
+    virtual status_t setRefreshRateChangedCallbackDebugEnabled(PhysicalDisplayId, bool enabled) = 0;
 };
 
 static inline bool operator==(const android::HWComposer::DeviceRequestedChanges& lhs,
@@ -333,8 +338,8 @@ public:
 
     status_t getDeviceCompositionChanges(
             HalDisplayId, bool frameUsesClientComposition,
-            std::chrono::steady_clock::time_point earliestPresentTime,
-            const std::shared_ptr<FenceTime>& previousPresentFence, nsecs_t expectedPresentTime,
+            std::optional<std::chrono::steady_clock::time_point> earliestPresentTime,
+            nsecs_t expectedPresentTime,
             std::optional<DeviceRequestedChanges>* outChanges) override;
 
     status_t setClientTarget(HalDisplayId, uint32_t slot, const sp<Fence>& acquireFence,
@@ -342,8 +347,8 @@ public:
 
     // Present layers to the display and read releaseFences.
     status_t presentAndGetReleaseFences(
-            HalDisplayId, std::chrono::steady_clock::time_point earliestPresentTime,
-            const std::shared_ptr<FenceTime>& previousPresentFence) override;
+            HalDisplayId,
+            std::optional<std::chrono::steady_clock::time_point> earliestPresentTime) override;
 
     // set power mode
     status_t setPowerMode(PhysicalDisplayId, hal::PowerMode mode) override;
@@ -402,7 +407,7 @@ public:
 
     bool updatesDeviceProductInfoOnHotplugReconnect() const override;
 
-    bool onVsync(hal::HWDisplayId, nsecs_t timestamp) override;
+    std::optional<PhysicalDisplayId> onVsync(hal::HWDisplayId, nsecs_t timestamp) override;
     void setVsyncEnabled(PhysicalDisplayId, hal::Vsync enabled) override;
 
     bool isConnected(PhysicalDisplayId) const override;
@@ -446,7 +451,9 @@ public:
     std::vector<aidl::android::hardware::graphics::common::HdrConversionCapability>
     getHdrConversionCapabilities() const override;
     status_t setHdrConversionStrategy(
-            aidl::android::hardware::graphics::common::HdrConversionStrategy) override;
+            aidl::android::hardware::graphics::common::HdrConversionStrategy,
+            aidl::android::hardware::graphics::common::Hdr*) override;
+    status_t setRefreshRateChangedCallbackDebugEnabled(PhysicalDisplayId, bool enabled) override;
 
     // for debugging ----------------------------------------------------------
     void dump(std::string& out) const override;

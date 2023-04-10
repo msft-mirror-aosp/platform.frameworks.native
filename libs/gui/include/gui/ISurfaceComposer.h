@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <android/gui/CachingHint.h>
 #include <android/gui/DisplayBrightness.h>
 #include <android/gui/FrameTimelineInfo.h>
 #include <android/gui/IDisplayEventConnection.h>
@@ -113,8 +114,9 @@ public:
             const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& state,
             const Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
             const InputWindowCommands& inputWindowCommands, int64_t desiredPresentTime,
-            bool isAutoTimestamp, const client_cache_t& uncacheBuffer, bool hasListenerCallbacks,
-            const std::vector<ListenerCallbacks>& listenerCallbacks, uint64_t transactionId) = 0;
+            bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffer,
+            bool hasListenerCallbacks, const std::vector<ListenerCallbacks>& listenerCallbacks,
+            uint64_t transactionId) = 0;
 };
 
 // ----------------------------------------------------------------------------

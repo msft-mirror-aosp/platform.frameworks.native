@@ -117,7 +117,15 @@ int RpcServerTrusty::handleConnect(const tipc_port* port, handle_t chan, const u
         *ctx_p = channelContext;
     };
 
-    base::unique_fd clientFd(chan);
+    // We need to duplicate the channel handle here because the tipc library
+    // owns the original handle and closes is automatically on channel cleanup.
+    // We use dup() because Trusty does not have fcntl().
+    // NOLINTNEXTLINE(android-cloexec-dup)
+    handle_t chanDup = dup(chan);
+    if (chanDup < 0) {
+        return chanDup;
+    }
+    base::unique_fd clientFd(chanDup);
     android::RpcTransportFd transportFd(std::move(clientFd));
 
     std::array<uint8_t, RpcServer::kRpcAddressSize> addr;
@@ -146,8 +154,18 @@ int RpcServerTrusty::handleMessage(const tipc_port* /*port*/, handle_t /*chan*/,
     return NO_ERROR;
 }
 
-void RpcServerTrusty::handleDisconnect(const tipc_port* /*port*/, handle_t /*chan*/,
-                                       void* /*ctx*/) {}
+void RpcServerTrusty::handleDisconnect(const tipc_port* /*port*/, handle_t /*chan*/, void* ctx) {
+    auto* channelContext = reinterpret_cast<ChannelContext*>(ctx);
+    if (channelContext == nullptr) {
+        // Connections marked "incoming" (outgoing from the server's side)
+        // do not have a valid channel context because joinFn does not get
+        // called for them. We ignore them here.
+        return;
+    }
+
+    auto& session = channelContext->session;
+    (void)session->shutdownAndWait(false);
+}
 
 void RpcServerTrusty::handleChannelCleanup(void* ctx) {
     auto* channelContext = reinterpret_cast<ChannelContext*>(ctx);

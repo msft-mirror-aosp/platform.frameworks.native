@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include "FrontEnd/LayerCreationArgs.h"
 #include "renderengine/ExternalTexture.h"
 
 #include <gui/LayerState.h>
@@ -27,12 +28,22 @@
 
 namespace android {
 
+enum TraverseBuffersReturnValues {
+    CONTINUE_TRAVERSAL,
+    STOP_TRAVERSAL,
+    DELETE_AND_CONTINUE_TRAVERSAL,
+};
+
 // Extends the client side composer state by resolving buffer.
 class ResolvedComposerState : public ComposerState {
 public:
     ResolvedComposerState() = default;
     ResolvedComposerState(ComposerState&& source) { state = std::move(source.state); }
     std::shared_ptr<renderengine::ExternalTexture> externalTexture;
+    uint32_t layerId = UNASSIGNED_LAYER_ID;
+    uint32_t parentId = UNASSIGNED_LAYER_ID;
+    uint32_t relativeParentId = UNASSIGNED_LAYER_ID;
+    uint32_t touchCropId = UNASSIGNED_LAYER_ID;
 };
 
 struct TransactionState {
@@ -43,7 +54,7 @@ struct TransactionState {
                      const Vector<DisplayState>& displayStates, uint32_t transactionFlags,
                      const sp<IBinder>& applyToken, const InputWindowCommands& inputWindowCommands,
                      int64_t desiredPresentTime, bool isAutoTimestamp,
-                     const client_cache_t& uncacheBuffer, int64_t postTime, uint32_t permissions,
+                     std::vector<uint64_t> uncacheBufferIds, int64_t postTime, uint32_t permissions,
                      bool hasListenerCallbacks, std::vector<ListenerCallbacks> listenerCallbacks,
                      int originPid, int originUid, uint64_t transactionId)
           : frameTimelineInfo(frameTimelineInfo),
@@ -54,7 +65,7 @@ struct TransactionState {
             inputWindowCommands(inputWindowCommands),
             desiredPresentTime(desiredPresentTime),
             isAutoTimestamp(isAutoTimestamp),
-            buffer(uncacheBuffer),
+            uncacheBufferIds(std::move(uncacheBufferIds)),
             postTime(postTime),
             permissions(permissions),
             hasListenerCallbacks(hasListenerCallbacks),
@@ -75,12 +86,18 @@ struct TransactionState {
     }
 
     template <typename Visitor>
-    void traverseStatesWithBuffersWhileTrue(Visitor&& visitor) const {
-        for (const auto& state : states) {
-            if (state.state.hasBufferChanges() && state.state.hasValidBuffer() &&
-                state.state.surface) {
-                if (!visitor(state.state)) return;
+    void traverseStatesWithBuffersWhileTrue(Visitor&& visitor) {
+        for (auto state = states.begin(); state != states.end();) {
+            if (state->state.hasBufferChanges() && state->state.hasValidBuffer() &&
+                state->state.surface) {
+                int result = visitor(state->state, state->externalTexture);
+                if (result == STOP_TRAVERSAL) return;
+                if (result == DELETE_AND_CONTINUE_TRAVERSAL) {
+                    state = states.erase(state);
+                    continue;
+                }
             }
+            state++;
         }
     }
 
@@ -109,7 +126,7 @@ struct TransactionState {
     InputWindowCommands inputWindowCommands;
     int64_t desiredPresentTime;
     bool isAutoTimestamp;
-    client_cache_t buffer;
+    std::vector<uint64_t> uncacheBufferIds;
     int64_t postTime;
     uint32_t permissions;
     bool hasListenerCallbacks;

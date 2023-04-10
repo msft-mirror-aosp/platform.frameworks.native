@@ -52,6 +52,7 @@
 #include <utils/Timers.h>
 
 #include <filesystem>
+#include <optional>
 #include <regex>
 #include <utility>
 
@@ -220,7 +221,7 @@ static bool isV4lTouchNode(std::string name) {
  * directly from /dev.
  */
 static bool isV4lScanningEnabled() {
-    return property_get_bool("ro.input.video_enabled", true /* default_value */);
+    return property_get_bool("ro.input.video_enabled", /*default_value=*/true);
 }
 
 static nsecs_t processEventTimestamp(const struct input_event& event) {
@@ -515,6 +516,18 @@ ftl::Flags<InputDeviceClass> getAbsAxisUsage(int32_t axis,
     return deviceClasses & InputDeviceClass::JOYSTICK;
 }
 
+// --- RawAbsoluteAxisInfo ---
+
+std::ostream& operator<<(std::ostream& out, const RawAbsoluteAxisInfo& info) {
+    if (info.valid) {
+        out << "min=" << info.minValue << ", max=" << info.maxValue << ", flat=" << info.flat
+            << ", fuzz=" << info.fuzz << ", resolution=" << info.resolution;
+    } else {
+        out << "unknown range";
+    }
+    return out;
+}
+
 // --- EventHub::Device ---
 
 EventHub::Device::Device(int fd, int32_t id, std::string path, InputDeviceIdentifier identifier,
@@ -661,9 +674,9 @@ status_t EventHub::Device::loadKeyMapLocked() {
 
 bool EventHub::Device::isExternalDeviceLocked() {
     if (configuration) {
-        bool value;
-        if (configuration->tryGetProperty("device.internal", value)) {
-            return !value;
+        std::optional<bool> isInternal = configuration->getBool("device.internal");
+        if (isInternal.has_value()) {
+            return !isInternal.value();
         }
     }
     return identifier.bus == BUS_USB || identifier.bus == BUS_BLUETOOTH;
@@ -671,9 +684,9 @@ bool EventHub::Device::isExternalDeviceLocked() {
 
 bool EventHub::Device::deviceHasMicLocked() {
     if (configuration) {
-        bool value;
-        if (configuration->tryGetProperty("audio.mic", value)) {
-            return value;
+        std::optional<bool> hasMic = configuration->getBool("audio.mic");
+        if (hasMic.has_value()) {
+            return hasMic.value();
         }
     }
     return false;
@@ -870,14 +883,13 @@ int32_t EventHub::getDeviceControllerNumber(int32_t deviceId) const {
     return device != nullptr ? device->controllerNumber : 0;
 }
 
-void EventHub::getConfiguration(int32_t deviceId, PropertyMap* outConfiguration) const {
+std::optional<PropertyMap> EventHub::getConfiguration(int32_t deviceId) const {
     std::scoped_lock _l(mLock);
     Device* device = getDeviceLocked(deviceId);
-    if (device != nullptr && device->configuration) {
-        *outConfiguration = *device->configuration;
-    } else {
-        outConfiguration->clear();
+    if (device == nullptr || device->configuration == nullptr) {
+        return {};
     }
+    return *device->configuration;
 }
 
 status_t EventHub::getAbsoluteAxisInfo(int32_t deviceId, int axis,
@@ -994,7 +1006,7 @@ int32_t EventHub::getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKey
     }
     int32_t outKeyCode;
     status_t mapKeyRes =
-            device->getKeyCharacterMap()->mapKey(scanCodes[0], 0 /*usageCode*/, &outKeyCode);
+            device->getKeyCharacterMap()->mapKey(scanCodes[0], /*usageCode=*/0, &outKeyCode);
     switch (mapKeyRes) {
         case OK:
             break;
@@ -1517,6 +1529,20 @@ std::shared_ptr<const EventHub::AssociatedDevice> EventHub::obtainAssociatedDevi
              path.c_str(), associatedDevice->dump().c_str());
 
     return associatedDevice;
+}
+
+bool EventHub::AssociatedDevice::isChanged() const {
+    std::unordered_map<int32_t, RawBatteryInfo> newBatteryInfos =
+            readBatteryConfiguration(sysfsRootPath);
+    std::unordered_map<int32_t, RawLightInfo> newLightInfos =
+            readLightsConfiguration(sysfsRootPath);
+    std::optional<RawLayoutInfo> newLayoutInfo = readLayoutConfiguration(sysfsRootPath);
+
+    if (newBatteryInfos == batteryInfos && newLightInfos == lightInfos &&
+        newLayoutInfo == layoutInfo) {
+        return false;
+    }
+    return true;
 }
 
 void EventHub::vibrate(int32_t deviceId, const VibrationElement& element) {
@@ -2270,8 +2296,8 @@ void EventHub::openDeviceLocked(const std::string& devicePath) {
     }
 
     // See if the device is specially configured to be of a certain type.
-    std::string deviceType;
-    if (device->configuration && device->configuration->tryGetProperty("device.type", deviceType)) {
+    if (device->configuration) {
+        std::string deviceType = device->configuration->getString("device.type").value_or("");
         if (deviceType == "rotaryEncoder") {
             device->classes |= InputDeviceClass::ROTARY_ENCODER;
         } else if (deviceType == "externalStylus") {
@@ -2524,6 +2550,42 @@ status_t EventHub::disableDevice(int32_t deviceId) {
     return device->disable();
 }
 
+// TODO(b/274755573): Shift to uevent handling on native side and remove this method
+// Currently using Java UEventObserver to trigger this which uses UEvent infrastructure that uses a
+// NETLINK socket to observe UEvents. We can create similar infrastructure on Eventhub side to
+// directly observe UEvents instead of triggering from Java side.
+void EventHub::sysfsNodeChanged(const std::string& sysfsNodePath) {
+    std::scoped_lock _l(mLock);
+
+    // Check in opening devices
+    for (auto it = mOpeningDevices.begin(); it != mOpeningDevices.end(); it++) {
+        std::unique_ptr<Device>& device = *it;
+        if (device->associatedDevice &&
+            sysfsNodePath.find(device->associatedDevice->sysfsRootPath.string()) !=
+                    std::string::npos &&
+            device->associatedDevice->isChanged()) {
+            it = mOpeningDevices.erase(it);
+            openDeviceLocked(device->path);
+        }
+    }
+
+    // Check in already added device
+    std::vector<Device*> devicesToReopen;
+    for (const auto& [id, device] : mDevices) {
+        if (device->associatedDevice &&
+            sysfsNodePath.find(device->associatedDevice->sysfsRootPath.string()) !=
+                    std::string::npos &&
+            device->associatedDevice->isChanged()) {
+            devicesToReopen.push_back(device.get());
+        }
+    }
+    for (const auto& device : devicesToReopen) {
+        closeDeviceLocked(*device);
+        openDeviceLocked(device->path);
+    }
+    devicesToReopen.clear();
+}
+
 void EventHub::createVirtualKeyboardLocked() {
     InputDeviceIdentifier identifier;
     identifier.name = "Virtual";
@@ -2532,7 +2594,7 @@ void EventHub::createVirtualKeyboardLocked() {
 
     std::unique_ptr<Device> device =
             std::make_unique<Device>(-1, ReservedInputDeviceId::VIRTUAL_KEYBOARD_ID, "<virtual>",
-                                     identifier, nullptr /*associatedDevice*/);
+                                     identifier, /*associatedDevice=*/nullptr);
     device->classes = InputDeviceClass::KEYBOARD | InputDeviceClass::ALPHAKEY |
             InputDeviceClass::DPAD | InputDeviceClass::VIRTUAL;
     device->loadKeyMapLocked();

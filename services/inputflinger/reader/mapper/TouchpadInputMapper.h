@@ -29,6 +29,7 @@
 #include "NotifyArgs.h"
 #include "gestures/GestureConverter.h"
 #include "gestures/HardwareStateConverter.h"
+#include "gestures/PropertyProvider.h"
 
 #include "include/gestures.h"
 
@@ -40,9 +41,12 @@ public:
     ~TouchpadInputMapper();
 
     uint32_t getSources() const override;
-    [[nodiscard]] std::list<NotifyArgs> configure(nsecs_t when,
-                                                  const InputReaderConfiguration* config,
-                                                  uint32_t changes) override;
+    void populateDeviceInfo(InputDeviceInfo& deviceInfo) override;
+    void dump(std::string& dump) override;
+
+    [[nodiscard]] std::list<NotifyArgs> reconfigure(nsecs_t when,
+                                                    const InputReaderConfiguration* config,
+                                                    uint32_t changes) override;
     [[nodiscard]] std::list<NotifyArgs> reset(nsecs_t when) override;
     [[nodiscard]] std::list<NotifyArgs> process(const RawEvent* rawEvent) override;
 
@@ -56,6 +60,8 @@ private:
     std::unique_ptr<gestures::GestureInterpreter, void (*)(gestures::GestureInterpreter*)>
             mGestureInterpreter;
     std::shared_ptr<PointerControllerInterface> mPointerController;
+
+    PropertyProvider mPropertyProvider;
 
     HardwareStateConverter mStateConverter;
     GestureConverter mGestureConverter;

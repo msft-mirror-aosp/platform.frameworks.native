@@ -37,15 +37,7 @@
 
 namespace android {
 
-struct ICompositor {
-    virtual void configure() = 0;
-    virtual bool commit(TimePoint frameTime, VsyncId, TimePoint expectedVsyncTime) = 0;
-    virtual void composite(TimePoint frameTime, VsyncId) = 0;
-    virtual void sample() = 0;
-
-protected:
-    ~ICompositor() = default;
-};
+struct ICompositor;
 
 template <typename F>
 class Task : public MessageHandler {
@@ -73,12 +65,13 @@ class MessageQueue {
 public:
     virtual ~MessageQueue() = default;
 
-    virtual void initVsync(scheduler::VSyncDispatch&, frametimeline::TokenManager&,
+    virtual void initVsync(std::shared_ptr<scheduler::VSyncDispatch>, frametimeline::TokenManager&,
                            std::chrono::nanoseconds workDuration) = 0;
     virtual void destroyVsync() = 0;
     virtual void setDuration(std::chrono::nanoseconds workDuration) = 0;
     virtual void waitMessage() = 0;
     virtual void postMessage(sp<MessageHandler>&&) = 0;
+    virtual void postMessageDelayed(sp<MessageHandler>&&, nsecs_t uptimeDelay) = 0;
     virtual void scheduleConfigure() = 0;
     virtual void scheduleFrame() = 0;
 
@@ -113,6 +106,8 @@ protected:
 
     void vsyncCallback(nsecs_t vsyncTime, nsecs_t targetWakeupTime, nsecs_t readyTime);
 
+    void onNewVsyncSchedule(std::shared_ptr<scheduler::VSyncDispatch>) EXCLUDES(mVsync.mutex);
+
 private:
     virtual void onFrameSignal(ICompositor&, VsyncId, TimePoint expectedVsyncTime) = 0;
 
@@ -122,9 +117,9 @@ private:
 
     struct Vsync {
         frametimeline::TokenManager* tokenManager = nullptr;
-        std::unique_ptr<scheduler::VSyncCallbackRegistration> registration;
 
         mutable std::mutex mutex;
+        std::unique_ptr<scheduler::VSyncCallbackRegistration> registration GUARDED_BY(mutex);
         TracedOrdinal<std::chrono::nanoseconds> workDuration
                 GUARDED_BY(mutex) = {"VsyncWorkDuration-sf", std::chrono::nanoseconds(0)};
         TimePoint lastCallbackTime GUARDED_BY(mutex);
@@ -134,16 +129,22 @@ private:
 
     Vsync mVsync;
 
+    // Returns the old registration so it can be destructed outside the lock to
+    // avoid deadlock.
+    std::unique_ptr<scheduler::VSyncCallbackRegistration> onNewVsyncScheduleLocked(
+            std::shared_ptr<scheduler::VSyncDispatch>) REQUIRES(mVsync.mutex);
+
 public:
     explicit MessageQueue(ICompositor&);
 
-    void initVsync(scheduler::VSyncDispatch&, frametimeline::TokenManager&,
+    void initVsync(std::shared_ptr<scheduler::VSyncDispatch>, frametimeline::TokenManager&,
                    std::chrono::nanoseconds workDuration) override;
     void destroyVsync() override;
     void setDuration(std::chrono::nanoseconds workDuration) override;
 
     void waitMessage() override;
     void postMessage(sp<MessageHandler>&&) override;
+    void postMessageDelayed(sp<MessageHandler>&&, nsecs_t uptimeDelay) override;
 
     void scheduleConfigure() override;
     void scheduleFrame() override;

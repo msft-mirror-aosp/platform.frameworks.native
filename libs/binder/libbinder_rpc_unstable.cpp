@@ -145,6 +145,17 @@ ARpcServer* ARpcServer_newUnixDomainBootstrap(AIBinder* service, int bootstrapFd
     return createObjectHandle<ARpcServer>(server);
 }
 
+ARpcServer* ARpcServer_newInet(AIBinder* service, const char* address, unsigned int port) {
+    auto server = RpcServer::make();
+    if (status_t status = server->setupInetServer(address, port, nullptr); status != OK) {
+        LOG(ERROR) << "Failed to set up inet RPC server with address " << address << " and port "
+                   << port << " error: " << statusToString(status).c_str();
+        return nullptr;
+    }
+    server->setRootObject(AIBinder_toPlatformBinder(service));
+    return createObjectHandle<ARpcServer>(server);
+}
+
 void ARpcServer_setSupportedFileDescriptorTransportModes(
         ARpcServer* handle, const ARpcSession_FileDescriptorTransportMode modes[],
         size_t modes_len) {
@@ -222,6 +233,16 @@ AIBinder* ARpcSession_setupUnixDomainBootstrapClient(ARpcSession* handle, int bo
     return AIBinder_fromPlatformBinder(session->getRootObject());
 }
 
+AIBinder* ARpcSession_setupInet(ARpcSession* handle, const char* address, unsigned int port) {
+    auto session = handleToStrongPointer<RpcSession>(handle);
+    if (status_t status = session->setupInetClient(address, port); status != OK) {
+        LOG(ERROR) << "Failed to set up inet RPC client with address " << address << " and port "
+                   << port << " error: " << statusToString(status).c_str();
+        return nullptr;
+    }
+    return AIBinder_fromPlatformBinder(session->getRootObject());
+}
+
 AIBinder* ARpcSession_setupPreconnectedClient(ARpcSession* handle, int (*requestFd)(void* param),
                                               void* param) {
     auto session = handleToStrongPointer<RpcSession>(handle);
@@ -244,8 +265,8 @@ void ARpcSession_setMaxIncomingThreads(ARpcSession* handle, size_t threads) {
     session->setMaxIncomingThreads(threads);
 }
 
-void ARpcSession_setMaxOutgoingThreads(ARpcSession* handle, size_t threads) {
+void ARpcSession_setMaxOutgoingConnections(ARpcSession* handle, size_t connections) {
     auto session = handleToStrongPointer<RpcSession>(handle);
-    session->setMaxOutgoingThreads(threads);
+    session->setMaxOutgoingConnections(connections);
 }
 }

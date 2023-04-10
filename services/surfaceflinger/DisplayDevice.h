@@ -24,6 +24,7 @@
 #include <android-base/thread_annotations.h>
 #include <android/native_window.h>
 #include <binder/IBinder.h>
+#include <ftl/concat.h>
 #include <gui/LayerState.h>
 #include <math/mat4.h>
 #include <renderengine/RenderEngine.h>
@@ -115,7 +116,6 @@ public:
     const ui::Transform& getTransform() const;
     const Rect& getLayerStackSpaceRect() const;
     const Rect& getOrientedDisplaySpaceRect() const;
-    bool needsFiltering() const;
     ui::LayerStack getLayerStack() const;
     bool receivesInput() const { return mFlags & eReceivesInput; }
 
@@ -175,6 +175,7 @@ public:
     std::optional<hardware::graphics::composer::hal::PowerMode> getPowerMode() const;
     void setPowerMode(hardware::graphics::composer::hal::PowerMode mode);
     bool isPoweredOn() const;
+    void tracePowerMode();
 
     // Enables layer caching on this DisplayDevice
     void enableLayerCaching(bool enable);
@@ -237,13 +238,20 @@ public:
     }
 
     // Enables an overlay to be displayed with the current refresh rate
-    void enableRefreshRateOverlay(bool enable, bool showSpinner, bool showRenderRate,
+    void enableRefreshRateOverlay(bool enable, bool setByHwc, bool showSpinner, bool showRenderRate,
                                   bool showInMiddle) REQUIRES(kMainThreadContext);
+    void updateRefreshRateOverlayRate(Fps displayFps, Fps renderFps, bool setByHwc = false);
     bool isRefreshRateOverlayEnabled() const { return mRefreshRateOverlay != nullptr; }
     bool onKernelTimerChanged(std::optional<DisplayModeId>, bool timerExpired);
     void animateRefreshRateOverlay();
 
     nsecs_t getVsyncPeriodFromHWC() const;
+
+    Fps getAdjustedRefreshRate() const { return mAdjustedRefreshRate; }
+
+    // Round the requested refresh rate to match a divisor of the pacesetter
+    // display's refresh rate. Only supported for virtual displays.
+    void adjustRefreshRate(Fps pacesetterDisplayRefreshRate);
 
     // release HWC resources (if any) for removable displays
     void disconnect();
@@ -269,7 +277,8 @@ private:
     static ui::Transform::RotationFlags sPrimaryDisplayRotationFlags;
 
     // Allow nullopt as initial power mode.
-    std::optional<hardware::graphics::composer::hal::PowerMode> mPowerMode;
+    using TracedPowerMode = TracedOrdinal<hardware::graphics::composer::hal::PowerMode>;
+    std::optional<TracedPowerMode> mPowerMode;
 
     std::optional<float> mStagedBrightness;
     std::optional<float> mBrightness;
@@ -279,6 +288,15 @@ private:
 
     uint32_t mFlags = 0;
 
+    // Requested refresh rate in fps, supported only for virtual displays.
+    // when this value is non zero, SurfaceFlinger will try to drop frames
+    // for virtual displays to match this requested refresh rate.
+    const Fps mRequestedRefreshRate;
+
+    // Adjusted refresh rate, rounded to match a divisor of the pacesetter
+    // display's refresh rate. Only supported for virtual displays.
+    Fps mAdjustedRefreshRate = 0_Hz;
+
     std::vector<ui::Hdr> mOverrideHdrTypes;
 
     std::shared_ptr<scheduler::RefreshRateSelector> mRefreshRateSelector;
@@ -286,8 +304,8 @@ private:
 
     mutable std::mutex mActiveModeLock;
     ActiveModeInfo mDesiredActiveMode GUARDED_BY(mActiveModeLock);
-    TracedOrdinal<bool> mDesiredActiveModeChanged
-            GUARDED_BY(mActiveModeLock) = {"DesiredActiveModeChanged", false};
+    TracedOrdinal<bool> mDesiredActiveModeChanged GUARDED_BY(mActiveModeLock) =
+            {ftl::Concat("DesiredActiveModeChanged-", getId().value).c_str(), false};
     ActiveModeInfo mUpcomingActiveMode GUARDED_BY(kMainThreadContext);
 };
 
@@ -316,6 +334,8 @@ struct DisplayDeviceState {
     uint32_t height = 0;
     std::string displayName;
     bool isSecure = false;
+    // Refer to DisplayDevice::mRequestedRefreshRate, for virtual display only
+    Fps requestedRefreshRate;
 
 private:
     static std::atomic<int32_t> sNextSequenceId;
@@ -345,6 +365,8 @@ struct DisplayDeviceCreationArgs {
     std::optional<hardware::graphics::composer::hal::PowerMode> initialPowerMode;
     bool isPrimary{false};
     DisplayModeId activeModeId;
+    // Refer to DisplayDevice::mRequestedRefreshRate, for virtual display only
+    Fps requestedRefreshRate;
 };
 
 } // namespace android

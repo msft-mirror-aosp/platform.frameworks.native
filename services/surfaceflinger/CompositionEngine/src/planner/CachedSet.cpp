@@ -378,6 +378,10 @@ bool CachedSet::hasUnsupportedDataspace() const {
             // to avoid flickering/color differences.
             return true;
         }
+        // TODO(b/274804887): temp fix of overdimming issue, skip caching if hsdr/sdr ratio > 1.01f
+        if (layer.getState()->getHdrSdrRatio() > 1.01f) {
+            return true;
+        }
         return false;
     });
 }
@@ -391,6 +395,18 @@ bool CachedSet::hasSolidColorLayers() const {
     return std::any_of(mLayers.cbegin(), mLayers.cend(), [](const Layer& layer) {
         return layer.getState()->hasSolidColorCompositionType();
     });
+}
+
+bool CachedSet::cachingHintExcludesLayers() const {
+    const bool shouldExcludeLayers =
+            std::any_of(mLayers.cbegin(), mLayers.cend(), [](const Layer& layer) {
+                return layer.getState()->getCachingHint() == gui::CachingHint::Disabled;
+            });
+
+    LOG_ALWAYS_FATAL_IF(shouldExcludeLayers && getLayerCount() > 1,
+                        "CachedSet is invalid: should be excluded but contains %zu layers",
+                        getLayerCount());
+    return shouldExcludeLayers;
 }
 
 void CachedSet::dump(std::string& result) const {

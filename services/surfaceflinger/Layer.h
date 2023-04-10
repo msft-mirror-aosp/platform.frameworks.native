@@ -137,10 +137,11 @@ public:
         wp<Layer> touchableRegionCrop;
 
         ui::Dataspace dataspace;
-        bool dataspaceRequested;
 
         uint64_t frameNumber;
         ui::Transform transform;
+
+        uint32_t producerId = 0;
         uint32_t bufferTransform;
         bool transformToDisplayInverse;
         Region transparentRegionHint;
@@ -223,6 +224,10 @@ public:
         gui::DropInputMode dropInputMode;
         bool autoRefresh = false;
         bool dimmingEnabled = true;
+        float currentHdrSdrRatio = 1.f;
+        float desiredHdrSdrRatio = 1.f;
+        gui::CachingHint cachingHint = gui::CachingHint::Enabled;
+        int64_t latchedVsyncId = 0;
     };
 
     explicit Layer(const LayerCreationArgs& args);
@@ -284,12 +289,15 @@ public:
 
     virtual bool setMetadata(const LayerMetadata& data);
     virtual void setChildrenDrawingParent(const sp<Layer>&);
-    virtual bool reparent(const sp<IBinder>& newParentHandle);
+    virtual bool reparent(const sp<IBinder>& newParentHandle) REQUIRES(mFlinger->mStateLock);
     virtual bool setColorTransform(const mat4& matrix);
     virtual mat4 getColorTransform() const;
     virtual bool hasColorTransform() const;
     virtual bool isColorSpaceAgnostic() const { return mDrawingState.colorSpaceAgnostic; }
-    virtual bool isDimmingEnabled() const { return getDrawingState().dimmingEnabled; };
+    virtual bool isDimmingEnabled() const { return getDrawingState().dimmingEnabled; }
+    float getDesiredHdrSdrRatio() const { return getDrawingState().desiredHdrSdrRatio; }
+    float getCurrentHdrSdrRatio() const { return getDrawingState().currentHdrSdrRatio; }
+    gui::CachingHint getCachingHint() const { return getDrawingState().cachingHint; }
 
     bool setTransform(uint32_t /*transform*/);
     bool setTransformToDisplayInverse(bool /*transformToDisplayInverse*/);
@@ -297,13 +305,18 @@ public:
                    const BufferData& /* bufferData */, nsecs_t /* postTime */,
                    nsecs_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/,
                    std::optional<nsecs_t> /* dequeueTime */, const FrameTimelineInfo& /*info*/);
+    void setDesiredPresentTime(nsecs_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/);
     bool setDataspace(ui::Dataspace /*dataspace*/);
+    bool setExtendedRangeBrightness(float currentBufferRatio, float desiredRatio);
+    bool setCachingHint(gui::CachingHint cachingHint);
     bool setHdrMetadata(const HdrMetadata& /*hdrMetadata*/);
     bool setSurfaceDamageRegion(const Region& /*surfaceDamage*/);
     bool setApi(int32_t /*api*/);
     bool setSidebandStream(const sp<NativeHandle>& /*sidebandStream*/);
-    bool setTransactionCompletedListeners(const std::vector<sp<CallbackHandle>>& /*handles*/);
-    virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace);
+    bool setTransactionCompletedListeners(const std::vector<sp<CallbackHandle>>& /*handles*/,
+                                          bool willPresent);
+    virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace)
+            REQUIRES(mFlinger->mStateLock);
     virtual bool setColorSpaceAgnostic(const bool agnostic);
     virtual bool setDimmingEnabled(const bool dimmingEnabled);
     virtual bool setDefaultFrameRateCompatibility(FrameRateCompatibility compatibility);
@@ -319,13 +332,15 @@ public:
     virtual FrameRateCompatibility getDefaultFrameRateCompatibility() const;
     //
     ui::Dataspace getDataSpace() const;
-    ui::Dataspace getRequestedDataSpace() const;
 
     virtual sp<LayerFE> getCompositionEngineLayerFE() const;
     virtual sp<LayerFE> copyCompositionEngineLayerFE() const;
+    sp<LayerFE> getCompositionEngineLayerFE(const frontend::LayerHierarchy::TraversalPath&);
 
     const frontend::LayerSnapshot* getLayerSnapshot() const;
     frontend::LayerSnapshot* editLayerSnapshot();
+    std::unique_ptr<frontend::LayerSnapshot> stealLayerSnapshot();
+    void updateLayerSnapshot(std::unique_ptr<frontend::LayerSnapshot> snapshot);
 
     // If we have received a new buffer this frame, we will pass its surface
     // damage down to hardware composer. Otherwise, we must send a region with
@@ -333,6 +348,7 @@ public:
     void useSurfaceDamage();
     void useEmptyDamage();
     Region getVisibleRegion(const DisplayDevice*) const;
+    void updateLastLatchTime(nsecs_t latchtime);
 
     /*
      * isOpaque - true if this surface is opaque
@@ -413,6 +429,9 @@ public:
      */
     bool latchBuffer(bool& /*recomputeVisibleRegions*/, nsecs_t /*latchTime*/);
 
+    bool latchBufferImpl(bool& /*recomputeVisibleRegions*/, nsecs_t /*latchTime*/,
+                         bool bgColorOnly);
+
     /*
      * Calls latchBuffer if the buffer has a frame queued and then releases the buffer.
      * This is used if the buffer is just latched and releases to free up the buffer
@@ -434,8 +453,6 @@ public:
 
     sp<GraphicBuffer> getBuffer() const;
     const std::shared_ptr<renderengine::ExternalTexture>& getExternalTexture() const;
-
-    ui::Transform::RotationFlags getTransformHint() const { return mTransformHint; }
 
     /*
      * Returns if a frame is ready
@@ -499,6 +516,7 @@ public:
         uint64_t mFrameNumber;
 
         bool mFrameLatencyNeeded{false};
+        float mDesiredHdrSdrRatio = 1.f;
     };
 
     BufferInfo mBufferInfo;
@@ -506,7 +524,7 @@ public:
     // implements compositionengine::LayerFE
     const compositionengine::LayerFECompositionState* getCompositionState() const;
     bool fenceHasSignaled() const;
-    bool onPreComposition(nsecs_t refreshStartTime);
+    void onPreComposition(nsecs_t refreshStartTime);
     void onLayerDisplayed(ftl::SharedFuture<FenceResult>);
 
     void setWasClientComposed(const sp<Fence>& fence) {
@@ -527,6 +545,20 @@ public:
 
     uint32_t getTransactionFlags() const { return mTransactionFlags; }
 
+    static bool computeTrustedPresentationState(const FloatRect& bounds,
+                                                const FloatRect& sourceBounds,
+                                                const Region& coveredRegion,
+                                                const FloatRect& screenBounds, float,
+                                                const ui::Transform&,
+                                                const TrustedPresentationThresholds&);
+    void updateTrustedPresentationState(const DisplayDevice* display,
+                                        const frontend::LayerSnapshot* snapshot, int64_t time_in_ms,
+                                        bool leaveState);
+
+    inline bool hasTrustedPresentationListener() {
+        return mTrustedPresentationListener.callbackInterface != nullptr;
+    }
+
     // Sets the masked bits.
     void setTransactionFlags(uint32_t mask);
 
@@ -535,6 +567,8 @@ public:
 
     FloatRect getBounds(const Region& activeTransparentRegion) const;
     FloatRect getBounds() const;
+    Rect getInputBoundsInDisplaySpace(const FloatRect& insetBounds,
+                                      const ui::Transform& displayTransform);
 
     // Compute bounds for the layer and cache the results.
     void computeBounds(FloatRect parentBounds, ui::Transform parentTransform, float shadowRadius);
@@ -575,6 +609,7 @@ public:
     bool isRemovedFromCurrentState() const;
 
     LayerProto* writeToProto(LayersProto& layersProto, uint32_t traceFlags);
+    void writeCompositionStateToProto(LayerProto* layerProto, ui::LayerStack layerStack);
 
     // Write states that are modified by the main thread. This includes drawing
     // state as well as buffer data. This should be called in the main or tracing
@@ -605,13 +640,13 @@ public:
     /*
      * Remove from current state and mark for removal.
      */
-    void removeFromCurrentState();
+    void removeFromCurrentState() REQUIRES(mFlinger->mStateLock);
 
     /*
      * called with the state lock from a binder thread when the layer is
      * removed from the current list to the pending removal list
      */
-    void onRemovedFromCurrentState();
+    void onRemovedFromCurrentState() REQUIRES(mFlinger->mStateLock);
 
     /*
      * Called when the layer is added back to the current state list.
@@ -664,6 +699,7 @@ public:
     void traverse(LayerVector::StateSet, const LayerVector::Visitor&);
     void traverseInReverseZOrder(LayerVector::StateSet, const LayerVector::Visitor&);
     void traverseInZOrder(LayerVector::StateSet, const LayerVector::Visitor&);
+    void traverseChildren(const LayerVector::Visitor&);
 
     /**
      * Traverse only children in z order, ignoring relative layers that are not children of the
@@ -671,7 +707,10 @@ public:
      */
     void traverseChildrenInZOrder(LayerVector::StateSet, const LayerVector::Visitor&);
 
-    size_t getChildrenCount() const;
+    size_t getDescendantCount() const;
+    size_t getChildrenCount() const { return mDrawingChildren.size(); }
+    bool isHandleAlive() const { return mHandleAlive; }
+    bool onHandleDestroyed() { return mHandleAlive = false; }
 
     // ONLY CALL THIS FROM THE LAYER DTOR!
     // See b/141111965.  We need to add current children to offscreen layers in
@@ -727,6 +766,9 @@ public:
             const FrameTimelineInfo& info, nsecs_t postTime);
     std::shared_ptr<frametimeline::SurfaceFrame> createSurfaceFrameForBuffer(
             const FrameTimelineInfo& info, nsecs_t queueTime, std::string debugName);
+
+    bool setTrustedPresentationInfo(TrustedPresentationThresholds const& thresholds,
+                                    TrustedPresentationListener const& listener);
 
     // Creates a new handle each time, so we only expect
     // this to be called once.
@@ -809,6 +851,36 @@ public:
     void updateMetadataSnapshot(const LayerMetadata& parentMetadata);
     void updateRelativeMetadataSnapshot(const LayerMetadata& relativeLayerMetadata,
                                         std::unordered_set<Layer*>& visited);
+    sp<Layer> getClonedFrom() const {
+        return mClonedFrom != nullptr ? mClonedFrom.promote() : nullptr;
+    }
+    bool isClone() { return mClonedFrom != nullptr; }
+
+    bool willPresentCurrentTransaction() const;
+
+    void callReleaseBufferCallback(const sp<ITransactionCompletedListener>& listener,
+                                   const sp<GraphicBuffer>& buffer, uint64_t framenumber,
+                                   const sp<Fence>& releaseFence);
+    bool setFrameRateForLayerTreeLegacy(FrameRate);
+    bool setFrameRateForLayerTree(FrameRate, const scheduler::LayerProps&);
+    void recordLayerHistoryBufferUpdate(const scheduler::LayerProps&);
+    void recordLayerHistoryAnimationTx(const scheduler::LayerProps&);
+    auto getLayerProps() const {
+        return scheduler::LayerProps{
+                .visible = isVisible(),
+                .bounds = getBounds(),
+                .transform = getTransform(),
+                .setFrameRateVote = getFrameRateForLayerTree(),
+                .frameRateSelectionPriority = getFrameRateSelectionPriority(),
+        };
+    };
+    bool hasBuffer() const { return mBufferInfo.mBuffer != nullptr; }
+    void setTransformHint(std::optional<ui::Transform::RotationFlags> transformHint) {
+        mTransformHint = transformHint;
+    }
+
+    // Exposed so SurfaceFlinger can assert that it's held
+    const sp<SurfaceFlinger> mFlinger;
 
 protected:
     // For unit tests
@@ -827,10 +899,6 @@ protected:
     void gatherBufferInfo();
     void onSurfaceFrameCreated(const std::shared_ptr<frametimeline::SurfaceFrame>&);
 
-    sp<Layer> getClonedFrom() const {
-        return mClonedFrom != nullptr ? mClonedFrom.promote() : nullptr;
-    }
-    bool isClone() { return mClonedFrom != nullptr; }
     bool isClonedFromAlive() { return getClonedFrom() != nullptr; }
 
     void cloneDrawingState(const Layer* from);
@@ -873,10 +941,7 @@ protected:
      * "replaceTouchableRegionWithCrop" is specified. In this case, the layer will receive input
      * in this layer's space, regardless of the specified crop layer.
      */
-    Rect getInputBounds() const;
-
-    // constant
-    sp<SurfaceFlinger> mFlinger;
+    std::pair<FloatRect, bool> getInputBounds(bool fillParentBounds) const;
 
     bool mPremultipliedAlpha{true};
     const std::string mName;
@@ -884,6 +949,12 @@ protected:
 
     // These are only accessed by the main thread or the tracing thread.
     State mDrawingState;
+
+    TrustedPresentationThresholds mTrustedPresentationThresholds;
+    TrustedPresentationListener mTrustedPresentationListener;
+    bool mLastComputedTrustedPresentationState = false;
+    bool mLastReportedTrustedPresentationState = false;
+    int64_t mEnteredTrustedPresentationStateTime = -1;
 
     uint32_t mTransactionFlags{0};
     // Updated in doTransaction, used to track the last sequence number we
@@ -975,7 +1046,6 @@ private:
 
     void updateTreeHasFrameRateVote();
     bool propagateFrameRateForLayerTree(FrameRate parentFrameRate, bool* transactionNeeded);
-    bool setFrameRateForLayerTree(FrameRate);
     void setZOrderRelativeOf(const wp<Layer>& relativeOf);
     bool isTrustedOverlay() const;
     gui::DropInputMode getDropInputMode() const;
@@ -1003,21 +1073,19 @@ private:
 
     bool hasFrameUpdate() const;
 
-    void updateTexImage(nsecs_t latchTime);
+    void updateTexImage(nsecs_t latchTime, bool bgColorOnly = false);
 
     // Crop that applies to the buffer
     Rect computeBufferCrop(const State& s);
-
-    bool willPresentCurrentTransaction() const;
-
-    // Returns true if the transformed buffer size does not match the layer size and we need
-    // to apply filtering.
-    bool bufferNeedsFiltering() const;
 
     void callReleaseBufferCallback(const sp<ITransactionCompletedListener>& listener,
                                    const sp<GraphicBuffer>& buffer, uint64_t framenumber,
                                    const sp<Fence>& releaseFence,
                                    uint32_t currentMaxAcquiredBufferCount);
+
+    // Returns true if the transformed buffer size does not match the layer size and we need
+    // to apply filtering.
+    bool bufferNeedsFiltering() const;
 
     // Returns true if there is a valid color to fill.
     bool fillsColor() const;
@@ -1035,6 +1103,11 @@ private:
     bool hasSomethingToDraw() const { return hasEffect() || hasBufferOrSidebandStream(); }
 
     void updateChildrenSnapshots(bool updateGeometry);
+
+    // Fills the provided vector with the currently available JankData and removes the processed
+    // JankData from the pending list.
+    void transferAvailableJankData(const std::deque<sp<CallbackHandle>>& handles,
+                                   std::vector<JankData>& jankData);
 
     // Cached properties computed from drawing state
     // Effective transform taking into account parent transforms and any parent scaling, which is
@@ -1081,14 +1154,15 @@ private:
     float mBorderWidth;
     half4 mBorderColor;
 
-    void setTransformHint(ui::Transform::RotationFlags);
+    void setTransformHintLegacy(ui::Transform::RotationFlags);
 
     const uint32_t mTextureName;
 
     // Transform hint provided to the producer. This must be accessed holding
     // the mStateLock.
-    ui::Transform::RotationFlags mTransformHint = ui::Transform::ROT_0;
+    ui::Transform::RotationFlags mTransformHintLegacy = ui::Transform::ROT_0;
     bool mSkipReportingTransformHint = true;
+    std::optional<ui::Transform::RotationFlags> mTransformHint = std::nullopt;
 
     ReleaseCallbackId mPreviousReleaseCallbackId = ReleaseCallbackId::INVALID_ID;
     uint64_t mPreviousReleasedFrameNumber = 0;
@@ -1121,34 +1195,11 @@ private:
     // not specify a destination frame.
     ui::Transform mRequestedTransform;
 
-    sp<LayerFE> mLayerFE;
+    sp<LayerFE> mLegacyLayerFE;
+    std::vector<std::pair<frontend::LayerHierarchy::TraversalPath, sp<LayerFE>>> mLayerFEs;
     std::unique_ptr<frontend::LayerSnapshot> mSnapshot =
             std::make_unique<frontend::LayerSnapshot>();
-
-    friend class LayerSnapshotGuard;
-};
-
-// LayerSnapshotGuard manages the movement of LayerSnapshot between a Layer and its corresponding
-// LayerFE. This class must be used whenever LayerFEs are passed to CompositionEngine. Instances of
-// LayerSnapshotGuard should only be constructed on the main thread and should not be moved outside
-// the main thread.
-//
-// Moving the snapshot instead of sharing common state prevents use of LayerFE outside the main
-// thread by making errors obvious (i.e. use outside the main thread results in SEGFAULTs due to
-// nullptr dereference).
-class LayerSnapshotGuard {
-public:
-    LayerSnapshotGuard(Layer* layer) REQUIRES(kMainThreadContext);
-    ~LayerSnapshotGuard() REQUIRES(kMainThreadContext);
-
-    LayerSnapshotGuard(const LayerSnapshotGuard&) = delete;
-    LayerSnapshotGuard& operator=(const LayerSnapshotGuard&) = delete;
-
-    LayerSnapshotGuard(LayerSnapshotGuard&& other) REQUIRES(kMainThreadContext);
-    LayerSnapshotGuard& operator=(LayerSnapshotGuard&& other) REQUIRES(kMainThreadContext);
-
-private:
-    Layer* mLayer;
+    bool mHandleAlive = false;
 };
 
 std::ostream& operator<<(std::ostream& stream, const Layer::FrameRate& rate);

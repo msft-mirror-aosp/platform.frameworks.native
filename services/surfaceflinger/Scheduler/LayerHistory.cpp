@@ -32,6 +32,7 @@
 #include <utility>
 
 #include "../Layer.h"
+#include "EventThread.h"
 #include "LayerInfo.h"
 
 namespace android::scheduler {
@@ -117,28 +118,34 @@ void LayerHistory::deregisterLayer(Layer* layer) {
     }
 }
 
-void LayerHistory::record(Layer* layer, nsecs_t presentTime, nsecs_t now,
-                          LayerUpdateType updateType) {
+void LayerHistory::record(int32_t id, const LayerProps& layerProps, nsecs_t presentTime,
+                          nsecs_t now, LayerUpdateType updateType) {
     std::lock_guard lock(mLock);
-    auto id = layer->getSequence();
-
     auto [found, layerPair] = findLayer(id);
     if (found == LayerStatus::NotFound) {
         // Offscreen layer
-        ALOGV("%s: %s not registered", __func__, layer->getName().c_str());
+        ALOGV("%s: %d not registered", __func__, id);
         return;
     }
 
     const auto& info = layerPair->second;
-    const auto layerProps = LayerInfo::LayerProps{
-            .visible = layer->isVisible(),
-            .bounds = layer->getBounds(),
-            .transform = layer->getTransform(),
-            .setFrameRateVote = layer->getFrameRateForLayerTree(),
-            .frameRateSelectionPriority = layer->getFrameRateSelectionPriority(),
-    };
-
     info->setLastPresentTime(presentTime, now, updateType, mModeChangePending, layerProps);
+
+    // Set frame rate to attached choreographer.
+    // TODO(b/260898223): Change to use layer hierarchy and handle frame rate vote.
+    if (updateType == LayerUpdateType::SetFrameRate) {
+        auto range = mAttachedChoreographers.equal_range(id);
+        auto it = range.first;
+        while (it != range.second) {
+            sp<EventThreadConnection> choreographerConnection = it->second.promote();
+            if (choreographerConnection) {
+                choreographerConnection->frameRate = layerProps.setFrameRateVote.rate;
+                it++;
+            } else {
+                it = mAttachedChoreographers.erase(it);
+            }
+        }
+    }
 
     // Activate layer if inactive.
     if (found == LayerStatus::LayerInInactiveMap) {
@@ -292,6 +299,12 @@ float LayerHistory::getLayerFramerate(nsecs_t now, int32_t id) const {
         return layerPair->second->getFps(now).getValue();
     }
     return 0.f;
+}
+
+void LayerHistory::attachChoreographer(int32_t layerId,
+                                       const sp<EventThreadConnection>& choreographerConnection) {
+    std::lock_guard lock(mLock);
+    mAttachedChoreographers.insert({layerId, wp<EventThreadConnection>(choreographerConnection)});
 }
 
 auto LayerHistory::findLayer(int32_t id) -> std::pair<LayerStatus, LayerPair*> {

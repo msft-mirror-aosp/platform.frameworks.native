@@ -100,7 +100,7 @@ public:
         return true;
     }
 
-    void setDivisor(unsigned) override {}
+    void setRenderRate(Fps) override {}
 
     nsecs_t nextVSyncTime(nsecs_t timePoint) const {
         if (timePoint % mPeriod == 0) {
@@ -126,6 +126,11 @@ public:
 
     scheduler::ScheduleResult schedule(CallbackToken /* token */,
                                        ScheduleTiming /* scheduleTiming */) override {
+        return (scheduler::ScheduleResult)0;
+    }
+
+    scheduler::ScheduleResult update(CallbackToken /* token */,
+                                     ScheduleTiming /* scheduleTiming */) override {
         return (scheduler::ScheduleResult)0;
     }
 

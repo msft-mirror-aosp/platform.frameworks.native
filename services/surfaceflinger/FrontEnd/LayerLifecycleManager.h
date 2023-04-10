@@ -39,8 +39,15 @@ class LayerLifecycleManager {
 public:
     // External state changes should be updated in the following order:
     void addLayers(std::vector<std::unique_ptr<RequestedLayerState>>);
-    void applyTransactions(const std::vector<TransactionState>&);
-    void onHandlesDestroyed(const std::vector<uint32_t>&);
+    // Ignore unknown layers when interoping with legacy front end. In legacy we destroy
+    // the layers it is unreachable. When using the LayerLifecycleManager for layer trace
+    // generation we may encounter layers which are known because we don't have an explicit
+    // lifecycle. Ignore these errors while we have to interop with legacy.
+    void applyTransactions(const std::vector<TransactionState>&, bool ignoreUnknownLayers = false);
+    // Ignore unknown handles when iteroping with legacy front end. In the old world, we
+    // would create child layers which are not necessary with the new front end. This means
+    // we will get notified for handle changes that don't exist in the new front end.
+    void onHandlesDestroyed(const std::vector<uint32_t>&, bool ignoreUnknownHandles = false);
 
     // Detaches the layer from its relative parent to prevent a loop in the
     // layer hierarchy. This overrides the RequestedLayerState and leaves
@@ -80,6 +87,9 @@ private:
     std::vector<uint32_t>* getLinkedLayersFromId(uint32_t);
     uint32_t linkLayer(uint32_t layerId, uint32_t layerToLink);
     uint32_t unlinkLayer(uint32_t layerId, uint32_t linkedLayer);
+    std::vector<uint32_t> unlinkLayers(const std::vector<uint32_t>& layerIds, uint32_t linkedLayer);
+
+    void updateDisplayMirrorLayers(RequestedLayerState& rootLayer);
 
     struct References {
         // Lifetime tied to mLayers
@@ -90,6 +100,8 @@ private:
     std::unordered_map<uint32_t, References> mIdToLayer;
     // Listeners are invoked once changes are committed.
     std::vector<std::shared_ptr<ILifecycleListener>> mListeners;
+    // Layers that mirror a display stack (see updateDisplayMirrorLayers)
+    std::vector<uint32_t> mDisplayMirroringLayers;
 
     // Aggregation of changes since last commit.
     ftl::Flags<RequestedLayerState::Changes> mGlobalChanges;

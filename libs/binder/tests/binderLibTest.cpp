@@ -507,7 +507,13 @@ TEST_F(BinderLibTest, Freeze) {
     }
 
     EXPECT_EQ(-EAGAIN, IPCThreadState::self()->freeze(pid, true, 0));
-    EXPECT_EQ(-EAGAIN, IPCThreadState::self()->freeze(pid, true, 0));
+
+    // b/268232063 - succeeds ~0.08% of the time
+    {
+        auto ret = IPCThreadState::self()->freeze(pid, true, 0);
+        EXPECT_TRUE(ret == -EAGAIN || ret == OK);
+    }
+
     EXPECT_EQ(NO_ERROR, IPCThreadState::self()->freeze(pid, true, 1000));
     EXPECT_EQ(FAILED_TRANSACTION, m_server->transact(BINDER_LIB_TEST_NOP_TRANSACTION, data, &reply));
 
@@ -1370,7 +1376,7 @@ TEST_F(BinderLibTest, ThreadPoolAvailableThreads) {
         }));
     }
 
-    data.writeInt32(100);
+    data.writeInt32(500);
     // Give a chance for all threads to be used
     EXPECT_THAT(server->transact(BINDER_LIB_TEST_UNLOCK_AFTER_MS, data, &reply), NO_ERROR);
 
@@ -1406,9 +1412,11 @@ TEST_F(BinderLibTest, HangingServices) {
     ASSERT_TRUE(server != nullptr);
     int32_t delay = 1000; // ms
     data.writeInt32(delay);
+    // b/266537959 - must take before taking lock, since countdown is started in the remote
+    // process there.
+    size_t epochMsBefore = epochMillis();
     EXPECT_THAT(server->transact(BINDER_LIB_TEST_PROCESS_TEMPORARY_LOCK, data, &reply), NO_ERROR);
     std::vector<std::thread> ts;
-    size_t epochMsBefore = epochMillis();
     for (size_t i = 0; i < kKernelThreads + 1; i++) {
         ts.push_back(std::thread([&] {
             Parcel local_reply;
