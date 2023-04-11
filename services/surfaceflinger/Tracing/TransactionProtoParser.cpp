@@ -47,6 +47,7 @@ public:
     uint64_t getId() const override { return mId; }
     PixelFormat getPixelFormat() const override { return mPixelFormat; }
     uint64_t getUsage() const override { return mUsage; }
+    void remapBuffer() override {}
     ~FakeExternalTexture() = default;
 };
 
@@ -585,7 +586,7 @@ frontend::DisplayInfo TransactionProtoParser::fromProto(const proto::DisplayInfo
     displayInfo.receivesInput = proto.receives_input();
     displayInfo.isSecure = proto.is_secure();
     displayInfo.isPrimary = proto.is_primary();
-    displayInfo.isPrimary = proto.is_virtual();
+    displayInfo.isVirtual = proto.is_virtual();
     displayInfo.rotationFlags = (ui::Transform::RotationFlags)proto.rotation_flags();
     displayInfo.transformHint = (ui::Transform::RotationFlags)proto.transform_hint();
     return displayInfo;
@@ -593,7 +594,7 @@ frontend::DisplayInfo TransactionProtoParser::fromProto(const proto::DisplayInfo
 
 void TransactionProtoParser::fromProto(
         const google::protobuf::RepeatedPtrField<proto::DisplayInfo>& proto,
-        display::DisplayMap<ui::LayerStack, frontend::DisplayInfo> outDisplayInfos) {
+        display::DisplayMap<ui::LayerStack, frontend::DisplayInfo>& outDisplayInfos) {
     outDisplayInfos.clear();
     for (const proto::DisplayInfo& displayInfo : proto) {
         outDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(displayInfo.layer_stack()),

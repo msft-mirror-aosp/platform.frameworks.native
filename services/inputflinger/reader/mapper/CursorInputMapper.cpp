@@ -133,10 +133,10 @@ void CursorInputMapper::dump(std::string& dump) {
     dump += StringPrintf(INDENT3 "DownTime: %" PRId64 "\n", mDownTime);
 }
 
-std::list<NotifyArgs> CursorInputMapper::configure(nsecs_t when,
-                                                   const InputReaderConfiguration* config,
-                                                   uint32_t changes) {
-    std::list<NotifyArgs> out = InputMapper::configure(when, config, changes);
+std::list<NotifyArgs> CursorInputMapper::reconfigure(nsecs_t when,
+                                                     const InputReaderConfiguration* config,
+                                                     uint32_t changes) {
+    std::list<NotifyArgs> out = InputMapper::reconfigure(when, config, changes);
 
     if (!changes) { // first time only
         mCursorScrollAccumulator.configure(getDeviceContext());
@@ -350,7 +350,7 @@ std::list<NotifyArgs> CursorInputMapper::sync(nsecs_t when, nsecs_t readTime) {
     PointerProperties pointerProperties;
     pointerProperties.clear();
     pointerProperties.id = 0;
-    pointerProperties.toolType = AMOTION_EVENT_TOOL_TYPE_MOUSE;
+    pointerProperties.toolType = ToolType::MOUSE;
 
     PointerCoords pointerCoords;
     pointerCoords.clear();

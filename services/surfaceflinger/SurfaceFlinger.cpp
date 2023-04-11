@@ -478,10 +478,6 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
 
     mIgnoreHdrCameraLayers = ignore_hdr_camera_layers(false);
 
-    // Power hint session mode, representing which hint(s) to send: early, late, or both)
-    mPowerHintSessionMode =
-            {.late = base::GetBoolProperty("debug.sf.send_late_power_session_hint"s, true),
-             .early = base::GetBoolProperty("debug.sf.send_early_power_session_hint"s, false)};
     mLayerLifecycleManagerEnabled =
             base::GetBoolProperty("persist.debug.sf.enable_layer_lifecycle_manager"s, false);
     mLegacyFrontEndEnabled = !mLayerLifecycleManagerEnabled ||
@@ -715,12 +711,12 @@ void SurfaceFlinger::bootFinished() {
 
         readPersistentProperties();
         mPowerAdvisor->onBootFinished();
-        const bool powerHintEnabled = mFlagManager.use_adpf_cpu_hint();
-        mPowerAdvisor->enablePowerHint(powerHintEnabled);
-        const bool powerHintUsed = mPowerAdvisor->usePowerHintSession();
+        const bool hintSessionEnabled = mFlagManager.use_adpf_cpu_hint();
+        mPowerAdvisor->enablePowerHintSession(hintSessionEnabled);
+        const bool hintSessionUsed = mPowerAdvisor->usePowerHintSession();
         ALOGD("Power hint is %s",
-              powerHintUsed ? "supported" : (powerHintEnabled ? "unsupported" : "disabled"));
-        if (powerHintUsed) {
+              hintSessionUsed ? "supported" : (hintSessionEnabled ? "unsupported" : "disabled"));
+        if (hintSessionUsed) {
             std::optional<pid_t> renderEngineTid = getRenderEngine().getRenderEngineTid();
             std::vector<int32_t> tidList;
             tidList.emplace_back(gettid());
@@ -2461,16 +2457,7 @@ bool SurfaceFlinger::commit(TimePoint frameTime, VsyncId vsyncId, TimePoint expe
 
         mPowerAdvisor->setFrameDelay(frameDelay);
         mPowerAdvisor->setTotalFrameTargetWorkDuration(idealSfWorkDuration);
-
-        const auto& display = FTL_FAKE_GUARD(mStateLock, getDefaultDisplayDeviceLocked()).get();
-        const Period vsyncPeriod = display->getActiveMode().fps.getPeriod();
-        mPowerAdvisor->setTargetWorkDuration(vsyncPeriod);
-
-        // Send early hint here to make sure there's not another frame pending
-        if (mPowerHintSessionMode.early) {
-            // Send a rough prediction for this frame based on last frame's timing info
-            mPowerAdvisor->sendPredictedWorkDuration();
-        }
+        mPowerAdvisor->updateTargetWorkDuration(vsyncPeriod);
     }
 
     if (mRefreshRateOverlaySpinner) {
@@ -2623,8 +2610,21 @@ void SurfaceFlinger::composite(TimePoint frameTime, VsyncId vsyncId)
     const auto prevVsyncTime = mExpectedPresentTime - mScheduler->getVsyncSchedule()->period();
     const auto hwcMinWorkDuration = mVsyncConfiguration->getCurrentConfigs().hwcMinWorkDuration;
 
-    refreshArgs.earliestPresentTime = prevVsyncTime - hwcMinWorkDuration;
-    refreshArgs.previousPresentFence = mPreviousPresentFences[0].fenceTime;
+    const Period vsyncPeriod = mScheduler->getVsyncSchedule()->period();
+    const bool threeVsyncsAhead = mExpectedPresentTime - frameTime > 2 * vsyncPeriod;
+
+    // We should wait for the earliest present time if HWC doesn't support ExpectedPresentTime,
+    // and the next vsync is not already taken by the previous frame.
+    const bool waitForEarliestPresent =
+            !getHwComposer().getComposer()->isSupported(
+                    Hwc2::Composer::OptionalFeature::ExpectedPresentTime) &&
+            (threeVsyncsAhead ||
+             mPreviousPresentFences[0].fenceTime->getSignalTime() != Fence::SIGNAL_TIME_PENDING);
+
+    if (waitForEarliestPresent) {
+        refreshArgs.earliestPresentTime = prevVsyncTime - hwcMinWorkDuration;
+    }
+
     refreshArgs.scheduledFrameTime = mScheduler->getScheduledFrameTime();
     refreshArgs.expectedPresentTime = mExpectedPresentTime.ns();
     refreshArgs.hasTrustedPresentationListener = mNumTrustedPresentationListeners > 0;
@@ -2658,9 +2658,7 @@ void SurfaceFlinger::composite(TimePoint frameTime, VsyncId vsyncId)
         mPowerAdvisor->setSfPresentTiming(TimePoint::fromNs(mPreviousPresentFences[0]
                                                                     .fenceTime->getSignalTime()),
                                           TimePoint::now());
-        if (mPowerHintSessionMode.late) {
-            mPowerAdvisor->sendActualWorkDuration();
-        }
+        mPowerAdvisor->reportActualWorkDuration();
     }
 
     if (mScheduler->onPostComposition(presentTime)) {
@@ -2763,7 +2761,7 @@ bool SurfaceFlinger::isHdrLayer(const frontend::LayerSnapshot& snapshot) const {
     // RANGE_EXTENDED layers may identify themselves as being "HDR" via a desired sdr/hdr ratio
     if ((snapshot.dataspace & (int32_t)Dataspace::RANGE_MASK) ==
                 (int32_t)Dataspace::RANGE_EXTENDED &&
-        snapshot.desiredSdrHdrRatio > 1.01f) {
+        snapshot.desiredHdrSdrRatio > 1.01f) {
         return true;
     }
     return false;
@@ -2900,11 +2898,9 @@ void SurfaceFlinger::postComposition(nsecs_t callTime) {
                         const auto* outputLayer =
                             compositionDisplay->getOutputLayerForLayer(layerFe);
                         if (outputLayer) {
-                            // TODO(b/267350616): Rename SdrHdrRatio -> HdrSdrRatio
-                            // everywhere
-                            const float desiredHdrSdrRatio = snapshot.desiredSdrHdrRatio <= 1.f
+                            const float desiredHdrSdrRatio = snapshot.desiredHdrSdrRatio <= 1.f
                                     ? std::numeric_limits<float>::infinity()
-                                    : snapshot.desiredSdrHdrRatio;
+                                    : snapshot.desiredHdrSdrRatio;
                             info.mergeDesiredRatio(desiredHdrSdrRatio);
                             info.numberOfHdrLayers++;
                             const auto displayFrame = outputLayer->getState().displayFrame;
@@ -3725,11 +3721,8 @@ void SurfaceFlinger::updateInputFlinger() {
         ATRACE_NAME("BackgroundExecutor::updateInputFlinger");
         if (updateWindowInfo) {
             mWindowInfosListenerInvoker
-                    ->windowInfosChanged(std::move(windowInfos), std::move(displayInfos),
-                                         std::move(
-                                                 inputWindowCommands.windowInfosReportedListeners),
-                                         /* forceImmediateCall= */
-                                         !inputWindowCommands.focusRequests.empty());
+                    ->windowInfosChanged(windowInfos, displayInfos,
+                                         inputWindowCommands.windowInfosReportedListeners);
         } else {
             // If there are listeners but no changes to input windows, call the listeners
             // immediately.
@@ -4269,20 +4262,23 @@ TransactionHandler::TransactionReadiness SurfaceFlinger::transactionReadyBufferC
             return TraverseBuffersReturnValues::STOP_TRAVERSAL;
         }
 
-        // check fence status
-        const bool allowLatchUnsignaled = shouldLatchUnsignaled(layer, s, transaction.states.size(),
-                                                                flushState.firstTransaction);
-        ATRACE_FORMAT("%s allowLatchUnsignaled=%s", layer->getName().c_str(),
-                      allowLatchUnsignaled ? "true" : "false");
-
-        const bool acquireFenceChanged = s.bufferData &&
+        // ignore the acquire fence if LatchUnsignaledConfig::Always is set.
+        const bool checkAcquireFence = enableLatchUnsignaledConfig != LatchUnsignaledConfig::Always;
+        const bool acquireFenceAvailable = s.bufferData &&
                 s.bufferData->flags.test(BufferData::BufferDataChange::fenceChanged) &&
                 s.bufferData->acquireFence;
-        const bool fenceSignaled =
-                (!acquireFenceChanged ||
-                 s.bufferData->acquireFence->getStatus() != Fence::Status::Unsignaled);
+        const bool fenceSignaled = !checkAcquireFence || !acquireFenceAvailable ||
+                s.bufferData->acquireFence->getStatus() != Fence::Status::Unsignaled;
         if (!fenceSignaled) {
-            if (!allowLatchUnsignaled) {
+            // check fence status
+            const bool allowLatchUnsignaled =
+                    shouldLatchUnsignaled(layer, s, transaction.states.size(),
+                                          flushState.firstTransaction);
+            ATRACE_FORMAT("%s allowLatchUnsignaled=%s", layer->getName().c_str(),
+                          allowLatchUnsignaled ? "true" : "false");
+            if (allowLatchUnsignaled) {
+                ready = TransactionReadiness::NotReadyUnsignaled;
+            } else {
                 ready = TransactionReadiness::NotReady;
                 auto& listener = s.bufferData->releaseBufferListener;
                 if (listener &&
@@ -4295,10 +4291,6 @@ TransactionHandler::TransactionReadiness SurfaceFlinger::transactionReadyBufferC
                 }
                 return TraverseBuffersReturnValues::STOP_TRAVERSAL;
             }
-
-            ready = enableLatchUnsignaledConfig == LatchUnsignaledConfig::AutoSingleLayer
-                    ? TransactionReadiness::ReadyUnsignaledSingle
-                    : TransactionReadiness::ReadyUnsignaled;
         }
         return TraverseBuffersReturnValues::CONTINUE_TRAVERSAL;
     });
@@ -4762,6 +4754,7 @@ uint32_t SurfaceFlinger::setClientStateLocked(const FrameTimelineInfo& frameTime
         }
         return 0;
     }
+    MUTEX_ALIAS(mStateLock, layer->mFlinger->mStateLock);
 
     ui::LayerStack oldLayerStack = layer->getLayerStack(LayerVector::StateSet::Current);
 
@@ -4962,7 +4955,7 @@ uint32_t SurfaceFlinger::setClientStateLocked(const FrameTimelineInfo& frameTime
         if (layer->setDimmingEnabled(s.dimmingEnabled)) flags |= eTraversalNeeded;
     }
     if (what & layer_state_t::eExtendedRangeBrightnessChanged) {
-        if (layer->setExtendedRangeBrightness(s.currentSdrHdrRatio, s.desiredSdrHdrRatio)) {
+        if (layer->setExtendedRangeBrightness(s.currentHdrSdrRatio, s.desiredHdrSdrRatio)) {
             flags |= eTraversalNeeded;
         }
     }
@@ -6888,6 +6881,7 @@ status_t SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
     wp<const DisplayDevice> displayWeak;
     ui::LayerStack layerStack;
     ui::Size reqSize(args.width, args.height);
+    std::unordered_set<uint32_t> excludeLayerIds;
     ui::Dataspace dataspace;
     {
         Mutex::Autolock lock(mStateLock);
@@ -6899,6 +6893,16 @@ status_t SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
         // set the requested width/height to the logical display layer stack rect size by default
         if (args.width == 0 || args.height == 0) {
             reqSize = display->getLayerStackSpaceRect().getSize();
+        }
+
+        for (const auto& handle : args.excludeHandles) {
+            uint32_t excludeLayer = LayerHandle::getLayerId(handle);
+            if (excludeLayer != UNASSIGNED_LAYER_ID) {
+                excludeLayerIds.emplace(excludeLayer);
+            } else {
+                ALOGW("Invalid layer handle passed as excludeLayer to captureDisplay");
+                return NAME_NOT_FOUND;
+            }
         }
 
         // Allow the caller to specify a dataspace regardless of the display's color mode, e.g. if
@@ -6916,10 +6920,11 @@ status_t SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
     GetLayerSnapshotsFunction getLayerSnapshots;
     if (mLayerLifecycleManagerEnabled) {
         getLayerSnapshots =
-                getLayerSnapshotsForScreenshots(layerStack, args.uid, /*snapshotFilterFn=*/nullptr);
+                getLayerSnapshotsForScreenshots(layerStack, args.uid, std::move(excludeLayerIds));
     } else {
-        auto traverseLayers = [this, args, layerStack](const LayerVector::Visitor& visitor) {
-            traverseLayersInLayerStack(layerStack, args.uid, visitor);
+        auto traverseLayers = [this, args, excludeLayerIds,
+                               layerStack](const LayerVector::Visitor& visitor) {
+            traverseLayersInLayerStack(layerStack, args.uid, std::move(excludeLayerIds), visitor);
         };
         getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
     }
@@ -6962,7 +6967,7 @@ status_t SurfaceFlinger::captureDisplay(DisplayId displayId,
                                                             /*snapshotFilterFn=*/nullptr);
     } else {
         auto traverseLayers = [this, layerStack](const LayerVector::Visitor& visitor) {
-            traverseLayersInLayerStack(layerStack, CaptureArgs::UNSET_UID, visitor);
+            traverseLayersInLayerStack(layerStack, CaptureArgs::UNSET_UID, {}, visitor);
         };
         getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
     }
@@ -7386,6 +7391,7 @@ void SurfaceFlinger::State::traverseInReverseZOrder(const LayerVector::Visitor& 
 }
 
 void SurfaceFlinger::traverseLayersInLayerStack(ui::LayerStack layerStack, const int32_t uid,
+                                                std::unordered_set<uint32_t> excludeLayerIds,
                                                 const LayerVector::Visitor& visitor) {
     // We loop through the first level of layers without traversing,
     // as we need to determine which layers belong to the requested display.
@@ -7404,6 +7410,17 @@ void SurfaceFlinger::traverseLayersInLayerStack(ui::LayerStack layerStack, const
             if (uid != CaptureArgs::UNSET_UID && layer->getOwnerUid() != uid) {
                 return;
             }
+
+            if (!excludeLayerIds.empty()) {
+                auto p = sp<Layer>::fromExisting(layer);
+                while (p != nullptr) {
+                    if (excludeLayerIds.count(p->sequence) != 0) {
+                        return;
+                    }
+                    p = p->getParent();
+                }
+            }
+
             visitor(layer);
         });
     }
@@ -7732,6 +7749,7 @@ void SurfaceFlinger::handleLayerCreatedLocked(const LayerCreatedState& state, Vs
         ALOGD("Layer was destroyed soon after creation %p", state.layer.unsafe_get());
         return;
     }
+    MUTEX_ALIAS(mStateLock, layer->mFlinger->mStateLock);
 
     sp<Layer> parent;
     bool addToRoot = state.addToRoot;
@@ -7906,9 +7924,15 @@ bool SurfaceFlinger::commitMirrorDisplays(VsyncId vsyncId) {
                                          ISurfaceComposerClient::eNoColorFill,
                                          gui::LayerMetadata());
             sp<Layer> childMirror;
-            createEffectLayer(mirrorArgs, &unused, &childMirror);
-            childMirror->setClonedChild(layer->createClone());
-            childMirror->reparent(mirrorDisplay.rootHandle);
+            {
+                Mutex::Autolock lock(mStateLock);
+                createEffectLayer(mirrorArgs, &unused, &childMirror);
+                MUTEX_ALIAS(mStateLock, childMirror->mFlinger->mStateLock);
+                childMirror->setClonedChild(layer->createClone());
+                childMirror->reparent(mirrorDisplay.rootHandle);
+            }
+            // lock on mStateLock needs to be released before binder handle gets destroyed
+            unused.clear();
         }
     }
     return true;
@@ -8053,6 +8077,44 @@ SurfaceFlinger::getLayerSnapshotsForScreenshots(
                     layerFE->mSnapshot = std::make_unique<frontend::LayerSnapshot>(*snapshot);
                     layers.emplace_back(legacyLayer, std::move(layerFE));
                 });
+
+        return layers;
+    };
+}
+
+std::function<std::vector<std::pair<Layer*, sp<LayerFE>>>()>
+SurfaceFlinger::getLayerSnapshotsForScreenshots(std::optional<ui::LayerStack> layerStack,
+                                                uint32_t uid,
+                                                std::unordered_set<uint32_t> excludeLayerIds) {
+    return [&, layerStack, uid, excludeLayerIds = std::move(excludeLayerIds)]() {
+        if (excludeLayerIds.empty()) {
+            auto getLayerSnapshotsFn =
+                    getLayerSnapshotsForScreenshots(layerStack, uid, /*snapshotFilterFn=*/nullptr);
+            std::vector<std::pair<Layer*, sp<LayerFE>>> layers = getLayerSnapshotsFn();
+            return layers;
+        }
+
+        frontend::LayerSnapshotBuilder::Args
+                args{.root = mLayerHierarchyBuilder.getHierarchy(),
+                     .layerLifecycleManager = mLayerLifecycleManager,
+                     .forceUpdate = frontend::LayerSnapshotBuilder::ForceUpdateFlags::HIERARCHY,
+                     .displays = mFrontEndDisplayInfos,
+                     .displayChanges = true,
+                     .globalShadowSettings = mDrawingState.globalShadowSettings,
+                     .supportsBlur = mSupportsBlur,
+                     .forceFullDamage = mForceFullDamage,
+                     .excludeLayerIds = std::move(excludeLayerIds),
+                     .supportedLayerGenericMetadata =
+                             getHwComposer().getSupportedLayerGenericMetadata(),
+                     .genericLayerMetadataKeyMap = getGenericLayerMetadataKeyMap()};
+        mLayerSnapshotBuilder.update(args);
+
+        auto getLayerSnapshotsFn =
+                getLayerSnapshotsForScreenshots(layerStack, uid, /*snapshotFilterFn=*/nullptr);
+        std::vector<std::pair<Layer*, sp<LayerFE>>> layers = getLayerSnapshotsFn();
+
+        args.excludeLayerIds.clear();
+        mLayerSnapshotBuilder.update(args);
 
         return layers;
     };
@@ -8904,6 +8966,15 @@ status_t SurfaceComposerAIDL::checkReadFrameBufferPermission() {
 
 void SurfaceFlinger::forceFutureUpdate(int delayInMs) {
     static_cast<void>(mScheduler->scheduleDelayed([&]() { scheduleRepaint(); }, ms2ns(delayInMs)));
+}
+
+const DisplayDevice* SurfaceFlinger::getDisplayFromLayerStack(ui::LayerStack layerStack) {
+    for (const auto& [_, display] : mDisplays) {
+        if (display->getLayerStack() == layerStack) {
+            return display.get();
+        }
+    }
+    return nullptr;
 }
 
 } // namespace android

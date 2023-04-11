@@ -137,7 +137,6 @@ public:
         wp<Layer> touchableRegionCrop;
 
         ui::Dataspace dataspace;
-        bool dataspaceRequested;
 
         uint64_t frameNumber;
         ui::Transform transform;
@@ -225,8 +224,8 @@ public:
         gui::DropInputMode dropInputMode;
         bool autoRefresh = false;
         bool dimmingEnabled = true;
-        float currentSdrHdrRatio = 1.f;
-        float desiredSdrHdrRatio = 1.f;
+        float currentHdrSdrRatio = 1.f;
+        float desiredHdrSdrRatio = 1.f;
         gui::CachingHint cachingHint = gui::CachingHint::Enabled;
         int64_t latchedVsyncId = 0;
     };
@@ -290,14 +289,14 @@ public:
 
     virtual bool setMetadata(const LayerMetadata& data);
     virtual void setChildrenDrawingParent(const sp<Layer>&);
-    virtual bool reparent(const sp<IBinder>& newParentHandle);
+    virtual bool reparent(const sp<IBinder>& newParentHandle) REQUIRES(mFlinger->mStateLock);
     virtual bool setColorTransform(const mat4& matrix);
     virtual mat4 getColorTransform() const;
     virtual bool hasColorTransform() const;
     virtual bool isColorSpaceAgnostic() const { return mDrawingState.colorSpaceAgnostic; }
     virtual bool isDimmingEnabled() const { return getDrawingState().dimmingEnabled; }
-    float getDesiredSdrHdrRatio() const { return getDrawingState().desiredSdrHdrRatio; }
-    float getCurrentSdrHdrRatio() const { return getDrawingState().currentSdrHdrRatio; }
+    float getDesiredHdrSdrRatio() const { return getDrawingState().desiredHdrSdrRatio; }
+    float getCurrentHdrSdrRatio() const { return getDrawingState().currentHdrSdrRatio; }
     gui::CachingHint getCachingHint() const { return getDrawingState().cachingHint; }
 
     bool setTransform(uint32_t /*transform*/);
@@ -316,7 +315,8 @@ public:
     bool setSidebandStream(const sp<NativeHandle>& /*sidebandStream*/);
     bool setTransactionCompletedListeners(const std::vector<sp<CallbackHandle>>& /*handles*/,
                                           bool willPresent);
-    virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace);
+    virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace)
+            REQUIRES(mFlinger->mStateLock);
     virtual bool setColorSpaceAgnostic(const bool agnostic);
     virtual bool setDimmingEnabled(const bool dimmingEnabled);
     virtual bool setDefaultFrameRateCompatibility(FrameRateCompatibility compatibility);
@@ -332,7 +332,6 @@ public:
     virtual FrameRateCompatibility getDefaultFrameRateCompatibility() const;
     //
     ui::Dataspace getDataSpace() const;
-    ui::Dataspace getRequestedDataSpace() const;
 
     virtual sp<LayerFE> getCompositionEngineLayerFE() const;
     virtual sp<LayerFE> copyCompositionEngineLayerFE() const;
@@ -517,7 +516,7 @@ public:
         uint64_t mFrameNumber;
 
         bool mFrameLatencyNeeded{false};
-        float mDesiredSdrHdrRatio = 1.f;
+        float mDesiredHdrSdrRatio = 1.f;
     };
 
     BufferInfo mBufferInfo;
@@ -610,7 +609,7 @@ public:
     bool isRemovedFromCurrentState() const;
 
     LayerProto* writeToProto(LayersProto& layersProto, uint32_t traceFlags);
-    void writeCompositionStateToProto(LayerProto* layerProto);
+    void writeCompositionStateToProto(LayerProto* layerProto, ui::LayerStack layerStack);
 
     // Write states that are modified by the main thread. This includes drawing
     // state as well as buffer data. This should be called in the main or tracing
@@ -641,13 +640,13 @@ public:
     /*
      * Remove from current state and mark for removal.
      */
-    void removeFromCurrentState();
+    void removeFromCurrentState() REQUIRES(mFlinger->mStateLock);
 
     /*
      * called with the state lock from a binder thread when the layer is
      * removed from the current list to the pending removal list
      */
-    void onRemovedFromCurrentState();
+    void onRemovedFromCurrentState() REQUIRES(mFlinger->mStateLock);
 
     /*
      * Called when the layer is added back to the current state list.
@@ -880,6 +879,9 @@ public:
         mTransformHint = transformHint;
     }
 
+    // Exposed so SurfaceFlinger can assert that it's held
+    const sp<SurfaceFlinger> mFlinger;
+
 protected:
     // For unit tests
     friend class TestableSurfaceFlinger;
@@ -940,9 +942,6 @@ protected:
      * in this layer's space, regardless of the specified crop layer.
      */
     std::pair<FloatRect, bool> getInputBounds(bool fillParentBounds) const;
-
-    // constant
-    sp<SurfaceFlinger> mFlinger;
 
     bool mPremultipliedAlpha{true};
     const std::string mName;
