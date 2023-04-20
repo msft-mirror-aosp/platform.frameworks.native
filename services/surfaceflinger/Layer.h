@@ -134,13 +134,14 @@ public:
 
     struct RoundedCornerState {
         RoundedCornerState() = default;
-        RoundedCornerState(FloatRect cropRect, float radius)
+        RoundedCornerState(const FloatRect& cropRect, const vec2& radius)
               : cropRect(cropRect), radius(radius) {}
 
         // Rounded rectangle in local layer coordinate space.
         FloatRect cropRect = FloatRect();
         // Radius of the rounded rectangle.
-        float radius = 0.0f;
+        vec2 radius;
+        bool hasRoundedCorners() const { return radius.x > 0.0f && radius.y > 0.0f; }
     };
 
     using FrameRate = scheduler::LayerInfo::FrameRate;
@@ -408,7 +409,7 @@ public:
     virtual ui::LayerStack getLayerStack() const;
     virtual bool setMetadata(const LayerMetadata& data);
     virtual void setChildrenDrawingParent(const sp<Layer>&);
-    virtual bool reparent(const sp<IBinder>& newParentHandle);
+    virtual bool reparent(const sp<IBinder>& newParentHandle) REQUIRES(mFlinger->mStateLock);
     virtual bool setColorTransform(const mat4& matrix);
     virtual mat4 getColorTransform() const;
     virtual bool hasColorTransform() const;
@@ -432,7 +433,8 @@ public:
     virtual bool setSidebandStream(const sp<NativeHandle>& /*sidebandStream*/) { return false; };
     virtual bool setTransactionCompletedListeners(
             const std::vector<sp<CallbackHandle>>& /*handles*/);
-    virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace);
+    virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace)
+            REQUIRES(mFlinger->mStateLock);
     virtual bool setColorSpaceAgnostic(const bool agnostic);
     virtual bool setDimmingEnabled(const bool dimmingEnabled);
     virtual bool setFrameRateSelectionPriority(int32_t priority);
@@ -596,7 +598,7 @@ public:
     // corner crop does not intersect with its own rounded corner crop.
     virtual RoundedCornerState getRoundedCornerState() const;
 
-    bool hasRoundedCorners() const override { return getRoundedCornerState().radius > .0f; }
+    bool hasRoundedCorners() const override { return getRoundedCornerState().hasRoundedCorners(); }
 
     virtual PixelFormat getPixelFormat() const { return PIXEL_FORMAT_NONE; }
     /**
@@ -714,13 +716,13 @@ public:
     /*
      * Remove from current state and mark for removal.
      */
-    void removeFromCurrentState();
+    void removeFromCurrentState() REQUIRES(mFlinger->mStateLock);
 
     /*
      * called with the state lock from a binder thread when the layer is
      * removed from the current list to the pending removal list
      */
-    void onRemovedFromCurrentState();
+    void onRemovedFromCurrentState() REQUIRES(mFlinger->mStateLock);
 
     /*
      * Called when the layer is added back to the current state list.
@@ -898,6 +900,9 @@ public:
 
     virtual bool simpleBufferUpdate(const layer_state_t&) const { return false; }
 
+    // Exposed so SurfaceFlinger can assert that it's held
+    const sp<SurfaceFlinger> mFlinger;
+
 protected:
     friend class impl::SurfaceInterceptor;
 
@@ -972,9 +977,6 @@ protected:
      * in this layer's space, regardless of the specified crop layer.
      */
     virtual Rect getInputBounds() const;
-
-    // constant
-    sp<SurfaceFlinger> mFlinger;
 
     bool mPremultipliedAlpha{true};
     const std::string mName;
