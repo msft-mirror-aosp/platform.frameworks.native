@@ -763,7 +763,7 @@ private:
      * Transactions
      */
     bool applyTransactionState(const FrameTimelineInfo& info, Vector<ComposerState>& state,
-                               const Vector<DisplayState>& displays, uint32_t flags,
+                               Vector<DisplayState>& displays, uint32_t flags,
                                const InputWindowCommands& inputWindowCommands,
                                const int64_t desiredPresentTime, bool isAutoTimestamp,
                                const client_cache_t& uncacheBuffer, const int64_t postTime,
@@ -859,7 +859,7 @@ private:
     // this layer meaning it is entirely safe to destroy all
     // resources associated to this layer.
     void onHandleDestroyed(BBinder* handle, sp<Layer>& layer);
-    void markLayerPendingRemovalLocked(const sp<Layer>& layer);
+    void markLayerPendingRemovalLocked(const sp<Layer>& layer) REQUIRES(mStateLock);
 
     // add a layer to SurfaceFlinger
     status_t addClientLayer(const sp<Client>& client, const sp<IBinder>& handle,

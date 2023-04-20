@@ -4227,7 +4227,7 @@ status_t SurfaceFlinger::setTransactionState(
 
 bool SurfaceFlinger::applyTransactionState(const FrameTimelineInfo& frameTimelineInfo,
                                            Vector<ComposerState>& states,
-                                           const Vector<DisplayState>& displays, uint32_t flags,
+                                           Vector<DisplayState>& displays, uint32_t flags,
                                            const InputWindowCommands& inputWindowCommands,
                                            const int64_t desiredPresentTime, bool isAutoTimestamp,
                                            const client_cache_t& uncacheBuffer,
@@ -4236,7 +4236,8 @@ bool SurfaceFlinger::applyTransactionState(const FrameTimelineInfo& frameTimelin
                                            const std::vector<ListenerCallbacks>& listenerCallbacks,
                                            int originPid, int originUid, uint64_t transactionId) {
     uint32_t transactionFlags = 0;
-    for (const DisplayState& display : displays) {
+    for (DisplayState& display : displays) {
+        display.sanitize(permissions);
         transactionFlags |= setDisplayStateLocked(display);
     }
 
@@ -4415,6 +4416,7 @@ uint32_t SurfaceFlinger::setClientStateLocked(const FrameTimelineInfo& frameTime
         }
         return 0;
     }
+    MUTEX_ALIAS(mStateLock, layer->mFlinger->mStateLock);
 
     // Only set by BLAST adapter layers
     if (what & layer_state_t::eProducerDisconnect) {
@@ -7304,6 +7306,7 @@ void SurfaceFlinger::handleLayerCreatedLocked(const LayerCreatedState& state) {
         ALOGD("Layer was destroyed soon after creation %p", state.layer.unsafe_get());
         return;
     }
+    MUTEX_ALIAS(mStateLock, layer->mFlinger->mStateLock);
 
     sp<Layer> parent;
     bool addToRoot = state.addToRoot;
