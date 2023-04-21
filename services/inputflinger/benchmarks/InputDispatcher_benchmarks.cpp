@@ -207,7 +207,7 @@ static MotionEvent generateMotionEvent() {
 
     pointerProperties[0].clear();
     pointerProperties[0].id = 0;
-    pointerProperties[0].toolType = AMOTION_EVENT_TOOL_TYPE_FINGER;
+    pointerProperties[0].toolType = ToolType::FINGER;
 
     pointerCoords[0].clear();
     pointerCoords[0].setAxisValue(AMOTION_EVENT_AXIS_X, 100);
@@ -235,7 +235,7 @@ static NotifyMotionArgs generateMotionArgs() {
 
     pointerProperties[0].clear();
     pointerProperties[0].id = 0;
-    pointerProperties[0].toolType = AMOTION_EVENT_TOOL_TYPE_FINGER;
+    pointerProperties[0].toolType = ToolType::FINGER;
 
     pointerCoords[0].clear();
     pointerCoords[0].setAxisValue(AMOTION_EVENT_AXIS_X, 100);
@@ -277,12 +277,12 @@ static void benchmarkNotifyMotion(benchmark::State& state) {
         motionArgs.action = AMOTION_EVENT_ACTION_DOWN;
         motionArgs.downTime = now();
         motionArgs.eventTime = motionArgs.downTime;
-        dispatcher.notifyMotion(&motionArgs);
+        dispatcher.notifyMotion(motionArgs);
 
         // Send ACTION_UP
         motionArgs.action = AMOTION_EVENT_ACTION_UP;
         motionArgs.eventTime = now();
-        dispatcher.notifyMotion(&motionArgs);
+        dispatcher.notifyMotion(motionArgs);
 
         window->consumeEvent();
         window->consumeEvent();

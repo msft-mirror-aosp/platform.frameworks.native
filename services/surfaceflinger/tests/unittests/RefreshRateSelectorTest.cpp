@@ -1455,6 +1455,24 @@ TEST_P(RefreshRateSelectorTest,
         lr.name = "ExplicitExactOrMultiple 29.97 Hz";
         EXPECT_EQ(kModeId60Frac, selector.getBestFrameRateMode(layers)->getId());
     }
+
+    // Test that 29.97 will choose 30 if 59.94 is not supported
+    {
+        auto selector = createSelector(makeModes(kMode30, kMode60), kModeId60);
+
+        lr.desiredRefreshRate = 29.97_Hz;
+        lr.name = "ExplicitExactOrMultiple 29.97 Hz";
+        EXPECT_EQ(kModeId30, selector.getBestFrameRateMode(layers)->getId());
+    }
+
+    // Test that 59.94 will choose 60 if 59.94 is not supported
+    {
+        auto selector = createSelector(makeModes(kMode60, kMode30Frac, kMode30), kModeId60);
+
+        lr.desiredRefreshRate = 59.94_Hz;
+        lr.name = "ExplicitExactOrMultiple 59.94 Hz";
+        EXPECT_EQ(kModeId60, selector.getBestFrameRateMode(layers)->getId());
+    }
 }
 
 TEST_P(RefreshRateSelectorTest, getBestFrameRateMode_ExplicitExact_WithFractionalRefreshRates) {
@@ -2981,6 +2999,12 @@ TEST_P(RefreshRateSelectorTest, noLowerFrameRateOnMinVote) {
     layers[0].name = "Test layer";
     layers[0].vote = LayerVoteType::Min;
     EXPECT_FRAME_RATE_MODE(kMode60, 60_Hz, selector.getBestScoredFrameRate(layers).frameRateMode);
+
+    constexpr FpsRanges kCappedAt60 = {{30_Hz, 90_Hz}, {30_Hz, 60_Hz}};
+    EXPECT_EQ(SetPolicyResult::Changed,
+              selector.setDisplayManagerPolicy(
+                      {DisplayModeId(kModeId60), kCappedAt60, kCappedAt60}));
+    EXPECT_FRAME_RATE_MODE(kMode60, 60_Hz, selector.getBestScoredFrameRate(layers).frameRateMode);
 }
 
 TEST_P(RefreshRateSelectorTest, frameRateIsCappedByPolicy) {
@@ -3000,6 +3024,22 @@ TEST_P(RefreshRateSelectorTest, frameRateIsCappedByPolicy) {
     layers[0].name = "Test layer";
     layers[0].vote = LayerVoteType::Min;
     EXPECT_FRAME_RATE_MODE(kMode60, 30_Hz, selector.getBestScoredFrameRate(layers).frameRateMode);
+}
+
+TEST_P(RefreshRateSelectorTest, frameRateNotInRange) {
+    auto selector = createSelector(kModes_60_90, kModeId60);
+
+    constexpr FpsRanges k60Only = {{60_Hz, 90_Hz}, {60_Hz, 60_Hz}};
+    constexpr FpsRanges kAll = {{0_Hz, 90_Hz}, {0_Hz, 90_Hz}};
+
+    EXPECT_EQ(SetPolicyResult::Changed,
+              selector.setDisplayManagerPolicy({DisplayModeId(kModeId60), k60Only, kAll}));
+
+    std::vector<LayerRequirement> layers = {{.weight = 1.f}};
+    layers[0].name = "Test layer";
+    layers[0].vote = LayerVoteType::Heuristic;
+    layers[0].desiredRefreshRate = 45_Hz;
+    EXPECT_FRAME_RATE_MODE(kMode60, 60_Hz, selector.getBestScoredFrameRate(layers).frameRateMode);
 }
 
 } // namespace

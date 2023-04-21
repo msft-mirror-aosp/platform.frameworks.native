@@ -24,7 +24,6 @@
 
 #include "Layer.h"
 #include "LayerCreationArgs.h"
-#include "LayerHandle.h"
 #include "LayerLog.h"
 #include "RequestedLayerState.h"
 
@@ -33,18 +32,6 @@ using ftl::Flags;
 using namespace ftl::flag_operators;
 
 namespace {
-uint32_t getLayerIdFromSurfaceControl(sp<SurfaceControl> surfaceControl) {
-    if (!surfaceControl) {
-        return UNASSIGNED_LAYER_ID;
-    }
-
-    return LayerHandle::getLayerId(surfaceControl->getHandle());
-}
-
-std::string layerIdToString(uint32_t layerId) {
-    return layerId == UNASSIGNED_LAYER_ID ? "none" : std::to_string(layerId);
-}
-
 std::string layerIdsToString(const std::vector<uint32_t>& layerIds) {
     std::stringstream stream;
     stream << "{";
@@ -64,17 +51,17 @@ RequestedLayerState::RequestedLayerState(const LayerCreationArgs& args)
         layerCreationFlags(args.flags),
         textureName(args.textureName),
         ownerUid(args.ownerUid),
-        ownerPid(args.ownerPid) {
+        ownerPid(args.ownerPid),
+        parentId(args.parentId),
+        layerIdToMirror(args.layerIdToMirror) {
     layerId = static_cast<int32_t>(args.sequence);
     changes |= RequestedLayerState::Changes::Created;
     metadata.merge(args.metadata);
     changes |= RequestedLayerState::Changes::Metadata;
     handleAlive = true;
-    parentId = LayerHandle::getLayerId(args.parentHandle.promote());
-    if (args.parentHandle != nullptr) {
+    if (parentId != UNASSIGNED_LAYER_ID) {
         canBeRoot = false;
     }
-    layerIdToMirror = LayerHandle::getLayerId(args.mirrorLayerHandle.promote());
     if (layerIdToMirror != UNASSIGNED_LAYER_ID) {
         changes |= RequestedLayerState::Changes::Mirror;
     } else if (args.layerStackToMirror != ui::INVALID_LAYER_STACK) {
@@ -109,8 +96,8 @@ RequestedLayerState::RequestedLayerState(const LayerCreationArgs& args)
     layerStack = ui::DEFAULT_LAYER_STACK;
     transformToDisplayInverse = false;
     dataspace = ui::Dataspace::UNKNOWN;
-    desiredSdrHdrRatio = 1.f;
-    currentSdrHdrRatio = 1.f;
+    desiredHdrSdrRatio = 1.f;
+    currentHdrSdrRatio = 1.f;
     dataspaceRequested = false;
     hdrMetadata.validTypes = 0;
     surfaceDamageRegion = Region::INVALID_REGION;
@@ -143,7 +130,8 @@ RequestedLayerState::RequestedLayerState(const LayerCreationArgs& args)
 void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerState) {
     const uint32_t oldFlags = flags;
     const half oldAlpha = color.a;
-    const bool hadBufferOrSideStream = hasValidBuffer() || sidebandStream != nullptr;
+    const bool hadBuffer = externalTexture != nullptr;
+    const bool hadSideStream = sidebandStream != nullptr;
     const layer_state_t& clientState = resolvedComposerState.state;
     const bool hadBlur = hasBlur();
     uint64_t clientChanges = what | layer_state_t::diff(clientState);
@@ -159,14 +147,31 @@ void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerSta
             changes |= RequestedLayerState::Changes::Geometry;
         }
     }
-    if (clientState.what &
-        (layer_state_t::eBufferChanged | layer_state_t::eSidebandStreamChanged)) {
-        const bool hasBufferOrSideStream = hasValidBuffer() || sidebandStream != nullptr;
-        if (hadBufferOrSideStream != hasBufferOrSideStream) {
+    if (clientState.what & layer_state_t::eBufferChanged) {
+        externalTexture = resolvedComposerState.externalTexture;
+        barrierProducerId = std::max(bufferData->producerId, barrierProducerId);
+        barrierFrameNumber = std::max(bufferData->frameNumber, barrierFrameNumber);
+        // TODO(b/277265947) log and flush transaction trace when we detect out of order updates
+
+        const bool hasBuffer = externalTexture != nullptr;
+        if (hasBuffer || hasBuffer != hadBuffer) {
+            changes |= RequestedLayerState::Changes::Buffer;
+        }
+
+        if (hasBuffer != hadBuffer) {
             changes |= RequestedLayerState::Changes::Geometry |
                     RequestedLayerState::Changes::VisibleRegion |
-                    RequestedLayerState::Changes::Visibility | RequestedLayerState::Changes::Input |
-                    RequestedLayerState::Changes::Buffer;
+                    RequestedLayerState::Changes::Visibility | RequestedLayerState::Changes::Input;
+        }
+    }
+
+    if (clientState.what & layer_state_t::eSidebandStreamChanged) {
+        changes |= RequestedLayerState::Changes::SidebandStream;
+        const bool hasSideStream = sidebandStream != nullptr;
+        if (hasSideStream != hadSideStream) {
+            changes |= RequestedLayerState::Changes::Geometry |
+                    RequestedLayerState::Changes::VisibleRegion |
+                    RequestedLayerState::Changes::Visibility | RequestedLayerState::Changes::Input;
         }
     }
     if (what & (layer_state_t::eAlphaChanged)) {
@@ -197,12 +202,14 @@ void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerSta
         static const mat4 identityMatrix = mat4();
         hasColorTransform = colorTransform != identityMatrix;
     }
-    if (clientState.what & (layer_state_t::eLayerChanged | layer_state_t::eRelativeLayerChanged)) {
+    if (clientState.what &
+        (layer_state_t::eLayerChanged | layer_state_t::eRelativeLayerChanged |
+         layer_state_t::eLayerStackChanged)) {
         changes |= RequestedLayerState::Changes::Z;
     }
     if (clientState.what & layer_state_t::eReparent) {
         changes |= RequestedLayerState::Changes::Parent;
-        parentId = getLayerIdFromSurfaceControl(clientState.parentSurfaceControlForChild);
+        parentId = resolvedComposerState.parentId;
         parentSurfaceControlForChild = nullptr;
         // Once a layer has be reparented, it cannot be placed at the root. It sounds odd
         // but thats the existing logic and until we make this behavior more explicit, we need
@@ -211,7 +218,7 @@ void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerSta
     }
     if (clientState.what & layer_state_t::eRelativeLayerChanged) {
         changes |= RequestedLayerState::Changes::RelativeParent;
-        relativeParentId = getLayerIdFromSurfaceControl(clientState.relativeLayerSurfaceControl);
+        relativeParentId = resolvedComposerState.relativeParentId;
         isRelativeOf = true;
         relativeLayerSurfaceControl = nullptr;
     }
@@ -228,10 +235,8 @@ void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerSta
         changes |= RequestedLayerState::Changes::RelativeParent;
     }
     if (clientState.what & layer_state_t::eInputInfoChanged) {
-        wp<IBinder>& touchableRegionCropHandle =
-                windowInfoHandle->editInfo()->touchableRegionCropHandle;
-        touchCropId = LayerHandle::getLayerId(touchableRegionCropHandle.promote());
-        touchableRegionCropHandle.clear();
+        touchCropId = resolvedComposerState.touchCropId;
+        windowInfoHandle->editInfo()->touchableRegionCropHandle.clear();
     }
     if (clientState.what & layer_state_t::eStretchChanged) {
         stretchEffect.sanitize();
@@ -239,10 +244,6 @@ void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerSta
 
     if (clientState.what & layer_state_t::eHasListenerCallbacksChanged) {
         // TODO(b/238781169) handle callbacks
-    }
-
-    if (clientState.what & layer_state_t::eBufferChanged) {
-        externalTexture = resolvedComposerState.externalTexture;
     }
 
     if (clientState.what & layer_state_t::ePositionChanged) {
@@ -327,9 +328,13 @@ ui::Transform RequestedLayerState::getTransform(uint32_t displayRotationFlags) c
 
 std::string RequestedLayerState::getDebugString() const {
     std::stringstream debug;
-    debug << "RequestedLayerState{" << name << " parent=" << layerIdToString(parentId)
-          << " relativeParent=" << layerIdToString(relativeParentId)
-          << " mirrorId=" << layerIdsToString(mirrorIds) << " handle=" << handleAlive << " z=" << z;
+    debug << "RequestedLayerState{" << name;
+    if (parentId != UNASSIGNED_LAYER_ID) debug << " parentId=" << parentId;
+    if (relativeParentId != UNASSIGNED_LAYER_ID) debug << " relativeParentId=" << relativeParentId;
+    if (!mirrorIds.empty()) debug << " mirrorId=" << layerIdsToString(mirrorIds);
+    if (!handleAlive) debug << " !handle";
+    if (z != 0) debug << " z=" << z;
+    if (layerStack.id != 0) debug << " layerStack=" << layerStack.id;
     return debug.str();
 }
 
@@ -451,6 +456,28 @@ bool RequestedLayerState::hasInputInfo() const {
 
 bool RequestedLayerState::hasBlur() const {
     return backgroundBlurRadius > 0 || blurRegions.size() > 0;
+}
+
+bool RequestedLayerState::hasFrameUpdate() const {
+    return what & layer_state_t::CONTENT_DIRTY &&
+            (externalTexture || bgColorLayerId != UNASSIGNED_LAYER_ID);
+}
+
+bool RequestedLayerState::hasReadyFrame() const {
+    return hasFrameUpdate() || changes.test(Changes::SidebandStream) || autoRefresh;
+}
+
+bool RequestedLayerState::hasSidebandStreamFrame() const {
+    return hasFrameUpdate() && sidebandStream.get();
+}
+
+bool RequestedLayerState::willReleaseBufferOnLatch() const {
+    return changes.test(Changes::Buffer) && !externalTexture;
+}
+
+void RequestedLayerState::clearChanges() {
+    what = 0;
+    changes.clear();
 }
 
 } // namespace android::surfaceflinger::frontend

@@ -538,8 +538,8 @@ void Output::ensureOutputLayerIfVisible(sp<compositionengine::LayerFE>& layerFE,
         return;
     }
 
-    bool computeAboveCoveredExcludingOverlays =
-            coverage.aboveCoveredLayersExcludingOverlays && !layerFEState->isInternalDisplayOverlay;
+    bool computeAboveCoveredExcludingOverlays = coverage.aboveCoveredLayersExcludingOverlays &&
+            !layerFEState->outputFilter.toInternalDisplay;
 
     /*
      * opaqueRegion: area of a surface that is fully opaque.
@@ -842,7 +842,6 @@ void Output::writeCompositionState(const compositionengine::CompositionRefreshAr
     }
 
     editState().earliestPresentTime = refreshArgs.earliestPresentTime;
-    editState().previousPresentFence = refreshArgs.previousPresentFence;
     editState().expectedPresentTime = refreshArgs.expectedPresentTime;
 
     compositionengine::OutputLayer* peekThroughLayer = nullptr;
@@ -1557,8 +1556,9 @@ void Output::postFramebuffer() {
             releaseFence =
                     Fence::merge("LayerRelease", releaseFence, frame.clientTargetAcquireFence);
         }
-        layer->getLayerFE().onLayerDisplayed(
-                ftl::yield<FenceResult>(std::move(releaseFence)).share());
+        layer->getLayerFE()
+                .onLayerDisplayed(ftl::yield<FenceResult>(std::move(releaseFence)).share(),
+                                  outputState.layerFilter.layerStack);
     }
 
     // We've got a list of layers needing fences, that are disjoint with
@@ -1566,7 +1566,8 @@ void Output::postFramebuffer() {
     // supply them with the present fence.
     for (auto& weakLayer : mReleasedLayers) {
         if (const auto layer = weakLayer.promote()) {
-            layer->onLayerDisplayed(ftl::yield<FenceResult>(frame.presentFence).share());
+            layer->onLayerDisplayed(ftl::yield<FenceResult>(frame.presentFence).share(),
+                                    outputState.layerFilter.layerStack);
         }
     }
 
@@ -1575,9 +1576,10 @@ void Output::postFramebuffer() {
 }
 
 void Output::renderCachedSets(const CompositionRefreshArgs& refreshArgs) {
-    if (mPlanner) {
-        mPlanner->renderCachedSets(getState(), refreshArgs.scheduledFrameTime,
-                                   getState().usesDeviceComposition || getSkipColorTransform());
+    const auto& outputState = getState();
+    if (mPlanner && outputState.isEnabled) {
+        mPlanner->renderCachedSets(outputState, refreshArgs.scheduledFrameTime,
+                                   outputState.usesDeviceComposition || getSkipColorTransform());
     }
 }
 

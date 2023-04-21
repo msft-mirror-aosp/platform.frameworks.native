@@ -138,14 +138,14 @@ MATCHER_P(WithPressure, pressure, "InputEvent with specified pressure") {
 
 MATCHER_P(WithToolType, toolType, "InputEvent with specified tool type") {
     const auto argToolType = arg.pointerProperties[0].toolType;
-    *result_listener << "expected tool type " << motionToolTypeToString(toolType) << ", but got "
-                     << motionToolTypeToString(argToolType);
+    *result_listener << "expected tool type " << ftl::enum_string(toolType) << ", but got "
+                     << ftl::enum_string(argToolType);
     return argToolType == toolType;
 }
 
 MATCHER_P(WithFlags, flags, "InputEvent with specified flags") {
     *result_listener << "expected flags " << flags << ", but got " << arg.flags;
-    return arg.flags == flags;
+    return arg.flags == static_cast<int32_t>(flags);
 }
 
 MATCHER_P(WithMotionClassification, classification,
@@ -174,6 +174,12 @@ MATCHER_P(WithEventTime, eventTime, "InputEvent with specified eventTime") {
 MATCHER_P(WithDownTime, downTime, "InputEvent with specified downTime") {
     *result_listener << "expected down time " << downTime << ", but got " << arg.downTime;
     return arg.downTime == downTime;
+}
+
+MATCHER_P2(WithPrecision, xPrecision, yPrecision, "MotionEvent with specified precision") {
+    *result_listener << "expected x-precision " << xPrecision << " and y-precision " << yPrecision
+                     << ", but got " << arg.xPrecision << " and " << arg.yPrecision;
+    return arg.xPrecision == xPrecision && arg.yPrecision == yPrecision;
 }
 
 } // namespace android

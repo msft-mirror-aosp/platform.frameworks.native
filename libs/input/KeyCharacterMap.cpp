@@ -272,8 +272,8 @@ const std::string KeyCharacterMap::getLoadFileName() const {
 
 char16_t KeyCharacterMap::getDisplayLabel(int32_t keyCode) const {
     char16_t result = 0;
-    const Key* key;
-    if (getKey(keyCode, &key)) {
+    const Key* key = getKey(keyCode);
+    if (key != nullptr) {
         result = key->label;
     }
 #if DEBUG_MAPPING
@@ -284,8 +284,8 @@ char16_t KeyCharacterMap::getDisplayLabel(int32_t keyCode) const {
 
 char16_t KeyCharacterMap::getNumber(int32_t keyCode) const {
     char16_t result = 0;
-    const Key* key;
-    if (getKey(keyCode, &key)) {
+    const Key* key = getKey(keyCode);
+    if (key != nullptr) {
         result = key->number;
     }
 #if DEBUG_MAPPING
@@ -332,8 +332,8 @@ bool KeyCharacterMap::getFallbackAction(int32_t keyCode, int32_t metaState,
 char16_t KeyCharacterMap::getMatch(int32_t keyCode, const char16_t* chars, size_t numChars,
         int32_t metaState) const {
     char16_t result = 0;
-    const Key* key;
-    if (getKey(keyCode, &key)) {
+    const Key* key = getKey(keyCode);
+    if (key != nullptr) {
         // Try to find the most general behavior that maps to this character.
         // For example, the base key behavior will usually be last in the list.
         // However, if we find a perfect meta state match for one behavior then use that one.
@@ -493,19 +493,18 @@ std::pair<int32_t, int32_t> KeyCharacterMap::applyKeyBehavior(int32_t fromKeyCod
     return std::make_pair(toKeyCode, toMetaState);
 }
 
-bool KeyCharacterMap::getKey(int32_t keyCode, const Key** outKey) const {
+const KeyCharacterMap::Key* KeyCharacterMap::getKey(int32_t keyCode) const {
     ssize_t index = mKeys.indexOfKey(keyCode);
     if (index >= 0) {
-        *outKey = mKeys.valueAt(index);
-        return true;
+        return mKeys.valueAt(index);
     }
-    return false;
+    return nullptr;
 }
 
 const KeyCharacterMap::Behavior* KeyCharacterMap::getKeyBehavior(int32_t keyCode,
                                                                  int32_t metaState) const {
-    const Key* key;
-    if (getKey(keyCode, &key)) {
+    const Key* key = getKey(keyCode);
+    if (key != nullptr) {
         for (const Behavior& behavior : key->behaviors) {
             if (matchesMetaState(metaState, behavior.metaState)) {
                 return &behavior;
@@ -1048,17 +1047,17 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
     String8 token = mTokenizer->nextToken(WHITESPACE_OR_PROPERTY_DELIMITER);
     if (token == "}") {
         mState = STATE_TOP;
-        return finishKey(key);
+        return finishKey(*key);
     }
 
-    Vector<Property> properties;
+    std::vector<Property> properties;
 
     // Parse all comma-delimited property names up to the first colon.
     for (;;) {
         if (token == "label") {
-            properties.add(Property(PROPERTY_LABEL));
+            properties.emplace_back(PROPERTY_LABEL);
         } else if (token == "number") {
-            properties.add(Property(PROPERTY_NUMBER));
+            properties.emplace_back(PROPERTY_NUMBER);
         } else {
             int32_t metaState;
             status_t status = parseModifier(token.string(), &metaState);
@@ -1067,7 +1066,7 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
                         mTokenizer->getLocation().string(), token.string());
                 return status;
             }
-            properties.add(Property(PROPERTY_META, metaState));
+            properties.emplace_back(PROPERTY_META, metaState);
         }
 
         mTokenizer->skipDelimiters(WHITESPACE);
@@ -1182,8 +1181,7 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
     } while (!mTokenizer->isEol() && mTokenizer->peekChar() != '#');
 
     // Add the behavior.
-    for (size_t i = 0; i < properties.size(); i++) {
-        const Property& property = properties.itemAt(i);
+    for (const Property& property : properties) {
         switch (property.property) {
         case PROPERTY_LABEL:
             if (key->label) {
@@ -1230,12 +1228,12 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
     return NO_ERROR;
 }
 
-status_t KeyCharacterMap::Parser::finishKey(Key* key) {
+status_t KeyCharacterMap::Parser::finishKey(Key& key) {
     // Fill in default number property.
-    if (!key->number) {
+    if (!key.number) {
         char16_t digit = 0;
         char16_t symbol = 0;
-        for (const Behavior& b : key->behaviors) {
+        for (const Behavior& b : key.behaviors) {
             char16_t ch = b.character;
             if (ch) {
                 if (ch >= '0' && ch <= '9') {
@@ -1247,7 +1245,7 @@ status_t KeyCharacterMap::Parser::finishKey(Key* key) {
                 }
             }
         }
-        key->number = digit ? digit : symbol;
+        key.number = digit ? digit : symbol;
     }
     return NO_ERROR;
 }

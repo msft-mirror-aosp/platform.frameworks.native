@@ -1428,6 +1428,19 @@ Error AidlComposer::setHdrConversionStrategy(AidlHdrConversionStrategy hdrConver
     return Error::NONE;
 }
 
+Error AidlComposer::setRefreshRateChangedCallbackDebugEnabled(Display displayId, bool enabled) {
+    const auto status =
+            mAidlComposerClient->setRefreshRateChangedCallbackDebugEnabled(translate<int64_t>(
+                                                                                   displayId),
+                                                                           enabled);
+    if (!status.isOk()) {
+        ALOGE("setRefreshRateChangedCallbackDebugEnabled failed %s",
+              status.getDescription().c_str());
+        return static_cast<Error>(status.getServiceSpecificError());
+    }
+    return Error::NONE;
+}
+
 Error AidlComposer::getClientTargetProperty(
         Display display, ClientTargetPropertyWithBrightness* outClientTargetProperty) {
     Error error = Error::NONE;
@@ -1534,6 +1547,8 @@ void AidlComposer::onHotplugDisconnect(Display display) {
 }
 
 bool AidlComposer::hasMultiThreadedPresentSupport(Display display) {
+#if 0
+    // TODO (b/259132483): Reenable
     const auto displayId = translate<int64_t>(display);
     std::vector<AidlDisplayCapability> capabilities;
     const auto status = mAidlComposerClient->getDisplayCapabilities(displayId, &capabilities);
@@ -1543,6 +1558,10 @@ bool AidlComposer::hasMultiThreadedPresentSupport(Display display) {
     }
     return std::find(capabilities.begin(), capabilities.end(),
                      AidlDisplayCapability::MULTI_THREADED_PRESENT) != capabilities.end();
+#else
+    (void) display;
+    return false;
+#endif
 }
 
 void AidlComposer::addReader(Display display) {

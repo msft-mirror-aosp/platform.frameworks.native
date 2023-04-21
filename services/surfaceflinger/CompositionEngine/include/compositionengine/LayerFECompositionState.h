@@ -210,12 +210,10 @@ struct LayerFECompositionState {
     // The dimming flag
     bool dimmingEnabled{true};
 
-    float currentSdrHdrRatio = 1.f;
-    float desiredSdrHdrRatio = 1.f;
+    float currentHdrSdrRatio = 1.f;
+    float desiredHdrSdrRatio = 1.f;
 
-    bool isInternalDisplayOverlay = false;
     gui::CachingHint cachingHint = gui::CachingHint::Enabled;
-
     virtual ~LayerFECompositionState();
 
     // Debugging

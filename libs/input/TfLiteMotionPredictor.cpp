@@ -30,6 +30,7 @@
 #include <type_traits>
 #include <utility>
 
+#include <android-base/file.h>
 #include <android-base/logging.h>
 #include <android-base/mapped_file.h>
 #define ATRACE_TAG ATRACE_TAG_INPUT
@@ -59,6 +60,27 @@ constexpr char INPUT_ORIENTATION[] = "orientation";
 constexpr char OUTPUT_R[] = "r";
 constexpr char OUTPUT_PHI[] = "phi";
 constexpr char OUTPUT_PRESSURE[] = "pressure";
+
+// Ideally, we would just use std::filesystem::exists here, but it requires libc++fs, which causes
+// build issues in other parts of the system.
+#if defined(__ANDROID__)
+bool fileExists(const char* filename) {
+    struct stat buffer;
+    return stat(filename, &buffer) == 0;
+}
+#endif
+
+std::string getModelPath() {
+#if defined(__ANDROID__)
+    static const char* oemModel = "/vendor/etc/motion_predictor_model.fb";
+    if (fileExists(oemModel)) {
+        return oemModel;
+    }
+    return "/system/etc/motion_predictor_model.fb";
+#else
+    return base::GetExecutableDirectory() + "/motion_predictor_model.fb";
+#endif
+}
 
 // A TFLite ErrorReporter that logs to logcat.
 class LoggingErrorReporter : public tflite::ErrorReporter {
@@ -206,9 +228,9 @@ void TfLiteMotionPredictorBuffers::pushSample(int64_t timestamp,
     mInputOrientation.pushBack(orientation);
 }
 
-std::unique_ptr<TfLiteMotionPredictorModel> TfLiteMotionPredictorModel::create(
-        const char* modelPath) {
-    const int fd = open(modelPath, O_RDONLY);
+std::unique_ptr<TfLiteMotionPredictorModel> TfLiteMotionPredictorModel::create() {
+    const std::string modelPath = getModelPath();
+    android::base::unique_fd fd(open(modelPath.c_str(), O_RDONLY));
     if (fd == -1) {
         PLOG(FATAL) << "Could not read model from " << modelPath;
     }
@@ -222,9 +244,6 @@ std::unique_ptr<TfLiteMotionPredictorModel> TfLiteMotionPredictorModel::create(
             android::base::MappedFile::FromFd(fd, /*offset=*/0, fdSize, PROT_READ);
     if (!modelBuffer) {
         PLOG(FATAL) << "Failed to mmap model";
-    }
-    if (close(fd) == -1) {
-        PLOG(FATAL) << "Failed to close model fd";
     }
 
     return std::unique_ptr<TfLiteMotionPredictorModel>(
@@ -325,6 +344,10 @@ bool TfLiteMotionPredictorModel::invoke() {
 
 size_t TfLiteMotionPredictorModel::inputLength() const {
     return getTensorBuffer<const float>(mInputR).size();
+}
+
+size_t TfLiteMotionPredictorModel::outputLength() const {
+    return getTensorBuffer<const float>(mOutputR).size();
 }
 
 std::span<float> TfLiteMotionPredictorModel::inputR() {

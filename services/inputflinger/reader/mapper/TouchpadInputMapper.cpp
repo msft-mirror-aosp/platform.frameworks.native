@@ -20,6 +20,7 @@
 #include <optional>
 
 #include <android/input.h>
+#include <ftl/enum.h>
 #include <input/PrintTools.h>
 #include <linux/input-event-codes.h>
 #include <log/log_main.h>
@@ -30,6 +31,15 @@
 namespace android {
 
 namespace {
+
+/**
+ * Log details of each gesture output by the gestures library.
+ * Enable this via "adb shell setprop log.tag.TouchpadInputMapperGestures DEBUG" (requires
+ * restarting the shell)
+ */
+const bool DEBUG_TOUCHPAD_GESTURES =
+        __android_log_is_loggable(ANDROID_LOG_DEBUG, "TouchpadInputMapperGestures",
+                                  ANDROID_LOG_INFO);
 
 // Describes a segment of the acceleration curve.
 struct CurveSegment {
@@ -47,7 +57,7 @@ const std::vector<CurveSegment> segments = {
         {std::numeric_limits<double>::infinity(), 15.04, -857.758},
 };
 
-const std::vector<double> sensitivityFactors = {1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20};
+const std::vector<double> sensitivityFactors = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18};
 
 std::vector<double> createAccelerationCurveForSensitivity(int32_t sensitivity,
                                                           size_t propertySize) {
@@ -159,8 +169,9 @@ void gestureInterpreterCallback(void* clientData, const Gesture* gesture) {
 
 } // namespace
 
-TouchpadInputMapper::TouchpadInputMapper(InputDeviceContext& deviceContext)
-      : InputMapper(deviceContext),
+TouchpadInputMapper::TouchpadInputMapper(InputDeviceContext& deviceContext,
+                                         const InputReaderConfiguration& readerConfig)
+      : InputMapper(deviceContext, readerConfig),
         mGestureInterpreter(NewGestureInterpreter(), DeleteGestureInterpreter),
         mPointerController(getContext()->getPointerController(getDeviceId())),
         mStateConverter(deviceContext),
@@ -196,6 +207,11 @@ uint32_t TouchpadInputMapper::getSources() const {
     return AINPUT_SOURCE_MOUSE | AINPUT_SOURCE_TOUCHPAD;
 }
 
+void TouchpadInputMapper::populateDeviceInfo(InputDeviceInfo& info) {
+    InputMapper::populateDeviceInfo(info);
+    mGestureConverter.populateMotionRanges(info);
+}
+
 void TouchpadInputMapper::dump(std::string& dump) {
     dump += INDENT2 "Touchpad Input Mapper:\n";
     dump += INDENT3 "Gesture converter:\n";
@@ -204,40 +220,46 @@ void TouchpadInputMapper::dump(std::string& dump) {
     dump += addLinePrefix(mPropertyProvider.dump(), INDENT4);
 }
 
-std::list<NotifyArgs> TouchpadInputMapper::configure(nsecs_t when,
-                                                     const InputReaderConfiguration* config,
-                                                     uint32_t changes) {
-    if (!changes || (changes & InputReaderConfiguration::CHANGE_DISPLAY_INFO)) {
+std::list<NotifyArgs> TouchpadInputMapper::reconfigure(nsecs_t when,
+                                                       const InputReaderConfiguration& config,
+                                                       ConfigurationChanges changes) {
+    if (!changes.any()) {
+        // First time configuration
+        mPropertyProvider.loadPropertiesFromIdcFile(getDeviceContext().getConfiguration());
+    }
+
+    if (!changes.any() || changes.test(InputReaderConfiguration::Change::DISPLAY_INFO)) {
         std::optional<int32_t> displayId = mPointerController->getDisplayId();
         ui::Rotation orientation = ui::ROTATION_0;
         if (displayId.has_value()) {
-            if (auto viewport = config->getDisplayViewportById(*displayId); viewport) {
+            if (auto viewport = config.getDisplayViewportById(*displayId); viewport) {
                 orientation = getInverseRotation(viewport->orientation);
             }
         }
         mGestureConverter.setOrientation(orientation);
     }
-    if (!changes || (changes & InputReaderConfiguration::CHANGE_TOUCHPAD_SETTINGS)) {
+    if (!changes.any() || changes.test(InputReaderConfiguration::Change::TOUCHPAD_SETTINGS)) {
         mPropertyProvider.getProperty("Use Custom Touchpad Pointer Accel Curve")
                 .setBoolValues({true});
         GesturesProp accelCurveProp = mPropertyProvider.getProperty("Pointer Accel Curve");
         accelCurveProp.setRealValues(
-                createAccelerationCurveForSensitivity(config->touchpadPointerSpeed,
+                createAccelerationCurveForSensitivity(config.touchpadPointerSpeed,
                                                       accelCurveProp.getCount()));
         mPropertyProvider.getProperty("Invert Scrolling")
-                .setBoolValues({config->touchpadNaturalScrollingEnabled});
+                .setBoolValues({config.touchpadNaturalScrollingEnabled});
         mPropertyProvider.getProperty("Tap Enable")
-                .setBoolValues({config->touchpadTapToClickEnabled});
+                .setBoolValues({config.touchpadTapToClickEnabled});
         mPropertyProvider.getProperty("Button Right Click Zone Enable")
-                .setBoolValues({config->touchpadRightClickZoneEnabled});
+                .setBoolValues({config.touchpadRightClickZoneEnabled});
     }
     return {};
 }
 
 std::list<NotifyArgs> TouchpadInputMapper::reset(nsecs_t when) {
     mStateConverter.reset();
-    mGestureConverter.reset();
-    return InputMapper::reset(when);
+    std::list<NotifyArgs> out = mGestureConverter.reset(when);
+    out += InputMapper::reset(when);
+    return out;
 }
 
 std::list<NotifyArgs> TouchpadInputMapper::process(const RawEvent* rawEvent) {
@@ -251,6 +273,7 @@ std::list<NotifyArgs> TouchpadInputMapper::process(const RawEvent* rawEvent) {
 
 std::list<NotifyArgs> TouchpadInputMapper::sendHardwareState(nsecs_t when, nsecs_t readTime,
                                                              SelfContainedHardwareState schs) {
+    ALOGD_IF(DEBUG_TOUCHPAD_GESTURES, "New hardware state: %s", schs.state.String().c_str());
     mProcessing = true;
     mGestureInterpreter->PushHardwareState(&schs.state);
     mProcessing = false;
@@ -259,7 +282,7 @@ std::list<NotifyArgs> TouchpadInputMapper::sendHardwareState(nsecs_t when, nsecs
 }
 
 void TouchpadInputMapper::consumeGesture(const Gesture* gesture) {
-    ALOGD("Gesture ready: %s", gesture->String().c_str());
+    ALOGD_IF(DEBUG_TOUCHPAD_GESTURES, "Gesture ready: %s", gesture->String().c_str());
     if (!mProcessing) {
         ALOGE("Received gesture outside of the normal processing flow; ignoring it.");
         return;

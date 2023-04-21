@@ -31,16 +31,16 @@ namespace android {
  * different classes of events.
  *
  * InputMapper lifecycle:
- * - create
- * - configure with 0 changes
+ * - create and configure with 0 changes
  * - reset
- * - process, process, process (may occasionally reconfigure with non-zero changes or reset)
+ * - process, process, process (may occasionally reconfigure or reset)
  * - reset
  * - destroy
  */
 class InputMapper {
 public:
-    explicit InputMapper(InputDeviceContext& deviceContext);
+    explicit InputMapper(InputDeviceContext& deviceContext,
+                         const InputReaderConfiguration& readerConfig);
     virtual ~InputMapper();
 
     inline int32_t getDeviceId() { return mDeviceContext.getId(); }
@@ -51,11 +51,11 @@ public:
     inline InputReaderPolicyInterface* getPolicy() { return getContext()->getPolicy(); }
 
     virtual uint32_t getSources() const = 0;
-    virtual void populateDeviceInfo(InputDeviceInfo* deviceInfo);
+    virtual void populateDeviceInfo(InputDeviceInfo& deviceInfo);
     virtual void dump(std::string& dump);
-    [[nodiscard]] virtual std::list<NotifyArgs> configure(nsecs_t when,
-                                                          const InputReaderConfiguration* config,
-                                                          uint32_t changes);
+    [[nodiscard]] virtual std::list<NotifyArgs> reconfigure(nsecs_t when,
+                                                            const InputReaderConfiguration& config,
+                                                            ConfigurationChanges changes);
     [[nodiscard]] virtual std::list<NotifyArgs> reset(nsecs_t when);
     [[nodiscard]] virtual std::list<NotifyArgs> process(const RawEvent* rawEvent) = 0;
     [[nodiscard]] virtual std::list<NotifyArgs> timeoutExpired(nsecs_t when);

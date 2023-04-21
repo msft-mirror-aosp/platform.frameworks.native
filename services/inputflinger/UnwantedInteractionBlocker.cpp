@@ -18,6 +18,7 @@
 #include "UnwantedInteractionBlocker.h"
 
 #include <android-base/stringprintf.h>
+#include <ftl/enum.h>
 #include <input/PrintTools.h>
 #include <inttypes.h>
 #include <linux/input-event-codes.h>
@@ -98,18 +99,21 @@ static bool isPalmRejectionEnabled() {
     return false;
 }
 
-static int getLinuxToolCode(int toolType) {
+static int getLinuxToolCode(ToolType toolType) {
     switch (toolType) {
-        case AMOTION_EVENT_TOOL_TYPE_STYLUS:
+        case ToolType::STYLUS:
             return BTN_TOOL_PEN;
-        case AMOTION_EVENT_TOOL_TYPE_ERASER:
+        case ToolType::ERASER:
             return BTN_TOOL_RUBBER;
-        case AMOTION_EVENT_TOOL_TYPE_FINGER:
+        case ToolType::FINGER:
             return BTN_TOOL_FINGER;
-        default:
-            ALOGW("Got tool type %" PRId32 ", converting to BTN_TOOL_FINGER", toolType);
-            return BTN_TOOL_FINGER;
+        case ToolType::UNKNOWN:
+        case ToolType::MOUSE:
+        case ToolType::PALM:
+            break;
     }
+    ALOGW("Got tool type %s, converting to BTN_TOOL_FINGER", ftl::enum_string(toolType).c_str());
+    return BTN_TOOL_FINGER;
 }
 
 static int32_t getActionUpForPointerId(const NotifyMotionArgs& args, int32_t pointerId) {
@@ -325,24 +329,24 @@ UnwantedInteractionBlocker::UnwantedInteractionBlocker(InputListenerInterface& l
       : mQueuedListener(listener), mEnablePalmRejection(enablePalmRejection) {}
 
 void UnwantedInteractionBlocker::notifyConfigurationChanged(
-        const NotifyConfigurationChangedArgs* args) {
+        const NotifyConfigurationChangedArgs& args) {
     mQueuedListener.notifyConfigurationChanged(args);
     mQueuedListener.flush();
 }
 
-void UnwantedInteractionBlocker::notifyKey(const NotifyKeyArgs* args) {
+void UnwantedInteractionBlocker::notifyKey(const NotifyKeyArgs& args) {
     mQueuedListener.notifyKey(args);
     mQueuedListener.flush();
 }
 
-void UnwantedInteractionBlocker::notifyMotion(const NotifyMotionArgs* args) {
-    ALOGD_IF(DEBUG_INBOUND_MOTION, "%s: %s", __func__, args->dump().c_str());
+void UnwantedInteractionBlocker::notifyMotion(const NotifyMotionArgs& args) {
+    ALOGD_IF(DEBUG_INBOUND_MOTION, "%s: %s", __func__, args.dump().c_str());
     { // acquire lock
         std::scoped_lock lock(mLock);
         const std::vector<NotifyMotionArgs> processedArgs =
-                mPreferStylusOverTouchBlocker.processMotion(*args);
+                mPreferStylusOverTouchBlocker.processMotion(args);
         for (const NotifyMotionArgs& loopArgs : processedArgs) {
-            notifyMotionLocked(&loopArgs);
+            notifyMotionLocked(loopArgs);
         }
     } // release lock
 
@@ -352,61 +356,68 @@ void UnwantedInteractionBlocker::notifyMotion(const NotifyMotionArgs* args) {
 
 void UnwantedInteractionBlocker::enqueueOutboundMotionLocked(const NotifyMotionArgs& args) {
     ALOGD_IF(DEBUG_OUTBOUND_MOTION, "%s: %s", __func__, args.dump().c_str());
-    mQueuedListener.notifyMotion(&args);
+    mQueuedListener.notifyMotion(args);
 }
 
-void UnwantedInteractionBlocker::notifyMotionLocked(const NotifyMotionArgs* args) {
-    auto it = mPalmRejectors.find(args->deviceId);
-    const bool sendToPalmRejector = it != mPalmRejectors.end() && isFromTouchscreen(args->source);
+void UnwantedInteractionBlocker::notifyMotionLocked(const NotifyMotionArgs& args) {
+    auto it = mPalmRejectors.find(args.deviceId);
+    const bool sendToPalmRejector = it != mPalmRejectors.end() && isFromTouchscreen(args.source);
     if (!sendToPalmRejector) {
-        enqueueOutboundMotionLocked(*args);
+        enqueueOutboundMotionLocked(args);
         return;
     }
 
-    std::vector<NotifyMotionArgs> processedArgs = it->second.processMotion(*args);
+    std::vector<NotifyMotionArgs> processedArgs = it->second.processMotion(args);
     for (const NotifyMotionArgs& loopArgs : processedArgs) {
         enqueueOutboundMotionLocked(loopArgs);
     }
 }
 
-void UnwantedInteractionBlocker::notifySwitch(const NotifySwitchArgs* args) {
+void UnwantedInteractionBlocker::notifySwitch(const NotifySwitchArgs& args) {
     mQueuedListener.notifySwitch(args);
     mQueuedListener.flush();
 }
 
-void UnwantedInteractionBlocker::notifySensor(const NotifySensorArgs* args) {
+void UnwantedInteractionBlocker::notifySensor(const NotifySensorArgs& args) {
     mQueuedListener.notifySensor(args);
     mQueuedListener.flush();
 }
 
-void UnwantedInteractionBlocker::notifyVibratorState(const NotifyVibratorStateArgs* args) {
+void UnwantedInteractionBlocker::notifyVibratorState(const NotifyVibratorStateArgs& args) {
     mQueuedListener.notifyVibratorState(args);
     mQueuedListener.flush();
 }
-void UnwantedInteractionBlocker::notifyDeviceReset(const NotifyDeviceResetArgs* args) {
+void UnwantedInteractionBlocker::notifyDeviceReset(const NotifyDeviceResetArgs& args) {
     { // acquire lock
         std::scoped_lock lock(mLock);
-        auto it = mPalmRejectors.find(args->deviceId);
+        auto it = mPalmRejectors.find(args.deviceId);
         if (it != mPalmRejectors.end()) {
             AndroidPalmFilterDeviceInfo info = it->second.getPalmFilterDeviceInfo();
             // Re-create the object instead of resetting it
             mPalmRejectors.erase(it);
-            mPalmRejectors.emplace(args->deviceId, info);
+            mPalmRejectors.emplace(args.deviceId, info);
         }
         mQueuedListener.notifyDeviceReset(args);
-        mPreferStylusOverTouchBlocker.notifyDeviceReset(*args);
+        mPreferStylusOverTouchBlocker.notifyDeviceReset(args);
     } // release lock
     // Send events to the next stage without holding the lock
     mQueuedListener.flush();
 }
 
 void UnwantedInteractionBlocker::notifyPointerCaptureChanged(
-        const NotifyPointerCaptureChangedArgs* args) {
+        const NotifyPointerCaptureChangedArgs& args) {
     mQueuedListener.notifyPointerCaptureChanged(args);
     mQueuedListener.flush();
 }
 
 void UnwantedInteractionBlocker::notifyInputDevicesChanged(
+        const NotifyInputDevicesChangedArgs& args) {
+    onInputDevicesChanged(args.inputDeviceInfos);
+    mQueuedListener.notify(args);
+    mQueuedListener.flush();
+}
+
+void UnwantedInteractionBlocker::onInputDevicesChanged(
         const std::vector<InputDeviceInfo>& inputDevices) {
     std::scoped_lock lock(mLock);
     if (!mEnablePalmRejection) {

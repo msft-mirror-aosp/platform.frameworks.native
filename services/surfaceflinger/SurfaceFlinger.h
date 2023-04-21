@@ -28,6 +28,7 @@
 #include <android/gui/ISurfaceComposerClient.h>
 #include <cutils/atomic.h>
 #include <cutils/compiler.h>
+#include <ftl/algorithm.h>
 #include <ftl/future.h>
 #include <ftl/non_null.h>
 #include <gui/BufferQueue.h>
@@ -174,10 +175,15 @@ enum class LatchUnsignaledConfig {
     // Latch unsignaled is permitted when a single layer is updated in a frame,
     // and the update includes just a buffer update (i.e. no sync transactions
     // or geometry changes).
+    // Latch unsignaled is also only permitted when a single transaction is ready
+    // to be applied. If we pass an unsignaled fence to HWC, HWC might miss presenting
+    // the frame if the fence does not fire in time. If we apply another transaction,
+    // we may penalize the other transaction unfairly.
     AutoSingleLayer,
 
     // All buffers are latched unsignaled. This behaviour is discouraged as it
     // can break sync transactions, stall the display and cause undesired side effects.
+    // This is equivalent to ignoring the acquire fence when applying transactions.
     Always,
 };
 
@@ -323,6 +329,8 @@ public:
     bool mIgnoreHwcPhysicalDisplayOrientation = false;
 
     void forceFutureUpdate(int delayInMs);
+    const DisplayDevice* getDisplayFromLayerStack(ui::LayerStack)
+            REQUIRES(mStateLock, kMainThreadContext);
 
 protected:
     // We're reference counted, never destroy SurfaceFlinger directly
@@ -455,26 +463,6 @@ private:
         FINISHED,
     };
 
-    struct LayerCreatedState {
-        LayerCreatedState(const wp<Layer>& layer, const wp<Layer>& parent, bool addToRoot)
-              : layer(layer), initialParent(parent), addToRoot(addToRoot) {}
-        wp<Layer> layer;
-        // Indicates the initial parent of the created layer, only used for creating layer in
-        // SurfaceFlinger. If nullptr, it may add the created layer into the current root layers.
-        wp<Layer> initialParent;
-        // Indicates whether the layer getting created should be added at root if there's no parent
-        // and has permission ACCESS_SURFACE_FLINGER. If set to false and no parent, the layer will
-        // be added offscreen.
-        bool addToRoot;
-    };
-
-    struct LifecycleUpdate {
-        std::vector<TransactionState> transactions;
-        std::vector<LayerCreatedState> layerCreatedStates;
-        std::vector<std::unique_ptr<frontend::RequestedLayerState>> newLayers;
-        std::vector<uint32_t> destroyedHandles;
-    };
-
     template <typename F, std::enable_if_t<!std::is_member_function_pointer_v<F>>* = nullptr>
     static Dumper dumper(F&& dump) {
         using namespace std::placeholders;
@@ -512,7 +500,7 @@ private:
 
     // Implements ISurfaceComposer
     sp<IBinder> createDisplay(const String8& displayName, bool secure,
-                              float requestedRefreshRate = 0);
+                              float requestedRefreshRate = 0.0f);
     void destroyDisplay(const sp<IBinder>& displayToken);
     std::vector<PhysicalDisplayId> getPhysicalDisplayIds() const EXCLUDES(mStateLock) {
         Mutex::Autolock lock(mStateLock);
@@ -721,12 +709,13 @@ private:
             int64_t vsyncId);
     void moveSnapshotsFromCompositionArgs(compositionengine::CompositionRefreshArgs& refreshArgs,
                                           std::vector<std::pair<Layer*, LayerFE*>>& layers);
-    bool updateLayerSnapshotsLegacy(VsyncId vsyncId, LifecycleUpdate& update,
+    bool updateLayerSnapshotsLegacy(VsyncId vsyncId, frontend::Update& update,
                                     bool transactionsFlushed, bool& out)
             REQUIRES(kMainThreadContext);
-    bool updateLayerSnapshots(VsyncId vsyncId, LifecycleUpdate& update, bool transactionsFlushed,
+    bool updateLayerSnapshots(VsyncId vsyncId, frontend::Update& update, bool transactionsFlushed,
                               bool& out) REQUIRES(kMainThreadContext);
-    LifecycleUpdate flushLifecycleUpdates() REQUIRES(kMainThreadContext);
+    void updateLayerHistory(const frontend::LayerSnapshot& snapshot);
+    frontend::Update flushLifecycleUpdates() REQUIRES(kMainThreadContext);
 
     void updateInputFlinger();
     void persistDisplayBrightness(bool needsComposite) REQUIRES(kMainThreadContext);
@@ -736,6 +725,8 @@ private:
     void updateCursorAsync();
 
     void initScheduler(const sp<const DisplayDevice>&) REQUIRES(kMainThreadContext, mStateLock);
+
+    void resetPhaseConfiguration(Fps) REQUIRES(mStateLock, kMainThreadContext);
     void updatePhaseConfiguration(Fps) REQUIRES(mStateLock);
 
     /*
@@ -814,10 +805,10 @@ private:
     status_t mirrorDisplay(DisplayId displayId, const LayerCreationArgs& args,
                            gui::CreateSurfaceResult& outResult);
 
-    void markLayerPendingRemovalLocked(const sp<Layer>& layer);
+    void markLayerPendingRemovalLocked(const sp<Layer>& layer) REQUIRES(mStateLock);
 
     // add a layer to SurfaceFlinger
-    status_t addClientLayer(const LayerCreationArgs& args, const sp<IBinder>& handle,
+    status_t addClientLayer(LayerCreationArgs& args, const sp<IBinder>& handle,
                             const sp<Layer>& layer, const wp<Layer>& parentLayer,
                             uint32_t* outTransformHint);
 
@@ -843,7 +834,9 @@ private:
 
     // If the uid provided is not UNSET_UID, the traverse will skip any layers that don't have a
     // matching ownerUid
-    void traverseLayersInLayerStack(ui::LayerStack, const int32_t uid, const LayerVector::Visitor&);
+    void traverseLayersInLayerStack(ui::LayerStack, const int32_t uid,
+                                    std::unordered_set<uint32_t> excludeLayerIds,
+                                    const LayerVector::Visitor&);
 
     void readPersistentProperties();
 
@@ -854,8 +847,7 @@ private:
      */
 
     // Called during boot, and restart after system_server death.
-    void initializeDisplays();
-    void onInitializeDisplays() REQUIRES(mStateLock, kMainThreadContext);
+    void initializeDisplays() REQUIRES(kMainThreadContext);
 
     sp<const DisplayDevice> getDisplayDeviceLocked(const wp<IBinder>& displayToken) const
             REQUIRES(mStateLock) {
@@ -863,8 +855,9 @@ private:
     }
 
     sp<DisplayDevice> getDisplayDeviceLocked(const wp<IBinder>& displayToken) REQUIRES(mStateLock) {
-        const sp<DisplayDevice> nullDisplay;
-        return mDisplays.get(displayToken).value_or(std::cref(nullDisplay));
+        return mDisplays.get(displayToken)
+                .or_else(ftl::static_ref<sp<DisplayDevice>>([] { return nullptr; }))
+                .value();
     }
 
     sp<const DisplayDevice> getDisplayDeviceLocked(PhysicalDisplayId id) const
@@ -1020,10 +1013,10 @@ private:
      */
     sp<display::DisplayToken> getPhysicalDisplayTokenLocked(PhysicalDisplayId displayId) const
             REQUIRES(mStateLock) {
-        const sp<display::DisplayToken> nullToken;
         return mPhysicalDisplays.get(displayId)
                 .transform([](const display::PhysicalDisplay& display) { return display.token(); })
-                .value_or(std::cref(nullToken));
+                .or_else([] { return std::optional<sp<display::DisplayToken>>(nullptr); })
+                .value();
     }
 
     std::optional<PhysicalDisplayId> getPhysicalDisplayIdLocked(
@@ -1084,7 +1077,9 @@ private:
     LayersProto dumpDrawingStateProto(uint32_t traceFlags) const;
     void dumpOffscreenLayersProto(LayersProto& layersProto,
                                   uint32_t traceFlags = LayerTracing::TRACE_ALL) const;
-    void dumpDisplayProto(LayersTraceProto& layersTraceProto) const;
+    google::protobuf::RepeatedPtrField<DisplayProto> dumpDisplayProto() const;
+    void addToLayerTracing(bool visibleRegionDirty, int64_t time, int64_t vsyncId)
+            REQUIRES(kMainThreadContext);
 
     // Dumps state from HW Composer
     void dumpHwc(std::string& result) const;
@@ -1120,13 +1115,11 @@ private:
                                                std::chrono::nanoseconds presentLatency);
     int getMaxAcquiredBufferCountForRefreshRate(Fps refreshRate) const;
 
-    void updateActiveDisplayVsyncLocked(const DisplayDevice& activeDisplay)
-            REQUIRES(mStateLock, kMainThreadContext);
-
     bool isHdrLayer(const frontend::LayerSnapshot& snapshot) const;
 
     ui::Rotation getPhysicalDisplayOrientation(DisplayId, bool isPrimary) const
             REQUIRES(mStateLock);
+    void traverseLegacyLayers(const LayerVector::Visitor& visitor) const;
 
     sp<StartPropertySetThread> mStartPropertySetThread;
     surfaceflinger::Factory& mFactory;
@@ -1200,6 +1193,7 @@ private:
     // Tracks layers that have pending frames which are candidates for being
     // latched.
     std::unordered_set<sp<Layer>, SpHash<Layer>> mLayersWithQueuedFrames;
+    std::unordered_set<sp<Layer>, SpHash<Layer>> mLayersWithBuffersRemoved;
     // Tracks layers that need to update a display's dirty region.
     std::vector<sp<Layer>> mLayersPendingRefresh;
 
@@ -1240,7 +1234,7 @@ private:
     bool mLayerCachingEnabled = false;
     bool mBackpressureGpuComposition = false;
 
-    LayerTracing mLayerTracing{*this};
+    LayerTracing mLayerTracing;
     bool mLayerTracingEnabled = false;
 
     std::optional<TransactionTracing> mTransactionTracing;
@@ -1395,10 +1389,15 @@ private:
                 [](const auto& display) { return display.isRefreshRateOverlayEnabled(); });
     }
     std::function<std::vector<std::pair<Layer*, sp<LayerFE>>>()> getLayerSnapshotsForScreenshots(
-            std::optional<ui::LayerStack> layerStack, uint32_t uid);
+            std::optional<ui::LayerStack> layerStack, uint32_t uid,
+            std::function<bool(const frontend::LayerSnapshot&, bool& outStopTraversal)>
+                    snapshotFilterFn);
+    std::function<std::vector<std::pair<Layer*, sp<LayerFE>>>()> getLayerSnapshotsForScreenshots(
+            std::optional<ui::LayerStack> layerStack, uint32_t uid,
+            std::unordered_set<uint32_t> excludeLayerIds);
     std::function<std::vector<std::pair<Layer*, sp<LayerFE>>>()> getLayerSnapshotsForScreenshots(
             uint32_t rootLayerId, uint32_t uid, std::unordered_set<uint32_t> excludeLayerIds,
-            bool childrenOnly, const FloatRect& parentCrop);
+            bool childrenOnly, const std::optional<FloatRect>& optionalParentCrop);
 
     const sp<WindowInfosListenerInvoker> mWindowInfosListenerInvoker;
 
@@ -1420,17 +1419,19 @@ private:
 
     std::vector<uint32_t> mDestroyedHandles;
     std::vector<std::unique_ptr<frontend::RequestedLayerState>> mNewLayers;
+    std::vector<LayerCreationArgs> mNewLayerArgs;
     // These classes do not store any client state but help with managing transaction callbacks
     // and stats.
     std::unordered_map<uint32_t, sp<Layer>> mLegacyLayers;
-    struct {
-        bool late = false;
-        bool early = false;
-    } mPowerHintSessionMode;
 
     TransactionHandler mTransactionHandler;
     display::DisplayMap<ui::LayerStack, frontend::DisplayInfo> mFrontEndDisplayInfos;
     bool mFrontEndDisplayInfosChanged = false;
+
+    // Layers visible during the last commit. This set should only be used for testing set equality
+    // and membership. The pointers should not be dereferenced as it's possible the set contains
+    // pointers to freed layers.
+    std::unordered_set<Layer*> mVisibleLayers;
 };
 
 class SurfaceComposerAIDL : public gui::BnSurfaceComposer {

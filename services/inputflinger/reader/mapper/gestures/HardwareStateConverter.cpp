@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+// clang-format off
+#include "../Macros.h"
+// clang-format on
 #include "gestures/HardwareStateConverter.h"
 
 #include <chrono>
@@ -78,25 +81,34 @@ SelfContainedHardwareState HardwareStateConverter::produceHardwareState(nsecs_t 
     }
 
     schs.fingers.clear();
+    size_t numPalms = 0;
     for (size_t i = 0; i < mMotionAccumulator.getSlotCount(); i++) {
         MultiTouchMotionAccumulator::Slot slot = mMotionAccumulator.getSlot(i);
-        if (slot.isInUse()) {
-            FingerState& fingerState = schs.fingers.emplace_back();
-            fingerState = {};
-            fingerState.touch_major = slot.getTouchMajor();
-            fingerState.touch_minor = slot.getTouchMinor();
-            fingerState.width_major = slot.getToolMajor();
-            fingerState.width_minor = slot.getToolMinor();
-            fingerState.pressure = slot.getPressure();
-            fingerState.orientation = slot.getOrientation();
-            fingerState.position_x = slot.getX();
-            fingerState.position_y = slot.getY();
-            fingerState.tracking_id = slot.getTrackingId();
+        if (!slot.isInUse()) {
+            continue;
         }
+        // Some touchpads continue to report contacts even after they've identified them as palms.
+        // We want to exclude these contacts from the HardwareStates.
+        if (slot.getToolType() == ToolType::PALM) {
+            numPalms++;
+            continue;
+        }
+
+        FingerState& fingerState = schs.fingers.emplace_back();
+        fingerState = {};
+        fingerState.touch_major = slot.getTouchMajor();
+        fingerState.touch_minor = slot.getTouchMinor();
+        fingerState.width_major = slot.getToolMajor();
+        fingerState.width_minor = slot.getToolMinor();
+        fingerState.pressure = slot.getPressure();
+        fingerState.orientation = slot.getOrientation();
+        fingerState.position_x = slot.getX();
+        fingerState.position_y = slot.getY();
+        fingerState.tracking_id = slot.getTrackingId();
     }
     schs.state.fingers = schs.fingers.data();
     schs.state.finger_cnt = schs.fingers.size();
-    schs.state.touch_cnt = mTouchButtonAccumulator.getTouchCount();
+    schs.state.touch_cnt = mTouchButtonAccumulator.getTouchCount() - numPalms;
     return schs;
 }
 
