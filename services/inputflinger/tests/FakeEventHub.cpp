@@ -255,11 +255,12 @@ int32_t FakeEventHub::getDeviceControllerNumber(int32_t) const {
     return 0;
 }
 
-void FakeEventHub::getConfiguration(int32_t deviceId, PropertyMap* outConfiguration) const {
+std::optional<PropertyMap> FakeEventHub::getConfiguration(int32_t deviceId) const {
     Device* device = getDevice(deviceId);
-    if (device) {
-        *outConfiguration = device->configuration;
+    if (device == nullptr) {
+        return {};
     }
+    return device->configuration;
 }
 
 status_t FakeEventHub::getAbsoluteAxisInfo(int32_t deviceId, int axis,
@@ -592,5 +593,36 @@ std::optional<std::unordered_map<LightColor, int32_t>> FakeEventHub::getLightInt
     }
     return lightIt->second;
 };
+
+void FakeEventHub::setSysfsRootPath(int32_t deviceId, std::string sysfsRootPath) const {
+    Device* device = getDevice(deviceId);
+    if (device == nullptr) {
+        return;
+    }
+    device->sysfsRootPath = sysfsRootPath;
+}
+
+void FakeEventHub::sysfsNodeChanged(const std::string& sysfsNodePath) {
+    int32_t foundDeviceId = -1;
+    Device* foundDevice = nullptr;
+    for (size_t i = 0; i < mDevices.size(); i++) {
+        Device* d = mDevices.valueAt(i);
+        if (sysfsNodePath.find(d->sysfsRootPath) != std::string::npos) {
+            foundDeviceId = mDevices.keyAt(i);
+            foundDevice = d;
+        }
+    }
+    if (foundDevice == nullptr) {
+        return;
+    }
+    // If device sysfs changed -> reopen the device
+    if (!mRawLightInfos.empty() && !foundDevice->classes.test(InputDeviceClass::LIGHT)) {
+        InputDeviceIdentifier identifier = foundDevice->identifier;
+        ftl::Flags<InputDeviceClass> classes = foundDevice->classes;
+        removeDevice(foundDeviceId);
+        addDevice(foundDeviceId, identifier.name, classes | InputDeviceClass::LIGHT,
+                  identifier.bus);
+    }
+}
 
 } // namespace android

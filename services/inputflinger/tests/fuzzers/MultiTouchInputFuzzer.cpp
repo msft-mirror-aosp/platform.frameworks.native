@@ -61,8 +61,8 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t* data, size_t size) {
             std::make_shared<ThreadSafeFuzzedDataProvider>(data, size);
     FuzzContainer fuzzer(fdp);
 
-    MultiTouchInputMapper& mapper = fuzzer.getMapper<MultiTouchInputMapper>();
     auto policyConfig = fuzzer.getPolicyConfig();
+    MultiTouchInputMapper& mapper = fuzzer.getMapper<MultiTouchInputMapper>(policyConfig);
 
     // Loop through mapper operations until randomness is exhausted.
     while (fdp->remaining_bytes() > 0) {
@@ -74,13 +74,14 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t* data, size_t size) {
                 },
                 [&]() -> void {
                     InputDeviceInfo info;
-                    mapper.populateDeviceInfo(&info);
+                    mapper.populateDeviceInfo(info);
                 },
                 [&]() -> void { mapper.getSources(); },
                 [&]() -> void {
                     std::list<NotifyArgs> unused =
-                            mapper.configure(fdp->ConsumeIntegral<nsecs_t>(), &policyConfig,
-                                             fdp->ConsumeIntegral<uint32_t>());
+                            mapper.reconfigure(fdp->ConsumeIntegral<nsecs_t>(), policyConfig,
+                                               InputReaderConfiguration::Change(
+                                                       fdp->ConsumeIntegral<uint32_t>()));
                 },
                 [&]() -> void {
                     std::list<NotifyArgs> unused = mapper.reset(fdp->ConsumeIntegral<nsecs_t>());
@@ -127,8 +128,7 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t* data, size_t size) {
                 [&]() -> void {
                     StylusState state{fdp->ConsumeIntegral<nsecs_t>(),
                                       fdp->ConsumeFloatingPoint<float>(),
-                                      fdp->ConsumeIntegral<uint32_t>(),
-                                      fdp->ConsumeIntegral<int32_t>()};
+                                      fdp->ConsumeIntegral<uint32_t>(), getFuzzedToolType(*fdp)};
                     std::list<NotifyArgs> unused = mapper.updateExternalStylusState(state);
                 },
                 [&]() -> void { mapper.getAssociatedDisplayId(); },

@@ -20,8 +20,7 @@
 #define LOG_TAG "LayerLifecycleManager"
 
 #include "LayerLifecycleManager.h"
-#include "Layer.h" // temporarily needed for LayerHandle
-#include "LayerHandle.h"
+#include "Client.h" // temporarily needed for LayerCreationArgs
 #include "LayerLog.h"
 #include "SwapErase.h"
 
@@ -39,10 +38,11 @@ void LayerLifecycleManager::addLayers(std::vector<std::unique_ptr<RequestedLayer
         RequestedLayerState& layer = *newLayer.get();
         auto [it, inserted] = mIdToLayer.try_emplace(layer.id, References{.owner = layer});
         if (!inserted) {
-            LOG_ALWAYS_FATAL("Duplicate layer id %d found. Existing layer: %s", layer.id,
+            LOG_ALWAYS_FATAL("Duplicate layer id found. New layer: %s Existing layer: %s",
+                             layer.getDebugString().c_str(),
                              it->second.owner.getDebugString().c_str());
         }
-
+        mAddedLayers.push_back(newLayer.get());
         layer.parentId = linkLayer(layer.parentId, layer.id);
         layer.relativeParentId = linkLayer(layer.relativeParentId, layer.id);
         if (layer.layerStackToMirror != ui::INVALID_LAYER_STACK) {
@@ -72,12 +72,14 @@ void LayerLifecycleManager::addLayers(std::vector<std::unique_ptr<RequestedLayer
     }
 }
 
-void LayerLifecycleManager::onHandlesDestroyed(const std::vector<uint32_t>& destroyedHandles) {
+void LayerLifecycleManager::onHandlesDestroyed(const std::vector<uint32_t>& destroyedHandles,
+                                               bool ignoreUnknownHandles) {
     std::vector<uint32_t> layersToBeDestroyed;
     for (const auto& layerId : destroyedHandles) {
         auto it = mIdToLayer.find(layerId);
         if (it == mIdToLayer.end()) {
-            LOG_ALWAYS_FATAL("%s Layerid not found %d", __func__, layerId);
+            LOG_ALWAYS_FATAL_IF(!ignoreUnknownHandles, "%s Layerid not found %d", __func__,
+                                layerId);
             continue;
         }
         RequestedLayerState& layer = it->second.owner;
@@ -163,11 +165,12 @@ void LayerLifecycleManager::onHandlesDestroyed(const std::vector<uint32_t>& dest
     }
 }
 
-void LayerLifecycleManager::applyTransactions(const std::vector<TransactionState>& transactions) {
+void LayerLifecycleManager::applyTransactions(const std::vector<TransactionState>& transactions,
+                                              bool ignoreUnknownLayers) {
     for (const auto& transaction : transactions) {
         for (const auto& resolvedComposerState : transaction.states) {
             const auto& clientState = resolvedComposerState.state;
-            uint32_t layerId = LayerHandle::getLayerId(clientState.surface);
+            uint32_t layerId = resolvedComposerState.layerId;
             if (layerId == UNASSIGNED_LAYER_ID) {
                 ALOGW("%s Handle %p is not valid", __func__, clientState.surface.get());
                 continue;
@@ -175,15 +178,15 @@ void LayerLifecycleManager::applyTransactions(const std::vector<TransactionState
 
             RequestedLayerState* layer = getLayerFromId(layerId);
             if (layer == nullptr) {
-                LOG_ALWAYS_FATAL("%s Layer with handle %p (layerid=%d) not found", __func__,
-                                 clientState.surface.get(), layerId);
+                LOG_ALWAYS_FATAL_IF(!ignoreUnknownLayers, "%s Layer with layerid=%d not found",
+                                    __func__, layerId);
                 continue;
             }
 
             if (!layer->handleAlive) {
-                LOG_ALWAYS_FATAL("%s Layer's handle %p (layerid=%d) is not alive. Possible out of "
+                LOG_ALWAYS_FATAL("%s Layer's with layerid=%d) is not alive. Possible out of "
                                  "order LayerLifecycleManager updates",
-                                 __func__, clientState.surface.get(), layerId);
+                                 __func__, layerId);
                 continue;
             }
 
@@ -198,13 +201,13 @@ void LayerLifecycleManager::applyTransactions(const std::vector<TransactionState
 
             if (layer->what & layer_state_t::eBackgroundColorChanged) {
                 if (layer->bgColorLayerId == UNASSIGNED_LAYER_ID && layer->bgColor.a != 0) {
-                    LayerCreationArgs backgroundLayerArgs{nullptr,
-                                                          nullptr,
-                                                          layer->name + "BackgroundColorLayer",
-                                                          ISurfaceComposerClient::eFXSurfaceEffect,
-                                                          {},
-                                                          layer->id,
-                                                          /*internalLayer=*/true};
+                    LayerCreationArgs
+                            backgroundLayerArgs(LayerCreationArgs::getInternalLayerId(
+                                                        LayerCreationArgs::sInternalSequence++),
+                                                /*internalLayer=*/true);
+                    backgroundLayerArgs.parentId = layer->id;
+                    backgroundLayerArgs.name = layer->name + "BackgroundColorLayer";
+                    backgroundLayerArgs.flags = ISurfaceComposerClient::eFXSurfaceEffect;
                     std::vector<std::unique_ptr<RequestedLayerState>> newLayers;
                     newLayers.emplace_back(
                             std::make_unique<RequestedLayerState>(backgroundLayerArgs));
@@ -258,23 +261,19 @@ void LayerLifecycleManager::applyTransactions(const std::vector<TransactionState
 }
 
 void LayerLifecycleManager::commitChanges() {
-    for (auto& layer : mLayers) {
-        if (layer->changes.test(RequestedLayerState::Changes::Created)) {
-            for (auto listener : mListeners) {
-                listener->onLayerAdded(*layer);
-            }
+    for (auto layer : mAddedLayers) {
+        for (auto& listener : mListeners) {
+            listener->onLayerAdded(*layer);
         }
+    }
+    mAddedLayers.clear();
+
+    for (auto& layer : mLayers) {
         layer->clearChanges();
     }
 
     for (auto& destroyedLayer : mDestroyedLayers) {
-        if (destroyedLayer->changes.test(RequestedLayerState::Changes::Created)) {
-            for (auto listener : mListeners) {
-                listener->onLayerAdded(*destroyedLayer);
-            }
-        }
-
-        for (auto listener : mListeners) {
+        for (auto& listener : mListeners) {
             listener->onLayerDestroyed(*destroyedLayer);
         }
     }

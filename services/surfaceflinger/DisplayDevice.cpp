@@ -167,6 +167,7 @@ auto DisplayDevice::getFrontEndInfo() const -> frontend::DisplayInfo {
             .receivesInput = receivesInput(),
             .isSecure = isSecure(),
             .isPrimary = isPrimary(),
+            .isVirtual = isVirtual(),
             .rotationFlags = ui::Transform::toRotationFlags(mOrientation),
             .transformHint = getTransformHint()};
 }
@@ -181,9 +182,21 @@ void DisplayDevice::setPowerMode(hal::PowerMode mode) {
         getCompositionDisplay()->applyDisplayBrightness(true);
     }
 
-    mPowerMode = mode;
+    if (mPowerMode) {
+        *mPowerMode = mode;
+    } else {
+        mPowerMode.emplace("PowerMode -" + to_string(getId()), mode);
+    }
 
     getCompositionDisplay()->setCompositionEnabled(isPoweredOn());
+}
+
+void DisplayDevice::tracePowerMode() {
+    // assign the same value for tracing
+    if (mPowerMode) {
+        const hal::PowerMode powerMode = *mPowerMode;
+        *mPowerMode = powerMode;
+    }
 }
 
 void DisplayDevice::enableLayerCaching(bool enable) {
@@ -522,8 +535,8 @@ void DisplayDevice::clearDesiredActiveModeState() {
 }
 
 void DisplayDevice::adjustRefreshRate(Fps pacesetterDisplayRefreshRate) {
-    using fps_approx_ops::operator==;
-    if (mRequestedRefreshRate == 0_Hz) {
+    using fps_approx_ops::operator<=;
+    if (mRequestedRefreshRate <= 0_Hz) {
         return;
     }
 
@@ -534,7 +547,12 @@ void DisplayDevice::adjustRefreshRate(Fps pacesetterDisplayRefreshRate) {
     }
 
     unsigned divisor = static_cast<unsigned>(
-            std::round(pacesetterDisplayRefreshRate.getValue() / mRequestedRefreshRate.getValue()));
+            std::floor(pacesetterDisplayRefreshRate.getValue() / mRequestedRefreshRate.getValue()));
+    if (divisor == 0) {
+        mAdjustedRefreshRate = 0_Hz;
+        return;
+    }
+
     mAdjustedRefreshRate = pacesetterDisplayRefreshRate / divisor;
 }
 

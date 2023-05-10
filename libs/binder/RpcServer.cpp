@@ -295,7 +295,8 @@ void RpcServer::join() {
 bool RpcServer::shutdown() {
     RpcMutexUniqueLock _l(mLock);
     if (mShutdownTrigger == nullptr) {
-        LOG_RPC_DETAIL("Cannot shutdown. No shutdown trigger installed (already shutdown?)");
+        LOG_RPC_DETAIL("Cannot shutdown. No shutdown trigger installed (already shutdown, or not "
+                       "joined yet?)");
         return false;
     }
 
@@ -552,7 +553,7 @@ status_t RpcServer::setupSocketServer(const RpcSocketAddress& addr) {
             socket(addr.addr()->sa_family, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0)));
     if (!socket_fd.ok()) {
         int savedErrno = errno;
-        ALOGE("Could not create socket: %s", strerror(savedErrno));
+        ALOGE("Could not create socket at %s: %s", addr.toString().c_str(), strerror(savedErrno));
         return -savedErrno;
     }
     if (0 != TEMP_FAILURE_RETRY(bind(socket_fd.get(), addr.addr(), addr.addrSize()))) {

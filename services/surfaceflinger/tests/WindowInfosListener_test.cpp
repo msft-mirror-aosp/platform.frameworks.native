@@ -16,13 +16,17 @@
 
 #include <gtest/gtest.h>
 #include <gui/SurfaceComposerClient.h>
+#include <gui/WindowInfosUpdate.h>
 #include <private/android_filesystem_config.h>
+#include <cstdint>
 #include <future>
+#include "utils/WindowInfosListenerUtils.h"
 
 namespace android {
 using Transaction = SurfaceComposerClient::Transaction;
 using gui::DisplayInfo;
 using gui::WindowInfo;
+constexpr auto findMatchingWindowInfo = WindowInfosListenerUtils::findMatchingWindowInfo;
 
 using WindowInfosPredicate = std::function<bool(const std::vector<WindowInfo>&)>;
 
@@ -35,45 +39,13 @@ protected:
 
     void TearDown() override { seteuid(AID_ROOT); }
 
-    struct WindowInfosListener : public gui::WindowInfosListener {
-    public:
-        WindowInfosListener(WindowInfosPredicate predicate, std::promise<void>& promise)
-              : mPredicate(std::move(predicate)), mPromise(promise) {}
-
-        void onWindowInfosChanged(const std::vector<WindowInfo>& windowInfos,
-                                  const std::vector<DisplayInfo>&) override {
-            if (mPredicate(windowInfos)) {
-                mPromise.set_value();
-            }
-        }
-
-    private:
-        WindowInfosPredicate mPredicate;
-        std::promise<void>& mPromise;
-    };
-
     sp<SurfaceComposerClient> mClient;
+    WindowInfosListenerUtils mWindowInfosListenerUtils;
 
-    bool waitForWindowInfosPredicate(WindowInfosPredicate predicate) {
-        std::promise<void> promise;
-        auto listener = sp<WindowInfosListener>::make(std::move(predicate), promise);
-        mClient->addWindowInfosListener(listener);
-        auto future = promise.get_future();
-        bool satisfied = future.wait_for(std::chrono::seconds{1}) == std::future_status::ready;
-        mClient->removeWindowInfosListener(listener);
-        return satisfied;
+    bool waitForWindowInfosPredicate(const WindowInfosPredicate& predicate) {
+        return mWindowInfosListenerUtils.waitForWindowInfosPredicate(std::move(predicate));
     }
 };
-
-std::optional<WindowInfo> findMatchingWindowInfo(WindowInfo targetWindowInfo,
-                                                 std::vector<WindowInfo> windowInfos) {
-    for (WindowInfo windowInfo : windowInfos) {
-        if (windowInfo.token == targetWindowInfo.token) {
-            return windowInfo;
-        }
-    }
-    return std::nullopt;
-}
 
 TEST_F(WindowInfosListenerTest, WindowInfoAddedAndRemoved) {
     std::string name = "Test Layer";
@@ -93,14 +65,14 @@ TEST_F(WindowInfosListenerTest, WindowInfoAddedAndRemoved) {
             .apply();
 
     auto windowPresent = [&](const std::vector<WindowInfo>& windowInfos) {
-        return findMatchingWindowInfo(windowInfo, windowInfos).has_value();
+        return findMatchingWindowInfo(windowInfo, windowInfos);
     };
     ASSERT_TRUE(waitForWindowInfosPredicate(windowPresent));
 
     Transaction().reparent(surfaceControl, nullptr).apply();
 
     auto windowNotPresent = [&](const std::vector<WindowInfo>& windowInfos) {
-        return !findMatchingWindowInfo(windowInfo, windowInfos).has_value();
+        return !findMatchingWindowInfo(windowInfo, windowInfos);
     };
     ASSERT_TRUE(waitForWindowInfosPredicate(windowNotPresent));
 }
@@ -132,8 +104,7 @@ TEST_F(WindowInfosListenerTest, WindowInfoChanged) {
     };
     ASSERT_TRUE(waitForWindowInfosPredicate(windowIsPresentAndTouchableRegionEmpty));
 
-    Rect touchableRegions(0, 0, 50, 50);
-    windowInfo.addTouchableRegion(Rect(0, 0, 50, 50));
+    windowInfo.addTouchableRegion({0, 0, 50, 50});
     Transaction().setInputWindowInfo(surfaceControl, windowInfo).apply();
 
     auto windowIsPresentAndTouchableRegionMatches =
@@ -142,7 +113,10 @@ TEST_F(WindowInfosListenerTest, WindowInfoChanged) {
                 if (!foundWindowInfo) {
                     return false;
                 }
-                return foundWindowInfo->touchableRegion.hasSameRects(windowInfo.touchableRegion);
+
+                auto touchableRegion =
+                        foundWindowInfo->transform.transform(foundWindowInfo->touchableRegion);
+                return touchableRegion.hasSameRects(windowInfo.touchableRegion);
             };
     ASSERT_TRUE(waitForWindowInfosPredicate(windowIsPresentAndTouchableRegionMatches));
 }

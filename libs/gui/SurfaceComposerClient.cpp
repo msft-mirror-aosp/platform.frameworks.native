@@ -54,6 +54,7 @@
 #include <ui/DynamicDisplayInfo.h>
 
 #include <android-base/thread_annotations.h>
+#include <gui/LayerStatePermissions.h>
 #include <private/gui/ComposerService.h>
 #include <private/gui/ComposerServiceAIDL.h>
 
@@ -716,11 +717,16 @@ SurfaceComposerClient::Transaction::Transaction(const Transaction& other)
     mListenerCallbacks = other.mListenerCallbacks;
 }
 
-void SurfaceComposerClient::Transaction::sanitize() {
+void SurfaceComposerClient::Transaction::sanitize(int pid, int uid) {
+    uint32_t permissions = LayerStatePermissions::getTransactionPermissions(pid, uid);
     for (auto & [handle, composerState] : mComposerStates) {
-        composerState.state.sanitize(0 /* permissionMask */);
+        composerState.state.sanitize(permissions);
     }
-    mInputWindowCommands.clear();
+    if (!mInputWindowCommands.empty() &&
+        (permissions & layer_state_t::Permission::ACCESS_SURFACE_FLINGER) == 0) {
+        ALOGE("Only privileged callers are allowed to send input commands.");
+        mInputWindowCommands.clear();
+    }
 }
 
 std::unique_ptr<SurfaceComposerClient::Transaction>
@@ -898,7 +904,7 @@ status_t SurfaceComposerClient::Transaction::writeToParcel(Parcel* parcel) const
 }
 
 void SurfaceComposerClient::Transaction::releaseBufferIfOverwriting(const layer_state_t& state) {
-    if (!(state.what & layer_state_t::eBufferChanged)) {
+    if (!(state.what & layer_state_t::eBufferChanged) || !state.bufferData->hasBuffer()) {
         return;
     }
 
@@ -1642,28 +1648,25 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBuffe
 
     releaseBufferIfOverwriting(*s);
 
-    if (buffer == nullptr) {
-        s->what &= ~layer_state_t::eBufferChanged;
-        s->bufferData = nullptr;
-        return *this;
-    }
-
     std::shared_ptr<BufferData> bufferData = std::make_shared<BufferData>();
     bufferData->buffer = buffer;
-    uint64_t frameNumber = sc->resolveFrameNumber(optFrameNumber);
-    bufferData->frameNumber = frameNumber;
-    bufferData->producerId = producerId;
-    bufferData->flags |= BufferData::BufferDataChange::frameNumberChanged;
-    if (fence) {
-        bufferData->acquireFence = *fence;
-        bufferData->flags |= BufferData::BufferDataChange::fenceChanged;
+    if (buffer) {
+        uint64_t frameNumber = sc->resolveFrameNumber(optFrameNumber);
+        bufferData->frameNumber = frameNumber;
+        bufferData->producerId = producerId;
+        bufferData->flags |= BufferData::BufferDataChange::frameNumberChanged;
+        if (fence) {
+            bufferData->acquireFence = *fence;
+            bufferData->flags |= BufferData::BufferDataChange::fenceChanged;
+        }
+        bufferData->releaseBufferEndpoint =
+                IInterface::asBinder(TransactionCompletedListener::getIInstance());
+        setReleaseBufferCallback(bufferData.get(), callback);
     }
-    bufferData->releaseBufferEndpoint =
-            IInterface::asBinder(TransactionCompletedListener::getIInstance());
+
     if (mIsAutoTimestamp) {
         mDesiredPresentTime = systemTime();
     }
-    setReleaseBufferCallback(bufferData.get(), callback);
     s->what |= layer_state_t::eBufferChanged;
     s->bufferData = std::move(bufferData);
     registerSurfaceControlForCallback(sc);
@@ -1681,6 +1684,25 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBuffe
                                     nullptr);
 
     mMayContainBuffer = true;
+    return *this;
+}
+
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::unsetBuffer(
+        const sp<SurfaceControl>& sc) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+
+    if (!(s->what & layer_state_t::eBufferChanged)) {
+        return *this;
+    }
+
+    releaseBufferIfOverwriting(*s);
+
+    s->what &= ~layer_state_t::eBufferChanged;
+    s->bufferData = nullptr;
     return *this;
 }
 
@@ -1723,8 +1745,8 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setExten
         return *this;
     }
     s->what |= layer_state_t::eExtendedRangeBrightnessChanged;
-    s->currentSdrHdrRatio = currentBufferRatio;
-    s->desiredSdrHdrRatio = desiredRatio;
+    s->currentHdrSdrRatio = currentBufferRatio;
+    s->desiredHdrSdrRatio = desiredRatio;
 
     registerSurfaceControlForCallback(sc);
     return *this;

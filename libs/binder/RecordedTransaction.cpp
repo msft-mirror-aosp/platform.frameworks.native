@@ -127,17 +127,16 @@ std::optional<RecordedTransaction> RecordedTransaction::fromDetails(
     t.mData.mInterfaceName = std::string(String8(interfaceName).string());
     if (interfaceName.size() != t.mData.mInterfaceName.size()) {
         LOG(ERROR) << "Interface Name is not valid. Contains characters that aren't single byte "
-                      "utf-8: "
-                   << interfaceName;
+                      "utf-8.";
         return std::nullopt;
     }
 
-    if (t.mSent.setData(dataParcel.data(), dataParcel.dataSize()) != android::NO_ERROR) {
+    if (t.mSent.setData(dataParcel.data(), dataParcel.dataBufferSize()) != android::NO_ERROR) {
         LOG(ERROR) << "Failed to set sent parcel data.";
         return std::nullopt;
     }
 
-    if (t.mReply.setData(replyParcel.data(), replyParcel.dataSize()) != android::NO_ERROR) {
+    if (t.mReply.setData(replyParcel.data(), replyParcel.dataBufferSize()) != android::NO_ERROR) {
         LOG(ERROR) << "Failed to set reply parcel data.";
         return std::nullopt;
     }
@@ -350,11 +349,11 @@ android::status_t RecordedTransaction::dumpToFile(const unique_fd& fd) const {
         return UNKNOWN_ERROR;
     }
 
-    if (NO_ERROR != writeChunk(fd, DATA_PARCEL_CHUNK, mSent.dataSize(), mSent.data())) {
+    if (NO_ERROR != writeChunk(fd, DATA_PARCEL_CHUNK, mSent.dataBufferSize(), mSent.data())) {
         LOG(ERROR) << "Failed to write sent Parcel to fd " << fd.get();
         return UNKNOWN_ERROR;
     }
-    if (NO_ERROR != writeChunk(fd, REPLY_PARCEL_CHUNK, mReply.dataSize(), mReply.data())) {
+    if (NO_ERROR != writeChunk(fd, REPLY_PARCEL_CHUNK, mReply.dataBufferSize(), mReply.data())) {
         LOG(ERROR) << "Failed to write reply Parcel to fd " << fd.get();
         return UNKNOWN_ERROR;
     }

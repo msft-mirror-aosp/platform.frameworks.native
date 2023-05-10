@@ -199,7 +199,7 @@ public:
 
     void modulateVsync() {
         static_cast<void>(
-                mFlinger.mutableScheduler().mutableVsyncModulator().onRefreshRateChangeInitiated());
+                mFlinger.mutableScheduler().vsyncModulator().onRefreshRateChangeInitiated());
     }
 
     bool mHasListenerCallbacks = false;
@@ -274,6 +274,34 @@ TEST_F(TransactionApplicationTest, FromHandle) {
     EXPECT_EQ(nullptr, ret.get());
 }
 
+class FakeExternalTexture : public renderengine::ExternalTexture {
+    const sp<GraphicBuffer> mEmptyBuffer = nullptr;
+    uint32_t mWidth;
+    uint32_t mHeight;
+    uint64_t mId;
+    PixelFormat mPixelFormat;
+    uint64_t mUsage;
+
+public:
+    FakeExternalTexture(BufferData& bufferData)
+          : mWidth(bufferData.getWidth()),
+            mHeight(bufferData.getHeight()),
+            mId(bufferData.getId()),
+            mPixelFormat(bufferData.getPixelFormat()),
+            mUsage(bufferData.getUsage()) {}
+    const sp<GraphicBuffer>& getBuffer() const { return mEmptyBuffer; }
+    bool hasSameBuffer(const renderengine::ExternalTexture& other) const override {
+        return getId() == other.getId();
+    }
+    uint32_t getWidth() const override { return mWidth; }
+    uint32_t getHeight() const override { return mHeight; }
+    uint64_t getId() const override { return mId; }
+    PixelFormat getPixelFormat() const override { return mPixelFormat; }
+    uint64_t getUsage() const override { return mUsage; }
+    void remapBuffer() override {}
+    ~FakeExternalTexture() = default;
+};
+
 class LatchUnsignaledTest : public TransactionApplicationTest {
 public:
     void TearDown() override {
@@ -294,7 +322,8 @@ public:
         return fence;
     }
 
-    ComposerState createComposerState(int layerId, sp<Fence> fence, uint64_t what) {
+    ComposerState createComposerState(int layerId, sp<Fence> fence, uint64_t what,
+                                      std::optional<sp<IBinder>> layerHandle = std::nullopt) {
         ComposerState state;
         state.state.bufferData =
                 std::make_shared<fake::BufferData>(/* bufferId */ 123L, /* width */ 1,
@@ -302,15 +331,20 @@ public:
                                                    /* outUsage */ 0);
         state.state.bufferData->acquireFence = std::move(fence);
         state.state.layerId = layerId;
-        state.state.surface =
+        state.state.surface = layerHandle.value_or(
                 sp<Layer>::make(LayerCreationArgs(mFlinger.flinger(), nullptr, "TestLayer", 0, {}))
-                        ->getHandle();
+                        ->getHandle());
         state.state.bufferData->flags = BufferData::BufferDataChange::fenceChanged;
 
         state.state.what = what;
         if (what & layer_state_t::eCropChanged) {
             state.state.crop = Rect(1, 2, 3, 4);
         }
+        if (what & layer_state_t::eFlagsChanged) {
+            state.state.flags = layer_state_t::eEnableBackpressure;
+            state.state.mask = layer_state_t::eEnableBackpressure;
+        }
+
         return state;
     }
 
@@ -340,7 +374,11 @@ public:
             std::vector<ResolvedComposerState> resolvedStates;
             resolvedStates.reserve(transaction.states.size());
             for (auto& state : transaction.states) {
-                resolvedStates.emplace_back(std::move(state));
+                ResolvedComposerState resolvedState;
+                resolvedState.state = std::move(state.state);
+                resolvedState.externalTexture =
+                        std::make_shared<FakeExternalTexture>(*resolvedState.state.bufferData);
+                resolvedStates.emplace_back(resolvedState);
             }
 
             TransactionState transactionState(transaction.frameTimelineInfo, resolvedStates,
@@ -348,7 +386,7 @@ public:
                                               transaction.applyToken,
                                               transaction.inputWindowCommands,
                                               transaction.desiredPresentTime,
-                                              transaction.isAutoTimestamp, {}, systemTime(), 0,
+                                              transaction.isAutoTimestamp, {}, systemTime(),
                                               mHasListenerCallbacks, mCallbacks, getpid(),
                                               static_cast<int>(getuid()), transaction.id);
             mFlinger.setTransactionStateInternal(transactionState);
@@ -599,6 +637,41 @@ TEST_F(LatchUnsignaledAutoSingleLayerTest, DontLatchUnsignaledWhenEarlyOffset) {
 
     modulateVsync();
     setTransactionStates({unsignaledTransaction}, kExpectedTransactionsPending);
+}
+
+TEST_F(LatchUnsignaledAutoSingleLayerTest, UnsignaledNotAppliedWhenThereAreSignaled_SignaledFirst) {
+    const sp<IBinder> kApplyToken1 =
+            IInterface::asBinder(TransactionCompletedListener::getIInstance());
+    const sp<IBinder> kApplyToken2 = sp<BBinder>::make();
+    const sp<IBinder> kApplyToken3 = sp<BBinder>::make();
+    const auto kLayerId1 = 1;
+    const auto kLayerId2 = 2;
+    const auto kExpectedTransactionsPending = 1u;
+
+    const auto signaledTransaction =
+            createTransactionInfo(kApplyToken1,
+                                  {
+                                          createComposerState(kLayerId1,
+                                                              fence(Fence::Status::Signaled),
+                                                              layer_state_t::eBufferChanged),
+                                  });
+    const auto signaledTransaction2 =
+            createTransactionInfo(kApplyToken2,
+                                  {
+                                          createComposerState(kLayerId1,
+                                                              fence(Fence::Status::Signaled),
+                                                              layer_state_t::eBufferChanged),
+                                  });
+    const auto unsignaledTransaction =
+            createTransactionInfo(kApplyToken3,
+                                  {
+                                          createComposerState(kLayerId2,
+                                                              fence(Fence::Status::Unsignaled),
+                                                              layer_state_t::eBufferChanged),
+                                  });
+
+    setTransactionStates({signaledTransaction, signaledTransaction2, unsignaledTransaction},
+                         kExpectedTransactionsPending);
 }
 
 class LatchUnsignaledDisabledTest : public LatchUnsignaledTest {
@@ -938,6 +1011,43 @@ TEST_F(LatchUnsignaledAlwaysTest, Flush_RemovesUnsignaledFromTheQueue) {
                                           createComposerState(kLayerId2,
                                                               fence(Fence::Status::Unsignaled),
                                                               layer_state_t::eBufferChanged),
+                                  });
+    setTransactionStates({unsignaledTransaction, unsignaledTransaction2},
+                         kExpectedTransactionsPending);
+}
+
+TEST_F(LatchUnsignaledAlwaysTest, RespectsBackPressureFlag) {
+    const sp<IBinder> kApplyToken1 =
+            IInterface::asBinder(TransactionCompletedListener::getIInstance());
+    const sp<IBinder> kApplyToken2 = sp<BBinder>::make();
+    const auto kLayerId1 = 1;
+    const auto kExpectedTransactionsPending = 1u;
+    auto layer =
+            sp<Layer>::make(LayerCreationArgs(mFlinger.flinger(), nullptr, "TestLayer", 0, {}));
+    auto layerHandle = layer->getHandle();
+    const auto setBackPressureFlagTransaction =
+            createTransactionInfo(kApplyToken1,
+                                  {createComposerState(kLayerId1, fence(Fence::Status::Unsignaled),
+                                                       layer_state_t::eBufferChanged |
+                                                               layer_state_t::eFlagsChanged,
+                                                       {layerHandle})});
+    setTransactionStates({setBackPressureFlagTransaction}, 0u);
+
+    const auto unsignaledTransaction =
+            createTransactionInfo(kApplyToken1,
+                                  {
+                                          createComposerState(kLayerId1,
+                                                              fence(Fence::Status::Unsignaled),
+                                                              layer_state_t::eBufferChanged,
+                                                              {layerHandle}),
+                                  });
+    const auto unsignaledTransaction2 =
+            createTransactionInfo(kApplyToken1,
+                                  {
+                                          createComposerState(kLayerId1,
+                                                              fence(Fence::Status::Unsignaled),
+                                                              layer_state_t::eBufferChanged,
+                                                              {layerHandle}),
                                   });
     setTransactionStates({unsignaledTransaction, unsignaledTransaction2},
                          kExpectedTransactionsPending);

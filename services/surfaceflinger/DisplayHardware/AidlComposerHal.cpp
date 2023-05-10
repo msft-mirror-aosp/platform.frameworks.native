@@ -329,14 +329,6 @@ void AidlComposer::registerCallback(HWC2::ComposerCallback& callback) {
     }
 }
 
-void AidlComposer::resetCommands(Display display) {
-    mMutex.lock_shared();
-    if (auto writer = getWriter(display)) {
-        writer->get().reset();
-    }
-    mMutex.unlock_shared();
-}
-
 Error AidlComposer::executeCommands(Display display) {
     mMutex.lock_shared();
     auto error = execute(display);
@@ -1054,9 +1046,8 @@ Error AidlComposer::execute(Display display) {
         return Error::BAD_DISPLAY;
     }
 
-    const auto& commands = writer->get().getPendingCommands();
+    auto commands = writer->get().takePendingCommands();
     if (commands.empty()) {
-        writer->get().reset();
         return Error::NONE;
     }
 
@@ -1087,8 +1078,6 @@ Error AidlComposer::execute(Display display) {
                   cmdErr.errorCode);
         }
     }
-
-    writer->get().reset();
 
     return error;
 }
@@ -1547,6 +1536,8 @@ void AidlComposer::onHotplugDisconnect(Display display) {
 }
 
 bool AidlComposer::hasMultiThreadedPresentSupport(Display display) {
+#if 0
+    // TODO (b/259132483): Reenable
     const auto displayId = translate<int64_t>(display);
     std::vector<AidlDisplayCapability> capabilities;
     const auto status = mAidlComposerClient->getDisplayCapabilities(displayId, &capabilities);
@@ -1556,6 +1547,10 @@ bool AidlComposer::hasMultiThreadedPresentSupport(Display display) {
     }
     return std::find(capabilities.begin(), capabilities.end(),
                      AidlDisplayCapability::MULTI_THREADED_PRESENT) != capabilities.end();
+#else
+    (void) display;
+    return false;
+#endif
 }
 
 void AidlComposer::addReader(Display display) {

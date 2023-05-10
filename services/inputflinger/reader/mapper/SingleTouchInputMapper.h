@@ -23,7 +23,11 @@ namespace android {
 
 class SingleTouchInputMapper : public TouchInputMapper {
 public:
-    explicit SingleTouchInputMapper(InputDeviceContext& deviceContext);
+    template <class T, class... Args>
+    friend std::unique_ptr<T> createInputMapper(InputDeviceContext& deviceContext,
+                                                const InputReaderConfiguration& readerConfig,
+                                                Args... args);
+
     ~SingleTouchInputMapper() override;
 
     [[nodiscard]] std::list<NotifyArgs> reset(nsecs_t when) override;
@@ -36,6 +40,8 @@ protected:
 
 private:
     SingleTouchMotionAccumulator mSingleTouchMotionAccumulator;
+    explicit SingleTouchInputMapper(InputDeviceContext& deviceContext,
+                                    const InputReaderConfiguration& readerConfig);
 };
 
 } // namespace android

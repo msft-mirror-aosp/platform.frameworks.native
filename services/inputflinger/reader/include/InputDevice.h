@@ -80,11 +80,12 @@ public:
     [[nodiscard]] std::list<NotifyArgs> setEnabled(bool enabled, nsecs_t when);
 
     void dump(std::string& dump, const std::string& eventHubDevStr);
-    void addEventHubDevice(int32_t eventHubId, bool populateMappers = true);
+    void addEmptyEventHubDevice(int32_t eventHubId);
+    void addEventHubDevice(int32_t eventHubId, const InputReaderConfiguration& readerConfig);
     void removeEventHubDevice(int32_t eventHubId);
     [[nodiscard]] std::list<NotifyArgs> configure(nsecs_t when,
-                                                  const InputReaderConfiguration* config,
-                                                  uint32_t changes);
+                                                  const InputReaderConfiguration& readerConfig,
+                                                  ConfigurationChanges changes);
     [[nodiscard]] std::list<NotifyArgs> reset(nsecs_t when);
     [[nodiscard]] std::list<NotifyArgs> process(const RawEvent* rawEvents, size_t count);
     [[nodiscard]] std::list<NotifyArgs> timeoutExpired(nsecs_t when);
@@ -137,7 +138,7 @@ public:
     template <class T, typename... Args>
     T& addMapper(int32_t eventHubId, Args... args) {
         // ensure a device entry exists for this eventHubId
-        addEventHubDevice(eventHubId, false);
+        addEmptyEventHubDevice(eventHubId);
 
         // create mapper
         auto& devicePair = mDevices[eventHubId];
@@ -148,11 +149,21 @@ public:
         return *mapper;
     }
 
+    template <class T, typename... Args>
+    T& constructAndAddMapper(int32_t eventHubId, Args... args) {
+        // create mapper
+        auto& devicePair = mDevices[eventHubId];
+        auto& deviceContext = devicePair.first;
+        auto& mappers = devicePair.second;
+        mappers.push_back(createInputMapper<T>(*deviceContext, args...));
+        return static_cast<T&>(*mappers.back());
+    }
+
     // construct and add a controller to the input device
     template <class T>
     T& addController(int32_t eventHubId) {
         // ensure a device entry exists for this eventHubId
-        addEventHubDevice(eventHubId, false);
+        addEmptyEventHubDevice(eventHubId);
 
         // create controller
         auto& devicePair = mDevices[eventHubId];
@@ -190,6 +201,9 @@ private:
 
     typedef int32_t (InputMapper::*GetStateFunc)(uint32_t sourceMask, int32_t code);
     int32_t getState(uint32_t sourceMask, int32_t code, GetStateFunc getStateFunc);
+
+    std::vector<std::unique_ptr<InputMapper>> createMappers(
+            InputDeviceContext& contextPtr, const InputReaderConfiguration& readerConfig);
 
     PropertyMap mConfiguration;
 
@@ -268,9 +282,6 @@ public:
     }
     inline int32_t getDeviceControllerNumber() const {
         return mEventHub->getDeviceControllerNumber(mId);
-    }
-    inline void getConfiguration(PropertyMap* outConfiguration) const {
-        return mEventHub->getConfiguration(mId, outConfiguration);
     }
     inline status_t getAbsoluteAxisInfo(int32_t code, RawAbsoluteAxisInfo* axisInfo) const {
         return mEventHub->getAbsoluteAxisInfo(mId, code, axisInfo);
@@ -406,7 +417,7 @@ public:
     inline const std::string getName() const { return mDevice.getName(); }
     inline const std::string getDescriptor() { return mDevice.getDescriptor(); }
     inline const std::string getLocation() { return mDevice.getLocation(); }
-    inline bool isExternal() { return mDevice.isExternal(); }
+    inline bool isExternal() const { return mDevice.isExternal(); }
     inline std::optional<uint8_t> getAssociatedDisplayPort() const {
         return mDevice.getAssociatedDisplayPort();
     }
@@ -423,7 +434,7 @@ public:
         return mDevice.cancelTouch(when, readTime);
     }
     inline void bumpGeneration() { mDevice.bumpGeneration(); }
-    inline const PropertyMap& getConfiguration() { return mDevice.getConfiguration(); }
+    inline const PropertyMap& getConfiguration() const { return mDevice.getConfiguration(); }
 
 private:
     InputDevice& mDevice;

@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+// clang-format off
+#include "../Macros.h"
+// clang-format on
 #include "gestures/HardwareStateConverter.h"
 
 #include <chrono>
@@ -23,16 +26,11 @@
 
 namespace android {
 
-HardwareStateConverter::HardwareStateConverter(const InputDeviceContext& deviceContext)
-      : mDeviceContext(deviceContext), mTouchButtonAccumulator(deviceContext) {
-    RawAbsoluteAxisInfo slotAxisInfo;
-    deviceContext.getAbsoluteAxisInfo(ABS_MT_SLOT, &slotAxisInfo);
-    if (!slotAxisInfo.valid || slotAxisInfo.maxValue <= 0) {
-        ALOGW("Touchpad \"%s\" doesn't have a valid ABS_MT_SLOT axis, and probably won't work "
-              "properly.",
-              deviceContext.getName().c_str());
-    }
-    mMotionAccumulator.configure(deviceContext, slotAxisInfo.maxValue + 1, true);
+HardwareStateConverter::HardwareStateConverter(const InputDeviceContext& deviceContext,
+                                               MultiTouchMotionAccumulator& motionAccumulator)
+      : mDeviceContext(deviceContext),
+        mMotionAccumulator(motionAccumulator),
+        mTouchButtonAccumulator(deviceContext) {
     mTouchButtonAccumulator.configure();
 }
 
@@ -78,16 +76,16 @@ SelfContainedHardwareState HardwareStateConverter::produceHardwareState(nsecs_t 
     }
 
     schs.fingers.clear();
+    size_t numPalms = 0;
     for (size_t i = 0; i < mMotionAccumulator.getSlotCount(); i++) {
         MultiTouchMotionAccumulator::Slot slot = mMotionAccumulator.getSlot(i);
         if (!slot.isInUse()) {
             continue;
         }
         // Some touchpads continue to report contacts even after they've identified them as palms.
-        // We want to exclude these contacts from the HardwareStates, but still need to report a
-        // tracking ID of -1 if a finger turns into a palm.
-        const bool isPalm = slot.getToolType() == AMOTION_EVENT_TOOL_TYPE_PALM;
-        if (isPalm && mFingerSlots.find(i) == mFingerSlots.end()) {
+        // We want to exclude these contacts from the HardwareStates.
+        if (slot.getToolType() == ToolType::PALM) {
+            numPalms++;
             continue;
         }
 
@@ -101,23 +99,17 @@ SelfContainedHardwareState HardwareStateConverter::produceHardwareState(nsecs_t 
         fingerState.orientation = slot.getOrientation();
         fingerState.position_x = slot.getX();
         fingerState.position_y = slot.getY();
-        fingerState.tracking_id = isPalm ? -1 : slot.getTrackingId();
-        if (fingerState.tracking_id == -1) {
-            mFingerSlots.erase(i);
-        } else {
-            mFingerSlots.insert(i);
-        }
+        fingerState.tracking_id = slot.getTrackingId();
     }
     schs.state.fingers = schs.fingers.data();
     schs.state.finger_cnt = schs.fingers.size();
-    schs.state.touch_cnt = mTouchButtonAccumulator.getTouchCount();
+    schs.state.touch_cnt = mTouchButtonAccumulator.getTouchCount() - numPalms;
     return schs;
 }
 
 void HardwareStateConverter::reset() {
     mCursorButtonAccumulator.reset(mDeviceContext);
     mTouchButtonAccumulator.reset();
-    mFingerSlots.clear();
     mMscTimestamp = 0;
 }
 

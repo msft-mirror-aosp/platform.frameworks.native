@@ -39,8 +39,15 @@ class LayerLifecycleManager {
 public:
     // External state changes should be updated in the following order:
     void addLayers(std::vector<std::unique_ptr<RequestedLayerState>>);
-    void applyTransactions(const std::vector<TransactionState>&);
-    void onHandlesDestroyed(const std::vector<uint32_t>&);
+    // Ignore unknown layers when interoping with legacy front end. In legacy we destroy
+    // the layers it is unreachable. When using the LayerLifecycleManager for layer trace
+    // generation we may encounter layers which are known because we don't have an explicit
+    // lifecycle. Ignore these errors while we have to interop with legacy.
+    void applyTransactions(const std::vector<TransactionState>&, bool ignoreUnknownLayers = false);
+    // Ignore unknown handles when iteroping with legacy front end. In the old world, we
+    // would create child layers which are not necessary with the new front end. This means
+    // we will get notified for handle changes that don't exist in the new front end.
+    void onHandlesDestroyed(const std::vector<uint32_t>&, bool ignoreUnknownHandles = false);
 
     // Detaches the layer from its relative parent to prevent a loop in the
     // layer hierarchy. This overrides the RequestedLayerState and leaves
@@ -101,6 +108,9 @@ private:
     std::vector<std::unique_ptr<RequestedLayerState>> mLayers;
     // Layers pending destruction. Layers will be destroyed once changes are committed.
     std::vector<std::unique_ptr<RequestedLayerState>> mDestroyedLayers;
+    // Keeps track of all the layers that were added in order. Changes will be cleared once
+    // committed.
+    std::vector<RequestedLayerState*> mAddedLayers;
 };
 
 } // namespace android::surfaceflinger::frontend
