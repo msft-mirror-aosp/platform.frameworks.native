@@ -57,9 +57,8 @@ static int32_t exceptionCodeFromStatusT(status_t status) {
  * The event flow is via the "InputListener" interface, as follows:
  * InputReader -> UnwantedInteractionBlocker -> InputProcessor -> InputDispatcher
  */
-InputManager::InputManager(
-        const sp<InputReaderPolicyInterface>& readerPolicy,
-        const sp<InputDispatcherPolicyInterface>& dispatcherPolicy) {
+InputManager::InputManager(const sp<InputReaderPolicyInterface>& readerPolicy,
+                           InputDispatcherPolicyInterface& dispatcherPolicy) {
     mDispatcher = createInputDispatcher(dispatcherPolicy);
     mProcessor = std::make_unique<InputProcessor>(*mDispatcher);
     mBlocker = std::make_unique<UnwantedInteractionBlocker>(*mProcessor);
@@ -110,10 +109,6 @@ InputReaderInterface& InputManager::getReader() {
     return *mReader;
 }
 
-UnwantedInteractionBlockerInterface& InputManager::getBlocker() {
-    return *mBlocker;
-}
-
 InputProcessorInterface& InputManager::getProcessor() {
     return *mProcessor;
 }
@@ -127,6 +122,17 @@ void InputManager::monitor() {
     mBlocker->monitor();
     mProcessor->monitor();
     mDispatcher->monitor();
+}
+
+void InputManager::dump(std::string& dump) {
+    mReader->dump(dump);
+    dump += '\n';
+    mBlocker->dump(dump);
+    dump += '\n';
+    mProcessor->dump(dump);
+    dump += '\n';
+    mDispatcher->dump(dump);
+    dump += '\n';
 }
 
 // Used by tests only.

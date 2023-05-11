@@ -28,6 +28,7 @@
 #include <android/gui/ISurfaceComposerClient.h>
 #include <cutils/atomic.h>
 #include <cutils/compiler.h>
+#include <ftl/algorithm.h>
 #include <ftl/future.h>
 #include <ftl/non_null.h>
 #include <gui/BufferQueue.h>
@@ -295,8 +296,7 @@ public:
     // the client can no longer modify this layer directly.
     void onHandleDestroyed(BBinder* handle, sp<Layer>& layer, uint32_t layerId);
 
-    // TODO: Remove atomic if move dtor to main thread CL lands
-    std::atomic<uint32_t> mNumClones;
+    std::vector<Layer*> mLayerMirrorRoots;
 
     TransactionCallbackInvoker& getTransactionCallbackInvoker() {
         return mTransactionCallbackInvoker;
@@ -499,7 +499,7 @@ private:
 
     // Implements ISurfaceComposer
     sp<IBinder> createDisplay(const String8& displayName, bool secure,
-                              float requestedRefreshRate = 0);
+                              float requestedRefreshRate = 0.0f);
     void destroyDisplay(const sp<IBinder>& displayToken);
     std::vector<PhysicalDisplayId> getPhysicalDisplayIds() const EXCLUDES(mStateLock) {
         Mutex::Autolock lock(mStateLock);
@@ -854,8 +854,9 @@ private:
     }
 
     sp<DisplayDevice> getDisplayDeviceLocked(const wp<IBinder>& displayToken) REQUIRES(mStateLock) {
-        const sp<DisplayDevice> nullDisplay;
-        return mDisplays.get(displayToken).value_or(std::cref(nullDisplay));
+        return mDisplays.get(displayToken)
+                .or_else(ftl::static_ref<sp<DisplayDevice>>([] { return nullptr; }))
+                .value();
     }
 
     sp<const DisplayDevice> getDisplayDeviceLocked(PhysicalDisplayId id) const
@@ -996,7 +997,9 @@ private:
 
     using FenceTimePtr = std::shared_ptr<FenceTime>;
 
-    const FenceTimePtr& getPreviousPresentFence(TimePoint frameTime, Period)
+    bool wouldPresentEarly(TimePoint frameTime, Period) const REQUIRES(kMainThreadContext);
+
+    const FenceTimePtr& getPreviousPresentFence(TimePoint frameTime, Period) const
             REQUIRES(kMainThreadContext);
 
     // Blocks the thread waiting for up to graceTimeMs in case the fence is about to signal.
@@ -1011,10 +1014,10 @@ private:
      */
     sp<display::DisplayToken> getPhysicalDisplayTokenLocked(PhysicalDisplayId displayId) const
             REQUIRES(mStateLock) {
-        const sp<display::DisplayToken> nullToken;
         return mPhysicalDisplays.get(displayId)
                 .transform([](const display::PhysicalDisplay& display) { return display.token(); })
-                .value_or(std::cref(nullToken));
+                .or_else([] { return std::optional<sp<display::DisplayToken>>(nullptr); })
+                .value();
     }
 
     std::optional<PhysicalDisplayId> getPhysicalDisplayIdLocked(
@@ -1191,6 +1194,7 @@ private:
     // Tracks layers that have pending frames which are candidates for being
     // latched.
     std::unordered_set<sp<Layer>, SpHash<Layer>> mLayersWithQueuedFrames;
+    std::unordered_set<sp<Layer>, SpHash<Layer>> mLayersWithBuffersRemoved;
     // Tracks layers that need to update a display's dirty region.
     std::vector<sp<Layer>> mLayersPendingRefresh;
 
@@ -1424,6 +1428,9 @@ private:
     TransactionHandler mTransactionHandler;
     display::DisplayMap<ui::LayerStack, frontend::DisplayInfo> mFrontEndDisplayInfos;
     bool mFrontEndDisplayInfosChanged = false;
+
+    // WindowInfo ids visible during the last commit.
+    std::unordered_set<int32_t> mVisibleWindowIds;
 };
 
 class SurfaceComposerAIDL : public gui::BnSurfaceComposer {

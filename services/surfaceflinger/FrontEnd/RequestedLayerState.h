@@ -79,6 +79,7 @@ struct RequestedLayerState : layer_state_t {
     bool hasFrameUpdate() const;
     bool hasReadyFrame() const;
     bool hasSidebandStreamFrame() const;
+    bool willReleaseBufferOnLatch() const;
 
     // Layer serial number.  This gives layers an explicit ordering, so we
     // have a stable sort order when their layer stack and Z-order are
@@ -111,6 +112,8 @@ struct RequestedLayerState : layer_state_t {
     ui::LayerStack layerStackToMirror = ui::INVALID_LAYER_STACK;
     uint32_t touchCropId = UNASSIGNED_LAYER_ID;
     uint32_t bgColorLayerId = UNASSIGNED_LAYER_ID;
+    uint64_t barrierFrameNumber = 0;
+    uint32_t barrierProducerId = 0;
 
     // book keeping states
     bool handleAlive = true;

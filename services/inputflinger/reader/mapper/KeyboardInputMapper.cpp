@@ -63,9 +63,10 @@ static bool isSupportedScanCode(int32_t scanCode) {
 
 // --- KeyboardInputMapper ---
 
-KeyboardInputMapper::KeyboardInputMapper(InputDeviceContext& deviceContext, uint32_t source,
-                                         int32_t keyboardType)
-      : InputMapper(deviceContext), mSource(source), mKeyboardType(keyboardType) {}
+KeyboardInputMapper::KeyboardInputMapper(InputDeviceContext& deviceContext,
+                                         const InputReaderConfiguration& readerConfig,
+                                         uint32_t source, int32_t keyboardType)
+      : InputMapper(deviceContext, readerConfig), mSource(source), mKeyboardType(keyboardType) {}
 
 uint32_t KeyboardInputMapper::getSources() const {
     return mSource;
@@ -118,36 +119,41 @@ void KeyboardInputMapper::dump(std::string& dump) {
 }
 
 std::optional<DisplayViewport> KeyboardInputMapper::findViewport(
-        const InputReaderConfiguration* config) {
+        const InputReaderConfiguration& readerConfig) {
     if (getDeviceContext().getAssociatedViewport()) {
         return getDeviceContext().getAssociatedViewport();
     }
 
     // No associated display defined, try to find default display if orientationAware.
     if (mParameters.orientationAware) {
-        return config->getDisplayViewportByType(ViewportType::INTERNAL);
+        return readerConfig.getDisplayViewportByType(ViewportType::INTERNAL);
     }
 
     return std::nullopt;
 }
 
 std::list<NotifyArgs> KeyboardInputMapper::reconfigure(nsecs_t when,
-                                                       const InputReaderConfiguration* config,
-                                                       uint32_t changes) {
+                                                       const InputReaderConfiguration& config,
+                                                       ConfigurationChanges changes) {
     std::list<NotifyArgs> out = InputMapper::reconfigure(when, config, changes);
 
-    if (!changes) { // first time only
+    if (!changes.any()) { // first time only
         // Configure basic parameters.
         configureParameters();
     }
 
-    if (!changes || (changes & InputReaderConfiguration::CHANGE_DISPLAY_INFO)) {
+    if (!changes.any() || changes.test(InputReaderConfiguration::Change::DISPLAY_INFO)) {
         mViewport = findViewport(config);
     }
 
-    if (!changes || (changes & InputReaderConfiguration::CHANGE_KEYBOARD_LAYOUT_ASSOCIATION)) {
-        mKeyboardLayoutInfo =
-                getValueByKey(config->keyboardLayoutAssociations, getDeviceContext().getLocation());
+    if (!changes.any() ||
+        changes.test(InputReaderConfiguration::Change::KEYBOARD_LAYOUT_ASSOCIATION)) {
+        std::optional<KeyboardLayoutInfo> newKeyboardLayoutInfo =
+                getValueByKey(config.keyboardLayoutAssociations, getDeviceContext().getLocation());
+        if (mKeyboardLayoutInfo != newKeyboardLayoutInfo) {
+            mKeyboardLayoutInfo = newKeyboardLayoutInfo;
+            bumpGeneration();
+        }
     }
 
     return out;

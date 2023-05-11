@@ -32,10 +32,6 @@ using ftl::Flags;
 using namespace ftl::flag_operators;
 
 namespace {
-std::string layerIdToString(uint32_t layerId) {
-    return layerId == UNASSIGNED_LAYER_ID ? "none" : std::to_string(layerId);
-}
-
 std::string layerIdsToString(const std::vector<uint32_t>& layerIds) {
     std::stringstream stream;
     stream << "{";
@@ -134,7 +130,8 @@ RequestedLayerState::RequestedLayerState(const LayerCreationArgs& args)
 void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerState) {
     const uint32_t oldFlags = flags;
     const half oldAlpha = color.a;
-    const bool hadBufferOrSideStream = hasValidBuffer() || sidebandStream != nullptr;
+    const bool hadBuffer = externalTexture != nullptr;
+    const bool hadSideStream = sidebandStream != nullptr;
     const layer_state_t& clientState = resolvedComposerState.state;
     const bool hadBlur = hasBlur();
     uint64_t clientChanges = what | layer_state_t::diff(clientState);
@@ -150,19 +147,31 @@ void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerSta
             changes |= RequestedLayerState::Changes::Geometry;
         }
     }
-    if (clientState.what &
-        (layer_state_t::eBufferChanged | layer_state_t::eSidebandStreamChanged)) {
-        const bool hasBufferOrSideStream = hasValidBuffer() || sidebandStream != nullptr;
-        if (hadBufferOrSideStream != hasBufferOrSideStream) {
+    if (clientState.what & layer_state_t::eBufferChanged) {
+        externalTexture = resolvedComposerState.externalTexture;
+        barrierProducerId = std::max(bufferData->producerId, barrierProducerId);
+        barrierFrameNumber = std::max(bufferData->frameNumber, barrierFrameNumber);
+        // TODO(b/277265947) log and flush transaction trace when we detect out of order updates
+
+        const bool hasBuffer = externalTexture != nullptr;
+        if (hasBuffer || hasBuffer != hadBuffer) {
+            changes |= RequestedLayerState::Changes::Buffer;
+        }
+
+        if (hasBuffer != hadBuffer) {
             changes |= RequestedLayerState::Changes::Geometry |
                     RequestedLayerState::Changes::VisibleRegion |
                     RequestedLayerState::Changes::Visibility | RequestedLayerState::Changes::Input;
         }
-        if (clientState.what & layer_state_t::eBufferChanged) {
-            changes |= RequestedLayerState::Changes::Buffer;
-        }
-        if (clientState.what & layer_state_t::eSidebandStreamChanged) {
-            changes |= RequestedLayerState::Changes::SidebandStream;
+    }
+
+    if (clientState.what & layer_state_t::eSidebandStreamChanged) {
+        changes |= RequestedLayerState::Changes::SidebandStream;
+        const bool hasSideStream = sidebandStream != nullptr;
+        if (hasSideStream != hadSideStream) {
+            changes |= RequestedLayerState::Changes::Geometry |
+                    RequestedLayerState::Changes::VisibleRegion |
+                    RequestedLayerState::Changes::Visibility | RequestedLayerState::Changes::Input;
         }
     }
     if (what & (layer_state_t::eAlphaChanged)) {
@@ -235,10 +244,6 @@ void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerSta
 
     if (clientState.what & layer_state_t::eHasListenerCallbacksChanged) {
         // TODO(b/238781169) handle callbacks
-    }
-
-    if (clientState.what & layer_state_t::eBufferChanged) {
-        externalTexture = resolvedComposerState.externalTexture;
     }
 
     if (clientState.what & layer_state_t::ePositionChanged) {
@@ -323,9 +328,13 @@ ui::Transform RequestedLayerState::getTransform(uint32_t displayRotationFlags) c
 
 std::string RequestedLayerState::getDebugString() const {
     std::stringstream debug;
-    debug << "RequestedLayerState{" << name << " parent=" << layerIdToString(parentId)
-          << " relativeParent=" << layerIdToString(relativeParentId)
-          << " mirrorId=" << layerIdsToString(mirrorIds) << " handle=" << handleAlive << " z=" << z;
+    debug << "RequestedLayerState{" << name;
+    if (parentId != UNASSIGNED_LAYER_ID) debug << " parentId=" << parentId;
+    if (relativeParentId != UNASSIGNED_LAYER_ID) debug << " relativeParentId=" << relativeParentId;
+    if (!mirrorIds.empty()) debug << " mirrorId=" << layerIdsToString(mirrorIds);
+    if (!handleAlive) debug << " !handle";
+    if (z != 0) debug << " z=" << z;
+    if (layerStack.id != 0) debug << " layerStack=" << layerStack.id;
     return debug.str();
 }
 
@@ -460,6 +469,10 @@ bool RequestedLayerState::hasReadyFrame() const {
 
 bool RequestedLayerState::hasSidebandStreamFrame() const {
     return hasFrameUpdate() && sidebandStream.get();
+}
+
+bool RequestedLayerState::willReleaseBufferOnLatch() const {
+    return changes.test(Changes::Buffer) && !externalTexture;
 }
 
 void RequestedLayerState::clearChanges() {
