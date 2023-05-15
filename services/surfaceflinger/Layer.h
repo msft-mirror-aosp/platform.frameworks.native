@@ -234,6 +234,7 @@ public:
         float desiredHdrSdrRatio = 1.f;
         gui::CachingHint cachingHint = gui::CachingHint::Enabled;
         int64_t latchedVsyncId = 0;
+        bool useVsyncIdForRefreshRateSelection = false;
     };
 
     explicit Layer(const LayerCreationArgs& args);
@@ -651,7 +652,7 @@ public:
 
     gui::WindowInfo::Type getWindowType() const { return mWindowType; }
 
-    bool updateMirrorInfo(const std::deque<Layer*>& cloneRootsPendingUpdates);
+    void updateMirrorInfo();
 
     /*
      * doTransaction - process the transaction. This is a good place to figure

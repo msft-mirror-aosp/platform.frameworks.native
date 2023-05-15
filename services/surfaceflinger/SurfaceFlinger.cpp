@@ -110,6 +110,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <gui/LayerStatePermissions.h>
 #include <ui/DisplayIdentification.h>
 #include "BackgroundExecutor.h"
 #include "Client.h"
@@ -2544,7 +2545,7 @@ bool SurfaceFlinger::commit(TimePoint frameTime, VsyncId vsyncId, TimePoint expe
     }
 
     updateCursorAsync();
-    updateInputFlinger();
+    updateInputFlinger(vsyncId);
 
     if (mLayerTracingEnabled && !mLayerTracing.flagIsSet(LayerTracing::TRACE_COMPOSITION)) {
         // This will block and tracing should only be enabled for debugging.
@@ -3732,7 +3733,7 @@ void SurfaceFlinger::commitTransactionsLocked(uint32_t transactionFlags) {
     doCommitTransactions();
 }
 
-void SurfaceFlinger::updateInputFlinger() {
+void SurfaceFlinger::updateInputFlinger(VsyncId vsyncId) {
     if (!mInputFlinger || (!mUpdateInputInfo && mInputWindowCommands.empty())) {
         return;
     }
@@ -3744,6 +3745,8 @@ void SurfaceFlinger::updateInputFlinger() {
     if (mUpdateInputInfo) {
         mUpdateInputInfo = false;
         updateWindowInfo = true;
+        mLastInputFlingerUpdateVsyncId = vsyncId;
+        mLastInputFlingerUpdateTimestamp = systemTime();
         buildWindowInfos(windowInfos, displayInfos);
     }
 
@@ -3773,7 +3776,9 @@ void SurfaceFlinger::updateInputFlinger() {
                                          std::move(
                                                  inputWindowCommands.windowInfosReportedListeners),
                                          /* forceImmediateCall= */ visibleWindowsChanged ||
-                                                 !inputWindowCommands.focusRequests.empty());
+                                                 !inputWindowCommands.focusRequests.empty(),
+                                         mLastInputFlingerUpdateVsyncId,
+                                         mLastInputFlingerUpdateTimestamp);
         } else {
             // If there are listeners but no changes to input windows, call the listeners
             // immediately.
@@ -4020,21 +4025,8 @@ void SurfaceFlinger::doCommitTransactions() {
     }
 
     commitOffscreenLayers();
-    if (mLayerMirrorRoots.size() > 0) {
-        std::deque<Layer*> pendingUpdates;
-        pendingUpdates.insert(pendingUpdates.end(), mLayerMirrorRoots.begin(),
-                              mLayerMirrorRoots.end());
-        std::vector<Layer*> needsUpdating;
-        for (Layer* cloneRoot : mLayerMirrorRoots) {
-            pendingUpdates.pop_front();
-            if (cloneRoot->updateMirrorInfo(pendingUpdates)) {
-            } else {
-                needsUpdating.push_back(cloneRoot);
-            }
-        }
-        for (Layer* cloneRoot : needsUpdating) {
-            cloneRoot->updateMirrorInfo({});
-        }
+    if (mNumClones > 0) {
+        mDrawingState.traverse([&](Layer* layer) { layer->updateMirrorInfo(); });
     }
 }
 
@@ -4141,7 +4133,7 @@ bool SurfaceFlinger::latchBuffers() {
         mBootStage = BootStage::BOOTANIMATION;
     }
 
-    if (mLayerMirrorRoots.size() > 0) {
+    if (mNumClones > 0) {
         mDrawingState.traverse([&](Layer* layer) { layer->updateCloneBufferInfo(); });
     }
 
@@ -4401,7 +4393,7 @@ bool SurfaceFlinger::applyTransactionsLocked(std::vector<TransactionState>& tran
                                       transaction.inputWindowCommands,
                                       transaction.desiredPresentTime, transaction.isAutoTimestamp,
                                       std::move(transaction.uncacheBufferIds), transaction.postTime,
-                                      transaction.permissions, transaction.hasListenerCallbacks,
+                                      transaction.hasListenerCallbacks,
                                       transaction.listenerCallbacks, transaction.originPid,
                                       transaction.originUid, transaction.id);
     }
@@ -4421,10 +4413,8 @@ bool SurfaceFlinger::frameIsEarly(TimePoint expectedPresentTime, VsyncId vsyncId
 
     const auto predictedPresentTime = TimePoint::fromNs(prediction->presentTime);
 
-    // The duration for which SF can delay a frame if it is considered early based on the
-    // VsyncConfig::appWorkDuration.
-    if (constexpr std::chrono::nanoseconds kEarlyLatchMaxThreshold = 100ms;
-        std::chrono::abs(predictedPresentTime - expectedPresentTime) >= kEarlyLatchMaxThreshold) {
+    if (std::chrono::abs(predictedPresentTime - expectedPresentTime) >=
+        scheduler::VsyncConfig::kEarlyLatchMaxThreshold) {
         return false;
     }
 
@@ -4482,24 +4472,27 @@ bool SurfaceFlinger::shouldLatchUnsignaled(const sp<Layer>& layer, const layer_s
 status_t SurfaceFlinger::setTransactionState(
         const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& states,
         const Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
-        const InputWindowCommands& inputWindowCommands, int64_t desiredPresentTime,
-        bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffers,
-        bool hasListenerCallbacks, const std::vector<ListenerCallbacks>& listenerCallbacks,
-        uint64_t transactionId) {
+        InputWindowCommands inputWindowCommands, int64_t desiredPresentTime, bool isAutoTimestamp,
+        const std::vector<client_cache_t>& uncacheBuffers, bool hasListenerCallbacks,
+        const std::vector<ListenerCallbacks>& listenerCallbacks, uint64_t transactionId) {
     ATRACE_CALL();
 
-    uint32_t permissions =
-        callingThreadHasUnscopedSurfaceFlingerAccess() ?
-        layer_state_t::Permission::ACCESS_SURFACE_FLINGER : 0;
-    // Avoid checking for rotation permissions if the caller already has ACCESS_SURFACE_FLINGER
-    // permissions.
-    if ((permissions & layer_state_t::Permission::ACCESS_SURFACE_FLINGER) ||
-        callingThreadHasPermission(sRotateSurfaceFlinger)) {
-        permissions |= layer_state_t::Permission::ROTATE_SURFACE_FLINGER;
+    IPCThreadState* ipc = IPCThreadState::self();
+    const int originPid = ipc->getCallingPid();
+    const int originUid = ipc->getCallingUid();
+    uint32_t permissions = LayerStatePermissions::getTransactionPermissions(originPid, originUid);
+    for (auto composerState : states) {
+        composerState.state.sanitize(permissions);
     }
 
-    if (callingThreadHasPermission(sInternalSystemWindow)) {
-        permissions |= layer_state_t::Permission::INTERNAL_SYSTEM_WINDOW;
+    for (DisplayState display : displays) {
+        display.sanitize(permissions);
+    }
+
+    if (!inputWindowCommands.empty() &&
+        (permissions & layer_state_t::Permission::ACCESS_SURFACE_FLINGER) == 0) {
+        ALOGE("Only privileged callers are allowed to send input commands.");
+        inputWindowCommands.clear();
     }
 
     if (flags & (eEarlyWakeupStart | eEarlyWakeupEnd)) {
@@ -4514,10 +4507,6 @@ status_t SurfaceFlinger::setTransactionState(
     }
 
     const int64_t postTime = systemTime();
-
-    IPCThreadState* ipc = IPCThreadState::self();
-    const int originPid = ipc->getCallingPid();
-    const int originUid = ipc->getCallingUid();
 
     std::vector<uint64_t> uncacheBufferIds;
     uncacheBufferIds.reserve(uncacheBuffers.size());
@@ -4565,12 +4554,11 @@ status_t SurfaceFlinger::setTransactionState(
                            displays,
                            flags,
                            applyToken,
-                           inputWindowCommands,
+                           std::move(inputWindowCommands),
                            desiredPresentTime,
                            isAutoTimestamp,
                            std::move(uncacheBufferIds),
                            postTime,
-                           permissions,
                            hasListenerCallbacks,
                            listenerCallbacks,
                            originPid,
@@ -4599,14 +4587,12 @@ bool SurfaceFlinger::applyTransactionState(const FrameTimelineInfo& frameTimelin
                                            const InputWindowCommands& inputWindowCommands,
                                            const int64_t desiredPresentTime, bool isAutoTimestamp,
                                            const std::vector<uint64_t>& uncacheBufferIds,
-                                           const int64_t postTime, uint32_t permissions,
-                                           bool hasListenerCallbacks,
+                                           const int64_t postTime, bool hasListenerCallbacks,
                                            const std::vector<ListenerCallbacks>& listenerCallbacks,
                                            int originPid, int originUid, uint64_t transactionId) {
     uint32_t transactionFlags = 0;
     if (!mLayerLifecycleManagerEnabled) {
         for (DisplayState& display : displays) {
-            display.sanitize(permissions);
             transactionFlags |= setDisplayStateLocked(display);
         }
     }
@@ -4623,12 +4609,12 @@ bool SurfaceFlinger::applyTransactionState(const FrameTimelineInfo& frameTimelin
         if (mLegacyFrontEndEnabled) {
             clientStateFlags |=
                     setClientStateLocked(frameTimelineInfo, resolvedState, desiredPresentTime,
-                                         isAutoTimestamp, postTime, permissions, transactionId);
+                                         isAutoTimestamp, postTime, transactionId);
 
         } else /*mLayerLifecycleManagerEnabled*/ {
             clientStateFlags |= updateLayerCallbacksAndStats(frameTimelineInfo, resolvedState,
                                                              desiredPresentTime, isAutoTimestamp,
-                                                             postTime, permissions, transactionId);
+                                                             postTime, transactionId);
         }
         if ((flags & eAnimation) && resolvedState.state.surface) {
             if (const auto layer = LayerHandle::getLayer(resolvedState.state.surface)) {
@@ -4645,12 +4631,7 @@ bool SurfaceFlinger::applyTransactionState(const FrameTimelineInfo& frameTimelin
     }
 
     transactionFlags |= clientStateFlags;
-
-    if (permissions & layer_state_t::Permission::ACCESS_SURFACE_FLINGER) {
-        transactionFlags |= addInputWindowCommands(inputWindowCommands);
-    } else if (!inputWindowCommands.empty()) {
-        ALOGE("Only privileged callers are allowed to send input commands.");
-    }
+    transactionFlags |= addInputWindowCommands(inputWindowCommands);
 
     for (uint64_t uncacheBufferId : uncacheBufferIds) {
         mBufferIdsToUncache.push_back(uncacheBufferId);
@@ -4687,7 +4668,6 @@ bool SurfaceFlinger::applyAndCommitDisplayTransactionStates(
     uint32_t transactionFlags = 0;
     for (auto& transaction : transactions) {
         for (DisplayState& display : transaction.displays) {
-            display.sanitize(transaction.permissions);
             transactionFlags |= setDisplayStateLocked(display);
         }
     }
@@ -4786,10 +4766,8 @@ bool SurfaceFlinger::callingThreadHasUnscopedSurfaceFlingerAccess(bool usePermis
 uint32_t SurfaceFlinger::setClientStateLocked(const FrameTimelineInfo& frameTimelineInfo,
                                               ResolvedComposerState& composerState,
                                               int64_t desiredPresentTime, bool isAutoTimestamp,
-                                              int64_t postTime, uint32_t permissions,
-                                              uint64_t transactionId) {
+                                              int64_t postTime, uint64_t transactionId) {
     layer_state_t& s = composerState.state;
-    s.sanitize(permissions);
 
     std::vector<ListenerCallbacks> filteredListeners;
     for (auto& listener : s.listeners) {
@@ -5138,10 +5116,8 @@ uint32_t SurfaceFlinger::updateLayerCallbacksAndStats(const FrameTimelineInfo& f
                                                       ResolvedComposerState& composerState,
                                                       int64_t desiredPresentTime,
                                                       bool isAutoTimestamp, int64_t postTime,
-                                                      uint32_t permissions,
                                                       uint64_t transactionId) {
     layer_state_t& s = composerState.state;
-    s.sanitize(permissions);
 
     std::vector<ListenerCallbacks> filteredListeners;
     for (auto& listener : s.listeners) {
@@ -5423,7 +5399,6 @@ void SurfaceFlinger::initializeDisplays() {
     const nsecs_t now = systemTime();
     state.desiredPresentTime = now;
     state.postTime = now;
-    state.permissions = layer_state_t::ACCESS_SURFACE_FLINGER;
     state.originPid = mPid;
     state.originUid = static_cast<int>(getuid());
     const uint64_t transactionId = (static_cast<uint64_t>(mPid) << 32) | mUniqueTransactionId++;
@@ -5499,14 +5474,19 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
             onActiveDisplayChangedLocked(activeDisplay.get(), *display);
         }
 
-        // Keep uclamp in a separate syscall and set it before changing to RT due to b/190237315.
-        // We can merge the syscall later.
-        if (SurfaceFlinger::setSchedAttr(true) != NO_ERROR) {
-            ALOGW("Couldn't set uclamp.min on display on: %s\n", strerror(errno));
+        if (displayId == mActiveDisplayId) {
+            // TODO(b/281692563): Merge the syscalls. For now, keep uclamp in a separate syscall and
+            // set it before SCHED_FIFO due to b/190237315.
+            if (setSchedAttr(true) != NO_ERROR) {
+                ALOGW("Failed to set uclamp.min after powering on active display: %s",
+                      strerror(errno));
+            }
+            if (setSchedFifo(true) != NO_ERROR) {
+                ALOGW("Failed to set SCHED_FIFO after powering on active display: %s",
+                      strerror(errno));
+            }
         }
-        if (SurfaceFlinger::setSchedFifo(true) != NO_ERROR) {
-            ALOGW("Couldn't set SCHED_FIFO on display on: %s\n", strerror(errno));
-        }
+
         getHwComposer().setPowerMode(displayId, mode);
         if (displayId == mActiveDisplayId && mode != hal::PowerMode::DOZE_SUSPEND) {
             setHWCVsyncEnabled(displayId,
@@ -5520,15 +5500,21 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
         scheduleComposite(FrameHint::kActive);
     } else if (mode == hal::PowerMode::OFF) {
         // Turn off the display
-        if (SurfaceFlinger::setSchedFifo(false) != NO_ERROR) {
-            ALOGW("Couldn't set SCHED_OTHER on display off: %s\n", strerror(errno));
-        }
-        if (SurfaceFlinger::setSchedAttr(false) != NO_ERROR) {
-            ALOGW("Couldn't set uclamp.min on display off: %s\n", strerror(errno));
-        }
-        if (displayId == mActiveDisplayId && *currentModeOpt != hal::PowerMode::DOZE_SUSPEND) {
-            mScheduler->disableHardwareVsync(displayId, true);
-            mScheduler->enableSyntheticVsync();
+
+        if (displayId == mActiveDisplayId) {
+            if (setSchedFifo(false) != NO_ERROR) {
+                ALOGW("Failed to set SCHED_OTHER after powering off active display: %s",
+                      strerror(errno));
+            }
+            if (setSchedAttr(false) != NO_ERROR) {
+                ALOGW("Failed set uclamp.min after powering off active display: %s",
+                      strerror(errno));
+            }
+
+            if (*currentModeOpt != hal::PowerMode::DOZE_SUSPEND) {
+                mScheduler->disableHardwareVsync(displayId, true);
+                mScheduler->enableSyntheticVsync();
+            }
         }
 
         // Make sure HWVsync is disabled before turning off the display
@@ -6132,6 +6118,29 @@ void SurfaceFlinger::dumpAllLocked(const DumpArgs& args, const std::string& comp
 
     result.append(mTimeStats->miniDump());
     result.append("\n");
+
+    result.append("Window Infos:\n");
+    StringAppendF(&result, "  input flinger update vsync id: %" PRId64 "\n",
+                  mLastInputFlingerUpdateVsyncId.value);
+    StringAppendF(&result, "  input flinger update timestamp (ns): %" PRId64 "\n",
+                  mLastInputFlingerUpdateTimestamp);
+    result.append("\n");
+
+    if (int64_t unsentVsyncId = mWindowInfosListenerInvoker->getUnsentMessageVsyncId().value;
+        unsentVsyncId != -1) {
+        StringAppendF(&result, "  unsent input flinger update vsync id: %" PRId64 "\n",
+                      unsentVsyncId);
+        StringAppendF(&result, "  unsent input flinger update timestamp (ns): %" PRId64 "\n",
+                      mWindowInfosListenerInvoker->getUnsentMessageTimestamp());
+        result.append("\n");
+    }
+
+    if (uint32_t pendingMessages = mWindowInfosListenerInvoker->getPendingMessageCount();
+        pendingMessages != 0) {
+        StringAppendF(&result, "  pending input flinger calls: %" PRIu32 "\n",
+                      mWindowInfosListenerInvoker->getPendingMessageCount());
+        result.append("\n");
+    }
 }
 
 mat4 SurfaceFlinger::calculateColorMatrix(float saturation) {

@@ -296,7 +296,8 @@ public:
     // the client can no longer modify this layer directly.
     void onHandleDestroyed(BBinder* handle, sp<Layer>& layer, uint32_t layerId);
 
-    std::vector<Layer*> mLayerMirrorRoots;
+    // TODO: Remove atomic if move dtor to main thread CL lands
+    std::atomic<uint32_t> mNumClones;
 
     TransactionCallbackInvoker& getTransactionCallbackInvoker() {
         return mTransactionCallbackInvoker;
@@ -510,7 +511,7 @@ private:
     status_t setTransactionState(const FrameTimelineInfo& frameTimelineInfo,
                                  Vector<ComposerState>& state, const Vector<DisplayState>& displays,
                                  uint32_t flags, const sp<IBinder>& applyToken,
-                                 const InputWindowCommands& inputWindowCommands,
+                                 InputWindowCommands inputWindowCommands,
                                  int64_t desiredPresentTime, bool isAutoTimestamp,
                                  const std::vector<client_cache_t>& uncacheBuffers,
                                  bool hasListenerCallbacks,
@@ -716,7 +717,7 @@ private:
     void updateLayerHistory(const frontend::LayerSnapshot& snapshot);
     frontend::Update flushLifecycleUpdates() REQUIRES(kMainThreadContext);
 
-    void updateInputFlinger();
+    void updateInputFlinger(VsyncId);
     void persistDisplayBrightness(bool needsComposite) REQUIRES(kMainThreadContext);
     void buildWindowInfos(std::vector<gui::WindowInfo>& outWindowInfos,
                           std::vector<gui::DisplayInfo>& outDisplayInfos);
@@ -731,14 +732,16 @@ private:
     /*
      * Transactions
      */
-    bool applyTransactionState(
-            const FrameTimelineInfo& info, std::vector<ResolvedComposerState>& state,
-            Vector<DisplayState>& displays, uint32_t flags,
-            const InputWindowCommands& inputWindowCommands, const int64_t desiredPresentTime,
-            bool isAutoTimestamp, const std::vector<uint64_t>& uncacheBufferIds,
-            const int64_t postTime, uint32_t permissions, bool hasListenerCallbacks,
-            const std::vector<ListenerCallbacks>& listenerCallbacks, int originPid, int originUid,
-            uint64_t transactionId) REQUIRES(mStateLock);
+    bool applyTransactionState(const FrameTimelineInfo& info,
+                               std::vector<ResolvedComposerState>& state,
+                               Vector<DisplayState>& displays, uint32_t flags,
+                               const InputWindowCommands& inputWindowCommands,
+                               const int64_t desiredPresentTime, bool isAutoTimestamp,
+                               const std::vector<uint64_t>& uncacheBufferIds,
+                               const int64_t postTime, bool hasListenerCallbacks,
+                               const std::vector<ListenerCallbacks>& listenerCallbacks,
+                               int originPid, int originUid, uint64_t transactionId)
+            REQUIRES(mStateLock);
     // Flush pending transactions that were presented after desiredPresentTime.
     // For test only
     bool flushTransactionQueues(VsyncId) REQUIRES(kMainThreadContext);
@@ -759,12 +762,11 @@ private:
 
     uint32_t setClientStateLocked(const FrameTimelineInfo&, ResolvedComposerState&,
                                   int64_t desiredPresentTime, bool isAutoTimestamp,
-                                  int64_t postTime, uint32_t permissions, uint64_t transactionId)
-            REQUIRES(mStateLock);
+                                  int64_t postTime, uint64_t transactionId) REQUIRES(mStateLock);
     uint32_t updateLayerCallbacksAndStats(const FrameTimelineInfo&, ResolvedComposerState&,
                                           int64_t desiredPresentTime, bool isAutoTimestamp,
-                                          int64_t postTime, uint32_t permissions,
-                                          uint64_t transactionId) REQUIRES(mStateLock);
+                                          int64_t postTime, uint64_t transactionId)
+            REQUIRES(mStateLock);
     uint32_t getTransactionFlags() const;
 
     // Sets the masked bits, and schedules a commit if needed.
@@ -1246,6 +1248,9 @@ private:
     const std::unique_ptr<frametimeline::FrameTimeline> mFrameTimeline;
 
     VsyncId mLastCommittedVsyncId;
+
+    VsyncId mLastInputFlingerUpdateVsyncId;
+    nsecs_t mLastInputFlingerUpdateTimestamp;
 
     // If blurs should be enabled on this device.
     bool mSupportsBlur = false;
