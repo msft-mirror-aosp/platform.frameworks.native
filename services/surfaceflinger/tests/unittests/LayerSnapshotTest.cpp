@@ -17,11 +17,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "FrontEnd/LayerHandle.h"
 #include "FrontEnd/LayerHierarchy.h"
 #include "FrontEnd/LayerLifecycleManager.h"
 #include "FrontEnd/LayerSnapshotBuilder.h"
-#include "Layer.h"
 #include "LayerHierarchyTest.h"
 
 #define UPDATE_AND_VERIFY(BUILDER, ...)                                    \
@@ -81,6 +79,7 @@ protected:
                                         .displays = mFrontEndDisplayInfos,
                                         .displayChanges = hasDisplayChanges,
                                         .globalShadowSettings = globalShadowSettings,
+                                        .supportsBlur = true,
                                         .supportedLayerGenericMetadata = {},
                                         .genericLayerMetadataKeyMap = {}};
         actualBuilder.update(args);
@@ -268,7 +267,7 @@ TEST_F(LayerSnapshotTest, GameMode) {
     transactions.back().states.front().state.what = layer_state_t::eMetadataChanged;
     transactions.back().states.front().state.metadata = LayerMetadata();
     transactions.back().states.front().state.metadata.setInt32(METADATA_GAME_MODE, 42);
-    transactions.back().states.front().state.surface = mHandles[1];
+    transactions.back().states.front().layerId = 1;
     transactions.back().states.front().state.layerId = static_cast<int32_t>(1);
     mLifecycleManager.applyTransactions(transactions);
     UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
@@ -297,8 +296,7 @@ TEST_F(LayerSnapshotTest, NoLayerVoteForParentWithChildVotes) {
             ANATIVEWINDOW_FRAME_RATE_EXACT;
     transactions.back().states.front().state.changeFrameRateStrategy =
             ANATIVEWINDOW_CHANGE_FRAME_RATE_ALWAYS;
-    transactions.back().states.front().state.surface = mHandles[11];
-    transactions.back().states.front().state.layerId = static_cast<int32_t>(11);
+    transactions.back().states.front().layerId = 11;
     mLifecycleManager.applyTransactions(transactions);
     UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
 
@@ -309,6 +307,44 @@ TEST_F(LayerSnapshotTest, NoLayerVoteForParentWithChildVotes) {
               scheduler::LayerInfo::FrameRateCompatibility::Exact);
     EXPECT_EQ(getSnapshot(1)->frameRate.rate.getIntValue(), 0);
     EXPECT_EQ(getSnapshot(1)->frameRate.type, scheduler::LayerInfo::FrameRateCompatibility::NoVote);
+}
+
+TEST_F(LayerSnapshotTest, canCropTouchableRegion) {
+    // ROOT
+    // ├── 1
+    // │   ├── 11
+    // │   │   └── 111 (touchregion set to touch but cropped by layer 13)
+    // │   ├── 12
+    // │   │   ├── 121
+    // │   │   └── 122
+    // │   │       └── 1221
+    // │   └── 13 (crop set to touchCrop)
+    // └── 2
+
+    Rect touchCrop{300, 300, 400, 500};
+    setCrop(13, touchCrop);
+    Region touch{Rect{0, 0, 1000, 1000}};
+    setTouchableRegionCrop(111, touch, /*touchCropId=*/13, /*replaceTouchableRegionWithCrop=*/true);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 111})->inputInfo.touchableRegion.bounds(), touchCrop);
+
+    Rect modifiedTouchCrop{100, 300, 400, 700};
+    setCrop(13, modifiedTouchCrop);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 111})->inputInfo.touchableRegion.bounds(), modifiedTouchCrop);
+}
+
+TEST_F(LayerSnapshotTest, blurUpdatesWhenAlphaChanges) {
+    static constexpr int blurRadius = 42;
+    setBackgroundBlurRadius(1221, blurRadius);
+
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1221})->backgroundBlurRadius, blurRadius);
+
+    static constexpr float alpha = 0.5;
+    setAlpha(12, alpha);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1221})->backgroundBlurRadius, blurRadius * alpha);
 }
 
 // Display Mirroring Tests
@@ -330,7 +366,7 @@ TEST_F(LayerSnapshotTest, displayMirrorRespectsLayerSkipScreenshotFlag) {
     createDisplayMirrorLayer(3, ui::LayerStack::fromValue(0));
     setLayerStack(3, 1);
 
-    std::vector<uint32_t> expected = {3, 1, 11, 111, 13, 2, 1, 11, 111, 12, 121, 122, 1221, 13, 2};
+    std::vector<uint32_t> expected = {1, 11, 111, 12, 121, 122, 1221, 13, 2, 3, 1, 11, 111, 13, 2};
     UPDATE_AND_VERIFY(mSnapshotBuilder, expected);
 }
 
@@ -349,8 +385,8 @@ TEST_F(LayerSnapshotTest, mirrorLayerGetsCorrectLayerStack) {
     createDisplayMirrorLayer(4, ui::LayerStack::fromValue(0));
     setLayerStack(4, 4);
 
-    std::vector<uint32_t> expected = {4,   1,  11, 111, 13, 2,   3,  1, 11,
-                                      111, 13, 2,  1,   11, 111, 13, 2};
+    std::vector<uint32_t> expected = {1,  11, 111, 13, 2,  3,   1,  11, 111,
+                                      13, 2,  4,   1,  11, 111, 13, 2};
     UPDATE_AND_VERIFY(mSnapshotBuilder, expected);
     EXPECT_EQ(getSnapshot({.id = 111, .mirrorRootId = 3})->outputFilter.layerStack.id, 3u);
     EXPECT_EQ(getSnapshot({.id = 111, .mirrorRootId = 4})->outputFilter.layerStack.id, 4u);
@@ -373,7 +409,7 @@ TEST_F(LayerSnapshotTest, mirrorLayerTouchIsCroppedByMirrorRoot) {
     setCrop(111, Rect{200, 200});
     Region touch{Rect{0, 0, 1000, 1000}};
     setTouchableRegion(111, touch);
-    std::vector<uint32_t> expected = {3, 1, 11, 111, 13, 2, 1, 11, 111, 13, 2};
+    std::vector<uint32_t> expected = {1, 11, 111, 13, 2, 3, 1, 11, 111, 13, 2};
     UPDATE_AND_VERIFY(mSnapshotBuilder, expected);
     EXPECT_TRUE(getSnapshot({.id = 111})->inputInfo.touchableRegion.hasSameRects(touch));
     Region touchCroppedByMirrorRoot{Rect{0, 0, 50, 50}};
@@ -385,7 +421,7 @@ TEST_F(LayerSnapshotTest, canRemoveDisplayMirror) {
     setFlags(12, layer_state_t::eLayerSkipScreenshot, layer_state_t::eLayerSkipScreenshot);
     createDisplayMirrorLayer(3, ui::LayerStack::fromValue(0));
     setLayerStack(3, 1);
-    std::vector<uint32_t> expected = {3, 1, 11, 111, 13, 2, 1, 11, 111, 12, 121, 122, 1221, 13, 2};
+    std::vector<uint32_t> expected = {1, 11, 111, 12, 121, 122, 1221, 13, 2, 3, 1, 11, 111, 13, 2};
     UPDATE_AND_VERIFY(mSnapshotBuilder, expected);
     destroyLayerHandle(3);
     UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
@@ -395,8 +431,8 @@ TEST_F(LayerSnapshotTest, cleanUpUnreachableSnapshotsAfterMirroring) {
     size_t startingNumSnapshots = mSnapshotBuilder.getSnapshots().size();
     createDisplayMirrorLayer(3, ui::LayerStack::fromValue(0));
     setLayerStack(3, 1);
-    std::vector<uint32_t> expected = {3, 1,  11,  111, 12,  121, 122,  1221, 13, 2,
-                                      1, 11, 111, 12,  121, 122, 1221, 13,   2};
+    std::vector<uint32_t> expected = {1, 11, 111, 12, 121, 122, 1221, 13, 2, 3,
+                                      1, 11, 111, 12, 121, 122, 1221, 13, 2};
     UPDATE_AND_VERIFY(mSnapshotBuilder, expected);
     destroyLayerHandle(3);
     UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);

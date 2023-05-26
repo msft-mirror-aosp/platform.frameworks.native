@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include "FrontEnd/LayerCreationArgs.h"
 #include "renderengine/ExternalTexture.h"
 
 #include <gui/LayerState.h>
@@ -39,6 +40,10 @@ public:
     ResolvedComposerState() = default;
     ResolvedComposerState(ComposerState&& source) { state = std::move(source.state); }
     std::shared_ptr<renderengine::ExternalTexture> externalTexture;
+    uint32_t layerId = UNASSIGNED_LAYER_ID;
+    uint32_t parentId = UNASSIGNED_LAYER_ID;
+    uint32_t relativeParentId = UNASSIGNED_LAYER_ID;
+    uint32_t touchCropId = UNASSIGNED_LAYER_ID;
 };
 
 struct TransactionState {
@@ -49,9 +54,10 @@ struct TransactionState {
                      const Vector<DisplayState>& displayStates, uint32_t transactionFlags,
                      const sp<IBinder>& applyToken, const InputWindowCommands& inputWindowCommands,
                      int64_t desiredPresentTime, bool isAutoTimestamp,
-                     std::vector<uint64_t> uncacheBufferIds, int64_t postTime, uint32_t permissions,
+                     std::vector<uint64_t> uncacheBufferIds, int64_t postTime,
                      bool hasListenerCallbacks, std::vector<ListenerCallbacks> listenerCallbacks,
-                     int originPid, int originUid, uint64_t transactionId)
+                     int originPid, int originUid, uint64_t transactionId,
+                     std::vector<uint64_t> mergedTransactionIds)
           : frameTimelineInfo(frameTimelineInfo),
             states(std::move(composerStates)),
             displays(displayStates),
@@ -62,19 +68,18 @@ struct TransactionState {
             isAutoTimestamp(isAutoTimestamp),
             uncacheBufferIds(std::move(uncacheBufferIds)),
             postTime(postTime),
-            permissions(permissions),
             hasListenerCallbacks(hasListenerCallbacks),
             listenerCallbacks(listenerCallbacks),
             originPid(originPid),
             originUid(originUid),
-            id(transactionId) {}
+            id(transactionId),
+            mergedTransactionIds(std::move(mergedTransactionIds)) {}
 
     // Invokes `void(const layer_state_t&)` visitor for matching layers.
     template <typename Visitor>
     void traverseStatesWithBuffers(Visitor&& visitor) const {
         for (const auto& state : states) {
-            if (state.state.hasBufferChanges() && state.state.hasValidBuffer() &&
-                state.state.surface) {
+            if (state.state.hasBufferChanges() && state.externalTexture && state.state.surface) {
                 visitor(state.state);
             }
         }
@@ -83,9 +88,8 @@ struct TransactionState {
     template <typename Visitor>
     void traverseStatesWithBuffersWhileTrue(Visitor&& visitor) {
         for (auto state = states.begin(); state != states.end();) {
-            if (state->state.hasBufferChanges() && state->state.hasValidBuffer() &&
-                state->state.surface) {
-                int result = visitor(state->state);
+            if (state->state.hasBufferChanges() && state->externalTexture && state->state.surface) {
+                int result = visitor(state->state, state->externalTexture);
                 if (result == STOP_TRAVERSAL) return;
                 if (result == DELETE_AND_CONTINUE_TRAVERSAL) {
                     state = states.erase(state);
@@ -123,13 +127,13 @@ struct TransactionState {
     bool isAutoTimestamp;
     std::vector<uint64_t> uncacheBufferIds;
     int64_t postTime;
-    uint32_t permissions;
     bool hasListenerCallbacks;
     std::vector<ListenerCallbacks> listenerCallbacks;
     int originPid;
     int originUid;
     uint64_t id;
     bool sentFenceTimeoutWarning = false;
+    std::vector<uint64_t> mergedTransactionIds;
 };
 
 } // namespace android

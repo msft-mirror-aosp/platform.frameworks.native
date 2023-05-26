@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
+
 #include "InputMapper.h"
 
 namespace android {
@@ -24,15 +27,18 @@ static constexpr ssize_t SENSOR_VEC_LEN = 3;
 
 class SensorInputMapper : public InputMapper {
 public:
-    explicit SensorInputMapper(InputDeviceContext& deviceContext);
+    template <class T, class... Args>
+    friend std::unique_ptr<T> createInputMapper(InputDeviceContext& deviceContext,
+                                                const InputReaderConfiguration& readerConfig,
+                                                Args... args);
     ~SensorInputMapper() override;
 
     uint32_t getSources() const override;
-    void populateDeviceInfo(InputDeviceInfo* deviceInfo) override;
+    void populateDeviceInfo(InputDeviceInfo& deviceInfo) override;
     void dump(std::string& dump) override;
-    [[nodiscard]] std::list<NotifyArgs> configure(nsecs_t when,
-                                                  const InputReaderConfiguration* config,
-                                                  uint32_t changes) override;
+    [[nodiscard]] std::list<NotifyArgs> reconfigure(nsecs_t when,
+                                                    const InputReaderConfiguration& config,
+                                                    ConfigurationChanges changes) override;
     [[nodiscard]] std::list<NotifyArgs> reset(nsecs_t when) override;
     [[nodiscard]] std::list<NotifyArgs> process(const RawEvent* rawEvent) override;
     bool enableSensor(InputDeviceSensorType sensorType, std::chrono::microseconds samplingPeriod,
@@ -102,6 +108,9 @@ private:
         }
     };
 
+    explicit SensorInputMapper(InputDeviceContext& deviceContext,
+                               const InputReaderConfiguration& readerConfig);
+
     static Axis createAxis(const AxisInfo& AxisInfo, const RawAbsoluteAxisInfo& rawAxisInfo);
 
     // Axes indexed by raw ABS_* axis index.
@@ -119,9 +128,6 @@ private:
     std::unordered_map<InputDeviceSensorType, Sensor> mSensors;
 
     [[nodiscard]] std::list<NotifyArgs> sync(nsecs_t when, bool force);
-
-    template <typename T>
-    bool tryGetProperty(std::string keyName, T& outValue);
 
     void parseSensorConfiguration(InputDeviceSensorType sensorType, int32_t absCode,
                                   int32_t sensorDataIndex, const Axis& axis);

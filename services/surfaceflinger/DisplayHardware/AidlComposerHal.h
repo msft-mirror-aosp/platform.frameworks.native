@@ -72,10 +72,6 @@ public:
 
     void registerCallback(HWC2::ComposerCallback& callback) override;
 
-    // Reset all pending commands in the command buffer. Useful if you want to
-    // skip a frame but have already queued some commands.
-    void resetCommands(Display) override;
-
     // Explicitly flush all pending commands in the command buffer.
     Error executeCommands(Display) override;
 
@@ -239,6 +235,7 @@ public:
     void onHotplugDisconnect(Display) override;
     Error getHdrConversionCapabilities(std::vector<HdrConversionCapability>*) override;
     Error setHdrConversionStrategy(HdrConversionStrategy, Hdr*) override;
+    Error setRefreshRateChangedCallbackDebugEnabled(Display, bool) override;
 
 private:
     // Many public functions above simply write a command into the command

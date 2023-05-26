@@ -63,11 +63,7 @@ public:
         return Scheduler::createConnection(std::move(eventThread));
     }
 
-    auto refreshRateSelector() { return leaderSelectorPtr(); }
-
-    const auto& refreshRateSelectors() const NO_THREAD_SAFETY_ANALYSIS {
-        return mRefreshRateSelectors;
-    }
+    auto refreshRateSelector() { return pacesetterSelectorPtr(); }
 
     void registerDisplay(PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr) {
         registerDisplay(displayId, std::move(selectorPtr),
@@ -92,17 +88,16 @@ public:
         Scheduler::unregisterDisplay(displayId);
     }
 
-    std::optional<PhysicalDisplayId> leaderDisplayId() const NO_THREAD_SAFETY_ANALYSIS {
-        return mLeaderDisplayId;
+    std::optional<PhysicalDisplayId> pacesetterDisplayId() const NO_THREAD_SAFETY_ANALYSIS {
+        return mPacesetterDisplayId;
     }
 
-    void setLeaderDisplay(PhysicalDisplayId displayId) {
+    void setPacesetterDisplay(PhysicalDisplayId displayId) {
         ftl::FakeGuard guard(kMainThreadContext);
-        Scheduler::setLeaderDisplay(displayId);
+        Scheduler::setPacesetterDisplay(displayId);
     }
 
     auto& mutableAppConnectionHandle() { return mAppConnectionHandle; }
-    auto& mutableVsyncModulator() { return *mVsyncModulator; }
     auto& mutableLayerHistory() { return mLayerHistory; }
 
     size_t layerHistorySize() NO_THREAD_SAFETY_ANALYSIS {

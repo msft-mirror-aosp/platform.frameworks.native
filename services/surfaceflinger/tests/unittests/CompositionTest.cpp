@@ -200,11 +200,11 @@ void CompositionTest::captureScreenComposition() {
     constexpr bool regionSampling = false;
 
     auto renderArea = DisplayRenderArea::create(mDisplay, sourceCrop, sourceCrop.getSize(),
-                                                ui::Dataspace::V0_SRGB, ui::Transform::ROT_0);
+                                                ui::Dataspace::V0_SRGB, true, true);
 
     auto traverseLayers = [this](const LayerVector::Visitor& visitor) {
         return mFlinger.traverseLayersInLayerStack(mDisplay->getLayerStack(),
-                                                   CaptureArgs::UNSET_UID, visitor);
+                                                   CaptureArgs::UNSET_UID, {}, visitor);
     };
 
     auto getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
@@ -605,7 +605,7 @@ struct BaseLayerProperties {
                     EXPECT_EQ(false, layer.source.buffer.isOpaque);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.x);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.y);
-                    EXPECT_EQ(ui::Dataspace::UNKNOWN, layer.sourceDataspace);
+                    EXPECT_EQ(ui::Dataspace::V0_SRGB, layer.sourceDataspace);
                     EXPECT_EQ(LayerProperties::COLOR[3], layer.alpha);
                     return resultFuture;
                 });
@@ -654,7 +654,7 @@ struct BaseLayerProperties {
                               layer.source.solidColor);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.x);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.y);
-                    EXPECT_EQ(ui::Dataspace::UNKNOWN, layer.sourceDataspace);
+                    EXPECT_EQ(ui::Dataspace::V0_SRGB, layer.sourceDataspace);
                     EXPECT_EQ(LayerProperties::COLOR[3], layer.alpha);
                     return resultFuture;
                 });
@@ -680,6 +680,9 @@ struct SidebandLayerProperties : public BaseLayerProperties<SidebandLayerPropert
                 NativeHandle::create(reinterpret_cast<native_handle_t*>(DEFAULT_SIDEBAND_STREAM),
                                      false);
         test->mFlinger.setLayerSidebandStream(layer, stream);
+        auto& layerDrawingState = test->mFlinger.mutableLayerDrawingState(layer);
+        layerDrawingState.crop =
+                Rect(0, 0, SidebandLayerProperties::HEIGHT, SidebandLayerProperties::WIDTH);
     }
 
     static void setupHwcSetSourceCropBufferCallExpectations(CompositionTest* test) {
@@ -731,7 +734,7 @@ struct CommonSecureLayerProperties : public BaseLayerProperties<LayerProperties>
                     EXPECT_EQ(half3(0.0f, 0.0f, 0.0f), layer.source.solidColor);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.x);
                     EXPECT_EQ(0.0, layer.geometry.roundedCornersRadius.y);
-                    EXPECT_EQ(ui::Dataspace::UNKNOWN, layer.sourceDataspace);
+                    EXPECT_EQ(ui::Dataspace::V0_SRGB, layer.sourceDataspace);
                     EXPECT_EQ(1.0f, layer.alpha);
                     return resultFuture;
                 });
@@ -814,6 +817,7 @@ struct BaseLayerVariant {
         Mock::VerifyAndClear(test->mComposer);
 
         test->mFlinger.mutableDrawingState().layersSortedByZ.add(layer);
+        test->mFlinger.mutableVisibleRegionsDirty() = true;
     }
 
     static void cleanupInjectedLayers(CompositionTest* test) {
@@ -822,6 +826,7 @@ struct BaseLayerVariant {
 
         test->mDisplay->getCompositionDisplay()->clearOutputLayers();
         test->mFlinger.mutableDrawingState().layersSortedByZ.clear();
+        test->mFlinger.mutablePreviouslyComposedLayers().clear();
 
         // Layer should be unregistered with scheduler.
         test->mFlinger.commit();

@@ -39,6 +39,7 @@ cc_test {
     srcs: [
         "AnrTracker_test.cpp",
         "BlockingQueue_test.cpp",
+        "CapturedTouchpadEventConverter_test.cpp",
         "EventHub_test.cpp",
         "FakeEventHub.cpp",
         "FakeInputReaderPolicy.cpp",
@@ -84,6 +85,13 @@ cc_test {
             static_libs: [
                 "libinput",
             ],
+        },
+    },
+    sanitize: {
+        undefined: true,
+        all_undefined: true,
+        diag: {
+            undefined: true,
         },
     },
     static_libs: [

@@ -44,10 +44,10 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t* data, size_t size) {
             std::make_shared<ThreadSafeFuzzedDataProvider>(data, size);
     FuzzContainer fuzzer(fdp);
 
-    KeyboardInputMapper& mapper =
-            fuzzer.getMapper<KeyboardInputMapper>(fdp->ConsumeIntegral<uint32_t>(),
-                                                  fdp->ConsumeIntegral<int32_t>());
     auto policyConfig = fuzzer.getPolicyConfig();
+    KeyboardInputMapper& mapper =
+            fuzzer.getMapper<KeyboardInputMapper>(policyConfig, fdp->ConsumeIntegral<uint32_t>(),
+                                                  fdp->ConsumeIntegral<int32_t>());
 
     // Loop through mapper operations until randomness is exhausted.
     while (fdp->remaining_bytes() > 0) {
@@ -59,13 +59,14 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t* data, size_t size) {
                 },
                 [&]() -> void {
                     InputDeviceInfo info;
-                    mapper.populateDeviceInfo(&info);
+                    mapper.populateDeviceInfo(info);
                 },
                 [&]() -> void { mapper.getSources(); },
                 [&]() -> void {
                     std::list<NotifyArgs> unused =
-                            mapper.configure(fdp->ConsumeIntegral<nsecs_t>(), &policyConfig,
-                                             fdp->ConsumeIntegral<uint32_t>());
+                            mapper.reconfigure(fdp->ConsumeIntegral<nsecs_t>(), policyConfig,
+                                               InputReaderConfiguration::Change(
+                                                       fdp->ConsumeIntegral<uint32_t>()));
                 },
                 [&]() -> void {
                     std::list<NotifyArgs> unused = mapper.reset(fdp->ConsumeIntegral<nsecs_t>());

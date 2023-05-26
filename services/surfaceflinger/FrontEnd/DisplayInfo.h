@@ -28,8 +28,9 @@ struct DisplayInfo {
     ui::Transform transform;
     bool receivesInput;
     bool isSecure;
-    // TODO(b/238781169) can eliminate once sPrimaryDisplayRotationFlags is removed.
+    // TODO(b/259407931): can eliminate once SurfaceFlinger::sActiveDisplayRotationFlags is removed.
     bool isPrimary;
+    bool isVirtual;
     ui::Transform::RotationFlags rotationFlags;
     ui::Transform::RotationFlags transformHint;
     std::string getDebugString() const {

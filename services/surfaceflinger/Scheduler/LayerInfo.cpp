@@ -44,14 +44,17 @@ LayerInfo::LayerInfo(const std::string& name, uid_t ownerUid,
         mOwnerUid(ownerUid),
         mDefaultVote(defaultVote),
         mLayerVote({defaultVote, Fps()}),
-        mRefreshRateHistory(name) {}
+        mLayerProps(std::make_unique<LayerProps>()),
+        mRefreshRateHistory(name) {
+    ;
+}
 
 void LayerInfo::setLastPresentTime(nsecs_t lastPresentTime, nsecs_t now, LayerUpdateType updateType,
-                                   bool pendingModeChange, LayerProps props) {
+                                   bool pendingModeChange, const LayerProps& props) {
     lastPresentTime = std::max(lastPresentTime, static_cast<nsecs_t>(0));
 
     mLastUpdatedTime = std::max(lastPresentTime, now);
-    mLayerProps = props;
+    *mLayerProps = props;
     switch (updateType) {
         case LayerUpdateType::AnimationTX:
             mLastAnimationTime = std::max(lastPresentTime, now);
@@ -75,17 +78,16 @@ bool LayerInfo::isFrameTimeValid(const FrameTimeData& frameTime) const {
                                           .count();
 }
 
-bool LayerInfo::isFrequent(nsecs_t now) const {
-    using fps_approx_ops::operator>=;
+LayerInfo::Frequent LayerInfo::isFrequent(nsecs_t now) const {
     // If we know nothing about this layer (e.g. after touch event),
     // we consider it as frequent as it might be the start of an animation.
     if (mFrameTimes.size() < kFrequentLayerWindowSize) {
-        return true;
+        return {/* isFrequent */ true, /* clearHistory */ false, /* isConclusive */ true};
     }
 
     // Non-active layers are also infrequent
     if (mLastUpdatedTime < getActiveLayerThreshold(now)) {
-        return false;
+        return {/* isFrequent */ false, /* clearHistory */ false, /* isConclusive */ true};
     }
 
     // We check whether we can classify this layer as frequent or infrequent:
@@ -108,12 +110,20 @@ bool LayerInfo::isFrequent(nsecs_t now) const {
     }
 
     if (isFrequent || isInfrequent) {
-        return isFrequent;
+        // If the layer was previously inconclusive, we clear
+        // the history as indeterminate layers changed to frequent,
+        // and we should not look at the stale data.
+        return {isFrequent, isFrequent && !mIsFrequencyConclusive, /* isConclusive */ true};
     }
 
     // If we can't determine whether the layer is frequent or not, we return
-    // the last known classification.
-    return !mLastRefreshRate.infrequent;
+    // the last known classification and mark the layer frequency as inconclusive.
+    isFrequent = !mLastRefreshRate.infrequent;
+
+    // If the layer was previously tagged as animating, we clear
+    // the history as it is likely the layer just changed its behavior,
+    // and we should not look at stale data.
+    return {isFrequent, isFrequent && mLastRefreshRate.animating, /* isConclusive */ false};
 }
 
 Fps LayerInfo::getFps(nsecs_t now) const {
@@ -270,19 +280,18 @@ LayerInfo::LayerVote LayerInfo::getRefreshRateVote(const RefreshRateSelector& se
         return {LayerHistory::LayerVoteType::Max, Fps()};
     }
 
-    if (!isFrequent(now)) {
+    const LayerInfo::Frequent frequent = isFrequent(now);
+    mIsFrequencyConclusive = frequent.isConclusive;
+    if (!frequent.isFrequent) {
         ATRACE_FORMAT_INSTANT("infrequent");
         ALOGV("%s is infrequent", mName.c_str());
         mLastRefreshRate.infrequent = true;
-        // Infrequent layers vote for mininal refresh rate for
+        // Infrequent layers vote for minimal refresh rate for
         // battery saving purposes and also to prevent b/135718869.
         return {LayerHistory::LayerVoteType::Min, Fps()};
     }
 
-    // If the layer was previously tagged as animating or infrequent, we clear
-    // the history as it is likely the layer just changed its behavior
-    // and we should not look at stale data
-    if (mLastRefreshRate.animating || mLastRefreshRate.infrequent) {
+    if (frequent.clearHistory) {
         clearHistory(now);
     }
 
@@ -303,6 +312,26 @@ const char* LayerInfo::getTraceTag(LayerHistory::LayerVoteType type) const {
     }
 
     return mTraceTags.at(type).c_str();
+}
+
+LayerInfo::FrameRate LayerInfo::getSetFrameRateVote() const {
+    return mLayerProps->setFrameRateVote;
+}
+
+bool LayerInfo::isVisible() const {
+    return mLayerProps->visible;
+}
+
+int32_t LayerInfo::getFrameRateSelectionPriority() const {
+    return mLayerProps->frameRateSelectionPriority;
+}
+
+FloatRect LayerInfo::getBounds() const {
+    return mLayerProps->bounds;
+}
+
+ui::Transform LayerInfo::getTransform() const {
+    return mLayerProps->transform;
 }
 
 LayerInfo::RefreshRateHistory::HeuristicTraceTagData

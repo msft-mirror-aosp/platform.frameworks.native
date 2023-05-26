@@ -27,14 +27,29 @@ using namespace ftl::flag_operators;
 LayerSnapshot::LayerSnapshot(const RequestedLayerState& state,
                              const LayerHierarchy::TraversalPath& path)
       : path(path) {
+    // Provide a unique id for all snapshots.
+    // A front end layer can generate multiple snapshots if its mirrored.
+    // Additionally, if the layer is not reachable, we may choose to destroy
+    // and recreate the snapshot in which case the unique sequence id will
+    // change. The consumer shouldn't tie any lifetimes to this unique id but
+    // register a LayerLifecycleManager::ILifecycleListener or get a list of
+    // destroyed layers from LayerLifecycleManager.
+    if (path.isClone()) {
+        uniqueSequence =
+                LayerCreationArgs::getInternalLayerId(LayerCreationArgs::sInternalSequence++);
+    } else {
+        uniqueSequence = state.id;
+    }
     sequence = static_cast<int32_t>(state.id);
     name = state.name;
     textureName = state.textureName;
     premultipliedAlpha = state.premultipliedAlpha;
     inputInfo.name = state.name;
-    inputInfo.id = static_cast<int32_t>(state.id);
+    inputInfo.id = static_cast<int32_t>(uniqueSequence);
     inputInfo.ownerUid = static_cast<int32_t>(state.ownerUid);
     inputInfo.ownerPid = state.ownerPid;
+    uid = state.ownerUid;
+    pid = state.ownerPid;
     changes = RequestedLayerState::Changes::Created;
     mirrorRootPath = path.variant == LayerHierarchy::Variant::Mirror
             ? path
@@ -170,7 +185,14 @@ std::string LayerSnapshot::getDebugString() const {
     std::stringstream debug;
     debug << "Snapshot{" << path.toString() << name << " isVisible=" << isVisible << " {"
           << getIsVisibleReason() << "} changes=" << changes.string()
-          << " layerStack=" << outputFilter.layerStack.id << "}";
+          << " layerStack=" << outputFilter.layerStack.id << " geomLayerBounds={"
+          << geomLayerBounds.left << "," << geomLayerBounds.top << "," << geomLayerBounds.bottom
+          << "," << geomLayerBounds.right << "}"
+          << " geomLayerTransform={tx=" << geomLayerTransform.tx()
+          << ",ty=" << geomLayerTransform.ty() << "}"
+          << "}";
+    debug << " input{ touchCropId=" << touchCropId
+          << " replaceTouchableRegionWithCrop=" << inputInfo.replaceTouchableRegionWithCrop << "}";
     return debug.str();
 }
 

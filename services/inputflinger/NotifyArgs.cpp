@@ -29,6 +29,12 @@ using android::base::StringPrintf;
 
 namespace android {
 
+// --- NotifyInputDevicesChangedArgs ---
+
+NotifyInputDevicesChangedArgs::NotifyInputDevicesChangedArgs(int32_t id,
+                                                             std::vector<InputDeviceInfo> infos)
+      : id(id), inputDeviceInfos(std::move(infos)) {}
+
 // --- NotifyConfigurationChangedArgs ---
 
 NotifyConfigurationChangedArgs::NotifyConfigurationChangedArgs(int32_t id, nsecs_t eventTime)
@@ -161,9 +167,9 @@ std::string NotifyMotionArgs::dump() const {
                 StringPrintf("id=%" PRIu32 " x=%.1f y=%.1f pressure=%.1f", pointerProperties[i].id,
                              pointerCoords[i].getX(), pointerCoords[i].getY(),
                              pointerCoords[i].getAxisValue(AMOTION_EVENT_AXIS_PRESSURE));
-        const int32_t toolType = pointerProperties[i].toolType;
-        if (toolType != AMOTION_EVENT_TOOL_TYPE_FINGER) {
-            coords += StringPrintf(" toolType=%s", motionToolTypeToString(toolType));
+        const ToolType toolType = pointerProperties[i].toolType;
+        if (toolType != ToolType::FINGER) {
+            coords += StringPrintf(" toolType=%s", ftl::enum_string(toolType).c_str());
         }
         const float major = pointerCoords[i].getAxisValue(AMOTION_EVENT_AXIS_TOUCH_MAJOR);
         const float minor = pointerCoords[i].getAxisValue(AMOTION_EVENT_AXIS_TOUCH_MINOR);
@@ -234,6 +240,7 @@ Visitor(V...) -> Visitor<V...>;
 
 const char* toString(const NotifyArgs& args) {
     Visitor toStringVisitor{
+            [&](const NotifyInputDevicesChangedArgs&) { return "NotifyInputDevicesChangedArgs"; },
             [&](const NotifyConfigurationChangedArgs&) { return "NotifyConfigurationChangedArgs"; },
             [&](const NotifyKeyArgs&) { return "NotifyKeyArgs"; },
             [&](const NotifyMotionArgs&) { return "NotifyMotionArgs"; },

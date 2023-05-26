@@ -30,7 +30,6 @@
 #include <stdint.h>
 #include <ui/Transform.h>
 #include <utils/BitSet.h>
-#include <utils/RefBase.h>
 #include <utils/Timers.h>
 #include <array>
 #include <limits>
@@ -210,13 +209,40 @@ vec2 transformWithoutTranslation(const ui::Transform& transform, const vec2& xy)
  */
 float transformAngle(const ui::Transform& transform, float angleRadians);
 
-const char* inputEventTypeToString(int32_t type);
+/**
+ * The type of the InputEvent.
+ * This should have 1:1 correspondence with the values of anonymous enum defined in input.h.
+ */
+enum class InputEventType {
+    KEY = AINPUT_EVENT_TYPE_KEY,
+    MOTION = AINPUT_EVENT_TYPE_MOTION,
+    FOCUS = AINPUT_EVENT_TYPE_FOCUS,
+    CAPTURE = AINPUT_EVENT_TYPE_CAPTURE,
+    DRAG = AINPUT_EVENT_TYPE_DRAG,
+    TOUCH_MODE = AINPUT_EVENT_TYPE_TOUCH_MODE,
+    ftl_first = KEY,
+    ftl_last = TOUCH_MODE,
+};
 
 std::string inputEventSourceToString(int32_t source);
 
 bool isFromSource(uint32_t source, uint32_t test);
 
-bool isStylusToolType(uint32_t toolType);
+/**
+ * The pointer tool type.
+ */
+enum class ToolType {
+    UNKNOWN = AMOTION_EVENT_TOOL_TYPE_UNKNOWN,
+    FINGER = AMOTION_EVENT_TOOL_TYPE_FINGER,
+    STYLUS = AMOTION_EVENT_TOOL_TYPE_STYLUS,
+    MOUSE = AMOTION_EVENT_TOOL_TYPE_MOUSE,
+    ERASER = AMOTION_EVENT_TOOL_TYPE_ERASER,
+    PALM = AMOTION_EVENT_TOOL_TYPE_PALM,
+    ftl_first = UNKNOWN,
+    ftl_last = PALM,
+};
+
+bool isStylusToolType(ToolType toolType);
 
 /*
  * Flags that flow alongside events in the input dispatch system to help with certain
@@ -319,8 +345,6 @@ enum class MotionClassification : uint8_t {
  * String representation of MotionClassification
  */
 const char* motionClassificationToString(MotionClassification classification);
-
-const char* motionToolTypeToString(int32_t toolType);
 
 /**
  * Portion of FrameMetrics timeline of interest to input code.
@@ -448,11 +472,11 @@ struct PointerProperties {
     int32_t id;
 
     // The pointer tool type.
-    int32_t toolType;
+    ToolType toolType;
 
     inline void clear() {
         id = -1;
-        toolType = 0;
+        toolType = ToolType::UNKNOWN;
     }
 
     bool operator==(const PointerProperties& other) const;
@@ -470,7 +494,7 @@ class InputEvent : public AInputEvent {
 public:
     virtual ~InputEvent() { }
 
-    virtual int32_t getType() const = 0;
+    virtual InputEventType getType() const = 0;
 
     inline int32_t getId() const { return mId; }
 
@@ -501,6 +525,8 @@ protected:
     std::array<uint8_t, 32> mHmac;
 };
 
+std::ostream& operator<<(std::ostream& out, const InputEvent& event);
+
 /*
  * Key events.
  */
@@ -508,7 +534,7 @@ class KeyEvent : public InputEvent {
 public:
     virtual ~KeyEvent() { }
 
-    virtual int32_t getType() const { return AINPUT_EVENT_TYPE_KEY; }
+    virtual InputEventType getType() const { return InputEventType::KEY; }
 
     inline int32_t getAction() const { return mAction; }
 
@@ -559,7 +585,7 @@ class MotionEvent : public InputEvent {
 public:
     virtual ~MotionEvent() { }
 
-    virtual int32_t getType() const { return AINPUT_EVENT_TYPE_MOTION; }
+    virtual InputEventType getType() const { return InputEventType::MOTION; }
 
     inline int32_t getAction() const { return mAction; }
 
@@ -638,7 +664,7 @@ public:
         return mPointerProperties[pointerIndex].id;
     }
 
-    inline int32_t getToolType(size_t pointerIndex) const {
+    inline ToolType getToolType(size_t pointerIndex) const {
         return mPointerProperties[pointerIndex].toolType;
     }
 
@@ -855,6 +881,8 @@ public:
                                                const PointerCoords&);
     static PointerCoords calculateTransformedCoords(uint32_t source, const ui::Transform&,
                                                     const PointerCoords&);
+    // The rounding precision for transformed motion events.
+    static constexpr float ROUNDING_PRECISION = 0.001f;
 
 protected:
     int32_t mAction;
@@ -885,7 +913,7 @@ class FocusEvent : public InputEvent {
 public:
     virtual ~FocusEvent() {}
 
-    virtual int32_t getType() const override { return AINPUT_EVENT_TYPE_FOCUS; }
+    virtual InputEventType getType() const override { return InputEventType::FOCUS; }
 
     inline bool getHasFocus() const { return mHasFocus; }
 
@@ -904,7 +932,7 @@ class CaptureEvent : public InputEvent {
 public:
     virtual ~CaptureEvent() {}
 
-    virtual int32_t getType() const override { return AINPUT_EVENT_TYPE_CAPTURE; }
+    virtual InputEventType getType() const override { return InputEventType::CAPTURE; }
 
     inline bool getPointerCaptureEnabled() const { return mPointerCaptureEnabled; }
 
@@ -923,7 +951,7 @@ class DragEvent : public InputEvent {
 public:
     virtual ~DragEvent() {}
 
-    virtual int32_t getType() const override { return AINPUT_EVENT_TYPE_DRAG; }
+    virtual InputEventType getType() const override { return InputEventType::DRAG; }
 
     inline bool isExiting() const { return mIsExiting; }
 
@@ -947,7 +975,7 @@ class TouchModeEvent : public InputEvent {
 public:
     virtual ~TouchModeEvent() {}
 
-    virtual int32_t getType() const override { return AINPUT_EVENT_TYPE_TOUCH_MODE; }
+    virtual InputEventType getType() const override { return InputEventType::TOUCH_MODE; }
 
     inline bool isInTouchMode() const { return mIsInTouchMode; }
 
