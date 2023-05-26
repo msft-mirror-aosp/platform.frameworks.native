@@ -16,7 +16,13 @@
       "name": "binderDriverInterfaceTest"
     },
     {
+      "name": "binderRecordReplayTest"
+    },
+    {
       "name": "binderHostDeviceTest"
+    },
+    {
+      "name": "binderParcelBenchmark"
     },
     {
       "name": "binderTextOutputTest"
@@ -90,12 +96,6 @@
   "presubmit-large": [
     {
       "name": "binderRpcTest"
-    },
-    {
-      "name": "CtsRootRollbackManagerHostTestCases"
-    },
-    {
-      "name": "StagedRollbackTest"
     },
     {
       "name": "binderRpcTestNoKernel"
