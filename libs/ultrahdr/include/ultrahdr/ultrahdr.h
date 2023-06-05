@@ -24,6 +24,7 @@ typedef enum {
   ULTRAHDR_COLORGAMUT_BT709,
   ULTRAHDR_COLORGAMUT_P3,
   ULTRAHDR_COLORGAMUT_BT2100,
+  ULTRAHDR_COLORGAMUT_MAX = ULTRAHDR_COLORGAMUT_BT2100,
 } ultrahdr_color_gamut;
 
 // Transfer functions for image data
@@ -33,14 +34,17 @@ typedef enum {
   ULTRAHDR_TF_HLG = 1,
   ULTRAHDR_TF_PQ = 2,
   ULTRAHDR_TF_SRGB = 3,
+  ULTRAHDR_TF_MAX = ULTRAHDR_TF_SRGB,
 } ultrahdr_transfer_function;
 
 // Target output formats for decoder
 typedef enum {
+  ULTRAHDR_OUTPUT_UNSPECIFIED = -1,
   ULTRAHDR_OUTPUT_SDR,          // SDR in RGBA_8888 color format
   ULTRAHDR_OUTPUT_HDR_LINEAR,   // HDR in F16 color format (linear)
   ULTRAHDR_OUTPUT_HDR_PQ,       // HDR in RGBA_1010102 color format (PQ transfer function)
   ULTRAHDR_OUTPUT_HDR_HLG,      // HDR in RGBA_1010102 color format (HLG transfer function)
+  ULTRAHDR_OUTPUT_MAX = ULTRAHDR_OUTPUT_HDR_HLG,
 } ultrahdr_output_format;
 
 /*

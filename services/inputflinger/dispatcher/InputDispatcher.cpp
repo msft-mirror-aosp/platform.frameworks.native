@@ -2561,9 +2561,17 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
         std::vector<TouchedWindow> hoveringWindows =
                 getHoveringWindowsLocked(oldState, tempTouchState, entry);
         for (const TouchedWindow& touchedWindow : hoveringWindows) {
-            addWindowTargetLocked(touchedWindow.windowHandle, touchedWindow.targetFlags,
-                                  touchedWindow.pointerIds, touchedWindow.firstDownTimeInTarget,
-                                  targets);
+            std::optional<InputTarget> target =
+                    createInputTargetLocked(touchedWindow.windowHandle, touchedWindow.targetFlags,
+                                            touchedWindow.firstDownTimeInTarget);
+            if (!target) {
+                continue;
+            }
+            // Hardcode to single hovering pointer for now.
+            std::bitset<MAX_POINTER_ID + 1> pointerIds;
+            pointerIds.set(entry.pointerProperties[0].id);
+            target->addPointers(pointerIds, touchedWindow.windowHandle->getInfo()->transform);
+            targets.push_back(*target);
         }
     }
 
@@ -5651,14 +5659,6 @@ void InputDispatcher::dumpDispatchStateLocked(std::string& dump) const {
     } else {
         dump += INDENT "Displays: <none>\n";
     }
-    dump += INDENT "Window Infos:\n";
-    dump += StringPrintf(INDENT2 "vsync id: %" PRId64 "\n", mWindowInfosVsyncId);
-    dump += StringPrintf(INDENT2 "timestamp (ns): %" PRId64 "\n", mWindowInfosTimestamp);
-    dump += "\n";
-    dump += StringPrintf(INDENT2 "max update delay (ns): %" PRId64 "\n", mMaxWindowInfosDelay);
-    dump += StringPrintf(INDENT2 "max update delay vsync id: %" PRId64 "\n",
-                         mMaxWindowInfosDelayVsyncId);
-    dump += "\n";
 
     if (!mGlobalMonitorsByDisplay.empty()) {
         for (const auto& [displayId, monitors] : mGlobalMonitorsByDisplay) {
@@ -6701,14 +6701,12 @@ void InputDispatcher::onWindowInfosChanged(const gui::WindowInfosUpdate& update)
             setInputWindowsLocked(handles, displayId);
         }
 
-        mWindowInfosVsyncId = update.vsyncId;
-        mWindowInfosTimestamp = update.timestamp;
-
-        int64_t delay = systemTime() - update.timestamp;
-        if (delay > mMaxWindowInfosDelay) {
-            mMaxWindowInfosDelay = delay;
-            mMaxWindowInfosDelayVsyncId = update.vsyncId;
+        if (update.vsyncId < mWindowInfosVsyncId) {
+            ALOGE("Received out of order window infos update. Last update vsync id: %" PRId64
+                  ", current update vsync id: %" PRId64,
+                  mWindowInfosVsyncId, update.vsyncId);
         }
+        mWindowInfosVsyncId = update.vsyncId;
     }
     // Wake up poll loop since it may need to make new input dispatching choices.
     mLooper->wake();
