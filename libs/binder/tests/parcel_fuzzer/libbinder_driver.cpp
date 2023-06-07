@@ -33,9 +33,13 @@ void fuzzService(const std::vector<sp<IBinder>>& binders, FuzzedDataProvider&& p
             .extraFds = {},
     };
 
+    // Always take so that a perturbation of just the one ConsumeBool byte will always
+    // take the same path, but with a different UID. Without this, the fuzzer needs to
+    // guess both the change in value and the shift at the same time.
+    int64_t maybeSetUid = provider.ConsumeIntegral<int64_t>();
     if (provider.ConsumeBool()) {
         // set calling uid
-        IPCThreadState::self()->restoreCallingIdentity(provider.ConsumeIntegral<int64_t>());
+        IPCThreadState::self()->restoreCallingIdentity(maybeSetUid);
     }
 
     while (provider.remaining_bytes() > 0) {
@@ -48,7 +52,8 @@ void fuzzService(const std::vector<sp<IBinder>>& binders, FuzzedDataProvider&& p
                     uint32_t flags = provider.ConsumeIntegral<uint32_t>();
                     Parcel data;
                     // for increased fuzz coverage
-                    data.setEnforceNoDataAvail(provider.ConsumeBool());
+                    data.setEnforceNoDataAvail(false);
+                    data.setServiceFuzzing();
 
                     sp<IBinder> target = options.extraBinders.at(
                             provider.ConsumeIntegralInRange<size_t>(0,
@@ -69,7 +74,8 @@ void fuzzService(const std::vector<sp<IBinder>>& binders, FuzzedDataProvider&& p
 
                     Parcel reply;
                     // for increased fuzz coverage
-                    reply.setEnforceNoDataAvail(provider.ConsumeBool());
+                    reply.setEnforceNoDataAvail(false);
+                    reply.setServiceFuzzing();
                     (void)target->transact(code, data, &reply, flags);
 
                     // feed back in binders and fds that are returned from the service, so that
