@@ -4870,6 +4870,10 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
                 flags |= AMOTION_EVENT_FLAG_IS_ACCESSIBILITY_EVENT;
             }
 
+            if (policyFlags & POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY_TOOL) {
+                flags |= AMOTION_EVENT_FLAG_INJECTED_FROM_ACCESSIBILITY_TOOL;
+            }
+
             mLock.lock();
 
             if (shouldRejectInjectedMotionLocked(motionEvent, resolvedDeviceId, displayId,
