@@ -234,6 +234,7 @@ public:
         float desiredHdrSdrRatio = 1.f;
         gui::CachingHint cachingHint = gui::CachingHint::Enabled;
         int64_t latchedVsyncId = 0;
+        bool useVsyncIdForRefreshRateSelection = false;
     };
 
     explicit Layer(const LayerCreationArgs& args);
@@ -248,7 +249,7 @@ public:
     // true if this layer is visible, false otherwise
     virtual bool isVisible() const;
 
-    virtual sp<Layer> createClone();
+    virtual sp<Layer> createClone(uint32_t mirrorRoot);
 
     // Set a 2x2 transformation matrix on the layer. This transform
     // will be applied after parent transforms, but before any final
@@ -651,7 +652,7 @@ public:
 
     gui::WindowInfo::Type getWindowType() const { return mWindowType; }
 
-    void updateMirrorInfo();
+    bool updateMirrorInfo(const std::deque<Layer*>& cloneRootsPendingUpdates);
 
     /*
      * doTransaction - process the transaction. This is a good place to figure
@@ -876,6 +877,7 @@ public:
     // TODO(b/238781169) Remove direct calls to RenderEngine::drawLayers that don't go through
     // CompositionEngine to create a single path for composing layers.
     void updateSnapshot(bool updateGeometry);
+    void updateChildrenSnapshots(bool updateGeometry);
     void updateMetadataSnapshot(const LayerMetadata& parentMetadata);
     void updateRelativeMetadataSnapshot(const LayerMetadata& relativeLayerMetadata,
                                         std::unordered_set<Layer*>& visited);
@@ -922,7 +924,7 @@ protected:
     friend class TransactionFrameTracerTest;
     friend class TransactionSurfaceFrameTest;
 
-    virtual void setInitialValuesForClone(const sp<Layer>& clonedFrom);
+    virtual void setInitialValuesForClone(const sp<Layer>& clonedFrom, uint32_t mirrorRootId);
     void preparePerFrameCompositionState();
     void preparePerFrameBufferCompositionState();
     void preparePerFrameEffectsCompositionState();
@@ -1132,8 +1134,6 @@ private:
     }
 
     bool hasSomethingToDraw() const { return hasEffect() || hasBufferOrSidebandStream(); }
-
-    void updateChildrenSnapshots(bool updateGeometry);
 
     // Fills the provided vector with the currently available JankData and removes the processed
     // JankData from the pending list.

@@ -406,11 +406,13 @@ void Scheduler::setVsyncConfig(const VsyncConfig& config, Period vsyncPeriod) {
 
 void Scheduler::enableHardwareVsync(PhysicalDisplayId id) {
     auto schedule = getVsyncSchedule(id);
+    LOG_ALWAYS_FATAL_IF(!schedule);
     schedule->enableHardwareVsync(mSchedulerCallback);
 }
 
 void Scheduler::disableHardwareVsync(PhysicalDisplayId id, bool disallow) {
     auto schedule = getVsyncSchedule(id);
+    LOG_ALWAYS_FATAL_IF(!schedule);
     schedule->disableHardwareVsync(mSchedulerCallback, disallow);
 }
 
@@ -427,7 +429,10 @@ void Scheduler::resyncAllToHardwareVsync(bool allowToEnable) {
 void Scheduler::resyncToHardwareVsyncLocked(PhysicalDisplayId id, bool allowToEnable,
                                             std::optional<Fps> refreshRate) {
     const auto displayOpt = mDisplays.get(id);
-    LOG_ALWAYS_FATAL_IF(!displayOpt);
+    if (!displayOpt) {
+        ALOGW("%s: Invalid display %s!", __func__, to_string(id).c_str());
+        return;
+    }
     const Display& display = *displayOpt;
 
     if (display.schedulePtr->isHardwareVsyncAllowed(allowToEnable)) {
@@ -446,7 +451,10 @@ void Scheduler::setRenderRate(PhysicalDisplayId id, Fps renderFrameRate) {
     ftl::FakeGuard guard(kMainThreadContext);
 
     const auto displayOpt = mDisplays.get(id);
-    LOG_ALWAYS_FATAL_IF(!displayOpt);
+    if (!displayOpt) {
+        ALOGW("%s: Invalid display %s!", __func__, to_string(id).c_str());
+        return;
+    }
     const Display& display = *displayOpt;
     const auto mode = display.selectorPtr->getActiveMode();
 
@@ -478,12 +486,18 @@ bool Scheduler::addResyncSample(PhysicalDisplayId id, nsecs_t timestamp,
     const auto hwcVsyncPeriod = ftl::Optional(hwcVsyncPeriodIn).transform([](nsecs_t nanos) {
         return Period::fromNs(nanos);
     });
-    return getVsyncSchedule(id)->addResyncSample(mSchedulerCallback, TimePoint::fromNs(timestamp),
-                                                 hwcVsyncPeriod);
+    auto schedule = getVsyncSchedule(id);
+    if (!schedule) {
+        ALOGW("%s: Invalid display %s!", __func__, to_string(id).c_str());
+        return false;
+    }
+    return schedule->addResyncSample(mSchedulerCallback, TimePoint::fromNs(timestamp),
+                                     hwcVsyncPeriod);
 }
 
 void Scheduler::addPresentFence(PhysicalDisplayId id, std::shared_ptr<FenceTime> fence) {
     auto schedule = getVsyncSchedule(id);
+    LOG_ALWAYS_FATAL_IF(!schedule);
     const bool needMoreSignals = schedule->getController().addPresentFence(std::move(fence));
     if (needMoreSignals) {
         schedule->enableHardwareVsync(mSchedulerCallback);
@@ -553,6 +567,7 @@ void Scheduler::setDisplayPowerMode(PhysicalDisplayId id, hal::PowerMode powerMo
     {
         std::scoped_lock lock(mDisplayLock);
         auto vsyncSchedule = getVsyncScheduleLocked(id);
+        LOG_ALWAYS_FATAL_IF(!vsyncSchedule);
         vsyncSchedule->getController().setDisplayPowerMode(powerMode);
     }
     if (!isPacesetter) return;
@@ -582,7 +597,9 @@ auto Scheduler::getVsyncScheduleLocked(std::optional<PhysicalDisplayId> idOpt) c
     }
 
     const auto displayOpt = mDisplays.get(*idOpt);
-    LOG_ALWAYS_FATAL_IF(!displayOpt);
+    if (!displayOpt) {
+        return nullptr;
+    }
     return displayOpt->get().schedulePtr;
 }
 
@@ -830,81 +847,35 @@ auto Scheduler::chooseDisplayModes() const -> DisplayModeChoiceMap {
 
     using RankedRefreshRates = RefreshRateSelector::RankedFrameRates;
     display::PhysicalDisplayVector<RankedRefreshRates> perDisplayRanking;
-
-    // Tallies the score of a refresh rate across `displayCount` displays.
-    struct RefreshRateTally {
-        explicit RefreshRateTally(float score) : score(score) {}
-
-        float score;
-        size_t displayCount = 1;
-    };
-
-    // Chosen to exceed a typical number of refresh rates across displays.
-    constexpr size_t kStaticCapacity = 8;
-    ftl::SmallMap<Fps, RefreshRateTally, kStaticCapacity, FpsApproxEqual> refreshRateTallies;
-
     const auto globalSignals = makeGlobalSignals();
+    Fps pacesetterFps;
 
     for (const auto& [id, display] : mDisplays) {
         auto rankedFrameRates =
                 display.selectorPtr->getRankedFrameRates(mPolicy.contentRequirements,
                                                          globalSignals);
-
-        for (const auto& [frameRateMode, score] : rankedFrameRates.ranking) {
-            const auto [it, inserted] = refreshRateTallies.try_emplace(frameRateMode.fps, score);
-
-            if (!inserted) {
-                auto& tally = it->second;
-                tally.score += score;
-                tally.displayCount++;
-            }
+        if (id == *mPacesetterDisplayId) {
+            pacesetterFps = rankedFrameRates.ranking.front().frameRateMode.fps;
         }
-
         perDisplayRanking.push_back(std::move(rankedFrameRates));
     }
 
-    auto maxScoreIt = refreshRateTallies.cbegin();
-
-    // Find the first refresh rate common to all displays.
-    while (maxScoreIt != refreshRateTallies.cend() &&
-           maxScoreIt->second.displayCount != mDisplays.size()) {
-        ++maxScoreIt;
-    }
-
-    if (maxScoreIt != refreshRateTallies.cend()) {
-        // Choose the highest refresh rate common to all displays, if any.
-        for (auto it = maxScoreIt + 1; it != refreshRateTallies.cend(); ++it) {
-            const auto [fps, tally] = *it;
-
-            if (tally.displayCount == mDisplays.size() && tally.score > maxScoreIt->second.score) {
-                maxScoreIt = it;
-            }
-        }
-    }
-
-    const std::optional<Fps> chosenFps = maxScoreIt != refreshRateTallies.cend()
-            ? std::make_optional(maxScoreIt->first)
-            : std::nullopt;
-
     DisplayModeChoiceMap modeChoices;
-
     using fps_approx_ops::operator==;
 
-    for (auto& [ranking, signals] : perDisplayRanking) {
-        if (!chosenFps) {
-            const auto& [frameRateMode, _] = ranking.front();
-            modeChoices.try_emplace(frameRateMode.modePtr->getPhysicalDisplayId(),
-                                    DisplayModeChoice{frameRateMode, signals});
-            continue;
-        }
+    for (auto& [rankings, signals] : perDisplayRanking) {
+        const auto chosenFrameRateMode =
+                ftl::find_if(rankings,
+                             [&](const auto& ranking) {
+                                 return ranking.frameRateMode.fps == pacesetterFps;
+                             })
+                        .transform([](const auto& scoredFrameRate) {
+                            return scoredFrameRate.get().frameRateMode;
+                        })
+                        .value_or(rankings.front().frameRateMode);
 
-        for (auto& [frameRateMode, _] : ranking) {
-            if (frameRateMode.fps == *chosenFps) {
-                modeChoices.try_emplace(frameRateMode.modePtr->getPhysicalDisplayId(),
-                                        DisplayModeChoice{frameRateMode, signals});
-                break;
-            }
-        }
+        modeChoices.try_emplace(chosenFrameRateMode.modePtr->getPhysicalDisplayId(),
+                                DisplayModeChoice{chosenFrameRateMode, signals});
     }
     return modeChoices;
 }

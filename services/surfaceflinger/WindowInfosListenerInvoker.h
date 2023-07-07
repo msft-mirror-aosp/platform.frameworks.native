@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <optional>
 #include <unordered_set>
 
 #include <android/gui/BnWindowInfosReportedListener.h>
@@ -25,6 +26,8 @@
 #include <ftl/small_map.h>
 #include <gui/SpHash.h>
 #include <utils/Mutex.h>
+
+#include "scheduler/VsyncId.h"
 
 namespace android {
 
@@ -38,11 +41,18 @@ public:
     void addWindowInfosListener(sp<gui::IWindowInfosListener>);
     void removeWindowInfosListener(const sp<gui::IWindowInfosListener>& windowInfosListener);
 
-    void windowInfosChanged(std::vector<gui::WindowInfo>, std::vector<gui::DisplayInfo>,
+    void windowInfosChanged(gui::WindowInfosUpdate update,
                             WindowInfosReportedListenerSet windowInfosReportedListeners,
                             bool forceImmediateCall);
 
     binder::Status onWindowInfosReported() override;
+
+    struct DebugInfo {
+        VsyncId maxSendDelayVsyncId;
+        nsecs_t maxSendDelayDuration;
+        uint32_t pendingMessageCount;
+    };
+    DebugInfo getDebugInfo();
 
 protected:
     void binderDied(const wp<IBinder>& who) override;
@@ -56,9 +66,16 @@ private:
 
     std::mutex mMessagesMutex;
     uint32_t mActiveMessageCount GUARDED_BY(mMessagesMutex) = 0;
-    std::function<void(WindowInfosReportedListenerSet)> mWindowInfosChangedDelayed
-            GUARDED_BY(mMessagesMutex);
-    WindowInfosReportedListenerSet mReportedListenersDelayed;
+    std::optional<gui::WindowInfosUpdate> mDelayedUpdate GUARDED_BY(mMessagesMutex);
+    WindowInfosReportedListenerSet mReportedListeners;
+
+    DebugInfo mDebugInfo GUARDED_BY(mMessagesMutex);
+    struct DelayInfo {
+        int64_t vsyncId;
+        nsecs_t frameTime;
+    };
+    std::optional<DelayInfo> mDelayInfo GUARDED_BY(mMessagesMutex);
+    void updateMaxSendDelay() REQUIRES(mMessagesMutex);
 };
 
 } // namespace android

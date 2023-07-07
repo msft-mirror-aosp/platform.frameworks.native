@@ -296,8 +296,7 @@ public:
     // the client can no longer modify this layer directly.
     void onHandleDestroyed(BBinder* handle, sp<Layer>& layer, uint32_t layerId);
 
-    // TODO: Remove atomic if move dtor to main thread CL lands
-    std::atomic<uint32_t> mNumClones;
+    std::vector<Layer*> mLayerMirrorRoots;
 
     TransactionCallbackInvoker& getTransactionCallbackInvoker() {
         return mTransactionCallbackInvoker;
@@ -331,6 +330,14 @@ public:
     void forceFutureUpdate(int delayInMs);
     const DisplayDevice* getDisplayFromLayerStack(ui::LayerStack)
             REQUIRES(mStateLock, kMainThreadContext);
+
+    // TODO (b/259407931): Remove.
+    // TODO (b/281857977): This should be annotated with REQUIRES(kMainThreadContext), but this
+    // would require thread safety annotations throughout the frontend (in particular Layer and
+    // LayerFE).
+    static ui::Transform::RotationFlags getActiveDisplayRotationFlags() {
+        return sActiveDisplayRotationFlags;
+    }
 
 protected:
     // We're reference counted, never destroy SurfaceFlinger directly
@@ -508,15 +515,13 @@ private:
     }
 
     sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId displayId) const;
-    status_t setTransactionState(const FrameTimelineInfo& frameTimelineInfo,
-                                 Vector<ComposerState>& state, const Vector<DisplayState>& displays,
-                                 uint32_t flags, const sp<IBinder>& applyToken,
-                                 const InputWindowCommands& inputWindowCommands,
-                                 int64_t desiredPresentTime, bool isAutoTimestamp,
-                                 const std::vector<client_cache_t>& uncacheBuffers,
-                                 bool hasListenerCallbacks,
-                                 const std::vector<ListenerCallbacks>& listenerCallbacks,
-                                 uint64_t transactionId) override;
+    status_t setTransactionState(
+            const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& state,
+            const Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
+            InputWindowCommands inputWindowCommands, int64_t desiredPresentTime,
+            bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffers,
+            bool hasListenerCallbacks, const std::vector<ListenerCallbacks>& listenerCallbacks,
+            uint64_t transactionId, const std::vector<uint64_t>& mergedTransactionIds) override;
     void bootFinished();
     virtual status_t getSupportedFrameTimestamps(std::vector<FrameEvent>* outSupported) const;
     sp<IDisplayEventConnection> createDisplayEventConnection(
@@ -717,7 +722,7 @@ private:
     void updateLayerHistory(const frontend::LayerSnapshot& snapshot);
     frontend::Update flushLifecycleUpdates() REQUIRES(kMainThreadContext);
 
-    void updateInputFlinger();
+    void updateInputFlinger(VsyncId vsyncId, TimePoint frameTime);
     void persistDisplayBrightness(bool needsComposite) REQUIRES(kMainThreadContext);
     void buildWindowInfos(std::vector<gui::WindowInfo>& outWindowInfos,
                           std::vector<gui::DisplayInfo>& outDisplayInfos);
@@ -732,14 +737,16 @@ private:
     /*
      * Transactions
      */
-    bool applyTransactionState(
-            const FrameTimelineInfo& info, std::vector<ResolvedComposerState>& state,
-            Vector<DisplayState>& displays, uint32_t flags,
-            const InputWindowCommands& inputWindowCommands, const int64_t desiredPresentTime,
-            bool isAutoTimestamp, const std::vector<uint64_t>& uncacheBufferIds,
-            const int64_t postTime, uint32_t permissions, bool hasListenerCallbacks,
-            const std::vector<ListenerCallbacks>& listenerCallbacks, int originPid, int originUid,
-            uint64_t transactionId) REQUIRES(mStateLock);
+    bool applyTransactionState(const FrameTimelineInfo& info,
+                               std::vector<ResolvedComposerState>& state,
+                               Vector<DisplayState>& displays, uint32_t flags,
+                               const InputWindowCommands& inputWindowCommands,
+                               const int64_t desiredPresentTime, bool isAutoTimestamp,
+                               const std::vector<uint64_t>& uncacheBufferIds,
+                               const int64_t postTime, bool hasListenerCallbacks,
+                               const std::vector<ListenerCallbacks>& listenerCallbacks,
+                               int originPid, int originUid, uint64_t transactionId)
+            REQUIRES(mStateLock);
     // Flush pending transactions that were presented after desiredPresentTime.
     // For test only
     bool flushTransactionQueues(VsyncId) REQUIRES(kMainThreadContext);
@@ -760,12 +767,11 @@ private:
 
     uint32_t setClientStateLocked(const FrameTimelineInfo&, ResolvedComposerState&,
                                   int64_t desiredPresentTime, bool isAutoTimestamp,
-                                  int64_t postTime, uint32_t permissions, uint64_t transactionId)
-            REQUIRES(mStateLock);
+                                  int64_t postTime, uint64_t transactionId) REQUIRES(mStateLock);
     uint32_t updateLayerCallbacksAndStats(const FrameTimelineInfo&, ResolvedComposerState&,
                                           int64_t desiredPresentTime, bool isAutoTimestamp,
-                                          int64_t postTime, uint32_t permissions,
-                                          uint64_t transactionId) REQUIRES(mStateLock);
+                                          int64_t postTime, uint64_t transactionId)
+            REQUIRES(mStateLock);
     uint32_t getTransactionFlags() const;
 
     // Sets the masked bits, and schedules a commit if needed.
@@ -998,7 +1004,9 @@ private:
 
     using FenceTimePtr = std::shared_ptr<FenceTime>;
 
-    const FenceTimePtr& getPreviousPresentFence(TimePoint frameTime, Period)
+    bool wouldPresentEarly(TimePoint frameTime, Period) const REQUIRES(kMainThreadContext);
+
+    const FenceTimePtr& getPreviousPresentFence(TimePoint frameTime, Period) const
             REQUIRES(kMainThreadContext);
 
     // Blocks the thread waiting for up to graceTimeMs in case the fence is about to signal.
@@ -1196,6 +1204,11 @@ private:
     std::unordered_set<sp<Layer>, SpHash<Layer>> mLayersWithBuffersRemoved;
     // Tracks layers that need to update a display's dirty region.
     std::vector<sp<Layer>> mLayersPendingRefresh;
+    // Sorted list of layers that were composed during previous frame. This is used to
+    // avoid an expensive traversal of the layer hierarchy when there are no
+    // visible region changes. Because this is a list of strong pointers, this will
+    // extend the life of the layer but this list is only updated in the main thread.
+    std::vector<sp<Layer>> mPreviouslyComposedLayers;
 
     BootStage mBootStage = BootStage::BOOTLOADER;
 
@@ -1384,6 +1397,10 @@ private:
 
     std::atomic<ui::Transform::RotationFlags> mActiveDisplayTransformHint;
 
+    // Must only be accessed on the main thread.
+    // TODO (b/259407931): Remove.
+    static ui::Transform::RotationFlags sActiveDisplayRotationFlags;
+
     bool isRefreshRateOverlayEnabled() const REQUIRES(mStateLock) {
         return hasDisplay(
                 [](const auto& display) { return display.isRefreshRateOverlayEnabled(); });
@@ -1428,10 +1445,8 @@ private:
     display::DisplayMap<ui::LayerStack, frontend::DisplayInfo> mFrontEndDisplayInfos;
     bool mFrontEndDisplayInfosChanged = false;
 
-    // Layers visible during the last commit. This set should only be used for testing set equality
-    // and membership. The pointers should not be dereferenced as it's possible the set contains
-    // pointers to freed layers.
-    std::unordered_set<Layer*> mVisibleLayers;
+    // WindowInfo ids visible during the last commit.
+    std::unordered_set<int32_t> mVisibleWindowIds;
 };
 
 class SurfaceComposerAIDL : public gui::BnSurfaceComposer {

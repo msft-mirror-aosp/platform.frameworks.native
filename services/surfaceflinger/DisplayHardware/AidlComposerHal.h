@@ -72,10 +72,6 @@ public:
 
     void registerCallback(HWC2::ComposerCallback& callback) override;
 
-    // Reset all pending commands in the command buffer. Useful if you want to
-    // skip a frame but have already queued some commands.
-    void resetCommands(Display) override;
-
     // Explicitly flush all pending commands in the command buffer.
     Error executeCommands(Display) override;
 
@@ -288,6 +284,8 @@ private:
     // threading annotations.
     ftl::SharedMutex mMutex;
 
+    // Whether or not explicitly clearing buffer slots is supported.
+    bool mSupportsBufferSlotsToClear;
     // Buffer slots for layers are cleared by setting the slot buffer to this buffer.
     sp<GraphicBuffer> mClearSlotBuffer;
 
