@@ -176,11 +176,8 @@ status_t SensorManager::assertStateLocked() {
 
         mSensors = mSensorServer->getSensorList(mOpPackageName);
         size_t count = mSensors.size();
-        if (count == 0) {
-            ALOGE("Failed to get Sensor list");
-            mSensorServer.clear();
-            return UNKNOWN_ERROR;
-        }
+        // If count is 0, mSensorList will be non-null. This is old
+        // existing behavior and callers expect this.
         mSensorList =
                 static_cast<Sensor const**>(malloc(count * sizeof(Sensor*)));
         LOG_ALWAYS_FATAL_IF(mSensorList == nullptr, "mSensorList NULL");
@@ -212,6 +209,19 @@ ssize_t SensorManager::getDynamicSensorList(Vector<Sensor> & dynamicSensors) {
 
     dynamicSensors = mSensorServer->getDynamicSensorList(mOpPackageName);
     size_t count = dynamicSensors.size();
+
+    return static_cast<ssize_t>(count);
+}
+
+ssize_t SensorManager::getRuntimeSensorList(int deviceId, Vector<Sensor>& runtimeSensors) {
+    Mutex::Autolock _l(mLock);
+    status_t err = assertStateLocked();
+    if (err < 0) {
+        return static_cast<ssize_t>(err);
+    }
+
+    runtimeSensors = mSensorServer->getRuntimeSensorList(mOpPackageName, deviceId);
+    size_t count = runtimeSensors.size();
 
     return static_cast<ssize_t>(count);
 }
@@ -302,6 +312,12 @@ bool SensorManager::isDataInjectionEnabled() {
 
 int SensorManager::createDirectChannel(
         size_t size, int channelType, const native_handle_t *resourceHandle) {
+    static constexpr int DEFAULT_DEVICE_ID = 0;
+    return createDirectChannel(DEFAULT_DEVICE_ID, size, channelType, resourceHandle);
+}
+
+int SensorManager::createDirectChannel(
+        int deviceId, size_t size, int channelType, const native_handle_t *resourceHandle) {
     Mutex::Autolock _l(mLock);
     if (assertStateLocked() != NO_ERROR) {
         return NO_INIT;
@@ -314,7 +330,7 @@ int SensorManager::createDirectChannel(
     }
 
     sp<ISensorEventConnection> conn =
-              mSensorServer->createSensorDirectConnection(mOpPackageName,
+              mSensorServer->createSensorDirectConnection(mOpPackageName, deviceId,
                   static_cast<uint32_t>(size),
                   static_cast<int32_t>(channelType),
                   SENSOR_DIRECT_FMT_SENSORS_EVENT, resourceHandle);
