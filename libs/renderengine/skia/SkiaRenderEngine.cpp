@@ -39,10 +39,10 @@
 #include <SkPath.h>
 #include <SkPoint.h>
 #include <SkPoint3.h>
+#include <SkRRect.h>
 #include <SkRect.h>
 #include <SkRefCnt.h>
 #include <SkRegion.h>
-#include <SkRRect.h>
 #include <SkRuntimeEffect.h>
 #include <SkSamplingOptions.h>
 #include <SkScalar.h>
@@ -51,9 +51,11 @@
 #include <SkString.h>
 #include <SkSurface.h>
 #include <SkTileMode.h>
-#include <src/core/SkTraceEventCommon.h>
 #include <android-base/stringprintf.h>
+#include <gui/FenceMonitor.h>
 #include <gui/TraceUtils.h>
+#include <pthread.h>
+#include <src/core/SkTraceEventCommon.h>
 #include <sync/sync.h>
 #include <ui/BlurRegion.h>
 #include <ui/DataspaceUtils.h>
@@ -63,6 +65,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <numeric>
 
@@ -83,6 +86,7 @@ namespace {
 // Debugging settings
 static const bool kPrintLayerSettings = false;
 static const bool kFlushAfterEveryLayer = kPrintLayerSettings;
+static constexpr bool kEnableLayerBrightening = true;
 
 } // namespace
 
@@ -229,7 +233,6 @@ static inline SkM44 getSkM44(const android::mat4& matrix) {
 static inline SkPoint3 getSkPoint3(const android::vec3& vector) {
     return SkPoint3::Make(vector.x, vector.y, vector.z);
 }
-
 } // namespace
 
 namespace android {
@@ -697,7 +700,8 @@ void SkiaRenderEngine::drawLayersInternal(
 
     // ...and compute the dimming ratio if dimming is requested
     const float displayDimmingRatio = display.targetLuminanceNits > 0.f &&
-                    maxLayerWhitePoint > 0.f && display.targetLuminanceNits > maxLayerWhitePoint
+                    maxLayerWhitePoint > 0.f &&
+                    (kEnableLayerBrightening || display.targetLuminanceNits > maxLayerWhitePoint)
             ? maxLayerWhitePoint / display.targetLuminanceNits
             : 1.f;
 
@@ -1134,8 +1138,13 @@ void SkiaRenderEngine::drawLayersInternal(
         activeSurface->flush();
     }
 
-    base::unique_fd drawFence = flushAndSubmit(grContext);
-    resultPromise->set_value(sp<Fence>::make(std::move(drawFence)));
+    auto drawFence = sp<Fence>::make(flushAndSubmit(grContext));
+
+    if (ATRACE_ENABLED()) {
+        static gui::FenceMonitor sMonitor("RE Completion");
+        sMonitor.queueFence(drawFence);
+    }
+    resultPromise->set_value(std::move(drawFence));
 }
 
 size_t SkiaRenderEngine::getMaxTextureSize() const {

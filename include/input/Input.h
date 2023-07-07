@@ -30,7 +30,6 @@
 #include <stdint.h>
 #include <ui/Transform.h>
 #include <utils/BitSet.h>
-#include <utils/RefBase.h>
 #include <utils/Timers.h>
 #include <array>
 #include <limits>
@@ -241,6 +240,19 @@ enum class ToolType {
     PALM = AMOTION_EVENT_TOOL_TYPE_PALM,
     ftl_first = UNKNOWN,
     ftl_last = PALM,
+};
+
+/**
+ * The state of the key. This should have 1:1 correspondence with the values of anonymous enum
+ * defined in input.h
+ */
+enum class KeyState {
+    UNKNOWN = AKEY_STATE_UNKNOWN,
+    UP = AKEY_STATE_UP,
+    DOWN = AKEY_STATE_DOWN,
+    VIRTUAL = AKEY_STATE_VIRTUAL,
+    ftl_first = UNKNOWN,
+    ftl_last = VIRTUAL,
 };
 
 bool isStylusToolType(ToolType toolType);

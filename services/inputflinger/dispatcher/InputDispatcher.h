@@ -205,9 +205,6 @@ private:
     const IdGenerator mIdGenerator;
 
     int64_t mWindowInfosVsyncId GUARDED_BY(mLock);
-    int64_t mWindowInfosTimestamp GUARDED_BY(mLock);
-    int64_t mMaxWindowInfosDelay GUARDED_BY(mLock) = -1;
-    int64_t mMaxWindowInfosDelayVsyncId GUARDED_BY(mLock) = -1;
 
     // With each iteration, InputDispatcher nominally processes one queued event,
     // a timeout, or a response from an input consumer.
@@ -556,6 +553,10 @@ private:
     std::vector<Monitor> selectResponsiveMonitorsLocked(
             const std::vector<Monitor>& gestureMonitors) const REQUIRES(mLock);
 
+    std::optional<InputTarget> createInputTargetLocked(
+            const sp<android::gui::WindowInfoHandle>& windowHandle,
+            ftl::Flags<InputTarget::Flags> targetFlags,
+            std::optional<nsecs_t> firstDownTimeInTarget) const REQUIRES(mLock);
     void addWindowTargetLocked(const sp<android::gui::WindowInfoHandle>& windowHandle,
                                ftl::Flags<InputTarget::Flags> targetFlags,
                                std::bitset<MAX_POINTER_ID + 1> pointerIds,

@@ -85,7 +85,7 @@ void LayerRenderArea::render(std::function<void()> drawLayers) {
     // If layer is offscreen, update mirroring info if it exists
     if (mLayer->isRemovedFromCurrentState()) {
         mLayer->traverse(LayerVector::StateSet::Drawing,
-                         [&](Layer* layer) { layer->updateMirrorInfo(); });
+                         [&](Layer* layer) { layer->updateMirrorInfo({}); });
         mLayer->traverse(LayerVector::StateSet::Drawing,
                          [&](Layer* layer) { layer->updateCloneBufferInfo(); });
     }
@@ -116,6 +116,8 @@ void LayerRenderArea::render(std::function<void()> drawLayers) {
             mLayer->setChildrenDrawingParent(mLayer);
         }
     }
+    mLayer->updateSnapshot(/*updateGeometry=*/true);
+    mLayer->updateChildrenSnapshots(/*updateGeometry=*/true);
 }
 
 } // namespace android
