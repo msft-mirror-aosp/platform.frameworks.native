@@ -83,9 +83,23 @@ public:
         fd->reset(mFdChannel.read());
         return Status::ok();
     }
+
+    HandoffChannel<int> mIntChannel;
+
+    Status blockingSendIntOneway(int n) override {
+        mIntChannel.write(n);
+        return Status::ok();
+    }
+
+    Status blockingRecvInt(int* n) override {
+        *n = mIntChannel.read();
+        return Status::ok();
+    }
 };
 
-int main(int argc, const char* argv[]) {
+int main(int argc, char* argv[]) {
+    android::base::InitLogging(argv, android::base::StderrLogger, android::base::DefaultAborter);
+
     LOG_ALWAYS_FATAL_IF(argc != 3, "Invalid number of arguments: %d", argc);
     base::unique_fd writeEnd(atoi(argv[1]));
     base::unique_fd readEnd(atoi(argv[2]));
@@ -102,7 +116,7 @@ int main(int argc, const char* argv[]) {
     }
 
     auto certVerifier = std::make_shared<RpcCertificateVerifierSimple>();
-    sp<RpcServer> server = RpcServer::make(newFactory(rpcSecurity, certVerifier));
+    sp<RpcServer> server = RpcServer::make(newTlsFactory(rpcSecurity, certVerifier));
 
     server->setProtocolVersion(serverConfig.serverVersion);
     server->setMaxThreads(serverConfig.numThreads);

@@ -159,8 +159,8 @@ aidl_interface {
 
 cc_library_static {
     name: "libbinder_tls_test_utils",
-    vendor_available: true,
     host_supported: true,
+    vendor_available: true,
     target: {
         darwin: {
             enabled: false,
@@ -213,7 +213,6 @@ cc_defaults {
     defaults: [
         "binderRpcTest_common_defaults",
     ],
-    vendor_available: true,
     gtest: false,
     auto_gen_config: false,
     srcs: [
@@ -224,17 +223,9 @@ cc_defaults {
 
 cc_defaults {
     name: "binderRpcTest_defaults",
-    vendor_available: true,
     target: {
         android: {
             test_suites: ["vts"],
-        },
-
-        vendor: {
-            shared_libs: [
-                "libbinder_trusty",
-                "libtrusty",
-            ],
         },
     },
     defaults: [
@@ -246,6 +237,13 @@ cc_defaults {
         "binderRpcTestCommon.cpp",
         "binderRpcUniversalTests.cpp",
     ],
+
+    // This test uses a lot of resources and takes a long time. Due to
+    // design of several tests, it is also very sensitive to resource
+    // contention on the device. b/276820894
+    test_options: {
+        unit_test: false,
+    },
 
     test_suites: ["general-tests"],
     require_root: true,
@@ -397,11 +395,6 @@ cc_binary {
 
 cc_test {
     name: "binderRpcTest",
-    // TODO(b/269799024)
-    test_options: {
-        unit_test: false,
-    },
-
     defaults: [
         "binderRpcTest_defaults",
         "binderRpcTest_shared_defaults",
@@ -454,6 +447,37 @@ cc_test {
     static_libs: [
         "libbinder_rpc_single_threaded_no_kernel",
     ],
+}
+
+cc_test {
+    name: "binderRpcToTrustyTest",
+    vendor: true,
+    host_supported: false,
+    defaults: [
+        "binderRpcTest_common_defaults",
+        "binderRpcTest_static_defaults",
+    ],
+
+    srcs: [
+        "binderRpcTest.cpp",
+        "binderRpcTestCommon.cpp",
+        "binderRpcUniversalTests.cpp",
+    ],
+
+    cflags: [
+        "-DBINDER_RPC_TO_TRUSTY_TEST",
+    ],
+
+    static_libs: [
+        // We want to link libbinder statically so we can push the binary
+        // to the device for testing independently of the library
+        "libbinder_rpc_no_kernel",
+        "libbinder_trusty",
+        "libtrusty",
+    ],
+
+    test_suites: ["device-tests"],
+    require_root: true,
 }
 
 cc_test {

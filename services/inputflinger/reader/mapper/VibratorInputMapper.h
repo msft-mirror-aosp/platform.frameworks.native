@@ -22,11 +22,14 @@ namespace android {
 
 class VibratorInputMapper : public InputMapper {
 public:
-    explicit VibratorInputMapper(InputDeviceContext& deviceContext);
+    template <class T, class... Args>
+    friend std::unique_ptr<T> createInputMapper(InputDeviceContext& deviceContext,
+                                                const InputReaderConfiguration& readerConfig,
+                                                Args... args);
     virtual ~VibratorInputMapper();
 
     virtual uint32_t getSources() const override;
-    virtual void populateDeviceInfo(InputDeviceInfo* deviceInfo) override;
+    virtual void populateDeviceInfo(InputDeviceInfo& deviceInfo) override;
     [[nodiscard]] std::list<NotifyArgs> process(const RawEvent* rawEvent) override;
 
     [[nodiscard]] std::list<NotifyArgs> vibrate(const VibrationSequence& sequence, ssize_t repeat,
@@ -45,6 +48,8 @@ private:
     ssize_t mIndex;
     nsecs_t mNextStepTime;
 
+    explicit VibratorInputMapper(InputDeviceContext& deviceContext,
+                                 const InputReaderConfiguration& readerConfig);
     [[nodiscard]] std::list<NotifyArgs> nextStep();
     [[nodiscard]] NotifyVibratorStateArgs stopVibrating();
 };

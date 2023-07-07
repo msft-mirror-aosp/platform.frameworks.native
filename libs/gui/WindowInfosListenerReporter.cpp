@@ -17,6 +17,7 @@
 #include <android/gui/ISurfaceComposer.h>
 #include <gui/AidlStatusUtil.h>
 #include <gui/WindowInfosListenerReporter.h>
+#include "gui/WindowInfosUpdate.h"
 
 namespace android {
 
@@ -62,6 +63,10 @@ status_t WindowInfosListenerReporter::removeWindowInfosListener(
     status_t status = OK;
     {
         std::scoped_lock lock(mListenersMutex);
+        if (mWindowInfosListeners.find(windowInfosListener) == mWindowInfosListeners.end()) {
+            return status;
+        }
+
         if (mWindowInfosListeners.size() == 1) {
             binder::Status s = surfaceComposer->removeWindowInfosListener(this);
             status = statusTFromBinderStatus(s);
@@ -80,7 +85,7 @@ status_t WindowInfosListenerReporter::removeWindowInfosListener(
 }
 
 binder::Status WindowInfosListenerReporter::onWindowInfosChanged(
-        const std::vector<WindowInfo>& windowInfos, const std::vector<DisplayInfo>& displayInfos,
+        const gui::WindowInfosUpdate& update,
         const sp<IWindowInfosReportedListener>& windowInfosReportedListener) {
     std::unordered_set<sp<WindowInfosListener>, gui::SpHash<WindowInfosListener>>
             windowInfosListeners;
@@ -91,12 +96,12 @@ binder::Status WindowInfosListenerReporter::onWindowInfosChanged(
             windowInfosListeners.insert(listener);
         }
 
-        mLastWindowInfos = windowInfos;
-        mLastDisplayInfos = displayInfos;
+        mLastWindowInfos = update.windowInfos;
+        mLastDisplayInfos = update.displayInfos;
     }
 
     for (auto listener : windowInfosListeners) {
-        listener->onWindowInfosChanged(windowInfos, displayInfos);
+        listener->onWindowInfosChanged(update);
     }
 
     if (windowInfosReportedListener) {

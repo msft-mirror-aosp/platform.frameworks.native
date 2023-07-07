@@ -155,13 +155,10 @@ protected:
     VSyncDispatch& operator=(const VSyncDispatch&) = delete;
 };
 
-/*
- * Helper class to operate on registered callbacks. It is up to user of the class to ensure
- * that VsyncDispatch lifetime exceeds the lifetime of VSyncCallbackRegistation.
- */
 class VSyncCallbackRegistration {
 public:
-    VSyncCallbackRegistration(VSyncDispatch&, VSyncDispatch::Callback, std::string callbackName);
+    VSyncCallbackRegistration(std::shared_ptr<VSyncDispatch>, VSyncDispatch::Callback,
+                              std::string callbackName);
     ~VSyncCallbackRegistration();
 
     VSyncCallbackRegistration(VSyncCallbackRegistration&&);
@@ -177,9 +174,10 @@ public:
     CancelResult cancel();
 
 private:
-    std::reference_wrapper<VSyncDispatch> mDispatch;
-    VSyncDispatch::CallbackToken mToken;
-    bool mValidToken;
+    friend class VSyncCallbackRegistrationTest;
+
+    std::shared_ptr<VSyncDispatch> mDispatch;
+    std::optional<VSyncDispatch::CallbackToken> mToken;
 };
 
 } // namespace android::scheduler

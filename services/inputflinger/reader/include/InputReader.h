@@ -77,7 +77,7 @@ public:
     bool hasKeys(int32_t deviceId, uint32_t sourceMask, const std::vector<int32_t>& keyCodes,
                  uint8_t* outFlags) override;
 
-    void requestRefreshConfiguration(uint32_t changes) override;
+    void requestRefreshConfiguration(ConfigurationChanges changes) override;
 
     void vibrate(int32_t deviceId, const VibrationSequence& sequence, ssize_t repeat,
                  int32_t token) override;
@@ -116,6 +116,8 @@ public:
     std::optional<int32_t> getLightPlayerId(int32_t deviceId, int32_t lightId) override;
 
     std::optional<std::string> getBluetoothAddress(int32_t deviceId) const override;
+
+    void sysfsNodeChanged(const std::string& sysfsNodePath) override;
 
 protected:
     // These members are protected so they can be instrumented by test cases.
@@ -231,8 +233,8 @@ private:
     nsecs_t mNextTimeout GUARDED_BY(mLock);
     void requestTimeoutAtTimeLocked(nsecs_t when) REQUIRES(mLock);
 
-    uint32_t mConfigurationChangesToRefresh GUARDED_BY(mLock);
-    void refreshConfigurationLocked(uint32_t changes) REQUIRES(mLock);
+    ConfigurationChanges mConfigurationChangesToRefresh GUARDED_BY(mLock);
+    void refreshConfigurationLocked(ConfigurationChanges changes) REQUIRES(mLock);
 
     void notifyAll(std::list<NotifyArgs>&& argsList);
 

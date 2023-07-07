@@ -64,6 +64,7 @@ class FakeEventHub : public EventHubInterface {
         std::vector<VirtualKeyDefinition> virtualKeys;
         bool enabled;
         std::optional<RawLayoutInfo> layoutInfo;
+        std::string sysfsRootPath;
 
         status_t enable() {
             enabled = true;
@@ -152,6 +153,7 @@ public:
     void enqueueEvent(nsecs_t when, nsecs_t readTime, int32_t deviceId, int32_t type, int32_t code,
                       int32_t value);
     void assertQueueIsEmpty();
+    void setSysfsRootPath(int32_t deviceId, std::string sysfsRootPath) const;
 
 private:
     Device* getDevice(int32_t deviceId) const;
@@ -159,7 +161,7 @@ private:
     ftl::Flags<InputDeviceClass> getDeviceClasses(int32_t deviceId) const override;
     InputDeviceIdentifier getDeviceIdentifier(int32_t deviceId) const override;
     int32_t getDeviceControllerNumber(int32_t) const override;
-    void getConfiguration(int32_t deviceId, PropertyMap* outConfiguration) const override;
+    std::optional<PropertyMap> getConfiguration(int32_t deviceId) const override;
     status_t getAbsoluteAxisInfo(int32_t deviceId, int axis,
                                  RawAbsoluteAxisInfo* outAxisInfo) const override;
     bool hasRelativeAxis(int32_t deviceId, int axis) const override;
@@ -212,7 +214,7 @@ private:
     std::optional<int32_t> getLightBrightness(int32_t deviceId, int32_t lightId) const override;
     std::optional<std::unordered_map<LightColor, int32_t>> getLightIntensities(
             int32_t deviceId, int32_t lightId) const override;
-
+    void sysfsNodeChanged(const std::string& sysfsNodePath) override;
     void dump(std::string&) const override {}
     void monitor() const override {}
     void requestReopenDevices() override {}

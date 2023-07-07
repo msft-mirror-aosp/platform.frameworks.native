@@ -52,10 +52,14 @@ struct RequestedLayerState : layer_state_t {
         FrameRate = 1u << 13,
         VisibleRegion = 1u << 14,
         Buffer = 1u << 15,
+        SidebandStream = 1u << 16,
+        Animation = 1u << 17,
     };
     static Rect reduce(const Rect& win, const Region& exclude);
     RequestedLayerState(const LayerCreationArgs&);
     void merge(const ResolvedComposerState&);
+    void clearChanges();
+
     // Currently we only care about the primary display
     ui::Transform getTransform(uint32_t displayRotationFlags) const;
     ui::Size getUnrotatedBufferSize(uint32_t displayRotationFlags) const;
@@ -72,6 +76,10 @@ struct RequestedLayerState : layer_state_t {
     bool hasValidRelativeParent() const;
     bool hasInputInfo() const;
     bool hasBlur() const;
+    bool hasFrameUpdate() const;
+    bool hasReadyFrame() const;
+    bool hasSidebandStreamFrame() const;
+    bool willReleaseBufferOnLatch() const;
 
     // Layer serial number.  This gives layers an explicit ordering, so we
     // have a stable sort order when their layer stack and Z-order are
@@ -98,18 +106,21 @@ struct RequestedLayerState : layer_state_t {
     std::shared_ptr<renderengine::ExternalTexture> externalTexture;
     gui::GameMode gameMode;
     scheduler::LayerInfo::FrameRate requestedFrameRate;
-    ui::LayerStack layerStackToMirror = ui::INVALID_LAYER_STACK;
+    uint32_t parentId = UNASSIGNED_LAYER_ID;
+    uint32_t relativeParentId = UNASSIGNED_LAYER_ID;
     uint32_t layerIdToMirror = UNASSIGNED_LAYER_ID;
+    ui::LayerStack layerStackToMirror = ui::INVALID_LAYER_STACK;
+    uint32_t touchCropId = UNASSIGNED_LAYER_ID;
+    uint32_t bgColorLayerId = UNASSIGNED_LAYER_ID;
+    uint64_t barrierFrameNumber = 0;
+    uint32_t barrierProducerId = 0;
 
     // book keeping states
     bool handleAlive = true;
     bool isRelativeOf = false;
-    uint32_t parentId = UNASSIGNED_LAYER_ID;
-    uint32_t relativeParentId = UNASSIGNED_LAYER_ID;
     std::vector<uint32_t> mirrorIds{};
-    uint32_t touchCropId = UNASSIGNED_LAYER_ID;
-    uint32_t bgColorLayerId = UNASSIGNED_LAYER_ID;
     ftl::Flags<RequestedLayerState::Changes> changes;
+    bool bgColorLayer = false;
 };
 
 } // namespace android::surfaceflinger::frontend

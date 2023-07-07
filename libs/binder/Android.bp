@@ -74,9 +74,6 @@ cc_defaults {
     name: "libbinder_common_defaults",
     host_supported: true,
 
-    // for vndbinder and binderRpcTest
-    vendor_available: true,
-
     srcs: [
         "Binder.cpp",
         "BpBinder.cpp",
@@ -194,13 +191,13 @@ cc_defaults {
         "google-*",
         "misc-*",
         "performance*",
+        "-performance-move-const-arg", // b/273486801
         "portability*",
     ],
 }
 
 cc_library_headers {
     name: "trusty_mock_headers",
-    vendor_available: true,
     host_supported: true,
 
     export_include_dirs: [
@@ -215,7 +212,6 @@ cc_library_headers {
 
 cc_defaults {
     name: "trusty_mock_defaults",
-    vendor_available: true,
     host_supported: true,
 
     header_libs: [
@@ -309,6 +305,8 @@ cc_library {
 
     version_script: "libbinder.map",
 
+    // for vndbinder
+    vendor_available: true,
     vndk: {
         enabled: true,
     },
@@ -357,6 +355,7 @@ cc_library {
 
 cc_library_static {
     name: "libbinder_rpc_no_kernel",
+    vendor_available: true,
     defaults: [
         "libbinder_common_defaults",
         "libbinder_android_defaults",
@@ -409,6 +408,7 @@ cc_defaults {
 cc_defaults {
     name: "libbinder_tls_defaults",
     defaults: ["libbinder_tls_shared_deps"],
+    vendor_available: true,
     host_supported: true,
 
     header_libs: [
@@ -435,7 +435,7 @@ cc_library_shared {
     defaults: ["libbinder_tls_defaults"],
 }
 
-cc_library_shared {
+cc_library {
     name: "libbinder_trusty",
     vendor: true,
     srcs: [
@@ -467,7 +467,6 @@ cc_library_shared {
 cc_library_static {
     name: "libbinder_tls_static",
     defaults: ["libbinder_tls_defaults"],
-    vendor_available: true,
     visibility: [
         ":__subpackages__",
     ],
@@ -550,6 +549,7 @@ cc_library {
         "//packages/modules/Virtualization/javalib/jni",
         "//packages/modules/Virtualization/vm_payload",
         "//device/google/cuttlefish/shared/minidroid:__subpackages__",
+        "//system/software_defined_vehicle:__subpackages__",
     ],
 }
 

@@ -20,8 +20,9 @@
 
 namespace android {
 
-VibratorInputMapper::VibratorInputMapper(InputDeviceContext& deviceContext)
-      : InputMapper(deviceContext), mVibrating(false), mSequence(0) {}
+VibratorInputMapper::VibratorInputMapper(InputDeviceContext& deviceContext,
+                                         const InputReaderConfiguration& readerConfig)
+      : InputMapper(deviceContext, readerConfig), mVibrating(false), mSequence(0) {}
 
 VibratorInputMapper::~VibratorInputMapper() {}
 
@@ -29,10 +30,10 @@ uint32_t VibratorInputMapper::getSources() const {
     return 0;
 }
 
-void VibratorInputMapper::populateDeviceInfo(InputDeviceInfo* info) {
+void VibratorInputMapper::populateDeviceInfo(InputDeviceInfo& info) {
     InputMapper::populateDeviceInfo(info);
 
-    info->setVibrator(true);
+    info.setVibrator(true);
 }
 
 std::list<NotifyArgs> VibratorInputMapper::process(const RawEvent* rawEvent) {

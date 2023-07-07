@@ -128,8 +128,6 @@ public:
     renderengine::mock::RenderEngine* mRenderEngine = new renderengine::mock::RenderEngine();
     Hwc2::mock::Composer* mComposer = nullptr;
 
-    mock::VsyncController* mVsyncController = new mock::VsyncController;
-    mock::VSyncTracker* mVSyncTracker = new mock::VSyncTracker;
     mock::EventThread* mEventThread = new mock::EventThread;
     mock::EventThread* mSFEventThread = new mock::EventThread;
 
@@ -503,14 +501,16 @@ struct PrimaryDisplay {
     static constexpr auto GET_IDENTIFICATION_DATA = getInternalEdid;
 };
 
-template <bool hasIdentificationData>
-struct ExternalDisplay {
-    static constexpr auto CONNECTION_TYPE = ui::DisplayConnectionType::External;
+template <ui::DisplayConnectionType connectionType, bool hasIdentificationData>
+struct SecondaryDisplay {
+    static constexpr auto CONNECTION_TYPE = connectionType;
     static constexpr Primary PRIMARY = Primary::FALSE;
     static constexpr uint8_t PORT = 254;
     static constexpr HWDisplayId HWC_DISPLAY_ID = 1002;
     static constexpr bool HAS_IDENTIFICATION_DATA = hasIdentificationData;
-    static constexpr auto GET_IDENTIFICATION_DATA = getExternalEdid;
+    static constexpr auto GET_IDENTIFICATION_DATA =
+            connectionType == ui::DisplayConnectionType::Internal ? getInternalEdid
+                                                                  : getExternalEdid;
 };
 
 struct TertiaryDisplay {
@@ -521,7 +521,16 @@ struct TertiaryDisplay {
 };
 
 using PrimaryDisplayVariant = PhysicalDisplayVariant<PrimaryDisplay<false>, 3840, 2160>;
-using ExternalDisplayVariant = PhysicalDisplayVariant<ExternalDisplay<false>, 1920, 1280>;
+
+using InnerDisplayVariant = PhysicalDisplayVariant<PrimaryDisplay<true>, 1840, 2208>;
+using OuterDisplayVariant =
+        PhysicalDisplayVariant<SecondaryDisplay<ui::DisplayConnectionType::Internal, true>, 1080,
+                               2092>;
+
+using ExternalDisplayVariant =
+        PhysicalDisplayVariant<SecondaryDisplay<ui::DisplayConnectionType::External, false>, 1920,
+                               1280>;
+
 using TertiaryDisplayVariant = PhysicalDisplayVariant<TertiaryDisplay, 1600, 1200>;
 
 // A virtual display not supported by the HWC.

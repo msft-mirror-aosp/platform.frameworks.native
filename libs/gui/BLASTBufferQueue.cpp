@@ -139,6 +139,11 @@ void BLASTBufferItemConsumer::onSidebandStreamChanged() {
     }
 }
 
+void BLASTBufferItemConsumer::resizeFrameEventHistory(size_t newSize) {
+    Mutex::Autolock lock(mMutex);
+    mFrameEventHistory.resize(newSize);
+}
+
 BLASTBufferQueue::BLASTBufferQueue(const std::string& name, bool updateDestinationFrame)
       : mSurfaceControl(nullptr),
         mSize(1, 1),
@@ -486,6 +491,17 @@ void BLASTBufferQueue::releaseBuffer(const ReleaseCallbackId& callbackId,
     mSyncedFrameNumbers.erase(callbackId.framenumber);
 }
 
+static ui::Size getBufferSize(const BufferItem& item) {
+    uint32_t bufWidth = item.mGraphicBuffer->getWidth();
+    uint32_t bufHeight = item.mGraphicBuffer->getHeight();
+
+    // Take the buffer's orientation into account
+    if (item.mTransform & ui::Transform::ROT_90) {
+        std::swap(bufWidth, bufHeight);
+    }
+    return ui::Size(bufWidth, bufHeight);
+}
+
 status_t BLASTBufferQueue::acquireNextBufferLocked(
         const std::optional<SurfaceComposerClient::Transaction*> transaction) {
     // Check if we have frames available and we have not acquired the maximum number of buffers.
@@ -563,7 +579,13 @@ status_t BLASTBufferQueue::acquireNextBufferLocked(
     // Ensure BLASTBufferQueue stays alive until we receive the transaction complete callback.
     incStrong((void*)transactionCallbackThunk);
 
-    mSize = mRequestedSize;
+    // Only update mSize for destination bounds if the incoming buffer matches the requested size.
+    // Otherwise, it could cause stretching since the destination bounds will update before the
+    // buffer with the new size is acquired.
+    if (mRequestedSize == getBufferSize(bufferItem) ||
+        bufferItem.mScalingMode != NATIVE_WINDOW_SCALING_MODE_FREEZE) {
+        mSize = mRequestedSize;
+    }
     Rect crop = computeCrop(bufferItem);
     mLastBufferInfo.update(true /* hasBuffer */, bufferItem.mGraphicBuffer->getWidth(),
                            bufferItem.mGraphicBuffer->getHeight(), bufferItem.mTransform,
@@ -779,34 +801,24 @@ void BLASTBufferQueue::onFrameCancelled(const uint64_t bufferId) {
     mDequeueTimestamps.erase(bufferId);
 };
 
-void BLASTBufferQueue::syncNextTransaction(
+bool BLASTBufferQueue::syncNextTransaction(
         std::function<void(SurfaceComposerClient::Transaction*)> callback,
         bool acquireSingleBuffer) {
-    std::function<void(SurfaceComposerClient::Transaction*)> prevCallback = nullptr;
-    SurfaceComposerClient::Transaction* prevTransaction = nullptr;
+    LOG_ALWAYS_FATAL_IF(!callback,
+                        "BLASTBufferQueue: callback passed in to syncNextTransaction must not be "
+                        "NULL");
 
-    {
-        std::lock_guard _lock{mMutex};
-        BBQ_TRACE();
-        // We're about to overwrite the previous call so we should invoke that callback
-        // immediately.
-        if (mTransactionReadyCallback) {
-            prevCallback = mTransactionReadyCallback;
-            prevTransaction = mSyncTransaction;
-        }
-
-        mTransactionReadyCallback = callback;
-        if (callback) {
-            mSyncTransaction = new SurfaceComposerClient::Transaction();
-        } else {
-            mSyncTransaction = nullptr;
-        }
-        mAcquireSingleBuffer = mTransactionReadyCallback ? acquireSingleBuffer : true;
+    std::lock_guard _lock{mMutex};
+    BBQ_TRACE();
+    if (mTransactionReadyCallback) {
+        ALOGW("Attempting to overwrite transaction callback in syncNextTransaction");
+        return false;
     }
 
-    if (prevCallback) {
-        prevCallback(prevTransaction);
-    }
+    mTransactionReadyCallback = callback;
+    mSyncTransaction = new SurfaceComposerClient::Transaction();
+    mAcquireSingleBuffer = acquireSingleBuffer;
+    return true;
 }
 
 void BLASTBufferQueue::stopContinuousSyncTransaction() {
@@ -814,18 +826,33 @@ void BLASTBufferQueue::stopContinuousSyncTransaction() {
     SurfaceComposerClient::Transaction* prevTransaction = nullptr;
     {
         std::lock_guard _lock{mMutex};
-        bool invokeCallback = mTransactionReadyCallback && !mAcquireSingleBuffer;
-        if (invokeCallback) {
-            prevCallback = mTransactionReadyCallback;
-            prevTransaction = mSyncTransaction;
+        if (mAcquireSingleBuffer || !mTransactionReadyCallback) {
+            ALOGW("Attempting to stop continuous sync when none are active");
+            return;
         }
+
+        prevCallback = mTransactionReadyCallback;
+        prevTransaction = mSyncTransaction;
+
         mTransactionReadyCallback = nullptr;
         mSyncTransaction = nullptr;
         mAcquireSingleBuffer = true;
     }
+
     if (prevCallback) {
         prevCallback(prevTransaction);
     }
+}
+
+void BLASTBufferQueue::clearSyncTransaction() {
+    std::lock_guard _lock{mMutex};
+    if (!mAcquireSingleBuffer) {
+        ALOGW("Attempting to clear sync transaction when none are active");
+        return;
+    }
+
+    mTransactionReadyCallback = nullptr;
+    mSyncTransaction = nullptr;
 }
 
 bool BLASTBufferQueue::rejectBuffer(const BufferItem& item) {
@@ -834,14 +861,7 @@ bool BLASTBufferQueue::rejectBuffer(const BufferItem& item) {
         return false;
     }
 
-    uint32_t bufWidth = item.mGraphicBuffer->getWidth();
-    uint32_t bufHeight = item.mGraphicBuffer->getHeight();
-
-    // Take the buffer's orientation into account
-    if (item.mTransform & ui::Transform::ROT_90) {
-        std::swap(bufWidth, bufHeight);
-    }
-    ui::Size bufferSize(bufWidth, bufHeight);
+    ui::Size bufferSize = getBufferSize(item);
     if (mRequestedSize != mSize && mRequestedSize == bufferSize) {
         return false;
     }
@@ -1060,8 +1080,9 @@ public:
 // can be non-blocking when the producer is in the client process.
 class BBQBufferQueueProducer : public BufferQueueProducer {
 public:
-    BBQBufferQueueProducer(const sp<BufferQueueCore>& core)
-          : BufferQueueProducer(core, false /* consumerIsSurfaceFlinger*/) {}
+    BBQBufferQueueProducer(const sp<BufferQueueCore>& core, wp<BLASTBufferQueue> bbq)
+          : BufferQueueProducer(core, false /* consumerIsSurfaceFlinger*/),
+            mBLASTBufferQueue(std::move(bbq)) {}
 
     status_t connect(const sp<IProducerListener>& listener, int api, bool producerControlledByApp,
                      QueueBufferOutput* output) override {
@@ -1073,6 +1094,26 @@ public:
                                             producerControlledByApp, output);
     }
 
+    // We want to resize the frame history when changing the size of the buffer queue
+    status_t setMaxDequeuedBufferCount(int maxDequeuedBufferCount) override {
+        int maxBufferCount;
+        status_t status = BufferQueueProducer::setMaxDequeuedBufferCount(maxDequeuedBufferCount,
+                                                                         &maxBufferCount);
+        // if we can't determine the max buffer count, then just skip growing the history size
+        if (status == OK) {
+            size_t newFrameHistorySize = maxBufferCount + 2; // +2 because triple buffer rendering
+            // optimize away resizing the frame history unless it will grow
+            if (newFrameHistorySize > FrameEventHistory::INITIAL_MAX_FRAME_HISTORY) {
+                sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+                if (bbq != nullptr) {
+                    ALOGV("increasing frame history size to %zu", newFrameHistorySize);
+                    bbq->resizeFrameEventHistory(newFrameHistorySize);
+                }
+            }
+        }
+        return status;
+    }
+
     int query(int what, int* value) override {
         if (what == NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER) {
             *value = 1;
@@ -1080,6 +1121,9 @@ public:
         }
         return BufferQueueProducer::query(what, value);
     }
+
+private:
+    const wp<BLASTBufferQueue> mBLASTBufferQueue;
 };
 
 // Similar to BufferQueue::createBufferQueue but creates an adapter specific bufferqueue producer.
@@ -1094,7 +1138,7 @@ void BLASTBufferQueue::createBufferQueue(sp<IGraphicBufferProducer>* outProducer
     sp<BufferQueueCore> core(new BufferQueueCore());
     LOG_ALWAYS_FATAL_IF(core == nullptr, "BLASTBufferQueue: failed to create BufferQueueCore");
 
-    sp<IGraphicBufferProducer> producer(new BBQBufferQueueProducer(core));
+    sp<IGraphicBufferProducer> producer(new BBQBufferQueueProducer(core, this));
     LOG_ALWAYS_FATAL_IF(producer == nullptr,
                         "BLASTBufferQueue: failed to create BBQBufferQueueProducer");
 
@@ -1105,6 +1149,16 @@ void BLASTBufferQueue::createBufferQueue(sp<IGraphicBufferProducer>* outProducer
 
     *outProducer = producer;
     *outConsumer = consumer;
+}
+
+void BLASTBufferQueue::resizeFrameEventHistory(size_t newSize) {
+    // This can be null during creation of the buffer queue, but resizing won't do anything at that
+    // point in time, so just ignore. This can go away once the class relationships and lifetimes of
+    // objects are cleaned up with a major refactor of BufferQueue as a whole.
+    if (mBufferItemConsumer != nullptr) {
+        std::unique_lock _lock{mMutex};
+        mBufferItemConsumer->resizeFrameEventHistory(newSize);
+    }
 }
 
 PixelFormat BLASTBufferQueue::convertBufferFormat(PixelFormat& format) {

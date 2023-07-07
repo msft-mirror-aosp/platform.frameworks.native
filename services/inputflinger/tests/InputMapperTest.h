@@ -23,16 +23,48 @@
 #include <InputMapper.h>
 #include <NotifyArgs.h>
 #include <ftl/flags.h>
+#include <gmock/gmock.h>
 #include <utils/StrongPointer.h>
 
 #include "FakeEventHub.h"
 #include "FakeInputReaderPolicy.h"
 #include "InstrumentedInputReader.h"
+#include "InterfaceMocks.h"
 #include "TestConstants.h"
 #include "TestInputListener.h"
 
 namespace android {
 
+class InputMapperUnitTest : public testing::Test {
+protected:
+    static constexpr int32_t EVENTHUB_ID = 1;
+    static constexpr int32_t DEVICE_ID = END_RESERVED_ID + 1000;
+    virtual void SetUp() override;
+
+    void setupAxis(int axis, bool valid, int32_t min, int32_t max, int32_t resolution);
+
+    void expectScanCodes(bool present, std::set<int> scanCodes);
+
+    void setScanCodeState(KeyState state, std::set<int> scanCodes);
+
+    void setKeyCodeState(KeyState state, std::set<int> keyCodes);
+
+    std::list<NotifyArgs> process(int32_t type, int32_t code, int32_t value);
+
+    MockEventHubInterface mMockEventHub;
+    std::shared_ptr<FakePointerController> mFakePointerController;
+    MockInputReaderContext mMockInputReaderContext;
+    std::unique_ptr<InputDevice> mDevice;
+
+    std::unique_ptr<InputDeviceContext> mDeviceContext;
+    InputReaderConfiguration mReaderConfiguration;
+    // The mapper should be created by the subclasses.
+    std::unique_ptr<InputMapper> mMapper;
+};
+
+/**
+ * Deprecated - use InputMapperUnitTest instead.
+ */
 class InputMapperTest : public testing::Test {
 protected:
     static const char* DEVICE_NAME;
@@ -54,14 +86,15 @@ protected:
     void TearDown() override;
 
     void addConfigurationProperty(const char* key, const char* value);
-    std::list<NotifyArgs> configureDevice(uint32_t changes);
+    std::list<NotifyArgs> configureDevice(ConfigurationChanges changes);
     std::shared_ptr<InputDevice> newDevice(int32_t deviceId, const std::string& name,
                                            const std::string& location, int32_t eventHubId,
                                            ftl::Flags<InputDeviceClass> classes, int bus = 0);
     template <class T, typename... Args>
     T& addMapperAndConfigure(Args... args) {
-        T& mapper = mDevice->addMapper<T>(EVENTHUB_ID, args...);
-        configureDevice(0);
+        T& mapper =
+                mDevice->addMapper<T>(EVENTHUB_ID, mFakePolicy->getReaderConfiguration(), args...);
+        configureDevice(/*changes=*/{});
         std::list<NotifyArgs> resetArgList = mDevice->reset(ARBITRARY_TIME);
         resetArgList += mapper.reset(ARBITRARY_TIME);
         // Loop the reader to flush the input listener queue.
@@ -70,6 +103,17 @@ protected:
         }
         mReader->loopOnce();
         return mapper;
+    }
+
+    template <class T, typename... Args>
+    T& constructAndAddMapper(Args... args) {
+        // ensure a device entry exists for this eventHubId
+        mDevice->addEmptyEventHubDevice(EVENTHUB_ID);
+        // configure the empty device
+        configureDevice(/*changes=*/{});
+
+        return mDevice->constructAndAddMapper<T>(EVENTHUB_ID, mFakePolicy->getReaderConfiguration(),
+                                                 args...);
     }
 
     void setDisplayInfoAndReconfigure(int32_t displayId, int32_t width, int32_t height,

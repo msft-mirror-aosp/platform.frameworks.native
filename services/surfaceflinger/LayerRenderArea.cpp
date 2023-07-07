@@ -39,9 +39,13 @@ void reparentForDrawing(const sp<Layer>& oldParent, const sp<Layer>& newParent,
 
 LayerRenderArea::LayerRenderArea(SurfaceFlinger& flinger, sp<Layer> layer, const Rect& crop,
                                  ui::Size reqSize, ui::Dataspace reqDataSpace, bool childrenOnly,
-                                 bool allowSecureLayers)
-      : RenderArea(reqSize, CaptureFill::CLEAR, reqDataSpace, allowSecureLayers),
+                                 bool allowSecureLayers, const ui::Transform& layerTransform,
+                                 const Rect& layerBufferSize, bool hintForSeamlessTransition)
+      : RenderArea(reqSize, CaptureFill::CLEAR, reqDataSpace, hintForSeamlessTransition,
+                   allowSecureLayers),
         mLayer(std::move(layer)),
+        mLayerTransform(layerTransform),
+        mLayerBufferSize(layerBufferSize),
         mCrop(crop),
         mFlinger(flinger),
         mChildrenOnly(childrenOnly) {}
@@ -60,7 +64,8 @@ sp<const DisplayDevice> LayerRenderArea::getDisplayDevice() const {
 
 Rect LayerRenderArea::getSourceCrop() const {
     if (mCrop.isEmpty()) {
-        return mLayer->getBufferSize(mLayer->getDrawingState());
+        // TODO this should probably be mBounds instead of just buffer bounds
+        return mLayerBufferSize;
     } else {
         return mCrop;
     }
@@ -70,7 +75,7 @@ void LayerRenderArea::render(std::function<void()> drawLayers) {
     using namespace std::string_literals;
 
     if (!mChildrenOnly) {
-        mTransform = mLayer->getTransform().inverse();
+        mTransform = mLayerTransform.inverse();
     }
 
     if (mFlinger.mLayerLifecycleManagerEnabled) {
@@ -80,7 +85,7 @@ void LayerRenderArea::render(std::function<void()> drawLayers) {
     // If layer is offscreen, update mirroring info if it exists
     if (mLayer->isRemovedFromCurrentState()) {
         mLayer->traverse(LayerVector::StateSet::Drawing,
-                         [&](Layer* layer) { layer->updateMirrorInfo(); });
+                         [&](Layer* layer) { layer->updateMirrorInfo({}); });
         mLayer->traverse(LayerVector::StateSet::Drawing,
                          [&](Layer* layer) { layer->updateCloneBufferInfo(); });
     }
@@ -111,6 +116,8 @@ void LayerRenderArea::render(std::function<void()> drawLayers) {
             mLayer->setChildrenDrawingParent(mLayer);
         }
     }
+    mLayer->updateSnapshot(/*updateGeometry=*/true);
+    mLayer->updateChildrenSnapshots(/*updateGeometry=*/true);
 }
 
 } // namespace android

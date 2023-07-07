@@ -110,10 +110,6 @@ public:
 
     virtual void registerCallback(HWC2::ComposerCallback& callback) = 0;
 
-    // Reset all pending commands in the command buffer. Useful if you want to
-    // skip a frame but have already queued some commands.
-    virtual void resetCommands(Display) = 0;
-
     // Explicitly flush all pending commands in the command buffer.
     virtual Error executeCommands(Display) = 0;
 
@@ -294,6 +290,7 @@ public:
             std::vector<::aidl::android::hardware::graphics::common::HdrConversionCapability>*) = 0;
     virtual Error setHdrConversionStrategy(
             ::aidl::android::hardware::graphics::common::HdrConversionStrategy, Hdr*) = 0;
+    virtual Error setRefreshRateChangedCallbackDebugEnabled(Display, bool) = 0;
 };
 
 } // namespace Hwc2

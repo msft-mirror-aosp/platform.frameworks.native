@@ -65,7 +65,7 @@ class MessageQueue {
 public:
     virtual ~MessageQueue() = default;
 
-    virtual void initVsync(scheduler::VSyncDispatch&, frametimeline::TokenManager&,
+    virtual void initVsync(std::shared_ptr<scheduler::VSyncDispatch>, frametimeline::TokenManager&,
                            std::chrono::nanoseconds workDuration) = 0;
     virtual void destroyVsync() = 0;
     virtual void setDuration(std::chrono::nanoseconds workDuration) = 0;
@@ -106,6 +106,8 @@ protected:
 
     void vsyncCallback(nsecs_t vsyncTime, nsecs_t targetWakeupTime, nsecs_t readyTime);
 
+    void onNewVsyncSchedule(std::shared_ptr<scheduler::VSyncDispatch>) EXCLUDES(mVsync.mutex);
+
 private:
     virtual void onFrameSignal(ICompositor&, VsyncId, TimePoint expectedVsyncTime) = 0;
 
@@ -115,9 +117,9 @@ private:
 
     struct Vsync {
         frametimeline::TokenManager* tokenManager = nullptr;
-        std::unique_ptr<scheduler::VSyncCallbackRegistration> registration;
 
         mutable std::mutex mutex;
+        std::unique_ptr<scheduler::VSyncCallbackRegistration> registration GUARDED_BY(mutex);
         TracedOrdinal<std::chrono::nanoseconds> workDuration
                 GUARDED_BY(mutex) = {"VsyncWorkDuration-sf", std::chrono::nanoseconds(0)};
         TimePoint lastCallbackTime GUARDED_BY(mutex);
@@ -127,10 +129,15 @@ private:
 
     Vsync mVsync;
 
+    // Returns the old registration so it can be destructed outside the lock to
+    // avoid deadlock.
+    std::unique_ptr<scheduler::VSyncCallbackRegistration> onNewVsyncScheduleLocked(
+            std::shared_ptr<scheduler::VSyncDispatch>) REQUIRES(mVsync.mutex);
+
 public:
     explicit MessageQueue(ICompositor&);
 
-    void initVsync(scheduler::VSyncDispatch&, frametimeline::TokenManager&,
+    void initVsync(std::shared_ptr<scheduler::VSyncDispatch>, frametimeline::TokenManager&,
                    std::chrono::nanoseconds workDuration) override;
     void destroyVsync() override;
     void setDuration(std::chrono::nanoseconds workDuration) override;

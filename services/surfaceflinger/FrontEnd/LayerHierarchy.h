@@ -104,6 +104,16 @@ public:
         static const TraversalPath ROOT;
     };
 
+    struct TraversalPathHash {
+        std::size_t operator()(const LayerHierarchy::TraversalPath& key) const {
+            uint32_t hashCode = key.id * 31;
+            if (key.mirrorRootId != UNASSIGNED_LAYER_ID) {
+                hashCode += key.mirrorRootId * 31;
+            }
+            return std::hash<size_t>{}(hashCode);
+        }
+    };
+
     // Helper class to add nodes to an existing traversal id and removes the
     // node when it goes out of scope.
     class ScopedAddToTraversalPath {
@@ -128,16 +138,24 @@ public:
     // Traverse the hierarchy and visit all child variants.
     void traverse(const Visitor& visitor) const {
         TraversalPath root = TraversalPath::ROOT;
+        if (mLayer) {
+            root.id = mLayer->id;
+        }
         traverse(visitor, root);
     }
 
     // Traverse the hierarchy in z-order, skipping children that have relative parents.
     void traverseInZOrder(const Visitor& visitor) const {
         TraversalPath root = TraversalPath::ROOT;
+        if (mLayer) {
+            root.id = mLayer->id;
+        }
         traverseInZOrder(visitor, root);
     }
 
     const RequestedLayerState* getLayer() const;
+    const LayerHierarchy* getRelativeParent() const;
+    const LayerHierarchy* getParent() const;
     std::string getDebugString(const char* prefix = "") const;
     std::string getDebugStringShort() const;
     // Traverse the hierarchy and return true if loops are found. The outInvalidRelativeRoot

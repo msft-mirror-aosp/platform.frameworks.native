@@ -25,18 +25,20 @@
 
 namespace android {
 
-InputMapper::InputMapper(InputDeviceContext& deviceContext) : mDeviceContext(deviceContext) {}
+InputMapper::InputMapper(InputDeviceContext& deviceContext,
+                         const InputReaderConfiguration& readerConfig)
+      : mDeviceContext(deviceContext) {}
 
 InputMapper::~InputMapper() {}
 
-void InputMapper::populateDeviceInfo(InputDeviceInfo* info) {
-    info->addSource(getSources());
+void InputMapper::populateDeviceInfo(InputDeviceInfo& info) {
+    info.addSource(getSources());
 }
 
 void InputMapper::dump(std::string& dump) {}
 
-std::list<NotifyArgs> InputMapper::configure(nsecs_t when, const InputReaderConfiguration* config,
-                                             uint32_t changes) {
+std::list<NotifyArgs> InputMapper::reconfigure(nsecs_t when, const InputReaderConfiguration& config,
+                                               ConfigurationChanges changes) {
     return {};
 }
 

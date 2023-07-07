@@ -23,6 +23,7 @@
 #include <sensor/SensorEventQueue.h>
 
 #include "vec.h"
+#include "BatteryService.h"
 #include "SensorEventConnection.h"
 #include "SensorDevice.h"
 
@@ -55,14 +56,13 @@ SensorService::SensorEventConnection::SensorEventConnection(
 SensorService::SensorEventConnection::~SensorEventConnection() {
     ALOGD_IF(DEBUG_CONNECTIONS, "~SensorEventConnection(%p)", this);
     destroy();
-    mService->cleanupConnection(this);
-    if (mEventCache != nullptr) {
-        delete[] mEventCache;
-    }
+    delete[] mEventCache;
 }
 
 void SensorService::SensorEventConnection::destroy() {
-    mDestroyed = true;
+    if (!mDestroyed.exchange(true)) {
+      mService->cleanupConnection(this);
+    }
 }
 
 void SensorService::SensorEventConnection::onFirstRef() {
@@ -392,6 +392,8 @@ status_t SensorService::SensorEventConnection::sendEvents(
     if (hasSensorAccess()) {
         index_wake_up_event = findWakeUpSensorEventLocked(scratch, count);
         if (index_wake_up_event >= 0) {
+            BatteryService::noteWakeupSensorEvent(scratch[index_wake_up_event].timestamp,
+                                                  mUid, scratch[index_wake_up_event].sensor);
             scratch[index_wake_up_event].flags |= WAKE_UP_SENSOR_EVENT_NEEDS_ACK;
             ++mWakeLockRefCount;
 #if DEBUG_CONNECTIONS

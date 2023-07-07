@@ -227,6 +227,10 @@ struct Surface {
     android::sp<ANativeWindow> window;
     VkSwapchainKHR swapchain_handle;
     uint64_t consumer_usage;
+
+    // Indicate whether this surface has been used by a swapchain, no matter the
+    // swapchain is still current or has been destroyed.
+    bool used_by_swapchain;
 };
 
 VkSurfaceKHR HandleFromSurface(Surface* surface) {
@@ -252,27 +256,31 @@ struct Swapchain {
     Swapchain(Surface& surface_,
               uint32_t num_images_,
               VkPresentModeKHR present_mode,
-              int pre_transform_)
+              int pre_transform_,
+              int64_t refresh_duration_)
         : surface(surface_),
           num_images(num_images_),
           mailbox_mode(present_mode == VK_PRESENT_MODE_MAILBOX_KHR),
           pre_transform(pre_transform_),
           frame_timestamps_enabled(false),
+          refresh_duration(refresh_duration_),
           acquire_next_image_timeout(-1),
           shared(IsSharedPresentMode(present_mode)) {
-        ANativeWindow* window = surface.window.get();
-        native_window_get_refresh_cycle_duration(
-            window,
-            &refresh_duration);
     }
-    uint64_t get_refresh_duration()
+
+    VkResult get_refresh_duration(uint64_t& outRefreshDuration)
     {
         ANativeWindow* window = surface.window.get();
-        native_window_get_refresh_cycle_duration(
+        int err = native_window_get_refresh_cycle_duration(
             window,
             &refresh_duration);
-        return static_cast<uint64_t>(refresh_duration);
-
+        if (err != android::OK) {
+            ALOGE("%s:native_window_get_refresh_cycle_duration failed: %s (%d)",
+                __func__, strerror(-err), err );
+            return VK_ERROR_SURFACE_LOST_KHR;
+        }
+        outRefreshDuration = refresh_duration;
+        return VK_SUCCESS;
     }
 
     Surface& surface;
@@ -514,7 +522,6 @@ android::PixelFormat GetNativePixelFormat(VkFormat format) {
         case VK_FORMAT_R8_UNORM:
             native_format = android::PIXEL_FORMAT_R_8;
             break;
-        // TODO: Do we need to query for VK_EXT_rgba10x6_formats here?
         case VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16:
             native_format = android::PIXEL_FORMAT_RGBA_10101010;
             break;
@@ -598,6 +605,7 @@ VkResult CreateAndroidSurfaceKHR(
 
     surface->window = pCreateInfo->window;
     surface->swapchain_handle = VK_NULL_HANDLE;
+    surface->used_by_swapchain = false;
     int err = native_window_get_consumer_usage(surface->window.get(),
                                                &surface->consumer_usage);
     if (err != android::OK) {
@@ -805,9 +813,23 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
         }
     }
 
-    // TODO query VK_EXT_rgba10x6_formats support
+    bool rgba10x6_formats_ext = false;
+    uint32_t exts_count;
+    const auto& driver = GetData(pdev).driver;
+    driver.EnumerateDeviceExtensionProperties(pdev, nullptr, &exts_count,
+                                              nullptr);
+    std::vector<VkExtensionProperties> props(exts_count);
+    driver.EnumerateDeviceExtensionProperties(pdev, nullptr, &exts_count,
+                                              props.data());
+    for (uint32_t i = 0; i < exts_count; i++) {
+        VkExtensionProperties prop = props[i];
+        if (strcmp(prop.extensionName,
+                   VK_EXT_RGBA10X6_FORMATS_EXTENSION_NAME) == 0) {
+            rgba10x6_formats_ext = true;
+        }
+    }
     desc.format = AHARDWAREBUFFER_FORMAT_R10G10B10A10_UNORM;
-    if (AHardwareBuffer_isSupported(&desc)) {
+    if (AHardwareBuffer_isSupported(&desc) && rgba10x6_formats_ext) {
         all_formats.emplace_back(
             VkSurfaceFormatKHR{VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16,
                                VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
@@ -855,6 +877,7 @@ VkResult GetPhysicalDeviceSurfaceCapabilities2KHR(
     int width, height;
     int transform_hint;
     int max_buffer_count;
+    int min_undequeued_buffers;
     if (surface == VK_NULL_HANDLE) {
         const InstanceData& instance_data = GetData(physicalDevice);
         ProcHook::Extension surfaceless = ProcHook::GOOGLE_surfaceless_query;
@@ -907,17 +930,24 @@ VkResult GetPhysicalDeviceSurfaceCapabilities2KHR(
             return VK_ERROR_SURFACE_LOST_KHR;
         }
 
+        err = window->query(window, NATIVE_WINDOW_MIN_UNDEQUEUED_BUFFERS,
+                            &min_undequeued_buffers);
+        if (err != android::OK) {
+            ALOGE("NATIVE_WINDOW_MIN_UNDEQUEUED_BUFFERS query failed: %s (%d)",
+                  strerror(-err), err);
+            return VK_ERROR_SURFACE_LOST_KHR;
+        }
+
         if (pPresentMode && IsSharedPresentMode(pPresentMode->presentMode)) {
             capabilities->minImageCount = 1;
             capabilities->maxImageCount = 1;
         } else if (pPresentMode && pPresentMode->presentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
-            // TODO: use undequeued buffer requirement for more precise bound
-            capabilities->minImageCount = std::min(max_buffer_count, 4);
+            capabilities->minImageCount =
+                std::min(max_buffer_count, min_undequeued_buffers + 2);
             capabilities->maxImageCount = static_cast<uint32_t>(max_buffer_count);
         } else {
-            // TODO: if we're able to, provide better bounds on the number of buffers
-            // for other modes as well.
-            capabilities->minImageCount = std::min(max_buffer_count, 3);
+            capabilities->minImageCount =
+                std::min(max_buffer_count, min_undequeued_buffers + 1);
             capabilities->maxImageCount = static_cast<uint32_t>(max_buffer_count);
         }
     }
@@ -1377,14 +1407,20 @@ VkResult CreateSwapchainKHR(VkDevice device,
     // orphans the previous buffers, getting us back to the state where we can
     // dequeue all buffers.
     //
+    // This is not necessary if the surface was never used previously.
+    //
     // TODO(http://b/134186185) recycle swapchain images more efficiently
     ANativeWindow* window = surface.window.get();
-    err = native_window_api_disconnect(window, NATIVE_WINDOW_API_EGL);
-    ALOGW_IF(err != android::OK, "native_window_api_disconnect failed: %s (%d)",
-             strerror(-err), err);
-    err = native_window_api_connect(window, NATIVE_WINDOW_API_EGL);
-    ALOGW_IF(err != android::OK, "native_window_api_connect failed: %s (%d)",
-             strerror(-err), err);
+    if (surface.used_by_swapchain) {
+        err = native_window_api_disconnect(window, NATIVE_WINDOW_API_EGL);
+        ALOGW_IF(err != android::OK,
+                 "native_window_api_disconnect failed: %s (%d)", strerror(-err),
+                 err);
+        err = native_window_api_connect(window, NATIVE_WINDOW_API_EGL);
+        ALOGW_IF(err != android::OK,
+                 "native_window_api_connect failed: %s (%d)", strerror(-err),
+                 err);
+    }
 
     err =
         window->perform(window, NATIVE_WINDOW_SET_DEQUEUE_TIMEOUT, nsecs_t{-1});
@@ -1613,6 +1649,13 @@ VkResult CreateSwapchainKHR(VkDevice device,
         return VK_ERROR_SURFACE_LOST_KHR;
     }
 
+    int64_t refresh_duration;
+    err = native_window_get_refresh_cycle_duration(window, &refresh_duration);
+    if (err != android::OK) {
+        ALOGE("native_window_get_refresh_cycle_duration query failed: %s (%d)",
+              strerror(-err), err);
+        return VK_ERROR_SURFACE_LOST_KHR;
+    }
     // -- Allocate our Swapchain object --
     // After this point, we must deallocate the swapchain on error.
 
@@ -1623,8 +1666,8 @@ VkResult CreateSwapchainKHR(VkDevice device,
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     Swapchain* swapchain = new (mem)
         Swapchain(surface, num_images, create_info->presentMode,
-                  TranslateVulkanToNativeTransform(create_info->preTransform));
-
+                  TranslateVulkanToNativeTransform(create_info->preTransform),
+                  refresh_duration);
     VkSwapchainImageCreateInfoANDROID swapchain_image_create = {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wold-style-cast"
@@ -1763,6 +1806,7 @@ VkResult CreateSwapchainKHR(VkDevice device,
     android::GraphicsEnv::getInstance().setTargetStats(
         android::GpuStatsInfo::Stats::CREATED_VULKAN_SWAPCHAIN);
 
+    surface.used_by_swapchain = true;
     surface.swapchain_handle = HandleFromSwapchain(swapchain);
     *swapchain_handle = surface.swapchain_handle;
     return VK_SUCCESS;
@@ -2295,9 +2339,7 @@ VkResult GetRefreshCycleDurationGOOGLE(
     ATRACE_CALL();
 
     Swapchain& swapchain = *SwapchainFromHandle(swapchain_handle);
-    VkResult result = VK_SUCCESS;
-
-    pDisplayTimingProperties->refreshDuration = swapchain.get_refresh_duration();
+    VkResult result = swapchain.get_refresh_duration(pDisplayTimingProperties->refreshDuration);
 
     return result;
 }

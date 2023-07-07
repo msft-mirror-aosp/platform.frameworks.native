@@ -53,15 +53,18 @@ private:
 
 class CursorInputMapper : public InputMapper {
 public:
-    explicit CursorInputMapper(InputDeviceContext& deviceContext);
+    template <class T, class... Args>
+    friend std::unique_ptr<T> createInputMapper(InputDeviceContext& deviceContext,
+                                                const InputReaderConfiguration& readerConfig,
+                                                Args... args);
     virtual ~CursorInputMapper();
 
     virtual uint32_t getSources() const override;
-    virtual void populateDeviceInfo(InputDeviceInfo* deviceInfo) override;
+    virtual void populateDeviceInfo(InputDeviceInfo& deviceInfo) override;
     virtual void dump(std::string& dump) override;
-    [[nodiscard]] std::list<NotifyArgs> configure(nsecs_t when,
-                                                  const InputReaderConfiguration* config,
-                                                  uint32_t changes) override;
+    [[nodiscard]] std::list<NotifyArgs> reconfigure(nsecs_t when,
+                                                    const InputReaderConfiguration& readerConfig,
+                                                    ConfigurationChanges changes) override;
     [[nodiscard]] std::list<NotifyArgs> reset(nsecs_t when) override;
     [[nodiscard]] std::list<NotifyArgs> process(const RawEvent* rawEvent) override;
 
@@ -124,10 +127,17 @@ private:
     nsecs_t mDownTime;
     nsecs_t mLastEventTime;
 
-    void configureParameters();
+    explicit CursorInputMapper(InputDeviceContext& deviceContext,
+                               const InputReaderConfiguration& readerConfig);
     void dumpParameters(std::string& dump);
+    void configureBasicParams();
+    void configureOnPointerCapture(const InputReaderConfiguration& config);
+    void configureOnChangePointerSpeed(const InputReaderConfiguration& config);
+    void configureOnChangeDisplayInfo(const InputReaderConfiguration& config);
 
     [[nodiscard]] std::list<NotifyArgs> sync(nsecs_t when, nsecs_t readTime);
+
+    static Parameters computeParameters(const InputDeviceContext& deviceContext);
 };
 
 } // namespace android

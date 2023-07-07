@@ -22,6 +22,74 @@
 
 namespace android {
 
+using testing::Return;
+
+void InputMapperUnitTest::SetUp() {
+    mFakePointerController = std::make_shared<FakePointerController>();
+    mFakePointerController->setBounds(0, 0, 800 - 1, 480 - 1);
+    mFakePointerController->setPosition(400, 240);
+
+    EXPECT_CALL(mMockInputReaderContext, getPointerController(DEVICE_ID))
+            .WillRepeatedly(Return(mFakePointerController));
+
+    EXPECT_CALL(mMockInputReaderContext, getEventHub()).WillRepeatedly(Return(&mMockEventHub));
+    InputDeviceIdentifier identifier;
+    identifier.name = "device";
+    identifier.location = "USB1";
+    identifier.bus = 0;
+
+    EXPECT_CALL(mMockEventHub, getDeviceIdentifier(EVENTHUB_ID)).WillRepeatedly(Return(identifier));
+    mDevice = std::make_unique<InputDevice>(&mMockInputReaderContext, DEVICE_ID,
+                                            /*generation=*/2, identifier);
+    mDeviceContext = std::make_unique<InputDeviceContext>(*mDevice, EVENTHUB_ID);
+}
+
+void InputMapperUnitTest::setupAxis(int axis, bool valid, int32_t min, int32_t max,
+                                    int32_t resolution) {
+    EXPECT_CALL(mMockEventHub, getAbsoluteAxisInfo(EVENTHUB_ID, axis, testing::_))
+            .WillRepeatedly([=](int32_t, int32_t, RawAbsoluteAxisInfo* outAxisInfo) {
+                outAxisInfo->valid = valid;
+                outAxisInfo->minValue = min;
+                outAxisInfo->maxValue = max;
+                outAxisInfo->flat = 0;
+                outAxisInfo->fuzz = 0;
+                outAxisInfo->resolution = resolution;
+                return valid ? OK : -1;
+            });
+}
+
+void InputMapperUnitTest::expectScanCodes(bool present, std::set<int> scanCodes) {
+    for (const auto& scanCode : scanCodes) {
+        EXPECT_CALL(mMockEventHub, hasScanCode(EVENTHUB_ID, scanCode))
+                .WillRepeatedly(testing::Return(present));
+    }
+}
+
+void InputMapperUnitTest::setScanCodeState(KeyState state, std::set<int> scanCodes) {
+    for (const auto& scanCode : scanCodes) {
+        EXPECT_CALL(mMockEventHub, getScanCodeState(EVENTHUB_ID, scanCode))
+                .WillRepeatedly(testing::Return(static_cast<int>(state)));
+    }
+}
+
+void InputMapperUnitTest::setKeyCodeState(KeyState state, std::set<int> keyCodes) {
+    for (const auto& keyCode : keyCodes) {
+        EXPECT_CALL(mMockEventHub, getKeyCodeState(EVENTHUB_ID, keyCode))
+                .WillRepeatedly(testing::Return(static_cast<int>(state)));
+    }
+}
+
+std::list<NotifyArgs> InputMapperUnitTest::process(int32_t type, int32_t code, int32_t value) {
+    RawEvent event;
+    event.when = systemTime(SYSTEM_TIME_MONOTONIC);
+    event.readTime = event.when;
+    event.deviceId = mMapper->getDeviceContext().getEventHubId();
+    event.type = type;
+    event.code = code;
+    event.value = value;
+    return mMapper->process(&event);
+}
+
 const char* InputMapperTest::DEVICE_NAME = "device";
 const char* InputMapperTest::DEVICE_LOCATION = "USB1";
 const ftl::Flags<InputDeviceClass> InputMapperTest::DEVICE_CLASSES =
@@ -50,12 +118,12 @@ void InputMapperTest::addConfigurationProperty(const char* key, const char* valu
     mFakeEventHub->addConfigurationProperty(EVENTHUB_ID, key, value);
 }
 
-std::list<NotifyArgs> InputMapperTest::configureDevice(uint32_t changes) {
-    if (!changes ||
-        (changes &
-         (InputReaderConfiguration::CHANGE_DISPLAY_INFO |
-          InputReaderConfiguration::CHANGE_POINTER_CAPTURE |
-          InputReaderConfiguration::CHANGE_DEVICE_TYPE))) {
+std::list<NotifyArgs> InputMapperTest::configureDevice(ConfigurationChanges changes) {
+    using namespace ftl::flag_operators;
+    if (!changes.any() ||
+        (changes.any(InputReaderConfiguration::Change::DISPLAY_INFO |
+                     InputReaderConfiguration::Change::POINTER_CAPTURE |
+                     InputReaderConfiguration::Change::DEVICE_TYPE))) {
         mReader->requestRefreshConfiguration(changes);
         mReader->loopOnce();
     }
@@ -94,7 +162,7 @@ void InputMapperTest::setDisplayInfoAndReconfigure(int32_t displayId, int32_t wi
                                                    ViewportType viewportType) {
     mFakePolicy->addDisplayViewport(displayId, width, height, orientation, /* isActive= */ true,
                                     uniqueId, physicalPort, viewportType);
-    configureDevice(InputReaderConfiguration::CHANGE_DISPLAY_INFO);
+    configureDevice(InputReaderConfiguration::Change::DISPLAY_INFO);
 }
 
 void InputMapperTest::clearViewports() {

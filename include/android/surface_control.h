@@ -54,6 +54,12 @@ typedef struct ASurfaceControl ASurfaceControl;
  * The caller takes ownership of the ASurfaceControl returned and must release it
  * using ASurfaceControl_release below.
  *
+ * By default the \a ASurfaceControl will be visible and display any buffer submitted. In
+ * addition, the default buffer submission control may release and not display all buffers
+ * that are submitted before receiving a callback for the previous buffer. See
+ * \a ASurfaceTransaction_setVisibility and \a ASurfaceTransaction_setEnableBackPressure to
+ * change the default behaviors after creation.
+ *
  * Available since API level 29.
  */
 ASurfaceControl* ASurfaceControl_createFromWindow(ANativeWindow* parent, const char* debug_name)
@@ -524,6 +530,8 @@ void ASurfaceTransaction_setHdrMetadata_cta861_3(ASurfaceTransaction* transactio
  * Sets the desired extended range brightness for the layer. This only applies for layers whose
  * dataspace has RANGE_EXTENDED set on it.
  *
+ * Available since API level 34.
+ *
  * @param surface_control The layer whose extended range brightness is being specified
  * @param currentBufferRatio The current hdr/sdr ratio of the current buffer as represented as
  *                           peakHdrBrightnessInNits / targetSdrWhitePointInNits. For example if the
@@ -546,13 +554,19 @@ void ASurfaceTransaction_setHdrMetadata_cta861_3(ASurfaceTransaction* transactio
  *                     to the max display brightness. The system may not be able to, or may choose
  *                     not to, deliver the requested range.
  *
- *                     If unspecified, the system will attempt to provide the best range it can
- *                     for the given ambient conditions & device state. However, voluntarily
- *                     reducing the requested range can help improve battery life as well as can
- *                     improve quality by ensuring greater bit depth is allocated to the luminance
- *                     range in use.
+ *                     While requesting a large desired ratio will result in the most
+ *                     dynamic range, voluntarily reducing the requested range can help
+ *                     improve battery life as well as can improve quality by ensuring
+ *                     greater bit depth is allocated to the luminance range in use.
+ *
+ *                     Default value is 1.0f and indicates that extended range brightness
+ *                     is not being used, so the resulting SDR or HDR behavior will be
+ *                     determined entirely by the dataspace being used (ie, typically SDR
+ *                     however PQ or HLG transfer functions will still result in HDR)
  *
  *                     Must be finite && >= 1.0f
+ *
+ * Available since API level 34.
  */
 void ASurfaceTransaction_setExtendedRangeBrightness(ASurfaceTransaction* transaction,
                                             ASurfaceControl* surface_control,
@@ -653,6 +667,8 @@ void ASurfaceTransaction_clearFrameRate(ASurfaceTransaction* transaction,
  * and pushing buffers earlier for server side queuing will be advantageous
  * in such cases.
  *
+ * Available since API level 31.
+ *
  * \param transaction The transaction in which to make the change.
  * \param surface_control The ASurfaceControl on which to control buffer backpressure behavior.
  * \param enableBackPressure Whether to enable back pressure.
@@ -673,6 +689,8 @@ void ASurfaceTransaction_setEnableBackPressure(ASurfaceTransaction* transaction,
  * To receive frame timelines, a callback must be posted to Choreographer using
  * AChoreographer_postVsyncCallback(). The \c vsyncId can then be extracted from the
  * callback payload using AChoreographerFrameCallbackData_getFrameTimelineVsyncId().
+ *
+ * Available since API level 33.
  *
  * \param vsyncId The vsync ID received from AChoreographer, setting the frame's presentation target
  * to the corresponding expected presentation time and deadline from the frame to be rendered. A

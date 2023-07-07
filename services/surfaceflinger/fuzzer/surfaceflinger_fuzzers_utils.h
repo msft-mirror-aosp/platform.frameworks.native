@@ -49,6 +49,7 @@
 #include "SurfaceFlingerDefaultFactory.h"
 #include "ThreadContext.h"
 #include "TimeStats/TimeStats.h"
+#include "surfaceflinger_scheduler_fuzzer.h"
 
 #include "renderengine/mock/RenderEngine.h"
 #include "scheduler/TimeKeeper.h"
@@ -226,19 +227,20 @@ public:
     TestableScheduler(const std::shared_ptr<scheduler::RefreshRateSelector>& selectorPtr,
                       sp<VsyncModulator> modulatorPtr, ISchedulerCallback& callback)
           : TestableScheduler(std::make_unique<android::mock::VsyncController>(),
-                              std::make_unique<android::mock::VSyncTracker>(), selectorPtr,
+                              std::make_shared<android::mock::VSyncTracker>(), selectorPtr,
                               std::move(modulatorPtr), callback) {}
 
     TestableScheduler(std::unique_ptr<VsyncController> controller,
-                      std::unique_ptr<VSyncTracker> tracker,
+                      VsyncSchedule::TrackerPtr tracker,
                       std::shared_ptr<RefreshRateSelector> selectorPtr,
                       sp<VsyncModulator> modulatorPtr, ISchedulerCallback& callback)
           : Scheduler(*this, callback, Feature::kContentDetection, std::move(modulatorPtr)) {
-        mVsyncSchedule = std::unique_ptr<VsyncSchedule>(
-                new VsyncSchedule(std::move(tracker), nullptr, std::move(controller)));
-
         const auto displayId = selectorPtr->getActiveMode().modePtr->getPhysicalDisplayId();
-        registerDisplay(displayId, std::move(selectorPtr));
+        registerDisplayInternal(displayId, std::move(selectorPtr),
+                                std::shared_ptr<VsyncSchedule>(
+                                        new VsyncSchedule(displayId, std::move(tracker),
+                                                          std::make_shared<FuzzImplVSyncDispatch>(),
+                                                          std::move(controller))));
     }
 
     ConnectionHandle createConnection(std::unique_ptr<EventThread> eventThread) {
@@ -247,7 +249,7 @@ public:
 
     auto &mutableLayerHistory() { return mLayerHistory; }
 
-    auto refreshRateSelector() { return leaderSelectorPtr(); }
+    auto refreshRateSelector() { return pacesetterSelectorPtr(); }
 
     void replaceTouchTimer(int64_t millis) {
         if (mTouchTimer) {
@@ -402,9 +404,8 @@ public:
     SurfaceFlinger *flinger() { return mFlinger.get(); }
     scheduler::TestableScheduler *scheduler() { return mScheduler; }
 
-    // Allow reading display state without locking, as if called on the SF main thread.
-    auto onInitializeDisplays() NO_THREAD_SAFETY_ANALYSIS {
-        return mFlinger->onInitializeDisplays();
+    void initializeDisplays() {
+        FTL_FAKE_GUARD(kMainThreadContext, mFlinger->initializeDisplays());
     }
 
     void setGlobalShadowSettings(FuzzedDataProvider *fdp) {
@@ -453,8 +454,7 @@ public:
 
         LayersProto layersProto = mFlinger->dumpDrawingStateProto(fdp->ConsumeIntegral<uint32_t>());
         mFlinger->dumpOffscreenLayersProto(layersProto);
-        LayersTraceProto layersTraceProto{};
-        mFlinger->dumpDisplayProto(layersTraceProto);
+        mFlinger->dumpDisplayProto();
 
         result = fdp->ConsumeRandomLengthString().c_str();
         mFlinger->dumpHwc(result);
@@ -542,7 +542,7 @@ public:
                 mFlinger->createDisplay(String8(fdp->ConsumeRandomLengthString().c_str()),
                                         fdp->ConsumeBool());
 
-        onInitializeDisplays();
+        initializeDisplays();
         mFlinger->getPhysicalDisplayToken(physicalDisplayId);
 
         mFlinger->mStartPropertySetThread =
@@ -590,7 +590,7 @@ public:
         mFlinger->binderDied(display);
         mFlinger->onFirstRef();
 
-        mFlinger->updateInputFlinger();
+        mFlinger->updateInputFlinger(VsyncId{}, TimePoint{});
         mFlinger->updateCursorAsync();
 
         mutableScheduler().setVsyncConfig({.sfOffset = mFdp.ConsumeIntegral<nsecs_t>(),
@@ -647,10 +647,10 @@ public:
 
     // The ISchedulerCallback argument can be nullptr for a no-op implementation.
     void setupScheduler(std::unique_ptr<scheduler::VsyncController> vsyncController,
-                        std::unique_ptr<scheduler::VSyncTracker> vsyncTracker,
+                        std::shared_ptr<scheduler::VSyncTracker> vsyncTracker,
                         std::unique_ptr<EventThread> appEventThread,
                         std::unique_ptr<EventThread> sfEventThread,
-                        scheduler::ISchedulerCallback *callback = nullptr,
+                        scheduler::ISchedulerCallback* callback = nullptr,
                         bool hasMultipleModes = false) {
         constexpr DisplayModeId kModeId60{0};
         DisplayModes modes = makeModes(mock::createDisplayMode(kModeId60, 60_Hz));
@@ -737,19 +737,18 @@ public:
         return mFlinger->mTransactionHandler.mPendingTransactionQueues;
     }
 
-    auto setTransactionState(const FrameTimelineInfo& frameTimelineInfo,
-                             Vector<ComposerState>& states, const Vector<DisplayState>& displays,
-                             uint32_t flags, const sp<IBinder>& applyToken,
-                             const InputWindowCommands& inputWindowCommands,
-                             int64_t desiredPresentTime, bool isAutoTimestamp,
-                             const std::vector<client_cache_t>& uncacheBuffers,
-                             bool hasListenerCallbacks,
-                             std::vector<ListenerCallbacks>& listenerCallbacks,
-                             uint64_t transactionId) {
+    auto setTransactionState(
+            const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& states,
+            const Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
+            const InputWindowCommands& inputWindowCommands, int64_t desiredPresentTime,
+            bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffers,
+            bool hasListenerCallbacks, std::vector<ListenerCallbacks>& listenerCallbacks,
+            uint64_t transactionId, const std::vector<uint64_t>& mergedTransactionIds) {
         return mFlinger->setTransactionState(frameTimelineInfo, states, displays, flags, applyToken,
                                              inputWindowCommands, desiredPresentTime,
                                              isAutoTimestamp, uncacheBuffers, hasListenerCallbacks,
-                                             listenerCallbacks, transactionId);
+                                             listenerCallbacks, transactionId,
+                                             mergedTransactionIds);
     }
 
     auto flushTransactionQueues() {
@@ -789,7 +788,7 @@ public:
     }
 
 private:
-    void setVsyncEnabled(bool) override {}
+    void setVsyncEnabled(PhysicalDisplayId, bool) override {}
     void requestDisplayModes(std::vector<display::DisplayModeRequest>) override {}
     void kernelTimerChanged(bool) override {}
     void triggerOnFrameRateOverridesChanged() override {}

@@ -160,6 +160,7 @@ struct layer_state_t {
         // This is needed to maintain compatibility for SurfaceView scaling behavior.
         // See SurfaceView scaling behavior for more details.
         eIgnoreDestinationFrame = 0x400,
+        eLayerIsRefreshRateIndicator = 0x800, // REFRESH_RATE_INDICATOR
     };
 
     enum {
@@ -226,15 +227,16 @@ struct layer_state_t {
     bool hasBufferChanges() const;
 
     // Layer hierarchy updates.
-    static constexpr uint64_t HIERARCHY_CHANGES = layer_state_t::eBackgroundColorChanged |
-            layer_state_t::eLayerChanged | layer_state_t::eRelativeLayerChanged |
-            layer_state_t::eReparent;
+    static constexpr uint64_t HIERARCHY_CHANGES = layer_state_t::eLayerChanged |
+            layer_state_t::eRelativeLayerChanged | layer_state_t::eReparent |
+            layer_state_t::eLayerStackChanged;
 
     // Geometry updates.
     static constexpr uint64_t GEOMETRY_CHANGES = layer_state_t::eBufferCropChanged |
-            layer_state_t::eBufferTransformChanged | layer_state_t::eCropChanged |
-            layer_state_t::eDestinationFrameChanged | layer_state_t::eMatrixChanged |
-            layer_state_t::ePositionChanged | layer_state_t::eTransformToDisplayInverseChanged |
+            layer_state_t::eBufferTransformChanged | layer_state_t::eCornerRadiusChanged |
+            layer_state_t::eCropChanged | layer_state_t::eDestinationFrameChanged |
+            layer_state_t::eMatrixChanged | layer_state_t::ePositionChanged |
+            layer_state_t::eTransformToDisplayInverseChanged |
             layer_state_t::eTransparentRegionChanged;
 
     // Buffer and related updates.
@@ -264,9 +266,8 @@ struct layer_state_t {
     static constexpr uint64_t AFFECTS_CHILDREN = layer_state_t::GEOMETRY_CHANGES |
             layer_state_t::HIERARCHY_CHANGES | layer_state_t::eAlphaChanged |
             layer_state_t::eColorTransformChanged | layer_state_t::eCornerRadiusChanged |
-            layer_state_t::eFlagsChanged | layer_state_t::eLayerStackChanged |
-            layer_state_t::eTrustedOverlayChanged | layer_state_t::eFrameRateChanged |
-            layer_state_t::eFixedTransformHintChanged;
+            layer_state_t::eFlagsChanged | layer_state_t::eTrustedOverlayChanged |
+            layer_state_t::eFrameRateChanged | layer_state_t::eFixedTransformHintChanged;
 
     // Changes affecting data sent to input.
     static constexpr uint64_t INPUT_CHANGES = layer_state_t::GEOMETRY_CHANGES |
@@ -333,7 +334,7 @@ struct layer_state_t {
 
     // The following refer to the alpha, and dataspace, respectively of
     // the background color layer
-    float bgColorAlpha;
+    half4 bgColor;
     ui::Dataspace bgColorDataspace;
 
     // A color space agnostic layer means the color of this layer can be
@@ -389,8 +390,8 @@ struct layer_state_t {
     gui::DropInputMode dropInputMode;
 
     bool dimmingEnabled;
-    float currentSdrHdrRatio = 1.f;
-    float desiredSdrHdrRatio = 1.f;
+    float currentHdrSdrRatio = 1.f;
+    float desiredHdrSdrRatio = 1.f;
 
     gui::CachingHint cachingHint = gui::CachingHint::Enabled;
 

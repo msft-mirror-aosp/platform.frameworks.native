@@ -109,8 +109,6 @@ public:
     ui::Rotation getPhysicalOrientation() const { return mPhysicalOrientation; }
     ui::Rotation getOrientation() const { return mOrientation; }
 
-    static ui::Transform::RotationFlags getPrimaryDisplayRotationFlags();
-
     std::optional<float> getStagedBrightness() const REQUIRES(kMainThreadContext);
     ui::Transform::RotationFlags getTransformHint() const;
     const ui::Transform& getTransform() const;
@@ -175,6 +173,7 @@ public:
     std::optional<hardware::graphics::composer::hal::PowerMode> getPowerMode() const;
     void setPowerMode(hardware::graphics::composer::hal::PowerMode mode);
     bool isPoweredOn() const;
+    void tracePowerMode();
 
     // Enables layer caching on this DisplayDevice
     void enableLayerCaching(bool enable);
@@ -237,8 +236,9 @@ public:
     }
 
     // Enables an overlay to be displayed with the current refresh rate
-    void enableRefreshRateOverlay(bool enable, bool showSpinner, bool showRenderRate,
+    void enableRefreshRateOverlay(bool enable, bool setByHwc, bool showSpinner, bool showRenderRate,
                                   bool showInMiddle) REQUIRES(kMainThreadContext);
+    void updateRefreshRateOverlayRate(Fps displayFps, Fps renderFps, bool setByHwc = false);
     bool isRefreshRateOverlayEnabled() const { return mRefreshRateOverlay != nullptr; }
     bool onKernelTimerChanged(std::optional<DisplayModeId>, bool timerExpired);
     void animateRefreshRateOverlay();
@@ -247,9 +247,9 @@ public:
 
     Fps getAdjustedRefreshRate() const { return mAdjustedRefreshRate; }
 
-    // Round the requested refresh rate to match a divisor of the leader
+    // Round the requested refresh rate to match a divisor of the pacesetter
     // display's refresh rate. Only supported for virtual displays.
-    void adjustRefreshRate(Fps leaderDisplayRefreshRate);
+    void adjustRefreshRate(Fps pacesetterDisplayRefreshRate);
 
     // release HWC resources (if any) for removable displays
     void disconnect();
@@ -272,10 +272,9 @@ private:
     const ui::Rotation mPhysicalOrientation;
     ui::Rotation mOrientation = ui::ROTATION_0;
 
-    static ui::Transform::RotationFlags sPrimaryDisplayRotationFlags;
-
     // Allow nullopt as initial power mode.
-    std::optional<hardware::graphics::composer::hal::PowerMode> mPowerMode;
+    using TracedPowerMode = TracedOrdinal<hardware::graphics::composer::hal::PowerMode>;
+    std::optional<TracedPowerMode> mPowerMode;
 
     std::optional<float> mStagedBrightness;
     std::optional<float> mBrightness;
@@ -290,7 +289,7 @@ private:
     // for virtual displays to match this requested refresh rate.
     const Fps mRequestedRefreshRate;
 
-    // Adjusted refresh rate, rounded to match a divisor of the leader
+    // Adjusted refresh rate, rounded to match a divisor of the pacesetter
     // display's refresh rate. Only supported for virtual displays.
     Fps mAdjustedRefreshRate = 0_Hz;
 

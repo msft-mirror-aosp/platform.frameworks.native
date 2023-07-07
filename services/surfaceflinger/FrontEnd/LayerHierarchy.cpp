@@ -30,7 +30,7 @@ auto layerZCompare = [](const std::pair<LayerHierarchy*, LayerHierarchy::Variant
     auto lhsLayer = lhs.first->getLayer();
     auto rhsLayer = rhs.first->getLayer();
     if (lhsLayer->layerStack.id != rhsLayer->layerStack.id) {
-        return lhsLayer->layerStack.id > rhsLayer->layerStack.id;
+        return lhsLayer->layerStack.id < rhsLayer->layerStack.id;
     }
     if (lhsLayer->z != rhsLayer->z) {
         return lhsLayer->z < rhsLayer->z;
@@ -128,6 +128,14 @@ void LayerHierarchy::updateChild(LayerHierarchy* hierarchy, LayerHierarchy::Vari
 
 const RequestedLayerState* LayerHierarchy::getLayer() const {
     return mLayer;
+}
+
+const LayerHierarchy* LayerHierarchy::getRelativeParent() const {
+    return mRelativeParent;
+}
+
+const LayerHierarchy* LayerHierarchy::getParent() const {
+    return mParent;
 }
 
 std::string LayerHierarchy::getDebugStringShort() const {
@@ -449,7 +457,7 @@ LayerHierarchy::ScopedAddToTraversalPath::ScopedAddToTraversalPath(TraversalPath
     traversalPath.id = layerId;
     traversalPath.variant = variant;
     if (variant == LayerHierarchy::Variant::Mirror) {
-        traversalPath.mirrorRootId = layerId;
+        traversalPath.mirrorRootId = mParentPath.id;
     } else if (variant == LayerHierarchy::Variant::Relative) {
         if (std::find(traversalPath.relativeRootIds.begin(), traversalPath.relativeRootIds.end(),
                       layerId) != traversalPath.relativeRootIds.end()) {

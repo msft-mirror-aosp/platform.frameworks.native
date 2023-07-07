@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <ftl/fake_guard.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <log/log.h>
@@ -122,12 +123,6 @@ TEST_F(SchedulerTest, invalidConnectionHandle) {
     EXPECT_CALL(*mEventThread, onHotplugReceived(_, _)).Times(0);
     mScheduler->onHotplugReceived(handle, kDisplayId1, false);
 
-    EXPECT_CALL(*mEventThread, onScreenAcquired()).Times(0);
-    mScheduler->onScreenAcquired(handle);
-
-    EXPECT_CALL(*mEventThread, onScreenReleased()).Times(0);
-    mScheduler->onScreenReleased(handle);
-
     std::string output;
     EXPECT_CALL(*mEventThread, dump(_)).Times(0);
     mScheduler->dump(handle, output);
@@ -146,12 +141,6 @@ TEST_F(SchedulerTest, validConnectionHandle) {
 
     EXPECT_CALL(*mEventThread, onHotplugReceived(kDisplayId1, false)).Times(1);
     mScheduler->onHotplugReceived(mConnectionHandle, kDisplayId1, false);
-
-    EXPECT_CALL(*mEventThread, onScreenAcquired()).Times(1);
-    mScheduler->onScreenAcquired(mConnectionHandle);
-
-    EXPECT_CALL(*mEventThread, onScreenReleased()).Times(1);
-    mScheduler->onScreenReleased(mConnectionHandle);
 
     std::string output("dump");
     EXPECT_CALL(*mEventThread, dump(output)).Times(1);
@@ -172,11 +161,12 @@ TEST_F(SchedulerTest, chooseRefreshRateForContentIsNoopWhenModeSwitchingIsNotSup
 
     // recordLayerHistory should be a noop
     ASSERT_EQ(0u, mScheduler->getNumActiveLayers());
-    mScheduler->recordLayerHistory(layer.get(), 0, LayerHistory::LayerUpdateType::Buffer);
+    mScheduler->recordLayerHistory(layer->getSequence(), layer->getLayerProps(), 0,
+                                   LayerHistory::LayerUpdateType::Buffer);
     ASSERT_EQ(0u, mScheduler->getNumActiveLayers());
 
     constexpr hal::PowerMode kPowerModeOn = hal::PowerMode::ON;
-    mScheduler->setDisplayPowerMode(kPowerModeOn);
+    FTL_FAKE_GUARD(kMainThreadContext, mScheduler->setDisplayPowerMode(kDisplayId1, kPowerModeOn));
 
     constexpr uint32_t kDisplayArea = 999'999;
     mScheduler->onActiveDisplayAreaChanged(kDisplayArea);
@@ -196,7 +186,8 @@ TEST_F(SchedulerTest, updateDisplayModes) {
                                                                       kDisplay1Mode60->getId()));
 
     ASSERT_EQ(0u, mScheduler->getNumActiveLayers());
-    mScheduler->recordLayerHistory(layer.get(), 0, LayerHistory::LayerUpdateType::Buffer);
+    mScheduler->recordLayerHistory(layer->getSequence(), layer->getLayerProps(), 0,
+                                   LayerHistory::LayerUpdateType::Buffer);
     ASSERT_EQ(1u, mScheduler->getNumActiveLayers());
 }
 
@@ -245,10 +236,11 @@ TEST_F(SchedulerTest, chooseRefreshRateForContentSelectsMaxRefreshRate) {
     const sp<MockLayer> layer = sp<MockLayer>::make(mFlinger.flinger());
     EXPECT_CALL(*layer, isVisible()).WillOnce(Return(true));
 
-    mScheduler->recordLayerHistory(layer.get(), 0, LayerHistory::LayerUpdateType::Buffer);
+    mScheduler->recordLayerHistory(layer->getSequence(), layer->getLayerProps(), 0,
+                                   LayerHistory::LayerUpdateType::Buffer);
 
     constexpr hal::PowerMode kPowerModeOn = hal::PowerMode::ON;
-    mScheduler->setDisplayPowerMode(kPowerModeOn);
+    FTL_FAKE_GUARD(kMainThreadContext, mScheduler->setDisplayPowerMode(kDisplayId1, kPowerModeOn));
 
     constexpr uint32_t kDisplayArea = 999'999;
     mScheduler->onActiveDisplayAreaChanged(kDisplayArea);
@@ -367,12 +359,33 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
         EXPECT_EQ(expectedChoices, actualChoices);
     }
     {
-        // This display does not support 120 Hz, so we should choose 60 Hz despite the touch signal.
+        // The kDisplayId3 does not support 120Hz, The pacesetter display rate is chosen to be 120
+        // Hz. In this case only the display kDisplayId3 choose 60Hz as it does not support 120Hz.
         mScheduler
                 ->registerDisplay(kDisplayId3,
                                   std::make_shared<RefreshRateSelector>(kDisplay3Modes,
                                                                         kDisplay3Mode60->getId()));
 
+        const GlobalSignals globalSignals = {.touch = true};
+        mScheduler->replaceTouchTimer(10);
+        mScheduler->setTouchStateAndIdleTimerPolicy(globalSignals);
+
+        expectedChoices = ftl::init::map<
+                const PhysicalDisplayId&,
+                DisplayModeChoice>(kDisplayId1, FrameRateMode{120_Hz, kDisplay1Mode120},
+                                   globalSignals)(kDisplayId2,
+                                                  FrameRateMode{120_Hz, kDisplay2Mode120},
+                                                  globalSignals)(kDisplayId3,
+                                                                 FrameRateMode{60_Hz,
+                                                                               kDisplay3Mode60},
+                                                                 globalSignals);
+
+        const auto actualChoices = mScheduler->chooseDisplayModes();
+        EXPECT_EQ(expectedChoices, actualChoices);
+    }
+    {
+        // We should choose 60Hz despite the touch signal as pacesetter only supports 60Hz
+        mScheduler->setPacesetterDisplay(kDisplayId3);
         const GlobalSignals globalSignals = {.touch = true};
         mScheduler->replaceTouchTimer(10);
         mScheduler->setTouchStateAndIdleTimerPolicy(globalSignals);

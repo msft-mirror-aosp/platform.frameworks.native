@@ -25,6 +25,7 @@
 #include <optional>
 
 constexpr uint32_t UNASSIGNED_LAYER_ID = std::numeric_limits<uint32_t>::max();
+constexpr uint32_t INTERNAL_LAYER_PREFIX = 1u << 31;
 
 namespace android {
 class SurfaceFlinger;
@@ -35,11 +36,16 @@ namespace android::surfaceflinger {
 
 struct LayerCreationArgs {
     static std::atomic<uint32_t> sSequence;
+    static std::atomic<uint32_t> sInternalSequence;
+    static uint32_t getInternalLayerId(uint32_t id);
+    static LayerCreationArgs fromOtherArgs(const LayerCreationArgs& other);
 
     LayerCreationArgs(android::SurfaceFlinger*, sp<android::Client>, std::string name,
-                      uint32_t flags, gui::LayerMetadata,
-                      std::optional<uint32_t> id = std::nullopt);
-    LayerCreationArgs(const LayerCreationArgs&);
+                      uint32_t flags, gui::LayerMetadata, std::optional<uint32_t> id = std::nullopt,
+                      bool internalLayer = false);
+    LayerCreationArgs(std::optional<uint32_t> id, bool internalLayer = false);
+    LayerCreationArgs() = default; // for tracing
+    std::string getDebugString() const;
 
     android::SurfaceFlinger* flinger;
     sp<android::Client> client;
@@ -54,6 +60,8 @@ struct LayerCreationArgs {
     wp<IBinder> parentHandle = nullptr;
     wp<IBinder> mirrorLayerHandle = nullptr;
     ui::LayerStack layerStackToMirror = ui::INVALID_LAYER_STACK;
+    uint32_t parentId = UNASSIGNED_LAYER_ID;
+    uint32_t layerIdToMirror = UNASSIGNED_LAYER_ID;
 };
 
 } // namespace android::surfaceflinger
