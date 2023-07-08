@@ -2485,7 +2485,10 @@ bool SurfaceFlinger::commit(TimePoint frameTime, VsyncId vsyncId, TimePoint expe
 
         mPowerAdvisor->setFrameDelay(frameDelay);
         mPowerAdvisor->setTotalFrameTargetWorkDuration(idealSfWorkDuration);
-        mPowerAdvisor->updateTargetWorkDuration(vsyncPeriod);
+
+        const auto& display = FTL_FAKE_GUARD(mStateLock, getDefaultDisplayDeviceLocked()).get();
+        const Period idealVsyncPeriod = display->getActiveMode().fps.getPeriod();
+        mPowerAdvisor->updateTargetWorkDuration(idealVsyncPeriod);
     }
 
     if (mRefreshRateOverlaySpinner) {
@@ -7416,6 +7419,13 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
                                       renderArea->getHintForSeamlessTransition());
             sdrWhitePointNits = state.sdrWhitePointNits;
             displayBrightnessNits = state.displayBrightnessNits;
+            if (sdrWhitePointNits > 1.0f) {
+                // Restrict the amount of HDR "headroom" in the screenshot to avoid over-dimming
+                // the SDR portion. 2.0 chosen by experimentation
+                constexpr float kMaxScreenshotHeadroom = 2.0f;
+                displayBrightnessNits =
+                        std::min(sdrWhitePointNits * kMaxScreenshotHeadroom, displayBrightnessNits);
+            }
 
             if (requestedDataspace == ui::Dataspace::UNKNOWN) {
                 renderIntent = state.renderIntent;
