@@ -28,7 +28,6 @@ cc_test {
         "GpuMemTest.cpp",
         "GpuMemTracerTest.cpp",
         "GpuStatsTest.cpp",
-        "GpuServiceTest.cpp",
     ],
     header_libs: ["bpf_headers"],
     shared_libs: [
@@ -46,7 +45,6 @@ cc_test {
         "libstatslog",
         "libstatspull",
         "libutils",
-        "libgpuservice",
     ],
     static_libs: [
         "libgmock",

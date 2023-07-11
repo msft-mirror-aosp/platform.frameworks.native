@@ -24,7 +24,6 @@
 #include <serviceutils/PriorityDumper.h>
 
 #include <mutex>
-#include <thread>
 #include <vector>
 
 namespace android {
@@ -42,7 +41,6 @@ public:
     static const char* const SERVICE_NAME ANDROID_API;
 
     GpuService() ANDROID_API;
-    ~GpuService();
 
 protected:
     status_t shellCommand(int in, int out, int err, std::vector<String16>& args) override;
@@ -92,8 +90,6 @@ private:
     std::unique_ptr<GpuMemTracer> mGpuMemTracer;
     std::mutex mLock;
     std::string mDeveloperDriverPath;
-    std::unique_ptr<std::thread> mGpuMemAsyncInitThread;
-    std::unique_ptr<std::thread> mGpuWorkAsyncInitThread;
 };
 
 } // namespace android
