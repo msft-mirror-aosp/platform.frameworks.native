@@ -21,6 +21,8 @@
 #include <binder/IPCThreadState.h>
 #include <binder/ProcessState.h>
 
+#include <private/android_filesystem_config.h>
+
 namespace android {
 
 void fuzzService(const sp<IBinder>& binder, FuzzedDataProvider&& provider) {
@@ -33,6 +35,11 @@ void fuzzService(const std::vector<sp<IBinder>>& binders, FuzzedDataProvider&& p
             .extraFds = {},
     };
 
+    // Reserved bytes so that we don't have to change fuzzers and seed corpus if
+    // we introduce anything new in fuzzService.
+    std::vector<uint8_t> reservedBytes = provider.ConsumeBytes<uint8_t>(8);
+    (void)reservedBytes;
+
     // always refresh the calling identity, because we sometimes set it below, but also,
     // the code we're fuzzing might reset it
     IPCThreadState::self()->clearCallingIdentity();
@@ -40,7 +47,12 @@ void fuzzService(const std::vector<sp<IBinder>>& binders, FuzzedDataProvider&& p
     // Always take so that a perturbation of just the one ConsumeBool byte will always
     // take the same path, but with a different UID. Without this, the fuzzer needs to
     // guess both the change in value and the shift at the same time.
-    int64_t maybeSetUid = provider.ConsumeIntegral<int64_t>();
+    int64_t maybeSetUid = provider.PickValueInArray<int64_t>(
+            {static_cast<int64_t>(AID_ROOT) << 32, static_cast<int64_t>(AID_SYSTEM) << 32,
+             provider.ConsumeIntegralInRange<int64_t>(static_cast<int64_t>(AID_ROOT) << 32,
+                                                      static_cast<int64_t>(AID_USER) << 32),
+             provider.ConsumeIntegral<int64_t>()});
+
     if (provider.ConsumeBool()) {
         // set calling uid
         IPCThreadState::self()->restoreCallingIdentity(maybeSetUid);
