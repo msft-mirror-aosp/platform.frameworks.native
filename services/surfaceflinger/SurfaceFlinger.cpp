@@ -2161,9 +2161,7 @@ void SurfaceFlinger::setVsyncEnabled(PhysicalDisplayId id, bool enabled) {
 }
 
 bool SurfaceFlinger::wouldPresentEarly(TimePoint frameTime, Period vsyncPeriod) const {
-    const bool isThreeVsyncsAhead = mExpectedPresentTime - frameTime > 2 * vsyncPeriod;
-    return isThreeVsyncsAhead ||
-            getPreviousPresentFence(frameTime, vsyncPeriod)->getSignalTime() !=
+    return getPreviousPresentFence(frameTime, vsyncPeriod)->getSignalTime() !=
             Fence::SIGNAL_TIME_PENDING;
 }
 
