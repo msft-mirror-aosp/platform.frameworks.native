@@ -137,20 +137,28 @@ static void* load_wrapper(const char* path) {
 #endif
 #endif
 
-static const char* DRIVER_SUFFIX_PROPERTY = "ro.hardware.egl";
+static const char* PERSIST_DRIVER_SUFFIX_PROPERTY = "persist.graphics.egl";
+static const char* RO_DRIVER_SUFFIX_PROPERTY = "ro.hardware.egl";
+static const char* RO_BOARD_PLATFORM_PROPERTY = "ro.board.platform";
 
-static const char* HAL_SUBNAME_KEY_PROPERTIES[2] = {
-    DRIVER_SUFFIX_PROPERTY,
-    "ro.board.platform",
+static const char* HAL_SUBNAME_KEY_PROPERTIES[3] = {
+        PERSIST_DRIVER_SUFFIX_PROPERTY,
+        RO_DRIVER_SUFFIX_PROPERTY,
+        RO_BOARD_PLATFORM_PROPERTY,
 };
 
+// Check whether the loaded system drivers should be unloaded in order to
+// load ANGLE or the updatable graphics drivers.
+// If ANGLE namespace is set, it means the application is identified to run on top of ANGLE.
+// If updatable graphics driver namespace is set, it means the application is identified to
+// run on top of updatable graphics drivers.
 static bool should_unload_system_driver(egl_connection_t* cnx) {
     // Return false if the system driver has been unloaded once.
     if (cnx->systemDriverUnloaded) {
         return false;
     }
 
-    // Return true if Angle namespace is set.
+    // Return true if ANGLE namespace is set.
     android_namespace_t* ns = android::GraphicsEnv::getInstance().getAngleNamespace();
     if (ns) {
         return true;
@@ -208,8 +216,7 @@ void* Loader::open(egl_connection_t* cnx)
     ATRACE_CALL();
     const nsecs_t openTime = systemTime();
 
-    if (!android::GraphicsEnv::getInstance().angleIsSystemDriver() &&
-        should_unload_system_driver(cnx)) {
+    if (should_unload_system_driver(cnx)) {
         unload_system_driver(cnx);
     }
 
@@ -218,12 +225,8 @@ void* Loader::open(egl_connection_t* cnx)
         return cnx->dso;
     }
 
-    // Firstly, try to load ANGLE driver, unless we know that we shouldn't.
-    bool shouldForceLegacyDriver = android::GraphicsEnv::getInstance().shouldForceLegacyDriver();
-    driver_t* hnd = nullptr;
-    if (!shouldForceLegacyDriver) {
-        hnd = attempt_to_load_angle(cnx);
-    }
+    // Firstly, try to load ANGLE driver.
+    driver_t* hnd = attempt_to_load_angle(cnx);
 
     if (!hnd) {
         // Secondly, try to load from driver apk.
@@ -249,17 +252,20 @@ void* Loader::open(egl_connection_t* cnx)
                 continue;
             }
             hnd = attempt_to_load_system_driver(cnx, prop.c_str(), true);
-            if (hnd) {
-                break;
-            } else if (strcmp(key, DRIVER_SUFFIX_PROPERTY) == 0) {
+            if (!hnd) {
+                ALOGD("Failed to load drivers from property %s with value %s", key, prop.c_str());
                 failToLoadFromDriverSuffixProperty = true;
             }
+
+            // Abort regardless of whether subsequent properties are set, the value must be set
+            // correctly with the first property that has a value.
+            break;
         }
     }
 
     if (!hnd) {
-        // Can't find graphics driver by appending system properties, now search for the exact name
-        // without any suffix of the GLES userspace driver in both locations.
+        // Can't find graphics driver by appending the value from system properties, now search for
+        // the exact name without any suffix of the GLES userspace driver in both locations.
         // i.e.:
         //      libGLES.so, or:
         //      libEGL.so, libGLESv1_CM.so, libGLESv2.so
@@ -278,15 +284,17 @@ void* Loader::open(egl_connection_t* cnx)
                                                             false, systemTime() - openTime);
     } else {
         // init_angle_backend will check if loaded driver is ANGLE or not,
-        // will set cnx->useAngle appropriately.
+        // will set cnx->angleLoaded appropriately.
         // Do this here so that we use ANGLE path when driver is ANGLE (e.g. loaded as native),
         // not just loading ANGLE as option.
-        init_angle_backend(hnd->dso[2], cnx);
+        attempt_to_init_angle_backend(hnd->dso[2], cnx);
     }
 
     LOG_ALWAYS_FATAL_IF(!hnd,
-                        "couldn't find an OpenGL ES implementation, make sure you set %s or %s",
-                        HAL_SUBNAME_KEY_PROPERTIES[0], HAL_SUBNAME_KEY_PROPERTIES[1]);
+                        "couldn't find an OpenGL ES implementation, make sure one of %s, %s and %s "
+                        "is set",
+                        HAL_SUBNAME_KEY_PROPERTIES[0], HAL_SUBNAME_KEY_PROPERTIES[1],
+                        HAL_SUBNAME_KEY_PROPERTIES[2]);
 
     if (!cnx->libEgl) {
         cnx->libEgl = load_wrapper(EGL_WRAPPER_DIR "/libEGL.so");
@@ -321,7 +329,7 @@ void Loader::close(egl_connection_t* cnx)
     delete hnd;
     cnx->dso = nullptr;
 
-    cnx->useAngle = false;
+    cnx->angleLoaded = false;
 }
 
 void Loader::init_api(void* dso,
@@ -499,7 +507,6 @@ static void* load_angle(const char* kind, android_namespace_t* ns) {
     void* so = do_android_dlopen_ext(name.c_str(), RTLD_LOCAL | RTLD_NOW, &dlextinfo);
 
     if (so) {
-        ALOGD("dlopen_ext from APK (%s) success at %p", name.c_str(), so);
         return so;
     } else {
         ALOGE("dlopen_ext(\"%s\") failed: %s", name.c_str(), dlerror());
@@ -563,14 +570,14 @@ Loader::driver_t* Loader::attempt_to_load_angle(egl_connection_t* cnx) {
     return hnd;
 }
 
-void Loader::init_angle_backend(void* dso, egl_connection_t* cnx) {
+void Loader::attempt_to_init_angle_backend(void* dso, egl_connection_t* cnx) {
     void* pANGLEGetDisplayPlatform = dlsym(dso, "ANGLEGetDisplayPlatform");
     if (pANGLEGetDisplayPlatform) {
-        ALOGV("ANGLE GLES library in use");
-        cnx->useAngle = true;
+        ALOGV("ANGLE GLES library loaded");
+        cnx->angleLoaded = true;
     } else {
-        ALOGV("Native GLES library in use");
-        cnx->useAngle = false;
+        ALOGV("Native GLES library loaded");
+        cnx->angleLoaded = false;
     }
 }
 

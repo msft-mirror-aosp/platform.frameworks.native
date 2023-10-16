@@ -35,6 +35,7 @@
 #include <gui/GLConsumer.h>
 #include <gui/IConsumerListener.h>
 #include <gui/IProducerListener.h>
+#include <gui/TraceUtils.h>
 #include <private/gui/BufferQueueThreadState.h>
 
 #include <utils/Log.h>
@@ -46,23 +47,23 @@ namespace android {
 
 // Macros for include BufferQueueCore information in log messages
 #define BQ_LOGV(x, ...)                                                                           \
-    ALOGV("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGV("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 #define BQ_LOGD(x, ...)                                                                           \
-    ALOGD("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGD("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 #define BQ_LOGI(x, ...)                                                                           \
-    ALOGI("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGI("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 #define BQ_LOGW(x, ...)                                                                           \
-    ALOGW("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGW("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 #define BQ_LOGE(x, ...)                                                                           \
-    ALOGE("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGE("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 
@@ -125,7 +126,7 @@ status_t BufferQueueProducer::setMaxDequeuedBufferCount(
 
 status_t BufferQueueProducer::setMaxDequeuedBufferCount(int maxDequeuedBuffers,
                                                         int* maxBufferCount) {
-    ATRACE_CALL();
+    ATRACE_FORMAT("%s(%d)", __func__, maxDequeuedBuffers);
     BQ_LOGV("setMaxDequeuedBufferCount: maxDequeuedBuffers = %d",
             maxDequeuedBuffers);
 
@@ -502,6 +503,20 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
         if ((buffer == nullptr) ||
                 buffer->needsReallocation(width, height, format, BQ_LAYER_COUNT, usage))
         {
+            if (CC_UNLIKELY(ATRACE_ENABLED())) {
+                if (buffer == nullptr) {
+                    ATRACE_FORMAT_INSTANT("%s buffer reallocation: null", mConsumerName.c_str());
+                } else {
+                    ATRACE_FORMAT_INSTANT("%s buffer reallocation actual %dx%d format:%d "
+                                          "layerCount:%d "
+                                          "usage:%d requested: %dx%d format:%d layerCount:%d "
+                                          "usage:%d ",
+                                          mConsumerName.c_str(), width, height, format,
+                                          BQ_LAYER_COUNT, usage, buffer->getWidth(),
+                                          buffer->getHeight(), buffer->getPixelFormat(),
+                                          buffer->getLayerCount(), buffer->getUsage());
+                }
+            }
             mSlots[found].mAcquireCalled = false;
             mSlots[found].mGraphicBuffer = nullptr;
             mSlots[found].mRequestBufferCalled = false;
@@ -554,9 +569,9 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
 
     if (returnFlags & BUFFER_NEEDS_REALLOCATION) {
         BQ_LOGV("dequeueBuffer: allocating a new buffer for slot %d", *outSlot);
-        sp<GraphicBuffer> graphicBuffer = new GraphicBuffer(
-                width, height, format, BQ_LAYER_COUNT, usage,
-                {mConsumerName.string(), mConsumerName.size()});
+        sp<GraphicBuffer> graphicBuffer =
+                new GraphicBuffer(width, height, format, BQ_LAYER_COUNT, usage,
+                                  {mConsumerName.c_str(), mConsumerName.size()});
 
         status_t error = graphicBuffer->initCheck();
 
@@ -1018,8 +1033,7 @@ status_t BufferQueueProducer::queueBuffer(int slot,
         output->numPendingBuffers = static_cast<uint32_t>(mCore->mQueue.size());
         output->nextFrameNumber = mCore->mFrameCounter + 1;
 
-        ATRACE_INT(mCore->mConsumerName.string(),
-                static_cast<int32_t>(mCore->mQueue.size()));
+        ATRACE_INT(mCore->mConsumerName.c_str(), static_cast<int32_t>(mCore->mQueue.size()));
 #ifndef NO_BINDER
         mCore->mOccupancyTracker.registerOccupancyChange(mCore->mQueue.size());
 #endif
@@ -1446,7 +1460,7 @@ void BufferQueueProducer::allocateBuffers(uint32_t width, uint32_t height,
 
             allocFormat = format != 0 ? format : mCore->mDefaultBufferFormat;
             allocUsage = usage | mCore->mConsumerUsageBits;
-            allocName.assign(mCore->mConsumerName.string(), mCore->mConsumerName.size());
+            allocName.assign(mCore->mConsumerName.c_str(), mCore->mConsumerName.size());
 
             mCore->mIsAllocating = true;
         } // Autolock scope
@@ -1548,7 +1562,7 @@ status_t BufferQueueProducer::setGenerationNumber(uint32_t generationNumber) {
 String8 BufferQueueProducer::getConsumerName() const {
     ATRACE_CALL();
     std::lock_guard<std::mutex> lock(mCore->mMutex);
-    BQ_LOGV("getConsumerName: %s", mConsumerName.string());
+    BQ_LOGV("getConsumerName: %s", mConsumerName.c_str());
     return mConsumerName;
 }
 

@@ -18,6 +18,7 @@
 
 #include <android-base/logging.h>
 #include <android-base/properties.h>
+#include <android-base/strings.h>
 #include <binder/BpBinder.h>
 #include <binder/IPCThreadState.h>
 #include <binder/ProcessState.h>
@@ -38,6 +39,11 @@ using ::android::binder::Status;
 using ::android::internal::Stability;
 
 namespace android {
+
+bool is_multiuser_uid_isolated(uid_t uid) {
+    uid_t appid = multiuser_get_app_id(uid);
+    return appid >= AID_ISOLATED_START && appid <= AID_ISOLATED_END;
+}
 
 #ifndef VENDORSERVICEMANAGER
 
@@ -112,10 +118,26 @@ static bool isVintfDeclared(const std::string& name) {
     });
 
     if (!found) {
+        std::set<std::string> instances;
+        forEachManifest([&](const ManifestWithDescription& mwd) {
+            std::set<std::string> res = mwd.manifest->getAidlInstances(aname.package, aname.iface);
+            instances.insert(res.begin(), res.end());
+            return true;
+        });
+
+        std::string available;
+        if (instances.empty()) {
+            available = "No alternative instances declared in VINTF";
+        } else {
+            // for logging only. We can't return this information to the client
+            // because they may not have permissions to find or list those
+            // instances
+            available = "VINTF declared instances: " + base::Join(instances, ", ");
+        }
         // Although it is tested, explicitly rebuilding qualified name, in case it
         // becomes something unexpected.
-        ALOGI("Could not find %s.%s/%s in the VINTF manifest.", aname.package.c_str(),
-              aname.iface.c_str(), aname.instance.c_str());
+        ALOGI("Could not find %s.%s/%s in the VINTF manifest. %s.", aname.package.c_str(),
+              aname.iface.c_str(), aname.instance.c_str(), available.c_str());
     }
 
     return found;
@@ -285,13 +307,8 @@ sp<IBinder> ServiceManager::tryGetService(const std::string& name, bool startIfN
     if (auto it = mNameToService.find(name); it != mNameToService.end()) {
         service = &(it->second);
 
-        if (!service->allowIsolated) {
-            uid_t appid = multiuser_get_app_id(ctx.uid);
-            bool isIsolated = appid >= AID_ISOLATED_START && appid <= AID_ISOLATED_END;
-
-            if (isIsolated) {
-                return nullptr;
-            }
+        if (!service->allowIsolated && is_multiuser_uid_isolated(ctx.uid)) {
+            return nullptr;
         }
         out = service->binder;
     }
@@ -455,7 +472,17 @@ Status ServiceManager::registerForNotifications(
     auto ctx = mAccess->getCallingContext();
 
     if (!mAccess->canFind(ctx, name)) {
-        return Status::fromExceptionCode(Status::EX_SECURITY);
+        return Status::fromExceptionCode(Status::EX_SECURITY, "SELinux");
+    }
+
+    // note - we could allow isolated apps to get notifications if we
+    // keep track of isolated callbacks and non-isolated callbacks, but
+    // this is done since isolated apps shouldn't access lazy services
+    // so we should be able to use different APIs to keep things simple.
+    // Here, we disallow everything, because the service might not be
+    // registered yet.
+    if (is_multiuser_uid_isolated(ctx.uid)) {
+        return Status::fromExceptionCode(Status::EX_SECURITY, "isolated app");
     }
 
     if (!isValidServiceName(name)) {
