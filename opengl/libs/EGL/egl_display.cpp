@@ -191,7 +191,7 @@ EGLDisplay egl_display_t::getPlatformDisplay(EGLNativeDisplayType display,
     if (cnx->dso) {
         EGLDisplay dpy = EGL_NO_DISPLAY;
 
-        if (cnx->useAngle) {
+        if (cnx->angleLoaded) {
             EGLint error;
             dpy = getPlatformDisplayAngle(display, cnx, attrib_list, &error);
             if (error != EGL_NONE) {
@@ -324,7 +324,7 @@ EGLBoolean egl_display_t::initialize(EGLint* major, EGLint* minor) {
 
         // b/269060366 Conditionally enabled EGL_ANDROID_get_frame_timestamps extension if the
         // device's present timestamps are reliable (which may not be the case on emulators).
-        if (cnx->useAngle) {
+        if (cnx->angleLoaded) {
             if (android::base::GetBoolProperty("service.sf.present_timestamp", false)) {
                 mExtensionString.append("EGL_ANDROID_get_frame_timestamps ");
             }
@@ -353,8 +353,9 @@ EGLBoolean egl_display_t::initialize(EGLint* major, EGLint* minor) {
             // Typically that means there is an HDR capable display attached, but could be
             // support for attaching an HDR display. In either case, advertise support for
             // HDR color spaces.
-            mExtensionString.append(
-                    "EGL_EXT_gl_colorspace_bt2020_linear EGL_EXT_gl_colorspace_bt2020_pq ");
+            mExtensionString.append("EGL_EXT_gl_colorspace_bt2020_hlg "
+                                    "EGL_EXT_gl_colorspace_bt2020_linear "
+                                    "EGL_EXT_gl_colorspace_bt2020_pq ");
         }
 
         char const* start = gExtensionString;
@@ -431,7 +432,7 @@ EGLBoolean egl_display_t::terminate() {
         egl_connection_t* const cnx = &gEGLImpl;
         if (cnx->dso && disp.state == egl_display_t::INITIALIZED) {
             // If we're using ANGLE reset any custom DisplayPlatform
-            if (cnx->useAngle) {
+            if (cnx->angleLoaded) {
                 angle::resetAnglePlatform(disp.dpy);
             }
             if (cnx->egl.eglTerminate(disp.dpy) == EGL_FALSE) {

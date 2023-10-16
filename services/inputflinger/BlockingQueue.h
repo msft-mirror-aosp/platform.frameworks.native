@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#ifndef _UI_INPUT_BLOCKING_QUEUE_H
-#define _UI_INPUT_BLOCKING_QUEUE_H
+#pragma once
 
-#include "android-base/thread_annotations.h"
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <vector>
+#include "android-base/thread_annotations.h"
 
 namespace android {
 
@@ -106,6 +106,4 @@ private:
     std::vector<T> mQueue GUARDED_BY(mLock);
 };
 
-
 } // namespace android
-#endif
