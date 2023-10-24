@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2018 The Android Open Source Project
+<!-- Copyright 2023 The Android Open Source Project
 
      Licensed under the Apache License, Version 2.0 (the "License");
      you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
      limitations under the License.
 -->
 
+<!-- This is the standard feature indicating that the device passes OpenGL ES
+     dEQP tests associated with the most recent level for this Android version. -->
 <permissions>
-    <!-- This should be used to exclude this feature from aosp targets. As aosp configurations
-    may or may not have a valid location provider -->
-    <unavailable-feature name="android.hardware.location.network" />
+    <feature name="android.software.opengles.deqp.level" version="132580097" />
 </permissions>
