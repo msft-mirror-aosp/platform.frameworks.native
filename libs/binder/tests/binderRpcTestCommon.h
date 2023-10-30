@@ -22,7 +22,6 @@
 #include <BnBinderRpcCallback.h>
 #include <BnBinderRpcSession.h>
 #include <BnBinderRpcTest.h>
-#include <android-base/stringprintf.h>
 #include <binder/Binder.h>
 #include <binder/BpBinder.h>
 #include <binder/IPCThreadState.h>
@@ -58,6 +57,7 @@
 #include "../BuildFlags.h"
 #include "../FdTrigger.h"
 #include "../RpcState.h" // for debugging
+#include "format.h"
 #include "utils/Errors.h"
 
 namespace android {
@@ -70,17 +70,28 @@ static inline std::vector<RpcSecurity> RpcSecurityValues() {
     return {RpcSecurity::RAW, RpcSecurity::TLS};
 }
 
+static inline bool hasExperimentalRpc() {
+#ifdef __ANDROID__
+    return base::GetProperty("ro.build.version.codename", "") != "REL";
+#else
+    // TODO(b/305983144): restrict on other platforms
+    return true;
+#endif
+}
+
 static inline std::vector<uint32_t> testVersions() {
     std::vector<uint32_t> versions;
     for (size_t i = 0; i < RPC_WIRE_PROTOCOL_VERSION_NEXT; i++) {
         versions.push_back(i);
     }
-    versions.push_back(RPC_WIRE_PROTOCOL_VERSION_EXPERIMENTAL);
+    if (hasExperimentalRpc()) {
+        versions.push_back(RPC_WIRE_PROTOCOL_VERSION_EXPERIMENTAL);
+    }
     return versions;
 }
 
 static inline std::string trustyIpcPort(uint32_t serverVersion) {
-    return base::StringPrintf("com.android.trusty.binderRpcTestService.V%" PRIu32, serverVersion);
+    return std::format("com.android.trusty.binderRpcTestService.V{}", serverVersion);
 }
 
 enum class SocketType {

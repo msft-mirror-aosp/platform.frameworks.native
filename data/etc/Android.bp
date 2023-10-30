@@ -131,6 +131,24 @@ prebuilt_etc {
 }
 
 prebuilt_etc {
+    name: "android.hardware.se.omapi.ese.prebuilt.xml",
+    src: "android.hardware.se.omapi.ese.xml",
+    defaults: ["frameworks_native_data_etc_defaults"],
+}
+
+prebuilt_etc {
+    name: "android.hardware.se.omapi.sd.prebuilt.xml",
+    src: "android.hardware.se.omapi.sd.xml",
+    defaults: ["frameworks_native_data_etc_defaults"],
+}
+
+prebuilt_etc {
+    name: "android.hardware.se.omapi.uicc.prebuilt.xml",
+    src: "android.hardware.se.omapi.uicc.xml",
+    defaults: ["frameworks_native_data_etc_defaults"],
+}
+
+prebuilt_etc {
     name: "android.hardware.sensor.accelerometer_limited_axes_uncalibrated.prebuilt.xml",
     src: "android.hardware.sensor.accelerometer_limited_axes_uncalibrated.xml",
     defaults: ["frameworks_native_data_etc_defaults"],
@@ -359,6 +377,12 @@ prebuilt_etc {
 }
 
 prebuilt_etc {
+    name: "android.software.opengles.deqp.level-latest.prebuilt.xml",
+    src: "android.software.opengles.deqp.level-latest.xml",
+    defaults: ["frameworks_native_data_etc_defaults"],
+}
+
+prebuilt_etc {
     name: "android.software.sip.voip.prebuilt.xml",
     src: "android.software.sip.voip.xml",
     defaults: ["frameworks_native_data_etc_defaults"],
@@ -385,6 +409,12 @@ prebuilt_etc {
 prebuilt_etc {
     name: "android.software.vulkan.deqp.level-2023-03-01.prebuilt.xml",
     src: "android.software.vulkan.deqp.level-2023-03-01.xml",
+    defaults: ["frameworks_native_data_etc_defaults"],
+}
+
+prebuilt_etc {
+    name: "android.software.vulkan.deqp.level-latest.prebuilt.xml",
+    src: "android.software.vulkan.deqp.level-latest.xml",
     defaults: ["frameworks_native_data_etc_defaults"],
 }
 
