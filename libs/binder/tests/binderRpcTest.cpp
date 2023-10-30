@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+#ifndef __ANDROID_VENDOR__
+// only used on NDK tests outside of vendor
 #include <aidl/IBinderRpcTest.h>
-#include <android-base/stringprintf.h>
+#endif
 
 #include <chrono>
 #include <cstdlib>
@@ -56,12 +58,12 @@ constexpr char kTrustyIpcDevice[] = "/dev/trusty-ipc-dev0";
 
 static std::string WaitStatusToString(int wstatus) {
     if (WIFEXITED(wstatus)) {
-        return base::StringPrintf("exit status %d", WEXITSTATUS(wstatus));
+        return std::format("exit status {}", WEXITSTATUS(wstatus));
     }
     if (WIFSIGNALED(wstatus)) {
-        return base::StringPrintf("term signal %d", WTERMSIG(wstatus));
+        return std::format("term signal {}", WTERMSIG(wstatus));
     }
-    return base::StringPrintf("unexpected state %d", wstatus);
+    return std::format("unexpected state {}", wstatus);
 }
 
 static void debugBacktrace(pid_t pid) {
@@ -227,7 +229,7 @@ static base::unique_fd connectToUnixBootstrap(const RpcTransportFd& transportFd)
     std::vector<std::variant<base::unique_fd, base::borrowed_fd>> fds;
     fds.emplace_back(std::move(sockServer));
 
-    if (sendMessageOnSocket(transportFd, &iov, 1, &fds) < 0) {
+    if (binder::os::sendMessageOnSocket(transportFd, &iov, 1, &fds) < 0) {
         int savedErrno = errno;
         LOG(FATAL) << "Failed sendMessageOnSocket: " << strerror(savedErrno);
     }
@@ -257,9 +259,9 @@ std::unique_ptr<ProcessSession> BinderRpc::createRpcTestSocketServerProcessEtc(
     bool noKernel = GetParam().noKernel;
 
     std::string path = android::base::GetExecutableDirectory();
-    auto servicePath = android::base::StringPrintf("%s/binder_rpc_test_service%s%s", path.c_str(),
-                                                   singleThreaded ? "_single_threaded" : "",
-                                                   noKernel ? "_no_kernel" : "");
+    auto servicePath =
+            std::format("{}/binder_rpc_test_service{}{}", path,
+                        singleThreaded ? "_single_threaded" : "", noKernel ? "_no_kernel" : "");
 
     base::unique_fd bootstrapClientFd, socketFd;
 
@@ -1589,7 +1591,7 @@ public:
             int buf;
             iovec iov{&buf, sizeof(buf)};
 
-            if (receiveMessageFromSocket(mFd, &iov, 1, &fds) < 0) {
+            if (binder::os::receiveMessageFromSocket(mFd, &iov, 1, &fds) < 0) {
                 int savedErrno = errno;
                 LOG(FATAL) << "Failed receiveMessage: " << strerror(savedErrno);
             }
