@@ -24,7 +24,6 @@ LIBUTILS_DIR := system/core/libutils
 FMTLIB_DIR := external/fmtlib
 
 MODULE_SRCS := \
-	$(LOCAL_DIR)/logging.cpp \
 	$(LOCAL_DIR)/OS.cpp \
 	$(LOCAL_DIR)/RpcServerTrusty.cpp \
 	$(LOCAL_DIR)/RpcTransportTipcTrusty.cpp \
@@ -44,6 +43,7 @@ MODULE_SRCS := \
 	$(LIBBINDER_DIR)/Stability.cpp \
 	$(LIBBINDER_DIR)/Status.cpp \
 	$(LIBBINDER_DIR)/Utils.cpp \
+	$(LIBBINDER_DIR)/file.cpp \
 	$(LIBBASE_DIR)/hex.cpp \
 	$(LIBBASE_DIR)/stringprintf.cpp \
 	$(LIBUTILS_DIR)/binder/Errors.cpp \

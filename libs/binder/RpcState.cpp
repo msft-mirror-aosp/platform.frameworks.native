@@ -18,9 +18,8 @@
 
 #include "RpcState.h"
 
-#include <android-base/macros.h>
-#include <android-base/scopeguard.h>
 #include <binder/BpBinder.h>
+#include <binder/Functional.h>
 #include <binder/IPCThreadState.h>
 #include <binder/RpcServer.h>
 
@@ -38,6 +37,10 @@
 #endif
 
 namespace android {
+
+using namespace android::binder::impl;
+using android::binder::borrowed_fd;
+using android::binder::unique_fd;
 
 #if RPC_FLAKE_PRONE
 void rpcMaybeWaitToFlake() {
@@ -354,11 +357,10 @@ RpcState::CommandData::CommandData(size_t size) : mSize(size) {
     mData.reset(new (std::nothrow) uint8_t[size]);
 }
 
-status_t RpcState::rpcSend(
-        const sp<RpcSession::RpcConnection>& connection, const sp<RpcSession>& session,
-        const char* what, iovec* iovs, int niovs,
-        const std::optional<android::base::function_ref<status_t()>>& altPoll,
-        const std::vector<std::variant<base::unique_fd, base::borrowed_fd>>* ancillaryFds) {
+status_t RpcState::rpcSend(const sp<RpcSession::RpcConnection>& connection,
+                           const sp<RpcSession>& session, const char* what, iovec* iovs, int niovs,
+                           const std::optional<SmallFunction<status_t()>>& altPoll,
+                           const std::vector<std::variant<unique_fd, borrowed_fd>>* ancillaryFds) {
     for (int i = 0; i < niovs; i++) {
         LOG_RPC_DETAIL("Sending %s (part %d of %d) on RpcTransport %p: %s",
                        what, i + 1, niovs, connection->rpcTransport.get(),
@@ -379,10 +381,9 @@ status_t RpcState::rpcSend(
     return OK;
 }
 
-status_t RpcState::rpcRec(
-        const sp<RpcSession::RpcConnection>& connection, const sp<RpcSession>& session,
-        const char* what, iovec* iovs, int niovs,
-        std::vector<std::variant<base::unique_fd, base::borrowed_fd>>* ancillaryFds) {
+status_t RpcState::rpcRec(const sp<RpcSession::RpcConnection>& connection,
+                          const sp<RpcSession>& session, const char* what, iovec* iovs, int niovs,
+                          std::vector<std::variant<unique_fd, borrowed_fd>>* ancillaryFds) {
     if (status_t status =
                 connection->rpcTransport->interruptableReadFully(session->mShutdownTrigger.get(),
                                                                  iovs, niovs, std::nullopt,
@@ -412,10 +413,8 @@ bool RpcState::validateProtocolVersion(uint32_t version) {
             return false;
         }
 #else
-        // TODO(b/305983144)
-        // don't restrict on other platforms, though experimental should
-        // only really be used for testing, we don't have a good way to see
-        // what is shipping outside of Android
+        ALOGE("Cannot use experimental RPC binder protocol outside of Android.");
+        return false;
 #endif
     } else if (version >= RPC_WIRE_PROTOCOL_VERSION_NEXT) {
         ALOGE("Cannot use RPC binder protocol version %u which is unknown (current protocol "
@@ -602,25 +601,24 @@ status_t RpcState::transactAddress(const sp<RpcSession::RpcConnection>& connecti
             {const_cast<uint8_t*>(data.data()), data.dataSize()},
             objectTableSpan.toIovec(),
     };
-    if (status_t status = rpcSend(
-                connection, session, "transaction", iovs, arraysize(iovs),
-                [&] {
-                    if (waitUs > kWaitLogUs) {
-                        ALOGE("Cannot send command, trying to process pending refcounts. Waiting "
-                              "%zuus. Too many oneway calls?",
-                              waitUs);
-                    }
+    auto altPoll = [&] {
+        if (waitUs > kWaitLogUs) {
+            ALOGE("Cannot send command, trying to process pending refcounts. Waiting "
+                  "%zuus. Too many oneway calls?",
+                  waitUs);
+        }
 
-                    if (waitUs > 0) {
-                        usleep(waitUs);
-                        waitUs = std::min(kWaitMaxUs, waitUs * 2);
-                    } else {
-                        waitUs = 1;
-                    }
+        if (waitUs > 0) {
+            usleep(waitUs);
+            waitUs = std::min(kWaitMaxUs, waitUs * 2);
+        } else {
+            waitUs = 1;
+        }
 
-                    return drainCommands(connection, session, CommandType::CONTROL_ONLY);
-                },
-                rpcFields->mFds.get());
+        return drainCommands(connection, session, CommandType::CONTROL_ONLY);
+    };
+    if (status_t status = rpcSend(connection, session, "transaction", iovs, countof(iovs),
+                                  std::ref(altPoll), rpcFields->mFds.get());
         status != OK) {
         // rpcSend calls shutdownAndWait, so all refcounts should be reset. If we ever tolerate
         // errors here, then we may need to undo the binder-sent counts for the transaction as
@@ -651,7 +649,7 @@ static void cleanup_reply_data(const uint8_t* data, size_t dataSize, const binde
 
 status_t RpcState::waitForReply(const sp<RpcSession::RpcConnection>& connection,
                                 const sp<RpcSession>& session, Parcel* reply) {
-    std::vector<std::variant<base::unique_fd, base::borrowed_fd>> ancillaryFds;
+    std::vector<std::variant<unique_fd, borrowed_fd>> ancillaryFds;
     RpcWireHeader command;
     while (true) {
         iovec iov{&command, sizeof(command)};
@@ -692,7 +690,7 @@ status_t RpcState::waitForReply(const sp<RpcSession::RpcConnection>& connection,
             {&rpcReply, rpcReplyWireSize},
             {data.data(), data.size()},
     };
-    if (status_t status = rpcRec(connection, session, "reply body", iovs, arraysize(iovs), nullptr);
+    if (status_t status = rpcRec(connection, session, "reply body", iovs, countof(iovs), nullptr);
         status != OK)
         return status;
 
@@ -762,14 +760,14 @@ status_t RpcState::sendDecStrongToTarget(const sp<RpcSession::RpcConnection>& co
             .bodySize = sizeof(RpcDecStrong),
     };
     iovec iovs[]{{&cmd, sizeof(cmd)}, {&body, sizeof(body)}};
-    return rpcSend(connection, session, "dec ref", iovs, arraysize(iovs), std::nullopt);
+    return rpcSend(connection, session, "dec ref", iovs, countof(iovs), std::nullopt);
 }
 
 status_t RpcState::getAndExecuteCommand(const sp<RpcSession::RpcConnection>& connection,
                                         const sp<RpcSession>& session, CommandType type) {
     LOG_RPC_DETAIL("getAndExecuteCommand on RpcTransport %p", connection->rpcTransport.get());
 
-    std::vector<std::variant<base::unique_fd, base::borrowed_fd>> ancillaryFds;
+    std::vector<std::variant<unique_fd, borrowed_fd>> ancillaryFds;
     RpcWireHeader command;
     iovec iov{&command, sizeof(command)};
     if (status_t status =
@@ -798,7 +796,7 @@ status_t RpcState::drainCommands(const sp<RpcSession::RpcConnection>& connection
 status_t RpcState::processCommand(
         const sp<RpcSession::RpcConnection>& connection, const sp<RpcSession>& session,
         const RpcWireHeader& command, CommandType type,
-        std::vector<std::variant<base::unique_fd, base::borrowed_fd>>&& ancillaryFds) {
+        std::vector<std::variant<unique_fd, borrowed_fd>>&& ancillaryFds) {
 #ifdef BINDER_WITH_KERNEL_IPC
     IPCThreadState* kernelBinderState = IPCThreadState::selfOrNull();
     IPCThreadState::SpGuard spGuard{
@@ -811,11 +809,11 @@ status_t RpcState::processCommand(
         origGuard = kernelBinderState->pushGetCallingSpGuard(&spGuard);
     }
 
-    base::ScopeGuard guardUnguard = [&]() {
+    auto guardUnguard = make_scope_guard([&]() {
         if (kernelBinderState != nullptr) {
             kernelBinderState->restoreGetCallingSpGuard(origGuard);
         }
-    };
+    });
 #endif // BINDER_WITH_KERNEL_IPC
 
     switch (command.command) {
@@ -838,7 +836,7 @@ status_t RpcState::processCommand(
 status_t RpcState::processTransact(
         const sp<RpcSession::RpcConnection>& connection, const sp<RpcSession>& session,
         const RpcWireHeader& command,
-        std::vector<std::variant<base::unique_fd, base::borrowed_fd>>&& ancillaryFds) {
+        std::vector<std::variant<unique_fd, borrowed_fd>>&& ancillaryFds) {
     LOG_ALWAYS_FATAL_IF(command.command != RPC_COMMAND_TRANSACT, "command: %d", command.command);
 
     CommandData transactionData(command.bodySize);
@@ -865,7 +863,7 @@ static void do_nothing_to_transact_data(const uint8_t* data, size_t dataSize,
 status_t RpcState::processTransactInternal(
         const sp<RpcSession::RpcConnection>& connection, const sp<RpcSession>& session,
         CommandData transactionData,
-        std::vector<std::variant<base::unique_fd, base::borrowed_fd>>&& ancillaryFds) {
+        std::vector<std::variant<unique_fd, borrowed_fd>>&& ancillaryFds) {
     // for 'recursive' calls to this, we have already read and processed the
     // binder from the transaction data and taken reference counts into account,
     // so it is cached here.
@@ -1145,7 +1143,7 @@ processTransactInternalTailCall:
             {const_cast<uint8_t*>(reply.data()), reply.dataSize()},
             objectTableSpan.toIovec(),
     };
-    return rpcSend(connection, session, "reply", iovs, arraysize(iovs), std::nullopt,
+    return rpcSend(connection, session, "reply", iovs, countof(iovs), std::nullopt,
                    rpcFields->mFds.get());
 }
 

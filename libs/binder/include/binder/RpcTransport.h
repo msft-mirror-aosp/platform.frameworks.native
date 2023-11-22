@@ -25,12 +25,12 @@
 #include <variant>
 #include <vector>
 
-#include <android-base/function_ref.h>
-#include <android-base/unique_fd.h>
 #include <utils/Errors.h>
 
+#include <binder/Functional.h>
 #include <binder/RpcCertificateFormat.h>
 #include <binder/RpcThreads.h>
+#include <binder/unique_fd.h>
 
 #include <sys/uio.h>
 
@@ -85,13 +85,14 @@ public:
      *   error - interrupted (failure or trigger)
      */
     [[nodiscard]] virtual status_t interruptableWriteFully(
-            FdTrigger *fdTrigger, iovec *iovs, int niovs,
-            const std::optional<android::base::function_ref<status_t()>> &altPoll,
-            const std::vector<std::variant<base::unique_fd, base::borrowed_fd>> *ancillaryFds) = 0;
+            FdTrigger* fdTrigger, iovec* iovs, int niovs,
+            const std::optional<binder::impl::SmallFunction<status_t()>>& altPoll,
+            const std::vector<std::variant<binder::unique_fd, binder::borrowed_fd>>*
+                    ancillaryFds) = 0;
     [[nodiscard]] virtual status_t interruptableReadFully(
-            FdTrigger *fdTrigger, iovec *iovs, int niovs,
-            const std::optional<android::base::function_ref<status_t()>> &altPoll,
-            std::vector<std::variant<base::unique_fd, base::borrowed_fd>> *ancillaryFds) = 0;
+            FdTrigger* fdTrigger, iovec* iovs, int niovs,
+            const std::optional<binder::impl::SmallFunction<status_t()>>& altPoll,
+            std::vector<std::variant<binder::unique_fd, binder::borrowed_fd>>* ancillaryFds) = 0;
 
     /**
      *  Check whether any threads are blocked while polling the transport
@@ -177,10 +178,10 @@ private:
     void setPollingState(bool state) const { isPolling = state; }
 
 public:
-    base::unique_fd fd;
+    binder::unique_fd fd;
 
     RpcTransportFd() = default;
-    explicit RpcTransportFd(base::unique_fd &&descriptor)
+    explicit RpcTransportFd(binder::unique_fd&& descriptor)
           : isPolling(false), fd(std::move(descriptor)) {}
 
     RpcTransportFd(RpcTransportFd &&transportFd) noexcept
@@ -192,7 +193,7 @@ public:
         return *this;
     }
 
-    RpcTransportFd &operator=(base::unique_fd &&descriptor) noexcept {
+    RpcTransportFd& operator=(binder::unique_fd&& descriptor) noexcept {
         fd = std::move(descriptor);
         isPolling = false;
         return *this;

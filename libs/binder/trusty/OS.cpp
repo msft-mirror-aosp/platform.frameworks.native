@@ -26,13 +26,14 @@
 #include "../OS.h"
 #include "TrustyStatus.h"
 
-using android::base::Result;
+using android::binder::borrowed_fd;
+using android::binder::unique_fd;
 
 namespace android::binder::os {
 
-Result<void> setNonBlocking(android::base::borrowed_fd /*fd*/) {
+status_t setNonBlocking(borrowed_fd /*fd*/) {
     // Trusty IPC syscalls are all non-blocking by default.
-    return {};
+    return OK;
 }
 
 status_t getRandomBytes(uint8_t* data, size_t size) {
@@ -61,14 +62,14 @@ std::unique_ptr<RpcTransportCtxFactory> makeDefaultRpcTransportCtxFactory() {
 
 ssize_t sendMessageOnSocket(
         const RpcTransportFd& /* socket */, iovec* /* iovs */, int /* niovs */,
-        const std::vector<std::variant<base::unique_fd, base::borrowed_fd>>* /* ancillaryFds */) {
+        const std::vector<std::variant<unique_fd, borrowed_fd>>* /* ancillaryFds */) {
     errno = ENOTSUP;
     return -1;
 }
 
 ssize_t receiveMessageFromSocket(
         const RpcTransportFd& /* socket */, iovec* /* iovs */, int /* niovs */,
-        std::vector<std::variant<base::unique_fd, base::borrowed_fd>>* /* ancillaryFds */) {
+        std::vector<std::variant<unique_fd, borrowed_fd>>* /* ancillaryFds */) {
     errno = ENOTSUP;
     return -1;
 }
