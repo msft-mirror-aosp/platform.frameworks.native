@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 The Android Open Source Project
+ * Copyright 2022 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,20 @@
 
 #pragma once
 
-#include <ui/GraphicTypes.h>
+#include <ftl/small_map.h>
+#include <ftl/small_vector.h>
 
-namespace android {
+namespace android::ui {
 
-inline bool isHdrDataspace(ui::Dataspace dataspace) {
-    const auto transfer = dataspace & HAL_DATASPACE_TRANSFER_MASK;
+// The static capacities were chosen to exceed a typical number of physical and/or virtual displays.
 
-    return transfer == HAL_DATASPACE_TRANSFER_ST2084 || transfer == HAL_DATASPACE_TRANSFER_HLG;
-}
+template <typename Key, typename Value>
+using DisplayMap = ftl::SmallMap<Key, Value, 5>;
 
-} // namespace android
+template <typename Key, typename Value>
+using PhysicalDisplayMap = ftl::SmallMap<Key, Value, 3>;
+
+template <typename T>
+using PhysicalDisplayVector = ftl::SmallVector<T, 3>;
+
+} // namespace android::ui
