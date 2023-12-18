@@ -397,12 +397,10 @@ void SkiaRenderEngine::mapExternalTextureBuffer(const sp<GraphicBuffer>& buffer,
     }
     // We don't attempt to map a buffer if the buffer contains protected content. In GL this is
     // important because GPU resources for protected buffers are much more limited. (In Vk we
-    // simply match the existing behavior for protected buffers.)  In Vk, we never cache any
-    // buffers while in a protected context, since Vk cannot share across contexts, and protected
-    // is less common.
+    // simply match the existing behavior for protected buffers.)  We also never cache any
+    // buffers while in a protected context.
     const bool isProtectedBuffer = buffer->getUsage() & GRALLOC_USAGE_PROTECTED;
-    if (isProtectedBuffer ||
-        (mRenderEngineType == RenderEngineType::SKIA_VK_THREADED && isProtected())) {
+    if (isProtectedBuffer || isProtected()) {
         return;
     }
     ATRACE_CALL();
@@ -467,9 +465,8 @@ void SkiaRenderEngine::unmapExternalTextureBuffer(sp<GraphicBuffer>&& buffer) {
 
 std::shared_ptr<AutoBackendTexture::LocalRef> SkiaRenderEngine::getOrCreateBackendTexture(
         const sp<GraphicBuffer>& buffer, bool isOutputBuffer) {
-    // Do not lookup the buffer in the cache for protected contexts with the SkiaVk back-end
-    if (mRenderEngineType == RenderEngineType::SKIA_GL_THREADED ||
-        (mRenderEngineType == RenderEngineType::SKIA_VK_THREADED && !isProtected())) {
+    // Do not lookup the buffer in the cache for protected contexts
+    if (!isProtected()) {
         if (const auto& it = mTextureCache.find(buffer->getId()); it != mTextureCache.end()) {
             return it->second;
         }
@@ -711,7 +708,9 @@ void SkiaRenderEngine::drawLayersInternal(
     SkCanvas* canvas = dstCanvas;
     SkiaCapture::OffscreenState offscreenCaptureState;
     const LayerSettings* blurCompositionLayer = nullptr;
-    if (mBlurFilter) {
+
+    // TODO (b/270314344): Enable blurs in protected context.
+    if (mBlurFilter && !mInProtectedContext) {
         bool requiresCompositionLayer = false;
         for (const auto& layer : layers) {
             // if the layer doesn't have blur or it is not visible then continue
@@ -805,7 +804,8 @@ void SkiaRenderEngine::drawLayersInternal(
         const auto [bounds, roundRectClip] =
                 getBoundsAndClip(layer.geometry.boundaries, layer.geometry.roundedCornersCrop,
                                  layer.geometry.roundedCornersRadius);
-        if (mBlurFilter && layerHasBlur(layer, ctModifiesAlpha)) {
+        // TODO (b/270314344): Enable blurs in protected context.
+        if (mBlurFilter && layerHasBlur(layer, ctModifiesAlpha) && !mInProtectedContext) {
             std::unordered_map<uint32_t, sk_sp<SkImage>> cachedBlurs;
 
             // if multiple layers have blur, then we need to take a snapshot now because
@@ -813,8 +813,20 @@ void SkiaRenderEngine::drawLayersInternal(
             if (!blurInput) {
                 blurInput = activeSurface->makeImageSnapshot();
             }
+
             // rect to be blurred in the coordinate space of blurInput
-            const auto blurRect = canvas->getTotalMatrix().mapRect(bounds.rect());
+            SkRect blurRect = canvas->getTotalMatrix().mapRect(bounds.rect());
+
+            // Some layers may be much bigger than the screen. If we used
+            // `blurRect` directly, this would allocate a large buffer with no
+            // benefit. Apply the clip, which already takes the display size
+            // into account. The clipped size will then be used to calculate the
+            // size of the buffer we will create for blurring.
+            if (!blurRect.intersect(SkRect::Make(canvas->getDeviceClipBounds()))) {
+                // This should not happen, but if it did, we would use the full
+                // sized layer, which should still be fine.
+                ALOGW("blur bounds does not intersect display clip!");
+            }
 
             // if the clip needs to be applied then apply it now and make sure
             // it is restored before we attempt to draw any shadows.
