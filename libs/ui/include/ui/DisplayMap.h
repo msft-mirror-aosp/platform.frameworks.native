@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 The Android Open Source Project
+ * Copyright 2022 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,19 +14,22 @@
  * limitations under the License.
  */
 
-#include <binder/Trace.h>
-#include <cutils/trace.h>
+#pragma once
 
-namespace android {
-namespace binder {
+#include <ftl/small_map.h>
+#include <ftl/small_vector.h>
 
-void atrace_begin(uint64_t tag, const char* name) {
-    ::atrace_begin(tag, name);
-}
+namespace android::ui {
 
-void atrace_end(uint64_t tag) {
-    ::atrace_end(tag);
-}
+// The static capacities were chosen to exceed a typical number of physical and/or virtual displays.
 
-} // namespace binder
-} // namespace android
+template <typename Key, typename Value>
+using DisplayMap = ftl::SmallMap<Key, Value, 5>;
+
+template <typename Key, typename Value>
+using PhysicalDisplayMap = ftl::SmallMap<Key, Value, 3>;
+
+template <typename T>
+using PhysicalDisplayVector = ftl::SmallVector<T, 3>;
+
+} // namespace android::ui
