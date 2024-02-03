@@ -134,6 +134,10 @@ aidl_interface {
         "IBinderRpcTest.aidl",
         "ParcelableCertificateData.aidl",
     ],
+    flags: [
+        "-Werror",
+        "-Wno-mixed-oneway",
+    ],
     backend: {
         java: {
             enabled: false,
@@ -252,6 +256,12 @@ cc_defaults {
     // contention on the device. b/276820894
     test_options: {
         unit_test: false,
+        test_runner_options: [
+            {
+                name: "native-test-timeout",
+                value: "10m",
+            },
+        ],
     },
 
     test_suites: ["general-tests"],
@@ -826,6 +836,7 @@ cc_defaults {
         ],
         // Adds bugs to hotlist "AIDL fuzzers bugs" on buganizer
         hotlists: ["4637097"],
+        use_for_presubmit: true,
     },
 }
 
