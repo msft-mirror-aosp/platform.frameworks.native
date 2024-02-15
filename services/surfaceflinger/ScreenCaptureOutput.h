@@ -36,6 +36,9 @@ struct ScreenCaptureOutputArgs {
     // Counterintuitively, when targetBrightness > 1.0 then dim the scene.
     float targetBrightness;
     bool regionSampling;
+    bool treat170mAsSrgb;
+    bool dimInGammaSpaceForEnhancedScreenshots;
+    bool isProtected = false;
 };
 
 // ScreenCaptureOutput is used to compose a set of layers into a preallocated buffer.
@@ -46,7 +49,7 @@ class ScreenCaptureOutput : public compositionengine::impl::Output {
 public:
     ScreenCaptureOutput(const RenderArea& renderArea,
                         const compositionengine::Output::ColorProfile& colorProfile,
-                        bool regionSampling);
+                        bool regionSampling, bool dimInGammaSpaceForEnhancedScreenshots);
 
     void updateColorProfile(const compositionengine::CompositionRefreshArgs&) override;
 
@@ -56,12 +59,14 @@ public:
 
 protected:
     bool getSkipColorTransform() const override { return false; }
-    renderengine::DisplaySettings generateClientCompositionDisplaySettings() const override;
+    renderengine::DisplaySettings generateClientCompositionDisplaySettings(
+            const std::shared_ptr<renderengine::ExternalTexture>& buffer) const override;
 
 private:
     const RenderArea& mRenderArea;
     const compositionengine::Output::ColorProfile& mColorProfile;
     const bool mRegionSampling;
+    const bool mDimInGammaSpaceForEnhancedScreenshots;
 };
 
 std::shared_ptr<ScreenCaptureOutput> createScreenCaptureOutput(ScreenCaptureOutputArgs);

@@ -46,6 +46,8 @@
 using namespace android::hardware::configstore;
 using namespace android::hardware::configstore::V1_0;
 
+extern "C" android_namespace_t* android_get_exported_namespace(const char*);
+
 // #define ENABLE_ALLOC_CALLSTACKS 1
 #if ENABLE_ALLOC_CALLSTACKS
 #include <utils/CallStack.h>
@@ -159,6 +161,7 @@ const std::array<const char*, 2> HAL_SUBNAME_KEY_PROPERTIES = {{
     "ro.board.platform",
 }};
 constexpr int LIB_DL_FLAGS = RTLD_LOCAL | RTLD_NOW;
+constexpr char RO_VULKAN_APEX_PROPERTY[] = "ro.vulkan.apex";
 
 // LoadDriver returns:
 // * 0 when succeed, or
@@ -166,6 +169,7 @@ constexpr int LIB_DL_FLAGS = RTLD_LOCAL | RTLD_NOW;
 // * -EINVAL when fail to find HAL_MODULE_INFO_SYM_AS_STR or
 //   HWVULKAN_HARDWARE_MODULE_ID in the library.
 int LoadDriver(android_namespace_t* library_namespace,
+               const char* ns_name,
                const hwvulkan_module_t** module) {
     ATRACE_CALL();
 
@@ -183,8 +187,10 @@ int LoadDriver(android_namespace_t* library_namespace,
                 .library_namespace = library_namespace,
             };
             so = android_dlopen_ext(lib_name.c_str(), LIB_DL_FLAGS, &dlextinfo);
-            ALOGE("Could not load %s from updatable gfx driver namespace: %s.",
-                  lib_name.c_str(), dlerror());
+            if (!so) {
+                ALOGE("Could not load %s from %s namespace: %s.",
+                      lib_name.c_str(), ns_name, dlerror());
+            }
         } else {
             // load built-in driver
             so = android_load_sphal_library(lib_name.c_str(), LIB_DL_FLAGS);
@@ -211,12 +217,30 @@ int LoadDriver(android_namespace_t* library_namespace,
     return 0;
 }
 
+int LoadDriverFromApex(const hwvulkan_module_t** module) {
+    ATRACE_CALL();
+
+    auto apex_name = android::base::GetProperty(RO_VULKAN_APEX_PROPERTY, "");
+    if (apex_name == "") {
+        return -ENOENT;
+    }
+    // Get linker namespace for Vulkan APEX
+    std::replace(apex_name.begin(), apex_name.end(), '.', '_');
+    auto ns = android_get_exported_namespace(apex_name.c_str());
+    if (!ns) {
+        return -ENOENT;
+    }
+    android::GraphicsEnv::getInstance().setDriverToLoad(
+        android::GpuStatsInfo::Driver::VULKAN);
+    return LoadDriver(ns, apex_name.c_str(), module);
+}
+
 int LoadBuiltinDriver(const hwvulkan_module_t** module) {
     ATRACE_CALL();
 
     android::GraphicsEnv::getInstance().setDriverToLoad(
         android::GpuStatsInfo::Driver::VULKAN);
-    return LoadDriver(nullptr, module);
+    return LoadDriver(nullptr, nullptr, module);
 }
 
 int LoadUpdatedDriver(const hwvulkan_module_t** module) {
@@ -227,7 +251,7 @@ int LoadUpdatedDriver(const hwvulkan_module_t** module) {
         return -ENOENT;
     android::GraphicsEnv::getInstance().setDriverToLoad(
         android::GpuStatsInfo::Driver::VULKAN_UPDATED);
-    int result = LoadDriver(ns, module);
+    int result = LoadDriver(ns, "updatable gfx driver", module);
     if (result != 0) {
         LOG_ALWAYS_FATAL(
             "couldn't find an updated Vulkan implementation from %s",
@@ -255,6 +279,9 @@ bool Hal::Open() {
     const hwvulkan_module_t* module = nullptr;
 
     result = LoadUpdatedDriver(&module);
+    if (result == -ENOENT) {
+        result = LoadDriverFromApex(&module);
+    }
     if (result == -ENOENT) {
         result = LoadBuiltinDriver(&module);
     }
@@ -313,8 +340,9 @@ void Hal::UnloadBuiltinDriver() {
     ALOGD("Unload builtin Vulkan driver.");
 
     // Close the opened device
-    ALOG_ASSERT(!hal_.dev_->common.close(hal_.dev_->common),
-                "hw_device_t::close() failed.");
+    int err = hal_.dev_->common.close(
+        const_cast<struct hw_device_t*>(&hal_.dev_->common));
+    ALOG_ASSERT(!err, "hw_device_t::close() failed.");
 
     // Close the opened shared library in the hw_module_t
     android_unload_sphal_library(hal_.dev_->common.module->dso);
@@ -762,6 +790,17 @@ void CreateInfoWrapper::FilterExtension(const char* name) {
             ALOGI("CreateInfoWrapper::FilterExtension: already have '%s'.", name);
             continue;
         }
+
+        // Ignore duplicate extensions (see: b/288929054)
+        bool duplicate_entry = false;
+        for (uint32_t j = 0; j < filter.name_count; j++) {
+            if (strcmp(name, filter.names[j]) == 0) {
+                duplicate_entry = true;
+                break;
+            }
+        }
+        if (duplicate_entry == true)
+            continue;
 
         filter.names[filter.name_count++] = name;
         if (ext_bit != ProcHook::EXTENSION_UNKNOWN) {
@@ -1422,13 +1461,15 @@ VkResult CreateDevice(VkPhysicalDevice physicalDevice,
     if ((wrapper.GetHalExtensions()[ProcHook::ANDROID_native_buffer]) &&
         !data->driver.GetSwapchainGrallocUsageANDROID &&
         !data->driver.GetSwapchainGrallocUsage2ANDROID &&
-        !data->driver.GetSwapchainGrallocUsage3ANDROID) {
+        !data->driver.GetSwapchainGrallocUsage3ANDROID &&
+        !data->driver.GetSwapchainGrallocUsage4ANDROID) {
         ALOGE(
             "Driver's implementation of ANDROID_native_buffer is broken;"
             " must expose at least one of "
             "vkGetSwapchainGrallocUsageANDROID or "
             "vkGetSwapchainGrallocUsage2ANDROID or "
-            "vkGetSwapchainGrallocUsage3ANDROID");
+            "vkGetSwapchainGrallocUsage3ANDROID or "
+            "vkGetSwapchainGrallocUsage4ANDROID");
 
         data->driver.DestroyDevice(dev, pAllocator);
         FreeDeviceData(data, data_allocator);
@@ -1443,6 +1484,7 @@ VkResult CreateDevice(VkPhysicalDevice physicalDevice,
     }
 
     data->driver_device = dev;
+    data->driver_physical_device = physicalDevice;
 
     *pDevice = dev;
 

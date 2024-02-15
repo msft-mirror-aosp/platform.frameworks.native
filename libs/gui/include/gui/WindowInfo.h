@@ -21,9 +21,12 @@
 #include <binder/Parcel.h>
 #include <binder/Parcelable.h>
 #include <ftl/flags.h>
+#include <ftl/mixins.h>
+#include <gui/PidUid.h>
 #include <gui/constants.h>
 #include <ui/Rect.h>
 #include <ui/Region.h>
+#include <ui/Size.h>
 #include <ui/Transform.h>
 #include <utils/RefBase.h>
 #include <utils/Timers.h>
@@ -173,6 +176,8 @@ struct WindowInfo : public Parcelable {
                 static_cast<uint32_t>(os::InputConfig::INTERCEPTS_STYLUS),
         CLONE =
                 static_cast<uint32_t>(os::InputConfig::CLONE),
+        GLOBAL_STYLUS_BLOCKS_TOUCH =
+                static_cast<uint32_t>(os::InputConfig::GLOBAL_STYLUS_BLOCKS_TOUCH),
         // clang-format on
     };
 
@@ -192,10 +197,10 @@ struct WindowInfo : public Parcelable {
     std::chrono::nanoseconds dispatchingTimeout = std::chrono::seconds(5);
 
     /* These values are filled in by SurfaceFlinger. */
-    int32_t frameLeft = -1;
-    int32_t frameTop = -1;
-    int32_t frameRight = -1;
-    int32_t frameBottom = -1;
+    Rect frame = Rect::INVALID_RECT;
+
+    // The real size of the content, excluding any crop. If no buffer is rendered, this is 0,0
+    ui::Size contentSize = ui::Size(0, 0);
 
     /*
      * SurfaceFlinger consumes this value to shrink the computed frame. This is
@@ -223,8 +228,8 @@ struct WindowInfo : public Parcelable {
     Region touchableRegion;
 
     TouchOcclusionMode touchOcclusionMode = TouchOcclusionMode::BLOCK_UNTRUSTED;
-    int32_t ownerPid = -1;
-    int32_t ownerUid = -1;
+    Pid ownerPid = Pid::INVALID;
+    Uid ownerUid = Uid::INVALID;
     std::string packageName;
     ftl::Flags<InputConfig> inputConfig;
     int32_t displayId = ADISPLAY_ID_NONE;
@@ -240,6 +245,10 @@ struct WindowInfo : public Parcelable {
     // can be successfully focused. If null, this input window will not transfer its focus to
     // any other window.
     sp<IBinder> focusTransferTarget;
+
+    // Sets a property on this window indicating that its visible region should be considered when
+    // computing TrustedPresentation Thresholds.
+    bool canOccludePresentation = false;
 
     void setInputConfig(ftl::Flags<InputConfig> config, bool value);
 
@@ -263,6 +272,8 @@ struct WindowInfo : public Parcelable {
 
     status_t readFromParcel(const android::Parcel* parcel) override;
 };
+
+std::ostream& operator<<(std::ostream& out, const WindowInfo& window);
 
 /*
  * Handle for a window that can receive input.
@@ -312,4 +323,7 @@ protected:
 
     WindowInfo mInfo;
 };
+
+std::ostream& operator<<(std::ostream& out, const WindowInfoHandle& window);
+
 } // namespace android::gui

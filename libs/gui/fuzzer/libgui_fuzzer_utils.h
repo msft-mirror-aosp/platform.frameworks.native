@@ -100,17 +100,18 @@ public:
     MOCK_METHOD(binder::Status, setGameContentType, (const sp<IBinder>&, bool), (override));
     MOCK_METHOD(binder::Status, captureDisplay,
                 (const DisplayCaptureArgs&, const sp<IScreenCaptureListener>&), (override));
-    MOCK_METHOD(binder::Status, captureDisplayById, (int64_t, const sp<IScreenCaptureListener>&),
-                (override));
+    MOCK_METHOD(binder::Status, captureDisplayById,
+                (int64_t, const gui::CaptureArgs&, const sp<IScreenCaptureListener>&), (override));
     MOCK_METHOD(binder::Status, captureLayers,
                 (const LayerCaptureArgs&, const sp<IScreenCaptureListener>&), (override));
+    MOCK_METHOD(binder::Status, captureLayersSync,
+                (const LayerCaptureArgs&, gui::ScreenCaptureResults*), (override));
     MOCK_METHOD(binder::Status, clearAnimationFrameStats, (), (override));
     MOCK_METHOD(binder::Status, getAnimationFrameStats, (gui::FrameStats*), (override));
     MOCK_METHOD(binder::Status, overrideHdrTypes, (const sp<IBinder>&, const std::vector<int32_t>&),
                 (override));
     MOCK_METHOD(binder::Status, onPullAtom, (int32_t, gui::PullAtomData*), (override));
     MOCK_METHOD(binder::Status, getLayerDebugInfo, (std::vector<gui::LayerDebugInfo>*), (override));
-    MOCK_METHOD(binder::Status, getColorManagement, (bool*), (override));
     MOCK_METHOD(binder::Status, getCompositionPreference, (gui::CompositionPreference*),
                 (override));
     MOCK_METHOD(binder::Status, getDisplayedContentSamplingAttributes,
@@ -150,14 +151,26 @@ public:
                 (const gui::Color&, const gui::Color&, float, float, float), (override));
     MOCK_METHOD(binder::Status, getDisplayDecorationSupport,
                 (const sp<IBinder>&, std::optional<gui::DisplayDecorationSupport>*), (override));
-    MOCK_METHOD(binder::Status, setOverrideFrameRate, (int32_t, float), (override));
+    MOCK_METHOD(binder::Status, setGameModeFrameRateOverride, (int32_t, float), (override));
+    MOCK_METHOD(binder::Status, setGameDefaultFrameRateOverride, (int32_t, float), (override));
+    MOCK_METHOD(binder::Status, enableRefreshRateOverlay, (bool), (override));
+    MOCK_METHOD(binder::Status, setDebugFlash, (int), (override));
+    MOCK_METHOD(binder::Status, scheduleComposite, (), (override));
+    MOCK_METHOD(binder::Status, scheduleCommit, (), (override));
+    MOCK_METHOD(binder::Status, forceClientComposition, (bool), (override));
+    MOCK_METHOD(binder::Status, updateSmallAreaDetection,
+                (const std::vector<int32_t>&, const std::vector<float>&), (override));
+    MOCK_METHOD(binder::Status, setSmallAreaDetectionThreshold, (int32_t, float), (override));
     MOCK_METHOD(binder::Status, getGpuContextPriority, (int32_t*), (override));
     MOCK_METHOD(binder::Status, getMaxAcquiredBufferCount, (int32_t*), (override));
-    MOCK_METHOD(binder::Status, addWindowInfosListener, (const sp<gui::IWindowInfosListener>&),
-                (override));
+    MOCK_METHOD(binder::Status, addWindowInfosListener,
+                (const sp<gui::IWindowInfosListener>&, gui::WindowInfosListenerInfo*), (override));
     MOCK_METHOD(binder::Status, removeWindowInfosListener, (const sp<gui::IWindowInfosListener>&),
                 (override));
     MOCK_METHOD(binder::Status, getOverlaySupport, (gui::OverlayProperties*), (override));
+    MOCK_METHOD(binder::Status, getStalledTransactionInfo,
+                (int32_t, std::optional<gui::StalledTransactionInfo>*), (override));
+    MOCK_METHOD(binder::Status, getSchedulingPolicy, (gui::SchedulingPolicy*), (override));
 };
 
 class FakeBnSurfaceComposerClient : public gui::BnSurfaceComposerClient {
@@ -178,6 +191,8 @@ public:
 
     MOCK_METHOD(binder::Status, mirrorDisplay,
                 (int64_t displayId, gui::CreateSurfaceResult* outResult), (override));
+
+    MOCK_METHOD(binder::Status, getSchedulingPolicy, (gui::SchedulingPolicy*), (override));
 };
 
 class FakeDisplayEventDispatcher : public DisplayEventDispatcher {
@@ -189,10 +204,12 @@ public:
 
     MOCK_METHOD4(dispatchVsync, void(nsecs_t, PhysicalDisplayId, uint32_t, VsyncEventData));
     MOCK_METHOD3(dispatchHotplug, void(nsecs_t, PhysicalDisplayId, bool));
+    MOCK_METHOD2(dispatchHotplugConnectionError, void(nsecs_t, int32_t));
     MOCK_METHOD4(dispatchModeChanged, void(nsecs_t, PhysicalDisplayId, int32_t, nsecs_t));
     MOCK_METHOD2(dispatchNullEvent, void(nsecs_t, PhysicalDisplayId));
     MOCK_METHOD3(dispatchFrameRateOverrides,
                  void(nsecs_t, PhysicalDisplayId, std::vector<FrameRateOverride>));
+    MOCK_METHOD3(dispatchHdcpLevelsChanged, void(PhysicalDisplayId, int32_t, int32_t));
 };
 
 } // namespace android

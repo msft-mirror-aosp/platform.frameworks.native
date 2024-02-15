@@ -25,6 +25,7 @@
 #include <GrContextOptions.h>
 #include <vk/GrVkExtensions.h>
 #include <vk/GrVkTypes.h>
+#include <include/gpu/ganesh/vk/GrVkDirectContext.h>
 
 #include <android-base/stringprintf.h>
 #include <gui/TraceUtils.h>
@@ -33,6 +34,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -66,6 +69,13 @@ struct DestroySemaphoreInfo {
     DestroySemaphoreInfo(VkSemaphore semaphore) : mSemaphore(semaphore) {}
 };
 
+namespace {
+void onVkDeviceFault(void* callbackContext, const std::string& description,
+                     const std::vector<VkDeviceFaultAddressInfoEXT>& addressInfos,
+                     const std::vector<VkDeviceFaultVendorInfoEXT>& vendorInfos,
+                     const std::vector<std::byte>& vendorBinaryData);
+} // anonymous namespace
+
 struct VulkanInterface {
     bool initialized = false;
     VkInstance instance;
@@ -78,6 +88,7 @@ struct VulkanInterface {
     VkPhysicalDeviceFeatures2* physicalDeviceFeatures2 = nullptr;
     VkPhysicalDeviceSamplerYcbcrConversionFeatures* samplerYcbcrConversionFeatures = nullptr;
     VkPhysicalDeviceProtectedMemoryFeatures* protectedMemoryFeatures = nullptr;
+    VkPhysicalDeviceFaultFeaturesEXT* deviceFaultFeatures = nullptr;
     GrVkGetProc grGetProc;
     bool isProtected;
     bool isRealtimePriority;
@@ -99,6 +110,8 @@ struct VulkanInterface {
         backendContext.fDeviceFeatures2 = physicalDeviceFeatures2;
         backendContext.fGetProc = grGetProc;
         backendContext.fProtectedContext = isProtected ? GrProtected::kYes : GrProtected::kNo;
+        backendContext.fDeviceLostContext = this; // VulkanInterface is long-lived
+        backendContext.fDeviceLostProc = onVkDeviceFault;
         return backendContext;
     };
 
@@ -176,6 +189,68 @@ struct VulkanInterface {
         funcs.vkDestroySemaphore(device, semaphore, nullptr);
     }
 };
+
+namespace {
+void onVkDeviceFault(void* callbackContext, const std::string& description,
+                     const std::vector<VkDeviceFaultAddressInfoEXT>& addressInfos,
+                     const std::vector<VkDeviceFaultVendorInfoEXT>& vendorInfos,
+                     const std::vector<std::byte>& vendorBinaryData) {
+    VulkanInterface* interface = static_cast<VulkanInterface*>(callbackContext);
+    const std::string protectedStr = interface->isProtected ? "protected" : "non-protected";
+    // The final crash string should contain as much differentiating info as possible, up to 1024
+    // bytes. As this final message is constructed, the same information is also dumped to the logs
+    // but in a more verbose format. Building the crash string is unsightly, so the clearer logging
+    // statement is always placed first to give context.
+    ALOGE("VK_ERROR_DEVICE_LOST (%s context): %s", protectedStr.c_str(), description.c_str());
+    std::stringstream crashMsg;
+    crashMsg << "VK_ERROR_DEVICE_LOST (" << protectedStr;
+
+    if (!addressInfos.empty()) {
+        ALOGE("%zu VkDeviceFaultAddressInfoEXT:", addressInfos.size());
+        crashMsg << ", " << addressInfos.size() << " address info (";
+        for (VkDeviceFaultAddressInfoEXT addressInfo : addressInfos) {
+            ALOGE(" addressType:       %d", (int)addressInfo.addressType);
+            ALOGE("  reportedAddress:  %" PRIu64, addressInfo.reportedAddress);
+            ALOGE("  addressPrecision: %" PRIu64, addressInfo.addressPrecision);
+            crashMsg << addressInfo.addressType << ":"
+                     << addressInfo.reportedAddress << ":"
+                     << addressInfo.addressPrecision << ", ";
+        }
+        crashMsg.seekp(-2, crashMsg.cur); // Move back to overwrite trailing ", "
+        crashMsg << ")";
+    }
+
+    if (!vendorInfos.empty()) {
+        ALOGE("%zu VkDeviceFaultVendorInfoEXT:", vendorInfos.size());
+        crashMsg << ", " << vendorInfos.size() << " vendor info (";
+        for (VkDeviceFaultVendorInfoEXT vendorInfo : vendorInfos) {
+            ALOGE(" description:      %s", vendorInfo.description);
+            ALOGE("  vendorFaultCode: %" PRIu64, vendorInfo.vendorFaultCode);
+            ALOGE("  vendorFaultData: %" PRIu64, vendorInfo.vendorFaultData);
+            // Omit descriptions for individual vendor info structs in the crash string, as the
+            // fault code and fault data fields should be enough for clustering, and the verbosity
+            // isn't worth it. Additionally, vendors may just set the general description field of
+            // the overall fault to the description of the first element in this list, and that
+            // overall description will be placed at the end of the crash string.
+            crashMsg << vendorInfo.vendorFaultCode << ":"
+                     << vendorInfo.vendorFaultData << ", ";
+        }
+        crashMsg.seekp(-2, crashMsg.cur); // Move back to overwrite trailing ", "
+        crashMsg << ")";
+    }
+
+    if (!vendorBinaryData.empty()) {
+        // TODO: b/322830575 - Log in base64, or dump directly to a file that gets put in bugreports
+        ALOGE("%zu bytes of vendor-specific binary data (please notify Android's Core Graphics"
+              " Stack team if you observe this message).",
+              vendorBinaryData.size());
+        crashMsg << ", " << vendorBinaryData.size() << " bytes binary";
+    }
+
+    crashMsg << "): " << description;
+    LOG_ALWAYS_FATAL("%s", crashMsg.str().c_str());
+};
+} // anonymous namespace
 
 static GrVkGetProc sGetProc = [](const char* proc_name, VkInstance instance, VkDevice device) {
     if (device != VK_NULL_HANDLE) {
@@ -263,7 +338,7 @@ VulkanInterface initVulkanInterface(bool protectedContent = false) {
     VK_GET_INST_PROC(instance, EnumerateDeviceExtensionProperties);
     VK_GET_INST_PROC(instance, GetPhysicalDeviceProperties2);
     VK_GET_INST_PROC(instance, GetPhysicalDeviceExternalSemaphoreProperties);
-    VK_GET_INST_PROC(instance, GetPhysicalDeviceQueueFamilyProperties);
+    VK_GET_INST_PROC(instance, GetPhysicalDeviceQueueFamilyProperties2);
     VK_GET_INST_PROC(instance, GetPhysicalDeviceFeatures2);
     VK_GET_INST_PROC(instance, CreateDevice);
 
@@ -342,17 +417,37 @@ VulkanInterface initVulkanInterface(bool protectedContent = false) {
     }
 
     uint32_t queueCount;
-    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueCount, nullptr);
+    vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &queueCount, nullptr);
     if (queueCount == 0) {
         BAIL("Could not find queues for physical device");
     }
 
-    std::vector<VkQueueFamilyProperties> queueProps(queueCount);
-    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueCount, queueProps.data());
+    std::vector<VkQueueFamilyProperties2> queueProps(queueCount);
+    std::vector<VkQueueFamilyGlobalPriorityPropertiesEXT> queuePriorityProps(queueCount);
+    VkQueueGlobalPriorityKHR queuePriority = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+    // Even though we don't yet know if the VK_EXT_global_priority extension is available,
+    // we can safely add the request to the pNext chain, and if the extension is not
+    // available, it will be ignored.
+    for (uint32_t i = 0; i < queueCount; ++i) {
+        queuePriorityProps[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_EXT;
+        queuePriorityProps[i].pNext = nullptr;
+        queueProps[i].pNext = &queuePriorityProps[i];
+    }
+    vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &queueCount, queueProps.data());
 
     int graphicsQueueIndex = -1;
     for (uint32_t i = 0; i < queueCount; ++i) {
-        if (queueProps[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+        // Look at potential answers to the VK_EXT_global_priority query.  If answers were
+        // provided, we may adjust the queuePriority.
+        if (queueProps[i].queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+            for (uint32_t j = 0; j < queuePriorityProps[i].priorityCount; j++) {
+                if (queuePriorityProps[i].priorities[j] > queuePriority) {
+                    queuePriority = queuePriorityProps[i].priorities[j];
+                }
+            }
+            if (queuePriority == VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR) {
+                interface.isRealtimePriority = true;
+            }
             graphicsQueueIndex = i;
             break;
         }
@@ -408,9 +503,21 @@ VulkanInterface initVulkanInterface(bool protectedContent = false) {
         tailPnext = &interface.protectedMemoryFeatures->pNext;
     }
 
+    if (interface.grExtensions.hasExtension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME, 1)) {
+        interface.deviceFaultFeatures = new VkPhysicalDeviceFaultFeaturesEXT;
+        interface.deviceFaultFeatures->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
+        interface.deviceFaultFeatures->pNext = nullptr;
+        *tailPnext = interface.deviceFaultFeatures;
+        tailPnext = &interface.deviceFaultFeatures->pNext;
+    }
+
     vkGetPhysicalDeviceFeatures2(physicalDevice, interface.physicalDeviceFeatures2);
     // Looks like this would slow things down and we can't depend on it on all platforms
     interface.physicalDeviceFeatures2->features.robustBufferAccess = VK_FALSE;
+
+    if (protectedContent && !interface.protectedMemoryFeatures->protectedMemory) {
+        BAIL("Protected memory not supported");
+    }
 
     float queuePriorities[1] = {0.0f};
     void* queueNextPtr = nullptr;
@@ -419,12 +526,11 @@ VulkanInterface initVulkanInterface(bool protectedContent = false) {
             VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_EXT,
             nullptr,
             // If queue priority is supported, RE should always have realtime priority.
-            VK_QUEUE_GLOBAL_PRIORITY_REALTIME_EXT,
+            queuePriority,
     };
 
     if (interface.grExtensions.hasExtension(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME, 2)) {
         queueNextPtr = &queuePriorityCreateInfo;
-        interface.isRealtimePriority = true;
     }
 
     VkDeviceQueueCreateFlags deviceQueueCreateFlags =
@@ -521,6 +627,10 @@ void teardownVulkanInterface(VulkanInterface* interface) {
         delete interface->physicalDeviceFeatures2;
     }
 
+    if (interface->deviceFaultFeatures) {
+        delete interface->deviceFaultFeatures;
+    }
+
     interface->samplerYcbcrConversionFeatures = nullptr;
     interface->physicalDeviceFeatures2 = nullptr;
     interface->protectedMemoryFeatures = nullptr;
@@ -572,8 +682,8 @@ std::unique_ptr<SkiaVkRenderEngine> SkiaVkRenderEngine::create(
 }
 
 SkiaVkRenderEngine::SkiaVkRenderEngine(const RenderEngineCreationArgs& args)
-      : SkiaRenderEngine(args.renderEngineType, static_cast<PixelFormat>(args.pixelFormat),
-                         args.useColorManagement, args.supportsBackgroundBlur) {}
+      : SkiaRenderEngine(args.threaded, static_cast<PixelFormat>(args.pixelFormat),
+                         args.supportsBackgroundBlur) {}
 
 SkiaVkRenderEngine::~SkiaVkRenderEngine() {
     finishRenderingAndAbandonContext();
@@ -584,11 +694,11 @@ SkiaRenderEngine::Contexts SkiaVkRenderEngine::createDirectContexts(
     sSetupVulkanInterface();
 
     SkiaRenderEngine::Contexts contexts;
-    contexts.first = GrDirectContext::MakeVulkan(sVulkanInterface.getBackendContext(), options);
+    contexts.first = GrDirectContexts::MakeVulkan(sVulkanInterface.getBackendContext(), options);
     if (supportsProtectedContentImpl()) {
         contexts.second =
-                GrDirectContext::MakeVulkan(sProtectedContentVulkanInterface.getBackendContext(),
-                                            options);
+                GrDirectContexts::MakeVulkan(sProtectedContentVulkanInterface.getBackendContext(),
+                                             options);
     }
 
     return contexts;
@@ -662,7 +772,7 @@ base::unique_fd SkiaVkRenderEngine::flushAndSubmit(GrDirectContext* grContext) {
         flushInfo.fFinishedContext = destroySemaphoreInfo;
     }
     GrSemaphoresSubmitted submitted = grContext->flush(flushInfo);
-    grContext->submit(false /* no cpu sync */);
+    grContext->submit(GrSyncCpu::kNo);
     int drawFenceFd = -1;
     if (semaphore != VK_NULL_HANDLE) {
         if (GrSemaphoresSubmitted::kYes == submitted) {

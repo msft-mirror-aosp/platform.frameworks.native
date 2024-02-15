@@ -18,8 +18,10 @@
 
 #include <android/sensor.h>
 #include <ftl/flags.h>
+#include <ftl/mixins.h>
 #include <input/Input.h>
 #include <input/KeyCharacterMap.h>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -68,6 +70,20 @@ struct InputDeviceIdentifier {
      * while conforming to the filename limitations.
      */
     std::string getCanonicalName() const;
+
+    bool operator==(const InputDeviceIdentifier&) const = default;
+    bool operator!=(const InputDeviceIdentifier&) const = default;
+};
+
+/**
+ * Holds View related behaviors for an InputDevice.
+ */
+struct InputDeviceViewBehavior {
+    /**
+     * The smooth scroll behavior that applies for all source/axis, if defined by the device.
+     * Empty optional if the device has not specified the default smooth scroll behavior.
+     */
+    std::optional<bool> shouldSmoothScroll;
 };
 
 /* Types of input device sensors. Keep sync with core/java/android/hardware/Sensor.java */
@@ -179,11 +195,24 @@ struct InputDeviceSensorInfo {
     int32_t id;
 };
 
+struct BrightnessLevel : ftl::DefaultConstructible<BrightnessLevel, std::uint8_t>,
+                         ftl::Equatable<BrightnessLevel>,
+                         ftl::Orderable<BrightnessLevel>,
+                         ftl::Addable<BrightnessLevel> {
+    using DefaultConstructible::DefaultConstructible;
+};
+
 struct InputDeviceLightInfo {
     explicit InputDeviceLightInfo(std::string name, int32_t id, InputDeviceLightType type,
                                   ftl::Flags<InputDeviceLightCapability> capabilityFlags,
-                                  int32_t ordinal)
-          : name(name), id(id), type(type), capabilityFlags(capabilityFlags), ordinal(ordinal) {}
+                                  int32_t ordinal,
+                                  std::set<BrightnessLevel> preferredBrightnessLevels)
+          : name(name),
+            id(id),
+            type(type),
+            capabilityFlags(capabilityFlags),
+            ordinal(ordinal),
+            preferredBrightnessLevels(std::move(preferredBrightnessLevels)) {}
     // Name string of the light.
     std::string name;
     // Light id
@@ -194,6 +223,8 @@ struct InputDeviceLightInfo {
     ftl::Flags<InputDeviceLightCapability> capabilityFlags;
     // Ordinal of the light
     int32_t ordinal;
+    // Custom brightness levels for the light
+    std::set<BrightnessLevel> preferredBrightnessLevels;
 };
 
 struct InputDeviceBatteryInfo {
@@ -246,7 +277,8 @@ public:
 
     void initialize(int32_t id, int32_t generation, int32_t controllerNumber,
                     const InputDeviceIdentifier& identifier, const std::string& alias,
-                    bool isExternal, bool hasMic, int32_t associatedDisplayId);
+                    bool isExternal, bool hasMic, int32_t associatedDisplayId,
+                    InputDeviceViewBehavior viewBehavior = {{}});
 
     inline int32_t getId() const { return mId; }
     inline int32_t getControllerNumber() const { return mControllerNumber; }
@@ -277,6 +309,8 @@ public:
     inline const std::optional<KeyboardLayoutInfo>& getKeyboardLayoutInfo() const {
         return mKeyboardLayoutInfo;
     }
+
+    inline const InputDeviceViewBehavior& getViewBehavior() const { return mViewBehavior; }
 
     inline void setKeyCharacterMap(const std::shared_ptr<KeyCharacterMap> value) {
         mKeyCharacterMap = value;
@@ -339,6 +373,8 @@ private:
     std::unordered_map<int32_t, InputDeviceLightInfo> mLights;
     /* Map from battery ID to battery info */
     std::unordered_map<int32_t, InputDeviceBatteryInfo> mBatteries;
+    /** The View related behaviors for the device. */
+    InputDeviceViewBehavior mViewBehavior;
 };
 
 /* Types of input device configuration files. */

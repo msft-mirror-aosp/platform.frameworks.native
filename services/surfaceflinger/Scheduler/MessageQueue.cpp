@@ -75,9 +75,9 @@ void MessageQueue::vsyncCallback(nsecs_t vsyncTime, nsecs_t targetWakeupTime, ns
     mHandler->dispatchFrame(vsyncId, expectedVsyncTime);
 }
 
-void MessageQueue::initVsync(std::shared_ptr<scheduler::VSyncDispatch> dispatch,
-                             frametimeline::TokenManager& tokenManager,
-                             std::chrono::nanoseconds workDuration) {
+void MessageQueue::initVsyncInternal(std::shared_ptr<scheduler::VSyncDispatch> dispatch,
+                                     frametimeline::TokenManager& tokenManager,
+                                     std::chrono::nanoseconds workDuration) {
     std::unique_ptr<scheduler::VSyncCallbackRegistration> oldRegistration;
     {
         std::lock_guard lock(mVsync.mutex);
@@ -87,7 +87,7 @@ void MessageQueue::initVsync(std::shared_ptr<scheduler::VSyncDispatch> dispatch,
     }
 
     // See comments in onNewVsyncSchedule. Today, oldRegistration should be
-    // empty, but nothing prevents us from calling initVsync multiple times, so
+    // empty, but nothing prevents us from calling initVsyncInternal multiple times, so
     // go ahead and destruct it outside the lock for safety.
     oldRegistration.reset();
 }
@@ -125,7 +125,7 @@ std::unique_ptr<scheduler::VSyncCallbackRegistration> MessageQueue::onNewVsyncSc
         mVsync.scheduledFrameTime =
                 mVsync.registration->schedule({.workDuration = mVsync.workDuration.get().count(),
                                                .readyDuration = 0,
-                                               .earliestVsync = mVsync.lastCallbackTime.ns()});
+                                               .lastVsync = mVsync.lastCallbackTime.ns()});
     }
     return oldRegistration;
 }
@@ -143,7 +143,7 @@ void MessageQueue::setDuration(std::chrono::nanoseconds workDuration) {
     mVsync.scheduledFrameTime =
             mVsync.registration->update({.workDuration = mVsync.workDuration.get().count(),
                                          .readyDuration = 0,
-                                         .earliestVsync = mVsync.lastCallbackTime.ns()});
+                                         .lastVsync = mVsync.lastCallbackTime.ns()});
 }
 
 void MessageQueue::waitMessage() {
@@ -196,7 +196,7 @@ void MessageQueue::scheduleFrame() {
     mVsync.scheduledFrameTime =
             mVsync.registration->schedule({.workDuration = mVsync.workDuration.get().count(),
                                            .readyDuration = 0,
-                                           .earliestVsync = mVsync.lastCallbackTime.ns()});
+                                           .lastVsync = mVsync.lastCallbackTime.ns()});
 }
 
 auto MessageQueue::getScheduledFrameTime() const -> std::optional<Clock::time_point> {

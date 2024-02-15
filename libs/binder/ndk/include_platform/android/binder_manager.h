@@ -120,7 +120,7 @@ binder_status_t AServiceManager_registerLazyService(AIBinder* binder, const char
 
 /**
  * Gets a binder object with this specific instance name. Efficiently waits for the service.
- * If the service is not declared, it will wait indefinitely. Requires the threadpool
+ * If the service is not ever registered, it will wait indefinitely. Requires the threadpool
  * to be started in the service.
  * This also implicitly calls AIBinder_incStrong (so the caller of this function is responsible
  * for calling AIBinder_decStrong).
@@ -241,6 +241,18 @@ bool AServiceManager_isUpdatableViaApex(const char* instance) __INTRODUCED_IN(31
 void AServiceManager_getUpdatableApexName(const char* instance, void* context,
                                           void (*callback)(const char*, void*))
         __INTRODUCED_IN(__ANDROID_API_U__);
+
+/**
+ * Opens a declared passthrough HAL.
+ *
+ * \param instance identifier of the passthrough service (e.g. "mapper")
+ * \param instance identifier of the implemenatation (e.g. "default")
+ * \param flag passed to dlopen()
+ */
+void* AServiceManager_openDeclaredPassthroughHal(const char* interface, const char* instance,
+                                                 int flag)
+        // TODO(b/302113279) use __INTRODUCED_LLNDK for vendor variants
+        __INTRODUCED_IN(__ANDROID_API_V__);
 
 /**
  * Prevent lazy services without client from shutting down their process

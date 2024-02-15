@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -26,7 +27,9 @@
 #include <android-base/thread_annotations.h>
 #include <android/sysprop/InputProperties.sysprop.h>
 #include <input/Input.h>
+#include <input/MotionPredictorMetricsManager.h>
 #include <input/TfLiteMotionPredictor.h>
+#include <utils/Timers.h> // for nsecs_t
 
 namespace android {
 
@@ -55,20 +58,24 @@ static inline bool isMotionPredictionEnabled() {
  */
 class MotionPredictor {
 public:
+    using ReportAtomFunction = MotionPredictorMetricsManager::ReportAtomFunction;
+
     /**
      * Parameters:
      * predictionTimestampOffsetNanos: additional, constant shift to apply to the target
      * prediction time. The prediction will target the time t=(prediction time +
      * predictionTimestampOffsetNanos).
      *
-     * modelPath: filesystem path to a TfLiteMotionPredictorModel flatbuffer, or nullptr to use the
-     * default model path.
-     *
-     * checkEnableMotionPredition: the function to check whether the prediction should run. Used to
+     * checkEnableMotionPrediction: the function to check whether the prediction should run. Used to
      * provide an additional way of turning prediction on and off. Can be toggled at runtime.
+     *
+     * reportAtomFunction: the function that will be called to report prediction metrics. If
+     * omitted, the implementation will choose a default metrics reporting mechanism.
      */
     MotionPredictor(nsecs_t predictionTimestampOffsetNanos,
-                    std::function<bool()> checkEnableMotionPrediction = isMotionPredictionEnabled);
+                    std::function<bool()> checkEnableMotionPrediction = isMotionPredictionEnabled,
+                    ReportAtomFunction reportAtomFunction = {});
+
     /**
      * Record the actual motion received by the view. This event will be used for calculating the
      * predictions.
@@ -77,7 +84,9 @@ public:
      * consistent with the previously recorded events.
      */
     android::base::Result<void> record(const MotionEvent& event);
+
     std::unique_ptr<MotionEvent> predict(nsecs_t timestamp);
+
     bool isPredictionAvailable(int32_t deviceId, int32_t source);
 
 private:
@@ -88,6 +97,10 @@ private:
 
     std::unique_ptr<TfLiteMotionPredictorBuffers> mBuffers;
     std::optional<MotionEvent> mLastEvent;
+
+    std::optional<MotionPredictorMetricsManager> mMetricsManager;
+
+    const ReportAtomFunction mReportAtomFunction;
 };
 
 } // namespace android

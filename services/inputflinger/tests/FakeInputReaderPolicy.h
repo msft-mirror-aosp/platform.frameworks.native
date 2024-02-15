@@ -64,7 +64,7 @@ public:
     void removeDisabledDevice(int32_t deviceId);
     void setPointerController(std::shared_ptr<FakePointerController> controller);
     const InputReaderConfiguration& getReaderConfiguration() const;
-    const std::vector<InputDeviceInfo>& getInputDevices() const;
+    const std::vector<InputDeviceInfo> getInputDevices() const;
     TouchAffineTransformation getTouchAffineTransformation(const std::string& inputDeviceDescriptor,
                                                            ui::Rotation surfaceRotation);
     void setTouchAffineTransformation(const TouchAffineTransformation t);
@@ -77,6 +77,10 @@ public:
     void setVelocityControlParams(const VelocityControlParameters& params);
     void setStylusButtonMotionEventsEnabled(bool enabled);
     void setStylusPointerIconEnabled(bool enabled);
+    void setIsInputMethodConnectionActive(bool active);
+    bool isInputMethodConnectionActive() override;
+    std::optional<DisplayViewport> getPointerViewportForAssociatedDisplay(
+            int32_t associatedDisplayId) override;
 
 private:
     void getReaderConfiguration(InputReaderConfiguration* outConfig) override;
@@ -84,12 +88,12 @@ private:
             int32_t /*deviceId*/) override;
     void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>& inputDevices) override;
     std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(
-            const InputDeviceIdentifier&) override;
+            const InputDeviceIdentifier&, const std::optional<KeyboardLayoutInfo>) override;
     std::string getDeviceAlias(const InputDeviceIdentifier&) override;
     void waitForInputDevices(std::function<void(bool)> processDevicesChanged);
     void notifyStylusGestureStarted(int32_t deviceId, nsecs_t eventTime) override;
 
-    std::mutex mLock;
+    mutable std::mutex mLock;
     std::condition_variable mDevicesChangedCondition;
 
     InputReaderConfiguration mConfig;
@@ -98,7 +102,10 @@ private:
     bool mInputDevicesChanged GUARDED_BY(mLock){false};
     std::vector<DisplayViewport> mViewports;
     TouchAffineTransformation transform;
-    std::optional<int32_t /*deviceId*/> mStylusGestureNotified GUARDED_BY(mLock){};
+    bool mIsInputMethodConnectionActive{false};
+
+    std::condition_variable mStylusGestureNotifiedCondition;
+    std::optional<DeviceId> mDeviceIdOfNotifiedStylusGesture GUARDED_BY(mLock){};
 
     uint32_t mNextPointerCaptureSequenceNumber{0};
 };

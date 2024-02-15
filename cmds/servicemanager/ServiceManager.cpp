@@ -18,6 +18,7 @@
 
 #include <android-base/logging.h>
 #include <android-base/properties.h>
+#include <android-base/strings.h>
 #include <binder/BpBinder.h>
 #include <binder/IPCThreadState.h>
 #include <binder/ProcessState.h>
@@ -33,6 +34,8 @@
 #endif // __ANDROID_RECOVERY__
 #include <vintf/constants.h>
 #endif  // !VENDORSERVICEMANAGER
+
+#include "NameUtil.h"
 
 using ::android::binder::Status;
 using ::android::internal::Stability;
@@ -83,6 +86,10 @@ static bool forEachManifest(const std::function<bool(const ManifestWithDescripti
     return false;
 }
 
+static std::string getNativeInstanceName(const vintf::ManifestInstance& instance) {
+    return instance.package() + "/" + instance.instance();
+}
+
 struct AidlName {
     std::string package;
     std::string iface;
@@ -104,7 +111,26 @@ struct AidlName {
     }
 };
 
+static std::string getAidlInstanceName(const vintf::ManifestInstance& instance) {
+    return instance.package() + "." + instance.interface() + "/" + instance.instance();
+}
+
 static bool isVintfDeclared(const std::string& name) {
+    NativeName nname;
+    if (NativeName::fill(name, &nname)) {
+        bool found = forEachManifest([&](const ManifestWithDescription& mwd) {
+            if (mwd.manifest->hasNativeInstance(nname.package, nname.instance)) {
+                ALOGI("Found %s in %s VINTF manifest.", name.c_str(), mwd.description);
+                return true; // break
+            }
+            return false; // continue
+        });
+        if (!found) {
+            ALOGI("Could not find %s in the VINTF manifest.", name.c_str());
+        }
+        return found;
+    }
+
     AidlName aname;
     if (!AidlName::fill(name, &aname)) return false;
 
@@ -117,23 +143,57 @@ static bool isVintfDeclared(const std::string& name) {
     });
 
     if (!found) {
+        std::set<std::string> instances;
+        forEachManifest([&](const ManifestWithDescription& mwd) {
+            std::set<std::string> res = mwd.manifest->getAidlInstances(aname.package, aname.iface);
+            instances.insert(res.begin(), res.end());
+            return true;
+        });
+
+        std::string available;
+        if (instances.empty()) {
+            available = "No alternative instances declared in VINTF";
+        } else {
+            // for logging only. We can't return this information to the client
+            // because they may not have permissions to find or list those
+            // instances
+            available = "VINTF declared instances: " + base::Join(instances, ", ");
+        }
         // Although it is tested, explicitly rebuilding qualified name, in case it
         // becomes something unexpected.
-        ALOGI("Could not find %s.%s/%s in the VINTF manifest.", aname.package.c_str(),
-              aname.iface.c_str(), aname.instance.c_str());
+        ALOGI("Could not find %s.%s/%s in the VINTF manifest. %s.", aname.package.c_str(),
+              aname.iface.c_str(), aname.instance.c_str(), available.c_str());
     }
 
     return found;
 }
 
 static std::optional<std::string> getVintfUpdatableApex(const std::string& name) {
+    NativeName nname;
+    if (NativeName::fill(name, &nname)) {
+        std::optional<std::string> updatableViaApex;
+
+        forEachManifest([&](const ManifestWithDescription& mwd) {
+            bool cont = mwd.manifest->forEachInstance([&](const auto& manifestInstance) {
+                if (manifestInstance.format() != vintf::HalFormat::NATIVE) return true;
+                if (manifestInstance.package() != nname.package) return true;
+                if (manifestInstance.instance() != nname.instance) return true;
+                updatableViaApex = manifestInstance.updatableViaApex();
+                return false; // break (libvintf uses opposite convention)
+            });
+            return !cont;
+        });
+
+        return updatableViaApex;
+    }
+
     AidlName aname;
     if (!AidlName::fill(name, &aname)) return std::nullopt;
 
     std::optional<std::string> updatableViaApex;
 
     forEachManifest([&](const ManifestWithDescription& mwd) {
-        mwd.manifest->forEachInstance([&](const auto& manifestInstance) {
+        bool cont = mwd.manifest->forEachInstance([&](const auto& manifestInstance) {
             if (manifestInstance.format() != vintf::HalFormat::AIDL) return true;
             if (manifestInstance.package() != aname.package) return true;
             if (manifestInstance.interface() != aname.iface) return true;
@@ -141,31 +201,31 @@ static std::optional<std::string> getVintfUpdatableApex(const std::string& name)
             updatableViaApex = manifestInstance.updatableViaApex();
             return false; // break (libvintf uses opposite convention)
         });
-        if (updatableViaApex.has_value()) return true; // break (found match)
-        return false; // continue
+        return !cont;
     });
 
     return updatableViaApex;
 }
 
-static std::vector<std::string> getVintfUpdatableInstances(const std::string& apexName) {
-    std::vector<std::string> instances;
+static std::vector<std::string> getVintfUpdatableNames(const std::string& apexName) {
+    std::vector<std::string> names;
 
     forEachManifest([&](const ManifestWithDescription& mwd) {
         mwd.manifest->forEachInstance([&](const auto& manifestInstance) {
-            if (manifestInstance.format() == vintf::HalFormat::AIDL &&
-                manifestInstance.updatableViaApex().has_value() &&
+            if (manifestInstance.updatableViaApex().has_value() &&
                 manifestInstance.updatableViaApex().value() == apexName) {
-                std::string aname = manifestInstance.package() + "." +
-                        manifestInstance.interface() + "/" + manifestInstance.instance();
-                instances.push_back(aname);
+                if (manifestInstance.format() == vintf::HalFormat::NATIVE) {
+                    names.push_back(getNativeInstanceName(manifestInstance));
+                } else if (manifestInstance.format() == vintf::HalFormat::AIDL) {
+                    names.push_back(getAidlInstanceName(manifestInstance));
+                }
             }
             return true; // continue (libvintf uses opposite convention)
         });
         return false; // continue
     });
 
-    return instances;
+    return names;
 }
 
 static std::optional<ConnectionInfo> getVintfConnectionInfo(const std::string& name) {
@@ -200,6 +260,18 @@ static std::optional<ConnectionInfo> getVintfConnectionInfo(const std::string& n
 static std::vector<std::string> getVintfInstances(const std::string& interface) {
     size_t lastDot = interface.rfind('.');
     if (lastDot == std::string::npos) {
+        // This might be a package for native instance.
+        std::vector<std::string> ret;
+        (void)forEachManifest([&](const ManifestWithDescription& mwd) {
+            auto instances = mwd.manifest->getNativeInstances(interface);
+            ret.insert(ret.end(), instances.begin(), instances.end());
+            return false; // continue
+        });
+        // If found, return it without error log.
+        if (!ret.empty()) {
+            return ret;
+        }
+
         ALOGE("VINTF interfaces require names in Java package format (e.g. some.package.foo.IFoo) "
               "but got: %s",
               interface.c_str());
@@ -291,6 +363,8 @@ sp<IBinder> ServiceManager::tryGetService(const std::string& name, bool startIfN
         service = &(it->second);
 
         if (!service->allowIsolated && is_multiuser_uid_isolated(ctx.uid)) {
+            LOG(WARNING) << "Isolated app with UID " << ctx.uid << " requested '" << name
+                         << "', but the service is not allowed for isolated apps.";
             return nullptr;
         }
         out = service->binder;
@@ -301,7 +375,7 @@ sp<IBinder> ServiceManager::tryGetService(const std::string& name, bool startIfN
     }
 
     if (!out && startIfNotFound) {
-        tryStartService(name);
+        tryStartService(ctx, name);
     }
 
     if (out) {
@@ -372,8 +446,10 @@ Status ServiceManager::addService(const std::string& name, const sp<IBinder>& bi
     }
 
     auto it = mNameToService.find(name);
+    bool prevClients = false;
     if (it != mNameToService.end()) {
         const Service& existing = it->second;
+        prevClients = existing.hasClients;
 
         // We could do better than this because if the other service dies, it
         // may not have an entry here. However, this case is unlikely. We are
@@ -401,12 +477,14 @@ Status ServiceManager::addService(const std::string& name, const sp<IBinder>& bi
             .binder = binder,
             .allowIsolated = allowIsolated,
             .dumpPriority = dumpPriority,
+            .hasClients = prevClients, // see b/279898063, matters if existing callbacks
+            .guaranteeClient = false,
             .ctx = ctx,
     };
 
     if (auto it = mNameToRegistrationCallback.find(name); it != mNameToRegistrationCallback.end()) {
-        // See also getService - handles case where client never gets the service,
-        // we want the service to quit.
+        // If someone is currently waiting on the service, notify the service that
+        // we're waiting and flush it to the service.
         mNameToService[name].guaranteeClient = true;
         CHECK(handleServiceClientCallback(2 /* sm + transaction */, name, false));
         mNameToService[name].guaranteeClient = true;
@@ -573,20 +651,20 @@ Status ServiceManager::getUpdatableNames([[maybe_unused]] const std::string& ape
                                          std::vector<std::string>* outReturn) {
     auto ctx = mAccess->getCallingContext();
 
-    std::vector<std::string> apexUpdatableInstances;
+    std::vector<std::string> apexUpdatableNames;
 #ifndef VENDORSERVICEMANAGER
-    apexUpdatableInstances = getVintfUpdatableInstances(apexName);
+    apexUpdatableNames = getVintfUpdatableNames(apexName);
 #endif
 
     outReturn->clear();
 
-    for (const std::string& instance : apexUpdatableInstances) {
-        if (mAccess->canFind(ctx, instance)) {
-            outReturn->push_back(instance);
+    for (const std::string& name : apexUpdatableNames) {
+        if (mAccess->canFind(ctx, name)) {
+            outReturn->push_back(name);
         }
     }
 
-    if (outReturn->size() == 0 && apexUpdatableInstances.size() != 0) {
+    if (outReturn->size() == 0 && apexUpdatableNames.size() != 0) {
         return Status::fromExceptionCode(Status::EX_SECURITY, "SELinux denied.");
     }
 
@@ -633,6 +711,14 @@ void ServiceManager::removeRegistrationCallback(const wp<IBinder>& who,
 void ServiceManager::binderDied(const wp<IBinder>& who) {
     for (auto it = mNameToService.begin(); it != mNameToService.end();) {
         if (who == it->second.binder) {
+            // TODO: currently, this entry contains the state also
+            // associated with mNameToClientCallback. If we allowed
+            // other processes to register client callbacks, we
+            // would have to preserve hasClients (perhaps moving
+            // that state into mNameToClientCallback, which is complicated
+            // because those callbacks are associated w/ particular binder
+            // objects, though they are indexed by name now, they may
+            // need to be indexed by binder at that point).
             it = mNameToService.erase(it);
         } else {
             ++it;
@@ -648,10 +734,11 @@ void ServiceManager::binderDied(const wp<IBinder>& who) {
     }
 }
 
-void ServiceManager::tryStartService(const std::string& name) {
-    ALOGI("Since '%s' could not be found, trying to start it as a lazy AIDL service. (if it's not "
-          "configured to be a lazy service, it may be stuck starting or still starting).",
-          name.c_str());
+void ServiceManager::tryStartService(const Access::CallingContext& ctx, const std::string& name) {
+    ALOGI("Since '%s' could not be found (requested by debug pid %d), trying to start it as a lazy "
+          "AIDL service. (if it's not configured to be a lazy service, it may be stuck starting or "
+          "still starting).",
+          name.c_str(), ctx.debugPid);
 
     std::thread([=] {
         if (!base::SetProperty("ctl.interface_start", "aidl/" + name)) {
@@ -700,12 +787,20 @@ Status ServiceManager::registerClientCallback(const std::string& name, const sp<
         return Status::fromExceptionCode(Status::EX_ILLEGAL_STATE, "Couldn't linkToDeath.");
     }
 
-    // make sure all callbacks have been told about a consistent state - b/278038751
+    // WARNING: binderDied makes an assumption about this. If we open up client
+    // callbacks to other services, certain race conditions may lead to services
+    // getting extra client callback notifications.
+    // Make sure all callbacks have been told about a consistent state - b/278038751
     if (serviceIt->second.hasClients) {
         cb->onClients(service, true);
     }
 
     mNameToClientCallback[name].push_back(cb);
+
+    // Flush updated info to client callbacks (especially if guaranteeClient
+    // and !hasClient, see b/285202885). We may or may not have clients at
+    // this point, so ignore the return value.
+    (void)handleServiceClientCallback(2 /* sm + transaction */, name, false);
 
     return Status::ok();
 }

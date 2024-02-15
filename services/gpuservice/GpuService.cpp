@@ -16,7 +16,7 @@
 
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 
-#include "GpuService.h"
+#include "gpuservice/GpuService.h"
 
 #include <android-base/stringprintf.h>
 #include <android-base/properties.h>
@@ -35,6 +35,7 @@
 #include <vkjson.h>
 
 #include <thread>
+#include <memory>
 
 namespace android {
 
@@ -58,17 +59,20 @@ GpuService::GpuService()
         mGpuStats(std::make_unique<GpuStats>()),
         mGpuMemTracer(std::make_unique<GpuMemTracer>()) {
 
-    std::thread gpuMemAsyncInitThread([this]() {
+    mGpuMemAsyncInitThread = std::make_unique<std::thread>([this] (){
         mGpuMem->initialize();
         mGpuMemTracer->initialize(mGpuMem);
     });
-    gpuMemAsyncInitThread.detach();
 
-    std::thread gpuWorkAsyncInitThread([this]() {
+    mGpuWorkAsyncInitThread = std::make_unique<std::thread>([this]() {
         mGpuWork->initialize();
     });
-    gpuWorkAsyncInitThread.detach();
 };
+
+GpuService::~GpuService() {
+    mGpuWorkAsyncInitThread->join();
+    mGpuMemAsyncInitThread->join();
+}
 
 void GpuService::setGpuStats(const std::string& driverPackageName,
                              const std::string& driverVersionName, uint64_t driverVersionCode,
@@ -139,7 +143,7 @@ status_t GpuService::shellCommand(int /*in*/, int out, int err, std::vector<Stri
 
     ALOGV("shellCommand");
     for (size_t i = 0, n = args.size(); i < n; i++)
-        ALOGV("  arg[%zu]: '%s'", i, String8(args[i]).string());
+        ALOGV("  arg[%zu]: '%s'", i, String8(args[i]).c_str());
 
     if (args.size() >= 1) {
         if (args[0] == String16("vkjson")) return cmdVkjson(out, err);

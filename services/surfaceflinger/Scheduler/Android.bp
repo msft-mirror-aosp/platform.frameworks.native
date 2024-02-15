@@ -21,6 +21,7 @@ cc_defaults {
         "libui",
         "libutils",
     ],
+    static_libs: ["libsurfaceflinger_common"],
 }
 
 cc_library_headers {
@@ -40,6 +41,7 @@ cc_library_static {
     name: "libscheduler",
     defaults: ["libscheduler_defaults"],
     srcs: [
+        "src/FrameTargeter.cpp",
         "src/PresentLatencyTracker.cpp",
         "src/Timer.cpp",
     ],
@@ -52,6 +54,7 @@ cc_test {
     test_suites: ["device-tests"],
     defaults: ["libscheduler_defaults"],
     srcs: [
+        "tests/FrameTargeterTest.cpp",
         "tests/PresentLatencyTrackerTest.cpp",
         "tests/TimerTest.cpp",
     ],
@@ -59,5 +62,9 @@ cc_test {
         "libgmock",
         "libgtest",
         "libscheduler",
+        "libsurfaceflingerflags_test",
+    ],
+    shared_libs: [
+        "server_configurable_flags",
     ],
 }

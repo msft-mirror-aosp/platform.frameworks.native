@@ -72,11 +72,20 @@ TEST(MotionPredictorTest, IsPredictionAvailable) {
     ASSERT_FALSE(predictor.isPredictionAvailable(/*deviceId=*/1, AINPUT_SOURCE_TOUCHSCREEN));
 }
 
+TEST(MotionPredictorTest, StationaryNoiseFloor) {
+    MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/1,
+                              []() { return true /*enable prediction*/; });
+    predictor.record(getMotionEvent(DOWN, 0, 1, 30ms));
+    predictor.record(getMotionEvent(MOVE, 0, 1, 35ms)); // No movement.
+    std::unique_ptr<MotionEvent> predicted = predictor.predict(40 * NSEC_PER_MSEC);
+    ASSERT_EQ(nullptr, predicted);
+}
+
 TEST(MotionPredictorTest, Offset) {
     MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/1,
                               []() { return true /*enable prediction*/; });
     predictor.record(getMotionEvent(DOWN, 0, 1, 30ms));
-    predictor.record(getMotionEvent(MOVE, 0, 2, 35ms));
+    predictor.record(getMotionEvent(MOVE, 0, 5, 35ms)); // Move enough to overcome the noise floor.
     std::unique_ptr<MotionEvent> predicted = predictor.predict(40 * NSEC_PER_MSEC);
     ASSERT_NE(nullptr, predicted);
     ASSERT_GE(predicted->getEventTime(), 41);
@@ -136,6 +145,37 @@ TEST(MotionPredictorTest, FlagDisablesPrediction) {
     ASSERT_EQ(nullptr, predicted);
     ASSERT_FALSE(predictor.isPredictionAvailable(/*deviceId=*/1, AINPUT_SOURCE_STYLUS));
     ASSERT_FALSE(predictor.isPredictionAvailable(/*deviceId=*/1, AINPUT_SOURCE_TOUCHSCREEN));
+}
+
+using AtomFields = MotionPredictorMetricsManager::AtomFields;
+using ReportAtomFunction = MotionPredictorMetricsManager::ReportAtomFunction;
+
+// Creates a mock atom reporting function that appends the reported atom to the given vector.
+// The passed-in pointer must not be nullptr.
+ReportAtomFunction createMockReportAtomFunction(std::vector<AtomFields>* reportedAtomFields) {
+    return [reportedAtomFields](const AtomFields& atomFields) -> void {
+        reportedAtomFields->push_back(atomFields);
+    };
+}
+
+TEST(MotionPredictorMetricsManagerIntegrationTest, ReportsMetrics) {
+    std::vector<AtomFields> reportedAtomFields;
+    MotionPredictor predictor(/*predictionTimestampOffsetNanos=*/0,
+                              []() { return true /*enable prediction*/; },
+                              createMockReportAtomFunction(&reportedAtomFields));
+
+    ASSERT_TRUE(predictor.record(getMotionEvent(DOWN, 1, 1, 0ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 2, 2, 4ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 3, 3, 8ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 4, 4, 12ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 5, 5, 16ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(MOVE, 6, 6, 20ms, /*deviceId=*/0)).ok());
+    ASSERT_TRUE(predictor.record(getMotionEvent(UP, 7, 7, 24ms, /*deviceId=*/0)).ok());
+
+    // The number of atoms reported should equal the number of prediction time buckets, which is
+    // given by the prediction model's output length. For now, this value is always 5, and we
+    // hardcode it because it's not publicly accessible from the MotionPredictor.
+    EXPECT_EQ(5u, reportedAtomFields.size());
 }
 
 } // namespace android

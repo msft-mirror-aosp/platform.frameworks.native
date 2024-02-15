@@ -10,13 +10,18 @@ package {
 cc_test {
     name: "ftl_test",
     test_suites: ["device-tests"],
+    header_libs: [
+        "libbase_headers",
+    ],
     srcs: [
         "algorithm_test.cpp",
         "cast_test.cpp",
         "concat_test.cpp",
         "enum_test.cpp",
+        "expected_test.cpp",
         "fake_guard_test.cpp",
         "flags_test.cpp",
+        "function_test.cpp",
         "future_test.cpp",
         "match_test.cpp",
         "mixins_test.cpp",

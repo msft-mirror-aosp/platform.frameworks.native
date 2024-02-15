@@ -32,14 +32,14 @@ public:
     MOCK_METHOD(void, setExpensiveRenderingExpected, (DisplayId displayId, bool expected),
                 (override));
     MOCK_METHOD(bool, isUsingExpensiveRendering, (), (override));
+    MOCK_METHOD(void, notifyCpuLoadUp, (), (override));
     MOCK_METHOD(void, notifyDisplayUpdateImminentAndCpuReset, (), (override));
     MOCK_METHOD(bool, usePowerHintSession, (), (override));
     MOCK_METHOD(bool, supportsPowerHintSession, (), (override));
-    MOCK_METHOD(bool, ensurePowerHintSessionRunning, (), (override));
     MOCK_METHOD(void, updateTargetWorkDuration, (Duration targetDuration), (override));
     MOCK_METHOD(void, reportActualWorkDuration, (), (override));
     MOCK_METHOD(void, enablePowerHintSession, (bool enabled), (override));
-    MOCK_METHOD(bool, startPowerHintSession, (const std::vector<int32_t>& threadIds), (override));
+    MOCK_METHOD(bool, startPowerHintSession, (std::vector<int32_t> && threadIds), (override));
     MOCK_METHOD(void, setGpuFenceTime,
                 (DisplayId displayId, std::unique_ptr<FenceTime>&& fenceTime), (override));
     MOCK_METHOD(void, setHwcValidateTiming,

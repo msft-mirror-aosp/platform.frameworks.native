@@ -121,7 +121,7 @@ public:
 
 protected:
     // These members are protected so they can be instrumented by test cases.
-    virtual std::shared_ptr<InputDevice> createDeviceLocked(int32_t deviceId,
+    virtual std::shared_ptr<InputDevice> createDeviceLocked(nsecs_t when, int32_t deviceId,
                                                             const InputDeviceIdentifier& identifier)
             REQUIRES(mLock);
 
@@ -155,6 +155,12 @@ protected:
         int32_t getNextId() NO_THREAD_SAFETY_ANALYSIS override;
         void updateLedMetaState(int32_t metaState) REQUIRES(mReader->mLock) override;
         int32_t getLedMetaState() REQUIRES(mReader->mLock) REQUIRES(mLock) override;
+        void setPreventingTouchpadTaps(bool prevent) REQUIRES(mReader->mLock)
+                REQUIRES(mLock) override;
+        bool isPreventingTouchpadTaps() REQUIRES(mReader->mLock) REQUIRES(mLock) override;
+        void setLastKeyDownTimestamp(nsecs_t when) REQUIRES(mReader->mLock)
+                REQUIRES(mLock) override;
+        nsecs_t getLastKeyDownTimestamp() REQUIRES(mReader->mLock) REQUIRES(mLock) override;
     } mContext;
 
     friend class ContextImpl;
@@ -171,7 +177,14 @@ private:
     // in parallel to passing it to the InputReader.
     std::shared_ptr<EventHubInterface> mEventHub;
     sp<InputReaderPolicyInterface> mPolicy;
-    QueuedInputListener mQueuedListener;
+
+    // The next stage that should receive the events generated inside InputReader.
+    InputListenerInterface& mNextListener;
+    // As various events are generated inside InputReader, they are stored inside this list. The
+    // list can only be accessed with the lock, so the events inside it are well-ordered.
+    // Once the reader is done working, these events will be swapped into a temporary storage and
+    // sent to the 'mNextListener' without holding the lock.
+    std::list<NotifyArgs> mPendingArgs GUARDED_BY(mLock);
 
     InputReaderConfiguration mConfig GUARDED_BY(mLock);
 
@@ -184,6 +197,12 @@ private:
     // EventHubIds contained in the input device from the input device instance.
     std::unordered_map<std::shared_ptr<InputDevice>, std::vector<int32_t> /*eventHubId*/>
             mDeviceToEventHubIdsMap GUARDED_BY(mLock);
+
+    // true if tap-to-click on touchpad currently disabled
+    bool mPreventingTouchpadTaps GUARDED_BY(mLock){false};
+
+    // records timestamp of the last key press on the physical keyboard
+    nsecs_t mLastKeyDownTimestamp GUARDED_BY(mLock){0};
 
     // low-level input event decoding and device management
     [[nodiscard]] std::list<NotifyArgs> processEventsLocked(const RawEvent* rawEvents, size_t count)
@@ -235,8 +254,6 @@ private:
 
     ConfigurationChanges mConfigurationChangesToRefresh GUARDED_BY(mLock);
     void refreshConfigurationLocked(ConfigurationChanges changes) REQUIRES(mLock);
-
-    void notifyAll(std::list<NotifyArgs>&& argsList);
 
     PointerCaptureRequest mCurrentPointerCaptureRequest GUARDED_BY(mLock);
 

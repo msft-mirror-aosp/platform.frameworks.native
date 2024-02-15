@@ -16,14 +16,13 @@
 
 #pragma once
 
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 
 #include <android-base/thread_annotations.h>
+#include <ftl/small_map.h>
 
 #include "VSyncDispatch.h"
 #include "VsyncSchedule.h"
@@ -135,16 +134,23 @@ private:
     VSyncDispatchTimerQueue(const VSyncDispatchTimerQueue&) = delete;
     VSyncDispatchTimerQueue& operator=(const VSyncDispatchTimerQueue&) = delete;
 
+    // The static capacity was chosen to exceed the expected number of callbacks.
     using CallbackMap =
-            std::unordered_map<CallbackToken, std::shared_ptr<VSyncDispatchTimerQueueEntry>>;
+            ftl::SmallMap<CallbackToken, std::shared_ptr<VSyncDispatchTimerQueueEntry>, 5>;
 
     void timerCallback();
     void setTimer(nsecs_t, nsecs_t) REQUIRES(mMutex);
     void rearmTimer(nsecs_t now) REQUIRES(mMutex);
-    void rearmTimerSkippingUpdateFor(nsecs_t now, CallbackMap::iterator const& skipUpdate)
+    void rearmTimerSkippingUpdateFor(nsecs_t now, CallbackMap::const_iterator skipUpdate)
             REQUIRES(mMutex);
     void cancelTimer() REQUIRES(mMutex);
     ScheduleResult scheduleLocked(CallbackToken, ScheduleTiming) REQUIRES(mMutex);
+
+    std::mutex mutable mMutex;
+
+    // During VSyncDispatchTimerQueue deconstruction, skip timerCallback to
+    // avoid crash
+    bool mRunning = true;
 
     static constexpr nsecs_t kInvalidTime = std::numeric_limits<int64_t>::max();
     std::unique_ptr<TimeKeeper> const mTimeKeeper;
@@ -152,8 +158,7 @@ private:
     nsecs_t const mTimerSlack;
     nsecs_t const mMinVsyncDistance;
 
-    std::mutex mutable mMutex;
-    size_t mCallbackToken GUARDED_BY(mMutex) = 0;
+    CallbackToken mCallbackToken GUARDED_BY(mMutex);
 
     CallbackMap mCallbacks GUARDED_BY(mMutex);
     nsecs_t mIntendedWakeupTime GUARDED_BY(mMutex) = kInvalidTime;
