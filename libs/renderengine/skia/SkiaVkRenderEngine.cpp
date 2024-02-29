@@ -287,6 +287,7 @@ static GrVkGetProc sGetProc = [](const char* proc_name, VkInstance instance, VkD
     CHECK_NONNULL(vk##F)
 
 VulkanInterface initVulkanInterface(bool protectedContent = false) {
+    const nsecs_t timeBefore = systemTime();
     VulkanInterface interface;
 
     VK_GET_PROC(EnumerateInstanceVersion);
@@ -375,6 +376,11 @@ VulkanInterface initVulkanInterface(bool protectedContent = false) {
     vkGetPhysicalDeviceProperties2(physicalDevice, &physDevProps);
     if (physDevProps.properties.apiVersion < VK_MAKE_VERSION(1, 1, 0)) {
         BAIL("Could not find a Vulkan 1.1+ physical device");
+    }
+
+    if (physDevProps.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+        // TODO: b/326633110 - SkiaVK is not working correctly on swiftshader path.
+        BAIL("CPU implementations of Vulkan is not supported");
     }
 
     // Check for syncfd support. Bail if we cannot both import and export them.
@@ -598,7 +604,9 @@ VulkanInterface initVulkanInterface(bool protectedContent = false) {
     interface.isProtected = protectedContent;
     // funcs already initialized
 
-    ALOGD("%s: Success init Vulkan interface", __func__);
+    const nsecs_t timeAfter = systemTime();
+    const float initTimeMs = static_cast<float>(timeAfter - timeBefore) / 1.0E6;
+    ALOGD("%s: Success init Vulkan interface in %f ms", __func__, initTimeMs);
     return interface;
 }
 
@@ -654,16 +662,24 @@ static void sSetupVulkanInterface() {
     }
 }
 
+bool RenderEngine::canSupport(GraphicsApi graphicsApi) {
+    switch (graphicsApi) {
+        case GraphicsApi::GL:
+            return true;
+        case GraphicsApi::VK: {
+            if (!sVulkanInterface.initialized) {
+                sVulkanInterface = initVulkanInterface(false /* no protected content */);
+                ALOGD("%s: initialized == %s.", __func__,
+                      sVulkanInterface.initialized ? "true" : "false");
+            }
+            return sVulkanInterface.initialized;
+        }
+    }
+}
+
 namespace skia {
 
 using base::StringAppendF;
-
-bool SkiaVkRenderEngine::canSupportSkiaVkRenderEngine() {
-    VulkanInterface temp = initVulkanInterface(false /* no protected content */);
-    ALOGD("SkiaVkRenderEngine::canSupportSkiaVkRenderEngine(): initialized == %s.",
-          temp.initialized ? "true" : "false");
-    return temp.initialized;
-}
 
 std::unique_ptr<SkiaVkRenderEngine> SkiaVkRenderEngine::create(
         const RenderEngineCreationArgs& args) {

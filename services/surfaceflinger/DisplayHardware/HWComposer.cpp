@@ -92,7 +92,7 @@ HWComposer::HWComposer(std::unique_ptr<Hwc2::Composer> composer)
         mMaxVirtualDisplayDimension(static_cast<size_t>(sysprop::max_virtual_display_dimension(0))),
         mUpdateDeviceProductInfoOnHotplugReconnect(
                 sysprop::update_device_product_info_on_hotplug_reconnect(false)),
-        mEnableVrrTimeout(base::GetBoolProperty("debug.sf.vrr_timeout_hint_enabled"s, false)) {}
+        mEnableVrrTimeout(base::GetBoolProperty("debug.sf.vrr_timeout_hint_enabled"s, true)) {}
 
 HWComposer::HWComposer(const std::string& composerServiceName)
       : HWComposer(Hwc2::Composer::create(composerServiceName)) {}
@@ -364,15 +364,13 @@ ui::DisplayConnectionType HWComposer::getDisplayConnectionType(PhysicalDisplayId
     RETURN_IF_INVALID_DISPLAY(displayId, ui::DisplayConnectionType::Internal);
     const auto& hwcDisplay = mDisplayData.at(displayId).hwcDisplay;
 
-    ui::DisplayConnectionType type;
-    const auto error = hwcDisplay->getConnectionType(&type);
-
-    const auto FALLBACK_TYPE = hwcDisplay->getId() == mPrimaryHwcDisplayId
-            ? ui::DisplayConnectionType::Internal
-            : ui::DisplayConnectionType::External;
-
-    RETURN_IF_HWC_ERROR(error, displayId, FALLBACK_TYPE);
-    return type;
+    if (const auto connectionType = hwcDisplay->getConnectionType()) {
+        return connectionType.value();
+    } else {
+        LOG_HWC_ERROR(__func__, connectionType.error(), displayId);
+        return hwcDisplay->getId() == mPrimaryHwcDisplayId ? ui::DisplayConnectionType::Internal
+                                                           : ui::DisplayConnectionType::External;
+    }
 }
 
 bool HWComposer::isVsyncPeriodSwitchSupported(PhysicalDisplayId displayId) const {

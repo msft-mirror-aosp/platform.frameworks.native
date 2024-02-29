@@ -54,6 +54,7 @@
 #include "InputDispatcher.h"
 #include "trace/InputTracer.h"
 #include "trace/InputTracingPerfettoBackend.h"
+#include "trace/ThreadedBackend.h"
 
 #define INDENT "  "
 #define INDENT2 "    "
@@ -84,6 +85,15 @@ bool isInputTracingEnabled() {
     static const std::string buildType = base::GetProperty("ro.build.type", "user");
     static const bool isUserdebugOrEng = buildType == "userdebug" || buildType == "eng";
     return input_flags::enable_input_event_tracing() && isUserdebugOrEng;
+}
+
+// Create the input tracing backend that writes to perfetto from a single thread.
+std::unique_ptr<trace::InputTracingBackendInterface> createInputTracingBackendIfEnabled() {
+    if (!isInputTracingEnabled()) {
+        return nullptr;
+    }
+    return std::make_unique<trace::impl::ThreadedBackend<trace::impl::PerfettoBackend>>(
+            trace::impl::PerfettoBackend());
 }
 
 template <class Entry>
@@ -365,17 +375,20 @@ size_t firstMarkedBit(T set) {
     return i;
 }
 
-std::unique_ptr<DispatchEntry> createDispatchEntry(const InputTarget& inputTarget,
+std::unique_ptr<DispatchEntry> createDispatchEntry(const IdGenerator& idGenerator,
+                                                   const InputTarget& inputTarget,
                                                    std::shared_ptr<const EventEntry> eventEntry,
                                                    ftl::Flags<InputTarget::Flags> inputTargetFlags,
                                                    int64_t vsyncId) {
+    const bool zeroCoords = inputTargetFlags.test(InputTarget::Flags::ZERO_COORDS);
     const sp<WindowInfoHandle> win = inputTarget.windowHandle;
     const std::optional<int32_t> windowId =
             win ? std::make_optional(win->getInfo()->id) : std::nullopt;
     // Assume the only targets that are not associated with a window are global monitors, and use
     // the system UID for global monitors for tracing purposes.
     const gui::Uid uid = win ? win->getInfo()->ownerUid : gui::Uid(AID_SYSTEM);
-    if (inputTarget.useDefaultPointerTransform()) {
+
+    if (inputTarget.useDefaultPointerTransform() && !zeroCoords) {
         const ui::Transform& transform = inputTarget.getDefaultPointerTransform();
         return std::make_unique<DispatchEntry>(eventEntry, inputTargetFlags, transform,
                                                inputTarget.displayTransform,
@@ -386,33 +399,39 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const InputTarget& inputTarge
     ALOG_ASSERT(eventEntry->type == EventEntry::Type::MOTION);
     const MotionEntry& motionEntry = static_cast<const MotionEntry&>(*eventEntry);
 
-    std::vector<PointerCoords> pointerCoords;
-    pointerCoords.resize(motionEntry.getPointerCount());
+    std::vector<PointerCoords> pointerCoords{motionEntry.getPointerCount()};
 
-    // Use the first pointer information to normalize all other pointers. This could be any pointer
-    // as long as all other pointers are normalized to the same value and the final DispatchEntry
-    // uses the transform for the normalized pointer.
-    const ui::Transform& firstPointerTransform =
-            inputTarget.pointerTransforms[firstMarkedBit(inputTarget.pointerIds)];
-    ui::Transform inverseFirstTransform = firstPointerTransform.inverse();
+    const ui::Transform* transform = &kIdentityTransform;
+    const ui::Transform* displayTransform = &kIdentityTransform;
+    if (zeroCoords) {
+        std::for_each(pointerCoords.begin(), pointerCoords.end(), [](auto& pc) { pc.clear(); });
+    } else {
+        // Use the first pointer information to normalize all other pointers. This could be any
+        // pointer as long as all other pointers are normalized to the same value and the final
+        // DispatchEntry uses the transform for the normalized pointer.
+        transform =
+                &inputTarget.getTransformForPointer(firstMarkedBit(inputTarget.getPointerIds()));
+        const ui::Transform inverseTransform = transform->inverse();
+        displayTransform = &inputTarget.displayTransform;
 
-    // Iterate through all pointers in the event to normalize against the first.
-    for (uint32_t pointerIndex = 0; pointerIndex < motionEntry.getPointerCount(); pointerIndex++) {
-        const PointerProperties& pointerProperties = motionEntry.pointerProperties[pointerIndex];
-        uint32_t pointerId = uint32_t(pointerProperties.id);
-        const ui::Transform& currTransform = inputTarget.pointerTransforms[pointerId];
+        // Iterate through all pointers in the event to normalize against the first.
+        for (size_t i = 0; i < motionEntry.getPointerCount(); i++) {
+            PointerCoords& newCoords = pointerCoords[i];
+            const auto pointerId = motionEntry.pointerProperties[i].id;
+            const ui::Transform& currTransform = inputTarget.getTransformForPointer(pointerId);
 
-        pointerCoords[pointerIndex].copyFrom(motionEntry.pointerCoords[pointerIndex]);
-        // First, apply the current pointer's transform to update the coordinates into
-        // window space.
-        pointerCoords[pointerIndex].transform(currTransform);
-        // Next, apply the inverse transform of the normalized coordinates so the
-        // current coordinates are transformed into the normalized coordinate space.
-        pointerCoords[pointerIndex].transform(inverseFirstTransform);
+            newCoords.copyFrom(motionEntry.pointerCoords[i]);
+            // First, apply the current pointer's transform to update the coordinates into
+            // window space.
+            newCoords.transform(currTransform);
+            // Next, apply the inverse transform of the normalized coordinates so the
+            // current coordinates are transformed into the normalized coordinate space.
+            newCoords.transform(inverseTransform);
+        }
     }
 
     std::unique_ptr<MotionEntry> combinedMotionEntry =
-            std::make_unique<MotionEntry>(motionEntry.id, motionEntry.injectionState,
+            std::make_unique<MotionEntry>(idGenerator.nextId(), motionEntry.injectionState,
                                           motionEntry.eventTime, motionEntry.deviceId,
                                           motionEntry.source, motionEntry.displayId,
                                           motionEntry.policyFlags, motionEntry.action,
@@ -426,7 +445,7 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const InputTarget& inputTarge
 
     std::unique_ptr<DispatchEntry> dispatchEntry =
             std::make_unique<DispatchEntry>(std::move(combinedMotionEntry), inputTargetFlags,
-                                            firstPointerTransform, inputTarget.displayTransform,
+                                            *transform, *displayTransform,
                                             inputTarget.globalScaleFactor, uid, vsyncId, windowId);
     return dispatchEntry;
 }
@@ -823,9 +842,7 @@ std::pair<bool /*cancelPointers*/, bool /*cancelNonPointers*/> expandCancellatio
 // --- InputDispatcher ---
 
 InputDispatcher::InputDispatcher(InputDispatcherPolicyInterface& policy)
-      : InputDispatcher(policy,
-                        isInputTracingEnabled() ? std::make_unique<trace::impl::PerfettoBackend>()
-                                                : nullptr) {}
+      : InputDispatcher(policy, createInputTracingBackendIfEnabled()) {}
 
 InputDispatcher::InputDispatcher(InputDispatcherPolicyInterface& policy,
                                  std::unique_ptr<trace::InputTracingBackendInterface> traceBackend)
@@ -1303,6 +1320,7 @@ bool InputDispatcher::enqueueInboundEventLocked(std::unique_ptr<EventEntry> newE
                 ALOGD("Received a new pointer down event, stop waiting for events to process and "
                       "just send the pending key event to the currently focused window.");
                 mKeyIsWaitingForEventsTimeout = now();
+                needWake = true;
             }
             break;
         }
@@ -1630,14 +1648,12 @@ void InputDispatcher::dispatchFocusLocked(nsecs_t currentTime,
     if (connection == nullptr) {
         return; // Connection has gone away
     }
-    InputTarget target;
-    target.connection = connection;
     entry->dispatchInProgress = true;
     std::string message = std::string("Focus ") + (entry->hasFocus ? "entering " : "leaving ") +
             connection->getInputChannelName();
     std::string reason = std::string("reason=").append(entry->reason);
     android_log_event_list(LOGTAG_INPUT_FOCUS) << message << reason << LOG_ID_EVENTS;
-    dispatchEventLocked(currentTime, entry, {target});
+    dispatchEventLocked(currentTime, entry, {{connection}});
 }
 
 void InputDispatcher::dispatchPointerCaptureChangedLocked(
@@ -1703,10 +1719,8 @@ void InputDispatcher::dispatchPointerCaptureChangedLocked(
         }
         return;
     }
-    InputTarget target;
-    target.connection = connection;
     entry->dispatchInProgress = true;
-    dispatchEventLocked(currentTime, entry, {target});
+    dispatchEventLocked(currentTime, entry, {{connection}});
 
     dropReason = DropReason::NOT_DROPPED;
 }
@@ -1739,9 +1753,7 @@ std::vector<InputTarget> InputDispatcher::getInputTargetsFromWindowHandlesLocked
         if (connection == nullptr) {
             continue; // Connection has gone away
         }
-        InputTarget target;
-        target.connection = connection;
-        inputTargets.push_back(target);
+        inputTargets.emplace_back(connection);
     }
     return inputTargets;
 }
@@ -2022,10 +2034,8 @@ void InputDispatcher::dispatchDragLocked(nsecs_t currentTime,
     if (connection == nullptr) {
         return; // Connection has gone away
     }
-    InputTarget target;
-    target.connection = connection;
     entry->dispatchInProgress = true;
-    dispatchEventLocked(currentTime, entry, {target});
+    dispatchEventLocked(currentTime, entry, {{connection}});
 }
 
 void InputDispatcher::logOutboundMotionDetails(const char* prefix, const MotionEntry& entry) {
@@ -2868,8 +2878,7 @@ std::optional<InputTarget> InputDispatcher::createInputTargetLocked(
         ALOGW("Not creating InputTarget for %s, no input channel", windowHandle->getName().c_str());
         return {};
     }
-    InputTarget inputTarget;
-    inputTarget.connection = connection;
+    InputTarget inputTarget{connection};
     inputTarget.windowHandle = windowHandle;
     inputTarget.dispatchMode = dispatchMode;
     inputTarget.flags = targetFlags;
@@ -2982,8 +2991,7 @@ void InputDispatcher::addGlobalMonitoringTargetsLocked(std::vector<InputTarget>&
     if (monitorsIt == mGlobalMonitorsByDisplay.end()) return;
 
     for (const Monitor& monitor : selectResponsiveMonitorsLocked(monitorsIt->second)) {
-        InputTarget target;
-        target.connection = monitor.connection;
+        InputTarget target{monitor.connection};
         // target.firstDownTimeInTarget is not set for global monitors. It is only required in split
         // touch and global monitoring works as intended even without setting firstDownTimeInTarget
         if (const auto& it = mDisplayInfos.find(displayId); it != mDisplayInfos.end()) {
@@ -3275,7 +3283,7 @@ void InputDispatcher::prepareDispatchCycleLocked(nsecs_t currentTime,
         ALOGD("channel '%s' ~ prepareDispatchCycle - flags=%s, "
               "globalScaleFactor=%f, pointerIds=%s %s",
               connection->getInputChannelName().c_str(), inputTarget.flags.string().c_str(),
-              inputTarget.globalScaleFactor, bitsetToString(inputTarget.pointerIds).c_str(),
+              inputTarget.globalScaleFactor, bitsetToString(inputTarget.getPointerIds()).c_str(),
               inputTarget.getPointerInfoString().c_str());
     }
 
@@ -3297,7 +3305,7 @@ void InputDispatcher::prepareDispatchCycleLocked(nsecs_t currentTime,
                             ftl::enum_string(eventEntry->type).c_str());
 
         const MotionEntry& originalMotionEntry = static_cast<const MotionEntry&>(*eventEntry);
-        if (inputTarget.pointerIds.count() != originalMotionEntry.getPointerCount()) {
+        if (inputTarget.getPointerIds().count() != originalMotionEntry.getPointerCount()) {
             if (!inputTarget.firstDownTimeInTarget.has_value()) {
                 logDispatchStateLocked();
                 LOG(FATAL) << "Splitting motion events requires a down time to be set for the "
@@ -3306,7 +3314,7 @@ void InputDispatcher::prepareDispatchCycleLocked(nsecs_t currentTime,
                            << originalMotionEntry.getDescription();
             }
             std::unique_ptr<MotionEntry> splitMotionEntry =
-                    splitMotionEvent(originalMotionEntry, inputTarget.pointerIds,
+                    splitMotionEvent(originalMotionEntry, inputTarget.getPointerIds(),
                                      inputTarget.firstDownTimeInTarget.value());
             if (!splitMotionEntry) {
                 return; // split event was dropped
@@ -3364,7 +3372,8 @@ void InputDispatcher::enqueueDispatchEntryLocked(const std::shared_ptr<Connectio
     // This is a new event.
     // Enqueue a new dispatch entry onto the outbound queue for this connection.
     std::unique_ptr<DispatchEntry> dispatchEntry =
-            createDispatchEntry(inputTarget, eventEntry, inputTarget.flags, mWindowInfosVsyncId);
+            createDispatchEntry(mIdGenerator, inputTarget, eventEntry, inputTarget.flags,
+                                mWindowInfosVsyncId);
 
     // Use the eventEntry from dispatchEntry since the entry may have changed and can now be a
     // different EventEntry than what was passed in.
@@ -3421,6 +3430,9 @@ void InputDispatcher::enqueueDispatchEntryLocked(const std::shared_ptr<Connectio
                 if (dispatchEntry->targetFlags.test(
                             InputTarget::Flags::WINDOW_IS_PARTIALLY_OBSCURED)) {
                     resolvedFlags |= AMOTION_EVENT_FLAG_WINDOW_IS_PARTIALLY_OBSCURED;
+                }
+                if (dispatchEntry->targetFlags.test(InputTarget::Flags::NO_FOCUS_CHANGE)) {
+                    resolvedFlags |= AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE;
                 }
 
                 dispatchEntry->resolvedFlags = resolvedFlags;
@@ -3482,7 +3494,7 @@ void InputDispatcher::enqueueDispatchEntryLocked(const std::shared_ptr<Connectio
                           << connection->getInputChannelName() << " with event "
                           << cancelEvent->getDescription();
                 std::unique_ptr<DispatchEntry> cancelDispatchEntry =
-                        createDispatchEntry(inputTarget, std::move(cancelEvent),
+                        createDispatchEntry(mIdGenerator, inputTarget, std::move(cancelEvent),
                                             ftl::Flags<InputTarget::Flags>(), mWindowInfosVsyncId);
 
                 // Send these cancel events to the queue before sending the event from the new
@@ -3496,8 +3508,7 @@ void InputDispatcher::enqueueDispatchEntryLocked(const std::shared_ptr<Connectio
                              << "~ dropping inconsistent event: " << *dispatchEntry;
                 return; // skip the inconsistent event
             }
-
-            if ((resolvedMotion->flags & AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE) &&
+            if ((dispatchEntry->resolvedFlags & AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE) &&
                 (resolvedMotion->policyFlags & POLICY_FLAG_TRUSTED)) {
                 // Skip reporting pointer down outside focus to the policy.
                 break;
@@ -3662,12 +3673,6 @@ status_t InputDispatcher::publishMotionEvent(Connection& connection,
             }
             usingCoords = scaledCoords;
         }
-    } else if (dispatchEntry.targetFlags.test(InputTarget::Flags::ZERO_COORDS)) {
-        // We don't want the dispatch target to know the coordinates
-        for (uint32_t i = 0; i < motionEntry.getPointerCount(); i++) {
-            scaledCoords[i].clear();
-        }
-        usingCoords = scaledCoords;
     }
 
     std::array<uint8_t, 32> hmac = getSignature(motionEntry, dispatchEntry);
@@ -4107,7 +4112,7 @@ void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
 
     const bool wasEmpty = connection->outboundQueue.empty();
     // The target to use if we don't find a window associated with the channel.
-    const InputTarget fallbackTarget{.connection = connection};
+    const InputTarget fallbackTarget{connection};
     const auto& token = connection->getToken();
 
     for (size_t i = 0; i < cancelationEvents.size(); i++) {
@@ -4225,8 +4230,7 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
                                                  targetFlags, pointerIds, motionEntry.downTime,
                                                  targets);
                 } else {
-                    targets.emplace_back(
-                            InputTarget{.connection = connection, .flags = targetFlags});
+                    targets.emplace_back(connection, targetFlags);
                     const auto it = mDisplayInfos.find(motionEntry.displayId);
                     if (it != mDisplayInfos.end()) {
                         targets.back().displayTransform = it->second.transform;
@@ -5560,8 +5564,8 @@ InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) 
     return std::make_tuple(nullptr, nullptr, ADISPLAY_ID_DEFAULT);
 }
 
-bool InputDispatcher::transferTouchFocus(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
-                                         bool isDragDrop) {
+bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
+                                           bool isDragDrop) {
     if (fromToken == toToken) {
         if (DEBUG_FOCUS) {
             ALOGD("Trivial transfer to same window.");
@@ -5595,7 +5599,7 @@ bool InputDispatcher::transferTouchFocus(const sp<IBinder>& fromToken, const sp<
         }
 
         if (DEBUG_FOCUS) {
-            ALOGD("transferTouchFocus: fromWindowHandle=%s, toWindowHandle=%s",
+            ALOGD("%s: fromWindowHandle=%s, toWindowHandle=%s", __func__,
                   touchedWindow->windowHandle->getName().c_str(),
                   toWindowHandle->getName().c_str());
         }
@@ -5612,6 +5616,8 @@ bool InputDispatcher::transferTouchFocus(const sp<IBinder>& fromToken, const sp<
         if (canReceiveForegroundTouches(*toWindowHandle->getInfo())) {
             newTargetFlags |= InputTarget::Flags::FOREGROUND;
         }
+        // Transferring touch focus using this API should not effect the focused window.
+        newTargetFlags |= InputTarget::Flags::NO_FOCUS_CHANGE;
         state->addOrUpdateWindow(toWindowHandle, InputTarget::DispatchMode::AS_IS, newTargetFlags,
                                  deviceId, pointers, downTimeInTarget);
 
@@ -5679,7 +5685,8 @@ sp<WindowInfoHandle> InputDispatcher::findTouchedForegroundWindowLocked(int32_t 
 }
 
 // Binder call
-bool InputDispatcher::transferTouch(const sp<IBinder>& destChannelToken, int32_t displayId) {
+bool InputDispatcher::transferTouchOnDisplay(const sp<IBinder>& destChannelToken,
+                                             int32_t displayId) {
     sp<IBinder> fromToken;
     { // acquire lock
         std::scoped_lock _l(mLock);
@@ -5699,7 +5706,7 @@ bool InputDispatcher::transferTouch(const sp<IBinder>& destChannelToken, int32_t
         fromToken = from->getToken();
     } // release lock
 
-    return transferTouchFocus(fromToken, destChannelToken);
+    return transferTouchGesture(fromToken, destChannelToken);
 }
 
 void InputDispatcher::resetAndDropEverythingLocked(const char* reason) {
@@ -7000,7 +7007,8 @@ void InputDispatcher::transferWallpaperTouch(ftl::Flags<InputTarget::Flags> oldT
 
     if (newWallpaper != nullptr) {
         nsecs_t downTimeInTarget = now();
-        ftl::Flags<InputTarget::Flags> wallpaperFlags = oldTargetFlags & InputTarget::Flags::SPLIT;
+        ftl::Flags<InputTarget::Flags> wallpaperFlags = newTargetFlags;
+        wallpaperFlags |= oldTargetFlags & InputTarget::Flags::SPLIT;
         wallpaperFlags |= InputTarget::Flags::WINDOW_IS_OBSCURED |
                 InputTarget::Flags::WINDOW_IS_PARTIALLY_OBSCURED;
         state.addOrUpdateWindow(newWallpaper, InputTarget::DispatchMode::AS_IS, wallpaperFlags,
