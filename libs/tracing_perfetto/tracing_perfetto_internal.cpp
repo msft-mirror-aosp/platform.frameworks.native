@@ -143,6 +143,10 @@ bool isPerfettoRegistered() {
 
 struct PerfettoTeCategory* toPerfettoCategory(uint64_t category) {
   struct PerfettoTeCategory* perfettoCategory = toCategory(category);
+  if (perfettoCategory == nullptr) {
+    return nullptr;
+  }
+
   bool enabled = PERFETTO_UNLIKELY(PERFETTO_ATOMIC_LOAD_EXPLICIT(
       (*perfettoCategory).enabled, PERFETTO_MEMORY_ORDER_RELAXED));
   return enabled ? perfettoCategory : nullptr;
