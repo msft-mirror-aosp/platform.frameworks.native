@@ -144,7 +144,9 @@ protected:
             std::vector<LayerFE*>& outLayerFEs) override;
     void appendRegionFlashRequests(const Region&, std::vector<LayerFE::LayerSettings>&) override;
     void setExpensiveRenderingExpected(bool enabled) override;
+    void setHintSessionGpuStart(TimePoint startTime) override;
     void setHintSessionGpuFence(std::unique_ptr<FenceTime>&& gpuFence) override;
+    void setHintSessionRequiresRenderEngine(bool requiresRenderEngine) override;
     bool isPowerHintSessionEnabled() override;
     void dumpBase(std::string&) const;
 
@@ -162,7 +164,6 @@ protected:
 
 private:
     void dirtyEntireOutput();
-    void updateCompositionStateForBorder(const compositionengine::CompositionRefreshArgs&);
     compositionengine::OutputLayer* findLayerRequestingBackgroundComposition() const;
     void finishPrepareFrame();
     ui::Dataspace getBestDataspace(ui::Dataspace*, bool*) const;

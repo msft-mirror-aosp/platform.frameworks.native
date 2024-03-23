@@ -168,10 +168,6 @@
 #define NO_THREAD_SAFETY_ANALYSIS \
     _Pragma("GCC error \"Prefer <ftl/fake_guard.h> or MutexUtils.h helpers.\"")
 
-// To enable layer borders in the system, change the below flag to true.
-#undef DOES_CONTAIN_BORDER
-#define DOES_CONTAIN_BORDER false
-
 namespace android {
 using namespace std::chrono_literals;
 using namespace std::string_literals;
@@ -2703,21 +2699,6 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         mLayerMetadataSnapshotNeeded = false;
     }
 
-    if (DOES_CONTAIN_BORDER) {
-        refreshArgs.borderInfoList.clear();
-        mDrawingState.traverse([&refreshArgs](Layer* layer) {
-            if (layer->isBorderEnabled()) {
-                compositionengine::BorderRenderInfo info;
-                info.width = layer->getBorderWidth();
-                info.color = layer->getBorderColor();
-                layer->traverse(LayerVector::StateSet::Drawing, [&info](Layer* ilayer) {
-                    info.layerIds.push_back(ilayer->getSequence());
-                });
-                refreshArgs.borderInfoList.emplace_back(std::move(info));
-            }
-        });
-    }
-
     refreshArgs.bufferIdsToUncache = std::move(mBufferIdsToUncache);
 
     if (!FlagManager::getInstance().ce_fence_promise()) {
@@ -3607,7 +3588,7 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
                 {.enableFrameRateOverride = enableFrameRateOverride,
                  .frameRateMultipleThreshold =
                          base::GetIntProperty("debug.sf.frame_rate_multiple_threshold"s, 0),
-                 .idleTimerTimeout = idleTimerTimeoutMs,
+                 .legacyIdleTimerTimeout = idleTimerTimeoutMs,
                  .kernelIdleTimerController = kernelIdleTimerController};
 
         creationArgs.refreshRateSelector =
@@ -5502,11 +5483,6 @@ uint32_t SurfaceFlinger::setClientStateLocked(const FrameTimelineInfo& frameTime
     }
     if (what & layer_state_t::eBlurRegionsChanged) {
         if (layer->setBlurRegions(s.blurRegions)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eRenderBorderChanged) {
-        if (layer->enableBorder(s.borderEnabled, s.borderWidth, s.borderColor)) {
-            flags |= eTraversalNeeded;
-        }
     }
     if (what & layer_state_t::eLayerStackChanged) {
         ssize_t idx = mCurrentState.layersSortedByZ.indexOf(layer);
@@ -8663,8 +8639,13 @@ status_t SurfaceFlinger::setDesiredDisplayModeSpecs(const sp<IBinder>& displayTo
             return INVALID_OPERATION;
         } else {
             using Policy = scheduler::RefreshRateSelector::DisplayManagerPolicy;
+            const auto idleScreenConfigOpt =
+                    FlagManager::getInstance().idle_screen_refresh_rate_timeout()
+                    ? specs.idleScreenRefreshRateConfig
+                    : std::nullopt;
             const Policy policy{DisplayModeId(specs.defaultMode), translate(specs.primaryRanges),
-                                translate(specs.appRequestRanges), specs.allowGroupSwitching};
+                                translate(specs.appRequestRanges), specs.allowGroupSwitching,
+                                idleScreenConfigOpt};
 
             return setDesiredDisplayModeSpecsInternal(display, policy);
         }
