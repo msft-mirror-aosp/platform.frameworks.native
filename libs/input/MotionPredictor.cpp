@@ -201,7 +201,7 @@ std::unique_ptr<MotionEvent> MotionPredictor::predict(nsecs_t timestamp) {
             // device starts to speed up, but avoids producing noisy predictions as it slows down.
             break;
         }
-        if (input_flags::enable_jerk_prediction_pruning()) {
+        if (input_flags::enable_prediction_pruning_via_jerk_thresholding()) {
             // TODO(b/266747654): Stop predictions if confidence is < some threshold
             // Arbitrarily high pruning index, will correct once jerk thresholding is implemented.
             const size_t upperBoundPredictionIndex = std::numeric_limits<size_t>::max();

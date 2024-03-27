@@ -130,8 +130,10 @@ flag {
 }
 
 flag {
-  name: "enable_jerk_prediction_pruning"
+  name: "enable_prediction_pruning_via_jerk_thresholding"
   namespace: "input"
   description: "Enable prediction pruning based on jerk thresholds."
   bug: "266747654"
+  is_fixed_read_only: true
+
 }
