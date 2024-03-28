@@ -16,13 +16,15 @@
 
 #pragma once
 
-#include "skia/SkiaVkRenderEngine.h"
+#include "SkiaVkRenderEngine.h"
+
+#include <include/gpu/graphite/BackendSemaphore.h>
 
 namespace android::renderengine::skia {
 
-class GaneshVkRenderEngine : public SkiaVkRenderEngine {
+class GraphiteVkRenderEngine : public SkiaVkRenderEngine {
 public:
-    static std::unique_ptr<GaneshVkRenderEngine> create(const RenderEngineCreationArgs& args);
+    static std::unique_ptr<GraphiteVkRenderEngine> create(const RenderEngineCreationArgs& args);
 
 protected:
     std::unique_ptr<SkiaGpuContext> createContext(VulkanInterface& vulkanInterface) override;
@@ -30,7 +32,9 @@ protected:
     base::unique_fd flushAndSubmit(SkiaGpuContext* context, sk_sp<SkSurface> dstSurface) override;
 
 private:
-    GaneshVkRenderEngine(const RenderEngineCreationArgs& args) : SkiaVkRenderEngine(args) {}
+    GraphiteVkRenderEngine(const RenderEngineCreationArgs& args) : SkiaVkRenderEngine(args) {}
+
+    std::vector<graphite::BackendSemaphore> mStagedWaitSemaphores;
 };
 
 } // namespace android::renderengine::skia
