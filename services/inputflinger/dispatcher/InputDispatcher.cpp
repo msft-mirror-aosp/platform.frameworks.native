@@ -838,6 +838,13 @@ Result<void> validateWindowInfosUpdate(const gui::WindowInfosUpdate& update) {
         if (!inserted) {
             return Error() << "Duplicate entry for " << info;
         }
+        if (info.layoutParamsFlags.test(WindowInfo::Flag::SECURE) &&
+            !info.inputConfig.test(WindowInfo::InputConfig::NOT_VISIBLE) &&
+            !info.inputConfig.test(WindowInfo::InputConfig::SENSITIVE_FOR_TRACING)) {
+            return Error()
+                    << "Window with FLAG_SECURE does not set InputConfig::SENSITIVE_FOR_TRACING: "
+                    << info;
+        }
     }
     return {};
 }
@@ -4848,7 +4855,7 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             const bool isPointerEvent =
                     isFromSource(event->getSource(), AINPUT_SOURCE_CLASS_POINTER);
             // If a pointer event has no displayId specified, inject it to the default display.
-            const uint32_t displayId = isPointerEvent && (event->getDisplayId() == ADISPLAY_ID_NONE)
+            const int32_t displayId = isPointerEvent && (event->getDisplayId() == ADISPLAY_ID_NONE)
                     ? ADISPLAY_ID_DEFAULT
                     : event->getDisplayId();
             int32_t flags = motionEvent.getFlags();
