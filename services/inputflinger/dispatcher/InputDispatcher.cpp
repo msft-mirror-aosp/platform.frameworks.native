@@ -838,6 +838,13 @@ Result<void> validateWindowInfosUpdate(const gui::WindowInfosUpdate& update) {
         if (!inserted) {
             return Error() << "Duplicate entry for " << info;
         }
+        if (info.layoutParamsFlags.test(WindowInfo::Flag::SECURE) &&
+            !info.inputConfig.test(WindowInfo::InputConfig::NOT_VISIBLE) &&
+            !info.inputConfig.test(WindowInfo::InputConfig::SENSITIVE_FOR_TRACING)) {
+            return Error()
+                    << "Window with FLAG_SECURE does not set InputConfig::SENSITIVE_FOR_TRACING: "
+                    << info;
+        }
     }
     return {};
 }
@@ -4383,7 +4390,7 @@ std::unique_ptr<MotionEntry> InputDispatcher::splitMotionEvent(
         // different pointer ids than we expected based on the previous ACTION_DOWN
         // or ACTION_POINTER_DOWN events that caused us to decide to split the pointers
         // in this way.
-        ALOGW("Dropping split motion event because the pointer count is %d but "
+        ALOGW("Dropping split motion event because the pointer count is %zu but "
               "we expected there to be %zu pointers.  This probably means we received "
               "a broken sequence of pointer ids from the input device: %s",
               pointerCoords.size(), pointerIds.count(),
@@ -4848,7 +4855,7 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             const bool isPointerEvent =
                     isFromSource(event->getSource(), AINPUT_SOURCE_CLASS_POINTER);
             // If a pointer event has no displayId specified, inject it to the default display.
-            const uint32_t displayId = isPointerEvent && (event->getDisplayId() == ADISPLAY_ID_NONE)
+            const int32_t displayId = isPointerEvent && (event->getDisplayId() == ADISPLAY_ID_NONE)
                     ? ADISPLAY_ID_DEFAULT
                     : event->getDisplayId();
             int32_t flags = motionEvent.getFlags();
@@ -7155,6 +7162,13 @@ bool InputDispatcher::isPointerInWindow(const sp<android::IBinder>& token, int32
         }
     }
     return false;
+}
+
+void InputDispatcher::setInputMethodConnectionIsActive(bool isActive) {
+    std::scoped_lock _l(mLock);
+    if (mTracer) {
+        mTracer->setInputMethodConnectionIsActive(isActive);
+    }
 }
 
 } // namespace android::inputdispatcher
