@@ -72,6 +72,7 @@
 #include <gui/TraceUtils.h>
 #include <hidl/ServiceManagement.h>
 #include <layerproto/LayerProtoParser.h>
+#include <linux/sched/types.h>
 #include <log/log.h>
 #include <private/android_filesystem_config.h>
 #include <private/gui/SyncFeatures.h>
@@ -808,15 +809,32 @@ void chooseRenderEngineType(renderengine::RenderEngineCreationArgs::Builder& bui
                 .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::VK);
     } else {
         const auto kVulkan = renderengine::RenderEngine::GraphicsApi::VK;
-        const bool canSupportVulkan = renderengine::RenderEngine::canSupport(kVulkan);
-        const bool useGraphite =
-                canSupportVulkan && FlagManager::getInstance().graphite_renderengine();
+        const bool useGraphite = FlagManager::getInstance().graphite_renderengine() &&
+                renderengine::RenderEngine::canSupport(kVulkan);
         const bool useVulkan = useGraphite ||
-                (canSupportVulkan && FlagManager::getInstance().vulkan_renderengine());
+                (FlagManager::getInstance().vulkan_renderengine() &&
+                 renderengine::RenderEngine::canSupport(kVulkan));
 
         builder.setSkiaBackend(useGraphite ? renderengine::RenderEngine::SkiaBackend::GRAPHITE
                                            : renderengine::RenderEngine::SkiaBackend::GANESH);
         builder.setGraphicsApi(useVulkan ? kVulkan : renderengine::RenderEngine::GraphicsApi::GL);
+    }
+}
+
+/**
+ * Choose a suggested blurring algorithm if supportsBlur is true. By default Kawase will be
+ * suggested as it's faster than a full Gaussian blur and looks close enough.
+ */
+renderengine::RenderEngine::BlurAlgorithm chooseBlurAlgorithm(bool supportsBlur) {
+    if (!supportsBlur) {
+        return renderengine::RenderEngine::BlurAlgorithm::NONE;
+    }
+
+    auto const algorithm = base::GetProperty(PROPERTY_DEBUG_RENDERENGINE_BLUR_ALGORITHM, "");
+    if (algorithm == "gaussian") {
+        return renderengine::RenderEngine::BlurAlgorithm::GAUSSIAN;
+    } else {
+        return renderengine::RenderEngine::BlurAlgorithm::KAWASE;
     }
 }
 
@@ -835,7 +853,7 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
                            .setImageCacheSize(maxFrameBufferAcquiredBuffers)
                            .setEnableProtectedContext(enable_protected_contents(false))
                            .setPrecacheToneMapperShaderOnly(false)
-                           .setSupportsBackgroundBlur(mSupportsBlur)
+                           .setBlurAlgorithm(chooseBlurAlgorithm(mSupportsBlur))
                            .setContextPriority(
                                    useContextPriority
                                            ? renderengine::RenderEngine::ContextPriority::REALTIME
@@ -2073,10 +2091,17 @@ status_t SurfaceFlinger::getDisplayDecorationSupport(
 sp<IDisplayEventConnection> SurfaceFlinger::createDisplayEventConnection(
         gui::ISurfaceComposer::VsyncSource vsyncSource, EventRegistrationFlags eventRegistration,
         const sp<IBinder>& layerHandle) {
-    const auto cycle = vsyncSource == gui::ISurfaceComposer::VsyncSource::eVsyncSourceSurfaceFlinger
-            ? scheduler::Cycle::LastComposite
-            : scheduler::Cycle::Render;
+    const auto cycle = [&] {
+        if (FlagManager::getInstance().deprecate_vsync_sf()) {
+            ALOGW_IF(vsyncSource == gui::ISurfaceComposer::VsyncSource::eVsyncSourceSurfaceFlinger,
+                "requested unsupported config eVsyncSourceSurfaceFlinger");
+            return scheduler::Cycle::Render;
+        }
 
+        return vsyncSource == gui::ISurfaceComposer::VsyncSource::eVsyncSourceSurfaceFlinger
+              ? scheduler::Cycle::LastComposite
+              : scheduler::Cycle::Render;
+    }();
     return mScheduler->createDisplayEventConnection(cycle, eventRegistration, layerHandle);
 }
 
@@ -2383,6 +2408,8 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
         frontend::LayerSnapshotBuilder::Args
                 args{.root = mLayerHierarchyBuilder.getHierarchy(),
                      .layerLifecycleManager = mLayerLifecycleManager,
+                     .includeMetadata = mCompositionEngine->getFeatureFlags().test(
+                             compositionengine::Feature::kSnapshotLayerMetadata),
                      .displays = mFrontEndDisplayInfos,
                      .displayChanges = mFrontEndDisplayInfosChanged,
                      .globalShadowSettings = mDrawingState.globalShadowSettings,
@@ -3171,7 +3198,8 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
             if (mLayerLifecycleManagerEnabled) {
                 mLayerSnapshotBuilder.forEachVisibleSnapshot(
                         [&, compositionDisplay = compositionDisplay](
-                                std::unique_ptr<frontend::LayerSnapshot>& snapshot) {
+                                std::unique_ptr<frontend::LayerSnapshot>&
+                                        snapshot) FTL_FAKE_GUARD(kMainThreadContext) {
                             auto it = mLegacyLayers.find(snapshot->sequence);
                             LLOG_ALWAYS_FATAL_WITH_TRACE_IF(it == mLegacyLayers.end(),
                                                             "Couldnt find layer object for %s",
@@ -3230,7 +3258,7 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
 
     if (mNumTrustedPresentationListeners > 0) {
         // We avoid any reverse traversal upwards so this shouldn't be too expensive
-        traverseLegacyLayers([&](Layer* layer) {
+        traverseLegacyLayers([&](Layer* layer) FTL_FAKE_GUARD(kMainThreadContext) {
             if (!layer->hasTrustedPresentationListener()) {
                 return;
             }
@@ -3992,19 +4020,7 @@ void SurfaceFlinger::commitTransactionsLocked(uint32_t transactionFlags) {
                 }
             }
 
-            if (!hintDisplay) {
-                // NOTE: TEMPORARY FIX ONLY. Real fix should cause layers to
-                // redraw after transform hint changes. See bug 8508397.
-                // could be null when this layer is using a layerStack
-                // that is not visible on any display. Also can occur at
-                // screen off/on times.
-                // U Update: Don't provide stale hints to the clients. For
-                // special cases where we want the app to draw its
-                // first frame before the display is available, we rely
-                // on WMS and DMS to provide the right information
-                // so the client can calculate the hint.
-                layer->skipReportingTransformHint();
-            } else {
+            if (hintDisplay) {
                 layer->updateTransformHint(hintDisplay->getTransformHint());
             }
         });
@@ -4143,7 +4159,7 @@ void SurfaceFlinger::buildWindowInfos(std::vector<WindowInfo>& outWindowInfos,
                     outWindowInfos.push_back(snapshot.inputInfo);
                 });
     } else {
-        mDrawingState.traverseInReverseZOrder([&](Layer* layer) {
+        mDrawingState.traverseInReverseZOrder([&](Layer* layer) FTL_FAKE_GUARD(kMainThreadContext) {
             if (!layer->needsInputInfo()) return;
             const auto opt =
                     mFrontEndDisplayInfos.get(layer->getLayerStack())
@@ -4848,6 +4864,8 @@ TransactionHandler::TransactionReadiness SurfaceFlinger::transactionReadyBufferC
                 if (listener &&
                     (flushState.queueProcessTime - transaction.postTime) >
                             std::chrono::nanoseconds(4s).count()) {
+                    // Used to add a stalled transaction which uses an internal lock.
+                    ftl::FakeGuard guard(kMainThreadContext);
                     mTransactionHandler
                             .onTransactionQueueStalled(transaction.id,
                                                        {.pid = layer->getOwnerPid(),
@@ -4870,97 +4888,107 @@ TransactionHandler::TransactionReadiness SurfaceFlinger::transactionReadyBufferC
         const TransactionHandler::TransactionFlushState& flushState) {
     using TransactionReadiness = TransactionHandler::TransactionReadiness;
     auto ready = TransactionReadiness::Ready;
-    flushState.transaction->traverseStatesWithBuffersWhileTrue([&](const ResolvedComposerState&
-                                                                           resolvedState) -> bool {
-        const frontend::RequestedLayerState* layer =
-                mLayerLifecycleManager.getLayerFromId(resolvedState.layerId);
-        const auto& transaction = *flushState.transaction;
-        const auto& s = resolvedState.state;
-        // check for barrier frames
-        if (s.bufferData->hasBarrier) {
-            // The current producerId is already a newer producer than the buffer that has a
-            // barrier. This means the incoming buffer is older and we can release it here. We
-            // don't wait on the barrier since we know that's stale information.
-            if (layer->barrierProducerId > s.bufferData->producerId) {
-                if (s.bufferData->releaseBufferListener) {
-                    uint32_t currentMaxAcquiredBufferCount =
-                            getMaxAcquiredBufferCountForCurrentRefreshRate(layer->ownerUid.val());
-                    ATRACE_FORMAT_INSTANT("callReleaseBufferCallback %s - %" PRIu64,
-                                          layer->name.c_str(), s.bufferData->frameNumber);
-                    s.bufferData->releaseBufferListener
-                            ->onReleaseBuffer({resolvedState.externalTexture->getBuffer()->getId(),
-                                               s.bufferData->frameNumber},
-                                              s.bufferData->acquireFence
-                                                      ? s.bufferData->acquireFence
-                                                      : Fence::NO_FENCE,
-                                              currentMaxAcquiredBufferCount);
+    flushState.transaction->traverseStatesWithBuffersWhileTrue(
+            [&](const ResolvedComposerState& resolvedState) FTL_FAKE_GUARD(
+                    kMainThreadContext) -> bool {
+                const frontend::RequestedLayerState* layer =
+                        mLayerLifecycleManager.getLayerFromId(resolvedState.layerId);
+                const auto& transaction = *flushState.transaction;
+                const auto& s = resolvedState.state;
+                // check for barrier frames
+                if (s.bufferData->hasBarrier) {
+                    // The current producerId is already a newer producer than the buffer that has a
+                    // barrier. This means the incoming buffer is older and we can release it here.
+                    // We don't wait on the barrier since we know that's stale information.
+                    if (layer->barrierProducerId > s.bufferData->producerId) {
+                        if (s.bufferData->releaseBufferListener) {
+                            uint32_t currentMaxAcquiredBufferCount =
+                                    getMaxAcquiredBufferCountForCurrentRefreshRate(
+                                            layer->ownerUid.val());
+                            ATRACE_FORMAT_INSTANT("callReleaseBufferCallback %s - %" PRIu64,
+                                                  layer->name.c_str(), s.bufferData->frameNumber);
+                            s.bufferData->releaseBufferListener
+                                    ->onReleaseBuffer({resolvedState.externalTexture->getBuffer()
+                                                               ->getId(),
+                                                       s.bufferData->frameNumber},
+                                                      s.bufferData->acquireFence
+                                                              ? s.bufferData->acquireFence
+                                                              : Fence::NO_FENCE,
+                                                      currentMaxAcquiredBufferCount);
+                        }
+
+                        // Delete the entire state at this point and not just release the buffer
+                        // because everything associated with the Layer in this Transaction is now
+                        // out of date.
+                        ATRACE_FORMAT("DeleteStaleBuffer %s barrierProducerId:%d > %d",
+                                      layer->name.c_str(), layer->barrierProducerId,
+                                      s.bufferData->producerId);
+                        return TraverseBuffersReturnValues::DELETE_AND_CONTINUE_TRAVERSAL;
+                    }
+
+                    if (layer->barrierFrameNumber < s.bufferData->barrierFrameNumber) {
+                        const bool willApplyBarrierFrame =
+                                flushState.bufferLayersReadyToPresent.contains(s.surface.get()) &&
+                                ((flushState.bufferLayersReadyToPresent.get(s.surface.get()) >=
+                                  s.bufferData->barrierFrameNumber));
+                        if (!willApplyBarrierFrame) {
+                            ATRACE_FORMAT("NotReadyBarrier %s barrierFrameNumber:%" PRId64
+                                          " > %" PRId64,
+                                          layer->name.c_str(), layer->barrierFrameNumber,
+                                          s.bufferData->barrierFrameNumber);
+                            ready = TransactionReadiness::NotReadyBarrier;
+                            return TraverseBuffersReturnValues::STOP_TRAVERSAL;
+                        }
+                    }
                 }
 
-                // Delete the entire state at this point and not just release the buffer because
-                // everything associated with the Layer in this Transaction is now out of date.
-                ATRACE_FORMAT("DeleteStaleBuffer %s barrierProducerId:%d > %d", layer->name.c_str(),
-                              layer->barrierProducerId, s.bufferData->producerId);
-                return TraverseBuffersReturnValues::DELETE_AND_CONTINUE_TRAVERSAL;
-            }
-
-            if (layer->barrierFrameNumber < s.bufferData->barrierFrameNumber) {
-                const bool willApplyBarrierFrame =
-                        flushState.bufferLayersReadyToPresent.contains(s.surface.get()) &&
-                        ((flushState.bufferLayersReadyToPresent.get(s.surface.get()) >=
-                          s.bufferData->barrierFrameNumber));
-                if (!willApplyBarrierFrame) {
-                    ATRACE_FORMAT("NotReadyBarrier %s barrierFrameNumber:%" PRId64 " > %" PRId64,
-                                  layer->name.c_str(), layer->barrierFrameNumber,
-                                  s.bufferData->barrierFrameNumber);
-                    ready = TransactionReadiness::NotReadyBarrier;
+                // If backpressure is enabled and we already have a buffer to commit, keep
+                // the transaction in the queue.
+                const bool hasPendingBuffer =
+                        flushState.bufferLayersReadyToPresent.contains(s.surface.get());
+                if (layer->backpressureEnabled() && hasPendingBuffer &&
+                    transaction.isAutoTimestamp) {
+                    ATRACE_FORMAT("hasPendingBuffer %s", layer->name.c_str());
+                    ready = TransactionReadiness::NotReady;
                     return TraverseBuffersReturnValues::STOP_TRAVERSAL;
                 }
-            }
-        }
 
-        // If backpressure is enabled and we already have a buffer to commit, keep
-        // the transaction in the queue.
-        const bool hasPendingBuffer =
-                flushState.bufferLayersReadyToPresent.contains(s.surface.get());
-        if (layer->backpressureEnabled() && hasPendingBuffer && transaction.isAutoTimestamp) {
-            ATRACE_FORMAT("hasPendingBuffer %s", layer->name.c_str());
-            ready = TransactionReadiness::NotReady;
-            return TraverseBuffersReturnValues::STOP_TRAVERSAL;
-        }
-
-        const bool acquireFenceAvailable = s.bufferData &&
-                s.bufferData->flags.test(BufferData::BufferDataChange::fenceChanged) &&
-                s.bufferData->acquireFence;
-        const bool fenceSignaled = !acquireFenceAvailable ||
-                s.bufferData->acquireFence->getStatus() != Fence::Status::Unsignaled;
-        if (!fenceSignaled) {
-            // check fence status
-            const bool allowLatchUnsignaled = shouldLatchUnsignaled(s, transaction.states.size(),
-                                                                    flushState.firstTransaction) &&
-                    layer->isSimpleBufferUpdate(s);
-            if (allowLatchUnsignaled) {
-                ATRACE_FORMAT("fence unsignaled try allowLatchUnsignaled %s", layer->name.c_str());
-                ready = TransactionReadiness::NotReadyUnsignaled;
-            } else {
-                ready = TransactionReadiness::NotReady;
-                auto& listener = s.bufferData->releaseBufferListener;
-                if (listener &&
-                    (flushState.queueProcessTime - transaction.postTime) >
-                            std::chrono::nanoseconds(4s).count()) {
-                    mTransactionHandler
-                            .onTransactionQueueStalled(transaction.id,
-                                                       {.pid = layer->ownerPid.val(),
-                                                        .layerId = layer->id,
-                                                        .layerName = layer->name,
-                                                        .bufferId = s.bufferData->getId(),
-                                                        .frameNumber = s.bufferData->frameNumber});
+                const bool acquireFenceAvailable = s.bufferData &&
+                        s.bufferData->flags.test(BufferData::BufferDataChange::fenceChanged) &&
+                        s.bufferData->acquireFence;
+                const bool fenceSignaled = !acquireFenceAvailable ||
+                        s.bufferData->acquireFence->getStatus() != Fence::Status::Unsignaled;
+                if (!fenceSignaled) {
+                    // check fence status
+                    const bool allowLatchUnsignaled =
+                            shouldLatchUnsignaled(s, transaction.states.size(),
+                                                  flushState.firstTransaction) &&
+                            layer->isSimpleBufferUpdate(s);
+                    if (allowLatchUnsignaled) {
+                        ATRACE_FORMAT("fence unsignaled try allowLatchUnsignaled %s",
+                                      layer->name.c_str());
+                        ready = TransactionReadiness::NotReadyUnsignaled;
+                    } else {
+                        ready = TransactionReadiness::NotReady;
+                        auto& listener = s.bufferData->releaseBufferListener;
+                        if (listener &&
+                            (flushState.queueProcessTime - transaction.postTime) >
+                                    std::chrono::nanoseconds(4s).count()) {
+                            mTransactionHandler
+                                    .onTransactionQueueStalled(transaction.id,
+                                                               {.pid = layer->ownerPid.val(),
+                                                                .layerId = layer->id,
+                                                                .layerName = layer->name,
+                                                                .bufferId = s.bufferData->getId(),
+                                                                .frameNumber =
+                                                                        s.bufferData->frameNumber});
+                        }
+                        ATRACE_FORMAT("fence unsignaled %s", layer->name.c_str());
+                        return TraverseBuffersReturnValues::STOP_TRAVERSAL;
+                    }
                 }
-                ATRACE_FORMAT("fence unsignaled %s", layer->name.c_str());
-                return TraverseBuffersReturnValues::STOP_TRAVERSAL;
-            }
-        }
-        return TraverseBuffersReturnValues::CONTINUE_TRAVERSAL;
-    });
+                return TraverseBuffersReturnValues::CONTINUE_TRAVERSAL;
+            });
     return ready;
 }
 
@@ -5181,7 +5209,13 @@ status_t SurfaceFlinger::setTransactionState(
     }(state.flags);
 
     const auto frameHint = state.isFrameActive() ? FrameHint::kActive : FrameHint::kNone;
-    mTransactionHandler.queueTransaction(std::move(state));
+    {
+        // Transactions are added via a lockless queue and does not need to be added from the main
+        // thread.
+        ftl::FakeGuard guard(kMainThreadContext);
+        mTransactionHandler.queueTransaction(std::move(state));
+    }
+
     for (const auto& [displayId, data] : mNotifyExpectedPresentMap) {
         if (data.hintStatus.load() == NotifyExpectedPresentHintStatus::ScheduleOnTx) {
             scheduleNotifyExpectedPresentHint(displayId, VsyncId{frameTimelineInfo.vsyncId});
@@ -5226,17 +5260,19 @@ bool SurfaceFlinger::applyTransactionState(const FrameTimelineInfo& frameTimelin
                                                              desiredPresentTime, isAutoTimestamp,
                                                              postTime, transactionId);
         }
-        if ((flags & eAnimation) && resolvedState.state.surface) {
-            if (const auto layer = LayerHandle::getLayer(resolvedState.state.surface)) {
-                const auto layerProps = scheduler::LayerProps{
-                        .visible = layer->isVisible(),
-                        .bounds = layer->getBounds(),
-                        .transform = layer->getTransform(),
-                        .setFrameRateVote = layer->getFrameRateForLayerTree(),
-                        .frameRateSelectionPriority = layer->getFrameRateSelectionPriority(),
-                        .isFrontBuffered = layer->isFrontBuffered(),
-                };
-                layer->recordLayerHistoryAnimationTx(layerProps, now);
+        if (!mLayerLifecycleManagerEnabled) {
+            if ((flags & eAnimation) && resolvedState.state.surface) {
+                if (const auto layer = LayerHandle::getLayer(resolvedState.state.surface)) {
+                    const auto layerProps = scheduler::LayerProps{
+                            .visible = layer->isVisible(),
+                            .bounds = layer->getBounds(),
+                            .transform = layer->getTransform(),
+                            .setFrameRateVote = layer->getFrameRateForLayerTree(),
+                            .frameRateSelectionPriority = layer->getFrameRateSelectionPriority(),
+                            .isFrontBuffered = layer->isFrontBuffered(),
+                    };
+                    layer->recordLayerHistoryAnimationTx(layerProps, now);
+                }
             }
         }
     }
@@ -5892,7 +5928,7 @@ status_t SurfaceFlinger::mirrorLayer(const LayerCreationArgs& args,
             return result;
         }
 
-        mirrorLayer->setClonedChild(mirrorFrom->createClone(mirrorLayer->getSequence()));
+        mirrorLayer->setClonedChild(mirrorFrom->createClone());
     }
 
     outResult.layerId = mirrorLayer->sequence;
@@ -6023,7 +6059,11 @@ void SurfaceFlinger::onHandleDestroyed(BBinder* handle, sp<Layer>& layer, uint32
         mDestroyedHandles.emplace_back(layerId, layer->getDebugName());
     }
 
-    mTransactionHandler.onLayerDestroyed(layerId);
+    {
+        // Used to remove stalled transactions which uses an internal lock.
+        ftl::FakeGuard guard(kMainThreadContext);
+        mTransactionHandler.onLayerDestroyed(layerId);
+    }
 
     Mutex::Autolock lock(mStateLock);
     markLayerPendingRemovalLocked(layer);
@@ -6675,7 +6715,11 @@ void SurfaceFlinger::dumpOffscreenLayersProto(perfetto::protos::LayersProto& lay
 }
 
 perfetto::protos::LayersProto SurfaceFlinger::dumpProtoFromMainThread(uint32_t traceFlags) {
-    return mScheduler->schedule([=, this] { return dumpDrawingStateProto(traceFlags); }).get();
+    return mScheduler
+            ->schedule([=, this]() FTL_FAKE_GUARD(kMainThreadContext) {
+                return dumpDrawingStateProto(traceFlags);
+            })
+            .get();
 }
 
 void SurfaceFlinger::dumpOffscreenLayers(std::string& result) {
@@ -6724,17 +6768,18 @@ void SurfaceFlinger::dumpHwcLayersMinidump(std::string& result) const {
         Layer::miniDumpHeader(result);
 
         const DisplayDevice& ref = *display;
-        mLayerSnapshotBuilder.forEachVisibleSnapshot([&](const frontend::LayerSnapshot& snapshot) {
-            if (!snapshot.hasSomethingToDraw() ||
-                ref.getLayerStack() != snapshot.outputFilter.layerStack) {
-                return;
-            }
-            auto it = mLegacyLayers.find(snapshot.sequence);
-            LLOG_ALWAYS_FATAL_WITH_TRACE_IF(it == mLegacyLayers.end(),
-                                            "Couldnt find layer object for %s",
-                                            snapshot.getDebugString().c_str());
-            it->second->miniDump(result, snapshot, ref);
-        });
+        mLayerSnapshotBuilder.forEachVisibleSnapshot(
+                [&](const frontend::LayerSnapshot& snapshot) FTL_FAKE_GUARD(kMainThreadContext) {
+                    if (!snapshot.hasSomethingToDraw() ||
+                        ref.getLayerStack() != snapshot.outputFilter.layerStack) {
+                        return;
+                    }
+                    auto it = mLegacyLayers.find(snapshot.sequence);
+                    LLOG_ALWAYS_FATAL_WITH_TRACE_IF(it == mLegacyLayers.end(),
+                                                    "Couldnt find layer object for %s",
+                                                    snapshot.getDebugString().c_str());
+                    it->second->miniDump(result, snapshot, ref);
+                });
         result.append("\n");
     }
 }
@@ -7770,20 +7815,6 @@ status_t SurfaceFlinger::setSchedAttr(bool enabled) {
         return NO_ERROR;
     }
 
-    // Currently, there is no wrapper in bionic: b/183240349.
-    struct sched_attr {
-        uint32_t size;
-        uint32_t sched_policy;
-        uint64_t sched_flags;
-        int32_t sched_nice;
-        uint32_t sched_priority;
-        uint64_t sched_runtime;
-        uint64_t sched_deadline;
-        uint64_t sched_period;
-        uint32_t sched_util_min;
-        uint32_t sched_util_max;
-    };
-
     sched_attr attr = {};
     attr.size = sizeof(attr);
 
@@ -7838,17 +7869,19 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
 
     status_t validate = validateScreenshotPermissions(args);
     if (validate != OK) {
+        ALOGD("Permission denied to captureDisplay");
         invokeScreenCaptureError(validate, captureListener);
         return;
     }
 
     if (!args.displayToken) {
+        ALOGD("Invalid display token to captureDisplay");
         invokeScreenCaptureError(BAD_VALUE, captureListener);
         return;
     }
 
     if (args.captureSecureLayers && !hasCaptureBlackoutContentPermission()) {
-        ALOGE("Attempting to capture secure layers without CAPTURE_BLACKOUT_CONTENT");
+        ALOGD("Attempting to capture secure layers without CAPTURE_BLACKOUT_CONTENT");
         invokeScreenCaptureError(PERMISSION_DENIED, captureListener);
         return;
     }
@@ -7861,6 +7894,7 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
         Mutex::Autolock lock(mStateLock);
         sp<DisplayDevice> display = getDisplayDeviceLocked(args.displayToken);
         if (!display) {
+            ALOGD("Unable to find display device for captureDisplay");
             invokeScreenCaptureError(NAME_NOT_FOUND, captureListener);
             return;
         }
@@ -7877,7 +7911,7 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
             if (excludeLayer != UNASSIGNED_LAYER_ID) {
                 excludeLayerIds.emplace(excludeLayer);
             } else {
-                ALOGW("Invalid layer handle passed as excludeLayer to captureDisplay");
+                ALOGD("Invalid layer handle passed as excludeLayer to captureDisplay");
                 invokeScreenCaptureError(NAME_NOT_FOUND, captureListener);
                 return;
             }
@@ -7915,6 +7949,7 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
 
         const auto display = getDisplayDeviceLocked(displayId);
         if (!display) {
+            ALOGD("Unable to find display device for captureDisplay");
             invokeScreenCaptureError(NAME_NOT_FOUND, captureListener);
             return;
         }
@@ -7932,7 +7967,7 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
     constexpr auto kMaxTextureSize = 16384;
     if (size.width <= 0 || size.height <= 0 || size.width >= kMaxTextureSize ||
         size.height >= kMaxTextureSize) {
-        ALOGE("capture display resolved to invalid size %d x %d", size.width, size.height);
+        ALOGD("captureDisplay resolved to invalid size %d x %d", size.width, size.height);
         invokeScreenCaptureError(BAD_VALUE, captureListener);
         return;
     }
@@ -7979,6 +8014,7 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
 
     status_t validate = validateScreenshotPermissions(args);
     if (validate != OK) {
+        ALOGD("Permission denied to captureLayers");
         invokeScreenCaptureError(validate, captureListener);
         return;
     }
@@ -7990,7 +8026,7 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
     ui::Dataspace dataspace = args.dataspace;
 
     if (args.captureSecureLayers && !hasCaptureBlackoutContentPermission()) {
-        ALOGE("Attempting to capture secure layers without CAPTURE_BLACKOUT_CONTENT");
+        ALOGD("Attempting to capture secure layers without CAPTURE_BLACKOUT_CONTENT");
         invokeScreenCaptureError(PERMISSION_DENIED, captureListener);
         return;
     }
@@ -8000,7 +8036,7 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
 
         parent = LayerHandle::getLayer(args.layerHandle);
         if (parent == nullptr) {
-            ALOGE("captureLayers called with an invalid or removed parent");
+            ALOGD("captureLayers called with an invalid or removed parent");
             invokeScreenCaptureError(NAME_NOT_FOUND, captureListener);
             return;
         }
@@ -8019,6 +8055,7 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
         if (crop.isEmpty() || args.frameScaleX <= 0.0f || args.frameScaleY <= 0.0f) {
             // Error out if the layer has no source bounds (i.e. they are boundless) and a source
             // crop was not specified, or an invalid frame scale was provided.
+            ALOGD("Boundless layer, unspecified crop, or invalid frame scale to captureLayers");
             invokeScreenCaptureError(BAD_VALUE, captureListener);
             return;
         }
@@ -8029,7 +8066,7 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
             if (excludeLayer != UNASSIGNED_LAYER_ID) {
                 excludeLayerIds.emplace(excludeLayer);
             } else {
-                ALOGW("Invalid layer handle passed as excludeLayer to captureLayers");
+                ALOGD("Invalid layer handle passed as excludeLayer to captureLayers");
                 invokeScreenCaptureError(NAME_NOT_FOUND, captureListener);
                 return;
             }
@@ -8038,33 +8075,29 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
 
     // really small crop or frameScale
     if (reqSize.width <= 0 || reqSize.height <= 0) {
-        ALOGW("Failed to captureLayers: crop or scale too small");
+        ALOGD("Failed to captureLayers: crop or scale too small");
         invokeScreenCaptureError(BAD_VALUE, captureListener);
         return;
     }
 
-    bool childrenOnly = args.childrenOnly;
-    RenderAreaFuture renderAreaFuture = ftl::defer([=, this]() -> std::unique_ptr<RenderArea> {
+    RenderAreaFuture renderAreaFuture = ftl::defer([=, this]() FTL_FAKE_GUARD(kMainThreadContext)
+                                                           -> std::unique_ptr<RenderArea> {
         ui::Transform layerTransform;
         Rect layerBufferSize;
-        if (mLayerLifecycleManagerEnabled) {
-            frontend::LayerSnapshot* snapshot =
-                    mLayerSnapshotBuilder.getSnapshot(parent->getSequence());
-            if (!snapshot) {
-                ALOGW("Couldn't find layer snapshot for %d", parent->getSequence());
-            } else {
-                layerTransform = snapshot->localTransform;
-                layerBufferSize = snapshot->bufferSize;
-            }
+        frontend::LayerSnapshot* snapshot =
+                mLayerSnapshotBuilder.getSnapshot(parent->getSequence());
+        if (!snapshot) {
+            ALOGW("Couldn't find layer snapshot for %d", parent->getSequence());
         } else {
-            layerTransform = parent->getTransform();
-            layerBufferSize = parent->getBufferSize(parent->getDrawingState());
+            if (!args.childrenOnly) {
+                layerTransform = snapshot->localTransform.inverse();
+            }
+            layerBufferSize = snapshot->bufferSize;
         }
 
-        return std::make_unique<LayerRenderArea>(*this, parent, crop, reqSize, dataspace,
-                                                 childrenOnly, args.captureSecureLayers,
-                                                 layerTransform, layerBufferSize,
-                                                 args.hintForSeamlessTransition);
+        return std::make_unique<LayerRenderArea>(parent, crop, reqSize, dataspace,
+                                                 args.captureSecureLayers, layerTransform,
+                                                 layerBufferSize, args.hintForSeamlessTransition);
     });
     GetLayerSnapshotsFunction getLayerSnapshots;
     if (mLayerLifecycleManagerEnabled) {
@@ -8103,7 +8136,7 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
     }
 
     if (captureListener == nullptr) {
-        ALOGE("capture screen must provide a capture listener callback");
+        ALOGD("capture screen must provide a capture listener callback");
         invokeScreenCaptureError(BAD_VALUE, captureListener);
         return;
     }
@@ -8217,11 +8250,9 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
             return ftl::yield<FenceResult>(base::unexpected(NO_ERROR)).share();
         }
 
-        ftl::SharedFuture<FenceResult> renderFuture;
-        renderArea->render([&]() FTL_FAKE_GUARD(kMainThreadContext) {
-            renderFuture = renderScreenImpl(renderArea, buffer, regionSampling, grayscale,
-                                            isProtected, captureResults, layers);
-        });
+        ftl::SharedFuture<FenceResult> renderFuture =
+                renderScreenImpl(renderArea, buffer, regionSampling, grayscale, isProtected,
+                                 captureResults, layers);
 
         if (captureListener) {
             // Defer blocking on renderFuture back to the Binder thread.
@@ -9016,6 +9047,8 @@ status_t SurfaceFlinger::removeWindowInfosListener(
 
 status_t SurfaceFlinger::getStalledTransactionInfo(
         int pid, std::optional<TransactionHandler::StalledTransactionInfo>& result) {
+    // Used to add a stalled transaction which uses an internal lock.
+    ftl::FakeGuard guard(kMainThreadContext);
     result = mTransactionHandler.getStalledTransactionInfo(pid);
     return NO_ERROR;
 }
@@ -9143,7 +9176,7 @@ bool SurfaceFlinger::commitMirrorDisplays(VsyncId vsyncId) {
                 Mutex::Autolock lock(mStateLock);
                 createEffectLayer(mirrorArgs, &unused, &childMirror);
                 MUTEX_ALIAS(mStateLock, childMirror->mFlinger->mStateLock);
-                childMirror->setClonedChild(layer->createClone(childMirror->getSequence()));
+                childMirror->setClonedChild(layer->createClone());
                 childMirror->reparent(mirrorDisplay.rootHandle);
             }
             // lock on mStateLock needs to be released before binder handle gets destroyed
@@ -9216,7 +9249,8 @@ std::vector<std::pair<Layer*, LayerFE*>> SurfaceFlinger::moveSnapshotsToComposit
     if (mLayerLifecycleManagerEnabled) {
         nsecs_t currentTime = systemTime();
         mLayerSnapshotBuilder.forEachVisibleSnapshot(
-                [&](std::unique_ptr<frontend::LayerSnapshot>& snapshot) {
+                [&](std::unique_ptr<frontend::LayerSnapshot>& snapshot) FTL_FAKE_GUARD(
+                        kMainThreadContext) {
                     if (cursorOnly &&
                         snapshot->compositionType !=
                                 aidl::android::hardware::graphics::composer3::Composition::CURSOR) {
@@ -9277,11 +9311,12 @@ SurfaceFlinger::getLayerSnapshotsForScreenshots(
         std::optional<ui::LayerStack> layerStack, uint32_t uid,
         std::function<bool(const frontend::LayerSnapshot&, bool& outStopTraversal)>
                 snapshotFilterFn) {
-    return [&, layerStack, uid]() {
+    return [&, layerStack, uid]() FTL_FAKE_GUARD(kMainThreadContext) {
         std::vector<std::pair<Layer*, sp<LayerFE>>> layers;
         bool stopTraversal = false;
         mLayerSnapshotBuilder.forEachVisibleSnapshot(
-                [&](std::unique_ptr<frontend::LayerSnapshot>& snapshot) {
+                [&](std::unique_ptr<frontend::LayerSnapshot>& snapshot) FTL_FAKE_GUARD(
+                        kMainThreadContext) {
                     if (stopTraversal) {
                         return;
                     }
@@ -9316,7 +9351,8 @@ std::function<std::vector<std::pair<Layer*, sp<LayerFE>>>()>
 SurfaceFlinger::getLayerSnapshotsForScreenshots(std::optional<ui::LayerStack> layerStack,
                                                 uint32_t uid,
                                                 std::unordered_set<uint32_t> excludeLayerIds) {
-    return [&, layerStack, uid, excludeLayerIds = std::move(excludeLayerIds)]() {
+    return [&, layerStack, uid,
+            excludeLayerIds = std::move(excludeLayerIds)]() FTL_FAKE_GUARD(kMainThreadContext) {
         if (excludeLayerIds.empty()) {
             auto getLayerSnapshotsFn =
                     getLayerSnapshotsForScreenshots(layerStack, uid, /*snapshotFilterFn=*/nullptr);
@@ -9358,7 +9394,7 @@ SurfaceFlinger::getLayerSnapshotsForScreenshots(uint32_t rootLayerId, uint32_t u
                                                 bool childrenOnly,
                                                 const std::optional<FloatRect>& parentCrop) {
     return [&, rootLayerId, uid, excludeLayerIds = std::move(excludeLayerIds), childrenOnly,
-            parentCrop]() {
+            parentCrop]() FTL_FAKE_GUARD(kMainThreadContext) {
         auto root = mLayerHierarchyBuilder.getPartialHierarchy(rootLayerId, childrenOnly);
         frontend::LayerSnapshotBuilder::Args
                 args{.root = root,
@@ -9869,6 +9905,7 @@ binder::Status SurfaceComposerAIDL::captureDisplayById(
         std::optional<DisplayId> id = DisplayId::fromValue(static_cast<uint64_t>(displayId));
         mFlinger->captureDisplay(*id, args, captureListener);
     } else {
+        ALOGD("Permission denied to captureDisplayById");
         invokeScreenCaptureError(PERMISSION_DENIED, captureListener);
     }
     return binderStatusFromStatusT(NO_ERROR);

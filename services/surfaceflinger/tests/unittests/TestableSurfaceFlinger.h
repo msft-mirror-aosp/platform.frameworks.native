@@ -18,10 +18,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <variant>
 
 #include <ftl/fake_guard.h>
 #include <ftl/match.h>
+#include <gui/LayerMetadata.h>
 #include <gui/ScreenCaptureResults.h>
 #include <ui/DynamicDisplayInfo.h>
 
@@ -38,6 +40,7 @@
 #include "FrameTracer/FrameTracer.h"
 #include "FrontEnd/LayerCreationArgs.h"
 #include "FrontEnd/LayerHandle.h"
+#include "FrontEnd/RequestedLayerState.h"
 #include "Layer.h"
 #include "NativeWindowSurface.h"
 #include "RenderArea.h"
@@ -45,6 +48,7 @@
 #include "Scheduler/RefreshRateSelector.h"
 #include "SurfaceFlinger.h"
 #include "TestableScheduler.h"
+#include "android/gui/ISurfaceComposerClient.h"
 #include "mock/DisplayHardware/MockComposer.h"
 #include "mock/DisplayHardware/MockDisplayMode.h"
 #include "mock/DisplayHardware/MockPowerAdvisor.h"
@@ -195,6 +199,11 @@ public:
 
     void setupTimeStats(const std::shared_ptr<TimeStats>& timeStats) {
         mFlinger->mCompositionEngine->setTimeStats(timeStats);
+    }
+
+    void setupCompositionEngine(
+            std::unique_ptr<compositionengine::CompositionEngine> compositionEngine) {
+        mFlinger->mCompositionEngine = std::move(compositionEngine);
     }
 
     enum class SchedulerCallbackImpl { kNoOp, kMock };
@@ -492,9 +501,11 @@ public:
 
     auto& getTransactionQueue() { return mFlinger->mTransactionHandler.mLocklessTransactionQueue; }
     auto& getPendingTransactionQueue() {
+        ftl::FakeGuard guard(kMainThreadContext);
         return mFlinger->mTransactionHandler.mPendingTransactionQueues;
     }
     size_t getPendingTransactionCount() {
+        ftl::FakeGuard guard(kMainThreadContext);
         return mFlinger->mTransactionHandler.mPendingTransactionCount.load();
     }
 
@@ -513,7 +524,9 @@ public:
     }
 
     auto setTransactionStateInternal(TransactionState& transaction) {
-        return mFlinger->mTransactionHandler.queueTransaction(std::move(transaction));
+        return FTL_FAKE_GUARD(kMainThreadContext,
+                              mFlinger->mTransactionHandler.queueTransaction(
+                                      std::move(transaction)));
     }
 
     auto flushTransactionQueues() {
@@ -583,6 +596,13 @@ public:
         return mFlinger->getDisplayStats(displayToken, outInfo);
     }
 
+    // Used to add a layer before updateLayerSnapshots is called.
+    // Must have transactionsFlushed enabled for the new layer to be updated.
+    void addLayer(std::unique_ptr<frontend::RequestedLayerState>& layer) {
+        std::scoped_lock<std::mutex> lock(mFlinger->mCreatedLayersLock);
+        mFlinger->mNewLayers.emplace_back(std::move(layer));
+    }
+
     /* ------------------------------------------------------------------------
      * Read-only access to private data to assert post-conditions.
      */
@@ -598,15 +618,20 @@ public:
     }
 
     void injectLegacyLayer(sp<Layer> layer) {
-        mFlinger->mLegacyLayers[static_cast<uint32_t>(layer->sequence)] = layer;
+        FTL_FAKE_GUARD(kMainThreadContext,
+                       mFlinger->mLegacyLayers[static_cast<uint32_t>(layer->sequence)] = layer);
     };
 
-    void releaseLegacyLayer(uint32_t sequence) { mFlinger->mLegacyLayers.erase(sequence); };
+    void releaseLegacyLayer(uint32_t sequence) {
+        FTL_FAKE_GUARD(kMainThreadContext, mFlinger->mLegacyLayers.erase(sequence));
+    };
 
     auto setLayerHistoryDisplayArea(uint32_t displayArea) {
         return mFlinger->mScheduler->onActiveDisplayAreaChanged(displayArea);
     };
-    auto updateLayerHistory(nsecs_t now) { return mFlinger->updateLayerHistory(now); };
+    auto updateLayerHistory(nsecs_t now) {
+        return FTL_FAKE_GUARD(kMainThreadContext, mFlinger->updateLayerHistory(now));
+    };
     auto setDaltonizerType(ColorBlindnessType type) {
         mFlinger->mDaltonizer.setType(type);
         return mFlinger->updateColorMatrixLocked();
@@ -664,11 +689,6 @@ public:
     auto initTransactionTraceWriter() {
         mFlinger->mTransactionTracing.emplace();
         return mFlinger->initTransactionTraceWriter();
-    }
-
-    void enableNewFrontEnd() {
-        mFlinger->mLayerLifecycleManagerEnabled = true;
-        mFlinger->mLegacyFrontEndEnabled = false;
     }
 
     void notifyExpectedPresentIfRequired(PhysicalDisplayId displayId, Period vsyncPeriod,

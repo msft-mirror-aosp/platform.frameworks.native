@@ -59,7 +59,7 @@ class BlurFilter;
 class SkiaRenderEngine : public RenderEngine {
 public:
     static std::unique_ptr<SkiaRenderEngine> create(const RenderEngineCreationArgs& args);
-    SkiaRenderEngine(Threaded, PixelFormat pixelFormat, bool supportsBackgroundBlur);
+    SkiaRenderEngine(Threaded, PixelFormat pixelFormat, BlurAlgorithm);
     ~SkiaRenderEngine() override;
 
     std::future<void> primeCache(bool shouldPrimeUltraHDR) override final;
@@ -79,9 +79,9 @@ public:
     void ensureContextsCreated();
 
 protected:
-    // This is so backends can stop the generic rendering state first before
-    // cleaning up backend-specific state
-    void finishRenderingAndAbandonContext();
+    // This is so backends can stop the generic rendering state first before cleaning up
+    // backend-specific state. SkiaGpuContexts are invalid after invocation.
+    void finishRenderingAndAbandonContexts();
 
     // Functions that a given backend (GLES, Vulkan) must implement
     using Contexts = std::pair<unique_ptr<SkiaGpuContext>, unique_ptr<SkiaGpuContext>>;

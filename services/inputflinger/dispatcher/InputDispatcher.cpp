@@ -838,13 +838,6 @@ Result<void> validateWindowInfosUpdate(const gui::WindowInfosUpdate& update) {
         if (!inserted) {
             return Error() << "Duplicate entry for " << info;
         }
-        if (info.layoutParamsFlags.test(WindowInfo::Flag::SECURE) &&
-            !info.inputConfig.test(WindowInfo::InputConfig::NOT_VISIBLE) &&
-            !info.inputConfig.test(WindowInfo::InputConfig::SENSITIVE_FOR_TRACING)) {
-            return Error()
-                    << "Window with FLAG_SECURE does not set InputConfig::SENSITIVE_FOR_TRACING: "
-                    << info;
-        }
     }
     return {};
 }
@@ -2462,7 +2455,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
         if (newTouchedWindowHandle == nullptr) {
             ALOGD("No new touched window at (%.1f, %.1f) in display %" PRId32, x, y, displayId);
             // Try to assign the pointer to the first foreground window we find, if there is one.
-            newTouchedWindowHandle = tempTouchState.getFirstForegroundWindowHandle();
+            newTouchedWindowHandle = tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
         }
 
         // Verify targeted injection.
@@ -2539,11 +2532,19 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
             if (!isHoverAction) {
                 const bool isDownOrPointerDown = maskedAction == AMOTION_EVENT_ACTION_DOWN ||
                         maskedAction == AMOTION_EVENT_ACTION_POINTER_DOWN;
-                tempTouchState.addOrUpdateWindow(windowHandle, InputTarget::DispatchMode::AS_IS,
-                                                 targetFlags, entry.deviceId, {pointer},
-                                                 isDownOrPointerDown
-                                                         ? std::make_optional(entry.eventTime)
-                                                         : std::nullopt);
+                Result<void> addResult =
+                        tempTouchState.addOrUpdateWindow(windowHandle,
+                                                         InputTarget::DispatchMode::AS_IS,
+                                                         targetFlags, entry.deviceId, {pointer},
+                                                         isDownOrPointerDown
+                                                                 ? std::make_optional(
+                                                                           entry.eventTime)
+                                                                 : std::nullopt);
+                if (!addResult.ok()) {
+                    LOG(ERROR) << "Error while processing " << entry << " for "
+                               << windowHandle->getName();
+                    logDispatchStateLocked();
+                }
                 // If this is the pointer going down and the touched window has a wallpaper
                 // then also add the touched wallpaper windows so they are locked in for the
                 // duration of the touch gesture. We do not collect wallpapers during HOVER_MOVE or
@@ -2622,7 +2623,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
             const auto [x, y] = resolveTouchedPosition(entry);
             const bool isStylus = isPointerFromStylus(entry, /*pointerIndex=*/0);
             sp<WindowInfoHandle> oldTouchedWindowHandle =
-                    tempTouchState.getFirstForegroundWindowHandle();
+                    tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
             LOG_ALWAYS_FATAL_IF(oldTouchedWindowHandle == nullptr);
             sp<WindowInfoHandle> newTouchedWindowHandle =
                     findTouchedWindowAtLocked(displayId, x, y, isStylus);
@@ -2740,7 +2741,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
     // has a different UID, then we will not reveal coordinate information to this window.
     if (maskedAction == AMOTION_EVENT_ACTION_DOWN) {
         sp<WindowInfoHandle> foregroundWindowHandle =
-                tempTouchState.getFirstForegroundWindowHandle();
+                tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
         if (foregroundWindowHandle) {
             const auto foregroundWindowUid = foregroundWindowHandle->getInfo()->ownerUid;
             for (InputTarget& target : targets) {
@@ -3053,7 +3054,11 @@ void InputDispatcher::addPointerWindowTargetLocked(
                    << ", windowInfo->globalScaleFactor=" << windowInfo->globalScaleFactor;
     }
 
-    it->addPointers(pointerIds, windowInfo->transform);
+    Result<void> result = it->addPointers(pointerIds, windowInfo->transform);
+    if (!result.ok()) {
+        logDispatchStateLocked();
+        LOG(FATAL) << result.error().message();
+    }
 }
 
 void InputDispatcher::addGlobalMonitoringTargetsLocked(std::vector<InputTarget>& inputTargets,
@@ -4727,6 +4732,7 @@ void InputDispatcher::notifySwitch(const NotifySwitchArgs& args) {
 }
 
 void InputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs& args) {
+    // TODO(b/308677868) Remove device reset from the InputListener interface
     if (debugInboundEventDetails()) {
         ALOGD("notifyDeviceReset - eventTime=%" PRId64 ", deviceId=%d", args.eventTime,
               args.deviceId);
@@ -4877,6 +4883,30 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             }
 
             mLock.lock();
+
+            if (policyFlags & POLICY_FLAG_FILTERED) {
+                // The events from InputFilter impersonate real hardware devices. Check these
+                // events for consistency and print an error. An inconsistent event sent from
+                // InputFilter could cause a crash in the later stages of dispatching pipeline.
+                auto [it, _] =
+                        mInputFilterVerifiersByDisplay
+                                .try_emplace(displayId,
+                                             StringPrintf("Injection on %" PRId32, displayId));
+                InputVerifier& verifier = it->second;
+
+                Result<void> result =
+                        verifier.processMovement(resolvedDeviceId, motionEvent.getSource(),
+                                                 motionEvent.getAction(),
+                                                 motionEvent.getPointerCount(),
+                                                 motionEvent.getPointerProperties(),
+                                                 motionEvent.getSamplePointerCoords(), flags);
+                if (!result.ok()) {
+                    logDispatchStateLocked();
+                    LOG(ERROR) << "Inconsistent event: " << motionEvent
+                               << ", reason: " << result.error();
+                }
+            }
+
             const nsecs_t* sampleEventTimes = motionEvent.getSampleEventTimes();
             const size_t pointerCount = motionEvent.getPointerCount();
             const std::vector<PointerProperties>
@@ -6940,6 +6970,7 @@ void InputDispatcher::displayRemoved(int32_t displayId) {
         // Remove the associated touch mode state.
         mTouchModePerDisplay.erase(displayId);
         mVerifiersByDisplay.erase(displayId);
+        mInputFilterVerifiersByDisplay.erase(displayId);
     } // release lock
 
     // Wake up poll loop since it may need to make new input dispatching choices.
