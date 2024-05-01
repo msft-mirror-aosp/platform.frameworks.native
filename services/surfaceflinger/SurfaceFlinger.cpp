@@ -2225,19 +2225,20 @@ void SurfaceFlinger::onComposerHalVsyncIdle(hal::HWDisplayId) {
 
 void SurfaceFlinger::onRefreshRateChangedDebug(const RefreshRateChangedDebugData& data) {
     ATRACE_CALL();
-    if (const auto displayId = getHwComposer().toPhysicalDisplayId(data.display); displayId) {
-        const char* const whence = __func__;
-        static_cast<void>(mScheduler->schedule([=, this]() FTL_FAKE_GUARD(mStateLock) {
-            const Fps fps = Fps::fromPeriodNsecs(getHwComposer().getComposer()->isVrrSupported()
-                                                         ? data.refreshPeriodNanos
-                                                         : data.vsyncPeriodNanos);
-            ATRACE_FORMAT("%s Fps %d", whence, fps.getIntValue());
-            const auto display = getDisplayDeviceLocked(*displayId);
-            FTL_FAKE_GUARD(kMainThreadContext,
-                           display->updateRefreshRateOverlayRate(fps, display->getActiveMode().fps,
-                                                                 /* setByHwc */ true));
-        }));
-    }
+    const char* const whence = __func__;
+    static_cast<void>(mScheduler->schedule([=, this]() FTL_FAKE_GUARD(mStateLock) FTL_FAKE_GUARD(
+                                                   kMainThreadContext) {
+        if (const auto displayIdOpt = getHwComposer().toPhysicalDisplayId(data.display)) {
+            if (const auto display = getDisplayDeviceLocked(*displayIdOpt)) {
+                const Fps fps = Fps::fromPeriodNsecs(getHwComposer().getComposer()->isVrrSupported()
+                                                             ? data.refreshPeriodNanos
+                                                             : data.vsyncPeriodNanos);
+                ATRACE_FORMAT("%s Fps %d", whence, fps.getIntValue());
+                display->updateRefreshRateOverlayRate(fps, display->getActiveMode().fps,
+                                                      /* setByHwc */ true);
+            }
+        }
+    }));
 }
 
 void SurfaceFlinger::configure() {
@@ -5110,7 +5111,7 @@ status_t SurfaceFlinger::setTransactionState(
     const int originPid = ipc->getCallingPid();
     const int originUid = ipc->getCallingUid();
     uint32_t permissions = LayerStatePermissions::getTransactionPermissions(originPid, originUid);
-    for (auto composerState : states) {
+    for (auto& composerState : states) {
         composerState.state.sanitize(permissions);
     }
 
@@ -6876,24 +6877,23 @@ void SurfaceFlinger::dumpAll(const DumpArgs& args, const std::string& compositio
     StringAppendF(&result, "  transaction-flags         : %08x\n", mTransactionFlags.load());
 
     if (const auto display = getDefaultDisplayDeviceLocked()) {
-        std::string fps, xDpi, yDpi;
-        if (const auto activeModePtr =
-                    display->refreshRateSelector().getActiveMode().modePtr.get()) {
-            fps = to_string(activeModePtr->getVsyncRate());
-
+        std::string peakFps, xDpi, yDpi;
+        const auto activeMode = display->refreshRateSelector().getActiveMode();
+        if (const auto activeModePtr = activeMode.modePtr.get()) {
+            peakFps = to_string(activeMode.modePtr->getPeakFps());
             const auto dpi = activeModePtr->getDpi();
             xDpi = base::StringPrintf("%.2f", dpi.x);
             yDpi = base::StringPrintf("%.2f", dpi.y);
         } else {
-            fps = "unknown";
+            peakFps = "unknown";
             xDpi = "unknown";
             yDpi = "unknown";
         }
         StringAppendF(&result,
-                      "  refresh-rate              : %s\n"
+                      "  peak-refresh-rate         : %s\n"
                       "  x-dpi                     : %s\n"
                       "  y-dpi                     : %s\n",
-                      fps.c_str(), xDpi.c_str(), yDpi.c_str());
+                      peakFps.c_str(), xDpi.c_str(), yDpi.c_str());
     }
 
     StringAppendF(&result, "  transaction time: %f us\n", inTransactionDuration / 1000.0);
