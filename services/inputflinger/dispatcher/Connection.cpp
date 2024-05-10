@@ -28,8 +28,6 @@ Connection::Connection(const std::shared_ptr<InputChannel>& inputChannel, bool m
         inputPublisher(inputChannel),
         inputState(idGenerator) {}
 
-Connection::~Connection() {}
-
 const std::string Connection::getWindowName() const {
     if (inputChannel != nullptr) {
         return inputChannel->getName();
@@ -38,15 +36,6 @@ const std::string Connection::getWindowName() const {
         return "monitor";
     }
     return "?";
-}
-
-std::deque<DispatchEntry*>::iterator Connection::findWaitQueueEntry(uint32_t seq) {
-    for (std::deque<DispatchEntry*>::iterator it = waitQueue.begin(); it != waitQueue.end(); it++) {
-        if ((*it)->seq == seq) {
-            return it;
-        }
-    }
-    return waitQueue.end();
 }
 
 } // namespace android::inputdispatcher

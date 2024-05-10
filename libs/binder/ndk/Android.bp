@@ -40,6 +40,7 @@ cc_library {
 
     llndk: {
         symbol_file: "libbinder_ndk.map.txt",
+        export_llndk_headers: ["libvendorsupport_llndk_headers"],
     },
 
     export_include_dirs: [
@@ -49,8 +50,10 @@ cc_library {
     ],
 
     cflags: [
+        "-DBINDER_WITH_KERNEL_IPC",
         "-Wall",
         "-Wextra",
+        "-Wextra-semi",
         "-Werror",
     ],
 
@@ -60,6 +63,7 @@ cc_library {
         "libbinder.cpp",
         "parcel.cpp",
         "parcel_jni.cpp",
+        "persistable_bundle.cpp",
         "process.cpp",
         "stability.cpp",
         "status.cpp",
@@ -78,9 +82,11 @@ cc_library {
     ],
 
     header_libs: [
+        "libvendorsupport_llndk_headers",
         "jni_headers",
     ],
     export_header_lib_headers: [
+        "libvendorsupport_llndk_headers",
         "jni_headers",
     ],
 
@@ -138,6 +144,47 @@ cc_library {
         "performance*",
         "portability*",
     ],
+    afdo: true,
+}
+
+cc_library {
+    name: "libbinder_ndk_on_trusty_mock",
+    defaults: [
+        "trusty_mock_defaults",
+    ],
+
+    export_include_dirs: [
+        "include_cpp",
+        "include_ndk",
+        "include_platform",
+    ],
+
+    srcs: [
+        "ibinder.cpp",
+        "libbinder.cpp",
+        "parcel.cpp",
+        "stability.cpp",
+        "status.cpp",
+    ],
+
+    shared_libs: [
+        "libbinder_on_trusty_mock",
+    ],
+
+    header_libs: [
+        "libbinder_trusty_ndk_headers",
+    ],
+    export_header_lib_headers: [
+        "libbinder_trusty_ndk_headers",
+    ],
+
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+
+    visibility: ["//frameworks/native/libs/binder:__subpackages__"],
 }
 
 cc_library_headers {

@@ -24,7 +24,6 @@
 namespace android::fuzz {
 
 static constexpr LatchUnsignaledConfig kLatchUnsignaledConfig[] = {
-        LatchUnsignaledConfig::Always,
         LatchUnsignaledConfig::AutoSingleLayer,
         LatchUnsignaledConfig::Disabled,
 };
@@ -95,6 +94,7 @@ static constexpr BnSurfaceComposer::ISurfaceComposerTag kSurfaceComposerTags[]{
         BnSurfaceComposer::REMOVE_TUNNEL_MODE_ENABLED_LISTENER,
         BnSurfaceComposer::ADD_WINDOW_INFOS_LISTENER,
         BnSurfaceComposer::REMOVE_WINDOW_INFOS_LISTENER,
+        BnSurfaceComposer::GET_SCHEDULING_POLICY,
 };
 
 static constexpr uint32_t kMinCode = 1000;
@@ -103,7 +103,7 @@ static constexpr uint32_t kMaxCode = 1050;
 class SurfaceFlingerFuzzer {
 public:
     SurfaceFlingerFuzzer(const uint8_t *data, size_t size) : mFdp(data, size) {
-        mFlinger = mTestableFlinger.flinger();
+        mFlinger = sp<SurfaceFlinger>::fromExisting(mTestableFlinger.flinger());
     };
     void process(const uint8_t *data, size_t size);
 
@@ -130,7 +130,7 @@ void SurfaceFlingerFuzzer::invokeFlinger() {
     mFlinger->maxFrameBufferAcquiredBuffers = mFdp.ConsumeIntegral<int64_t>();
     mFlinger->maxGraphicsWidth = mFdp.ConsumeIntegral<uint32_t>();
     mFlinger->maxGraphicsHeight = mFdp.ConsumeIntegral<uint32_t>();
-    mFlinger->hasWideColorDisplay = mFdp.ConsumeBool();
+    mTestableFlinger.mutableSupportsWideColor() = mFdp.ConsumeBool();
     mFlinger->useContextPriority = mFdp.ConsumeBool();
 
     mFlinger->defaultCompositionDataspace = mFdp.PickValueInArray(kDataspaces);
@@ -145,13 +145,9 @@ void SurfaceFlingerFuzzer::invokeFlinger() {
     mFlinger->scheduleRepaint();
     mFlinger->scheduleSample();
 
-    uint32_t texture = mFlinger->getNewTexture();
-    mFlinger->deleteTextureAsync(texture);
-
     sp<IBinder> handle = defaultServiceManager()->checkService(
             String16(mFdp.ConsumeRandomLengthString().c_str()));
-    mFlinger->fromHandle(handle);
-    mFlinger->windowInfosReported();
+    LayerHandle::getLayer(handle);
     mFlinger->disableExpensiveRendering();
 }
 
@@ -186,11 +182,12 @@ void SurfaceFlingerFuzzer::setTransactionState() {
     bool hasListenerCallbacks = mFdp.ConsumeBool();
     std::vector<ListenerCallbacks> listenerCallbacks{};
     uint64_t transactionId = mFdp.ConsumeIntegral<uint64_t>();
+    std::vector<uint64_t> mergedTransactionIds{};
 
     mTestableFlinger.setTransactionState(FrameTimelineInfo{}, states, displays, flags, applyToken,
                                          InputWindowCommands{}, desiredPresentTime, isAutoTimestamp,
-                                         {}, hasListenerCallbacks, listenerCallbacks,
-                                         transactionId);
+                                         {}, hasListenerCallbacks, listenerCallbacks, transactionId,
+                                         mergedTransactionIds);
 }
 
 void SurfaceFlingerFuzzer::setDisplayStateLocked() {
@@ -238,7 +235,8 @@ void SurfaceFlingerFuzzer::process(const uint8_t *data, size_t size) {
 
     mTestableFlinger.enableHalVirtualDisplays(mFdp.ConsumeBool());
 
-    mTestableFlinger.commitTransactionsLocked(mFdp.ConsumeIntegral<uint32_t>());
+    FTL_FAKE_GUARD(kMainThreadContext,
+                   mTestableFlinger.commitTransactionsLocked(mFdp.ConsumeIntegral<uint32_t>()));
 
     mTestableFlinger.notifyPowerBoost(mFdp.ConsumeIntegral<int32_t>());
 

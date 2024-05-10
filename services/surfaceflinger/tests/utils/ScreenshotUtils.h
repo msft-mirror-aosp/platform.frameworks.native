@@ -15,14 +15,18 @@
  */
 #pragma once
 
+#include <gui/AidlStatusUtil.h>
 #include <gui/SyncScreenCaptureListener.h>
 #include <private/gui/ComposerServiceAIDL.h>
+#include <ui/FenceResult.h>
 #include <ui/Rect.h>
 #include <utils/String8.h>
 #include <functional>
 #include "TransactionUtils.h"
 
 namespace android {
+
+using gui::aidl_utils::statusTFromBinderStatus;
 
 namespace {
 
@@ -36,18 +40,22 @@ public:
         SurfaceComposerClient::Transaction().apply(true);
 
         captureArgs.dataspace = ui::Dataspace::V0_SRGB;
-        const sp<SyncScreenCaptureListener> captureListener = new SyncScreenCaptureListener();
+        const sp<SyncScreenCaptureListener> captureListener = sp<SyncScreenCaptureListener>::make();
         binder::Status status = sf->captureDisplay(captureArgs, captureListener);
-
-        if (status.transactionError() != NO_ERROR) {
-            return status.transactionError();
+        status_t err = statusTFromBinderStatus(status);
+        if (err != NO_ERROR) {
+            return err;
         }
         captureResults = captureListener->waitForResults();
-        return captureResults.result;
+        return fenceStatus(captureResults.fenceResult);
     }
 
     static void captureScreen(std::unique_ptr<ScreenCapture>* sc) {
-        captureScreen(sc, SurfaceComposerClient::getInternalDisplayToken());
+        const auto ids = SurfaceComposerClient::getPhysicalDisplayIds();
+        // TODO(b/248317436): extend to cover all displays for multi-display devices
+        const auto display =
+                ids.empty() ? nullptr : SurfaceComposerClient::getPhysicalDisplayToken(ids.front());
+        captureScreen(sc, display);
     }
 
     static void captureScreen(std::unique_ptr<ScreenCapture>* sc, sp<IBinder> displayToken) {
@@ -70,13 +78,14 @@ public:
         SurfaceComposerClient::Transaction().apply(true);
 
         captureArgs.dataspace = ui::Dataspace::V0_SRGB;
-        const sp<SyncScreenCaptureListener> captureListener = new SyncScreenCaptureListener();
+        const sp<SyncScreenCaptureListener> captureListener = sp<SyncScreenCaptureListener>::make();
         binder::Status status = sf->captureLayers(captureArgs, captureListener);
-        if (status.transactionError() != NO_ERROR) {
-            return status.transactionError();
+        status_t err = statusTFromBinderStatus(status);
+        if (err != NO_ERROR) {
+            return err;
         }
         captureResults = captureListener->waitForResults();
-        return captureResults.result;
+        return fenceStatus(captureResults.fenceResult);
     }
 
     static void captureLayers(std::unique_ptr<ScreenCapture>* sc, LayerCaptureArgs& captureArgs) {
@@ -161,7 +170,7 @@ public:
             String8 err(String8::format("pixel @ (%3d, %3d): "
                                         "expected [%3d, %3d, %3d], got [%3d, %3d, %3d]",
                                         x, y, r, g, b, pixel[0], pixel[1], pixel[2]));
-            EXPECT_EQ(String8(), err) << err.string();
+            EXPECT_EQ(String8(), err) << err.c_str();
         }
     }
 

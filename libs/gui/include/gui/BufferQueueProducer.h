@@ -18,6 +18,7 @@
 #define ANDROID_GUI_BUFFERQUEUEPRODUCER_H
 
 #include <gui/BufferQueueDefs.h>
+
 #include <gui/IGraphicBufferProducer.h>
 
 namespace android {
@@ -201,6 +202,16 @@ public:
 
     // See IGraphicBufferProducer::setAutoPrerotation
     virtual status_t setAutoPrerotation(bool autoPrerotation);
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_SETFRAMERATE)
+    // See IGraphicBufferProducer::setFrameRate
+    status_t setFrameRate(float frameRate, int8_t compatibility,
+                          int8_t changeFrameRateStrategy) override;
+#endif
+
+protected:
+    // see IGraphicsBufferProducer::setMaxDequeuedBufferCount, but with the ability to retrieve the
+    // total maximum buffer count for the buffer queue (dequeued AND acquired)
+    status_t setMaxDequeuedBufferCount(int maxDequeuedBuffers, int* maxBufferCount);
 
 private:
     // This is required by the IBinder::DeathRecipient interface

@@ -16,11 +16,12 @@
 
 #pragma once
 
-#include <android-base/unique_fd.h>
 #include <binder/IBinder.h>
-#include <utils/Mutex.h>
+#include <binder/RpcThreads.h>
+#include <binder/unique_fd.h>
 
 #include <map>
+#include <optional>
 #include <unordered_map>
 #include <variant>
 
@@ -34,7 +35,8 @@ class Stability;
 }
 class ProcessState;
 
-using binder_proxy_limit_callback = void(*)(int);
+using binder_proxy_limit_callback = std::function<void(int)>;
+using binder_proxy_warning_callback = std::function<void(int)>;
 
 class BpBinder : public IBinder
 {
@@ -85,14 +87,16 @@ public:
     static void         enableCountByUid();
     static void         disableCountByUid();
     static void         setCountByUidEnabled(bool enable);
-    static void         setLimitCallback(binder_proxy_limit_callback cb);
-    static void         setBinderProxyCountWatermarks(int high, int low);
+    static void         setBinderProxyCountEventCallback(binder_proxy_limit_callback cbl,
+                                                         binder_proxy_warning_callback cbw);
+    static void         setBinderProxyCountWatermarks(int high, int low, int warning);
+    static uint32_t     getBinderProxyCount();
 
     std::optional<int32_t> getDebugBinderHandle() const;
 
     // Start recording transactions to the unique_fd.
     // See RecordedTransaction.h for more details.
-    status_t startRecordingBinder(const android::base::unique_fd& fd);
+    status_t startRecordingBinder(const binder::unique_fd& fd);
     // Stop the current recording.
     status_t stopRecordingBinder();
 
@@ -191,7 +195,7 @@ private:
             void                reportOneDeath(const Obituary& obit);
             bool                isDescriptorCached() const;
 
-    mutable Mutex               mLock;
+    mutable RpcMutex            mLock;
             volatile int32_t    mAlive;
             volatile int32_t    mObitsSent;
             Vector<Obituary>*   mObituaries;
@@ -199,7 +203,7 @@ private:
     mutable String16            mDescriptorCache;
             int32_t             mTrackedUid;
 
-    static Mutex                                sTrackingLock;
+    static RpcMutex                             sTrackingLock;
     static std::unordered_map<int32_t,uint32_t> sTrackingMap;
     static int                                  sNumTrackedUids;
     static std::atomic_bool                     sCountByUidEnabled;
@@ -208,6 +212,10 @@ private:
     static uint32_t                             sBinderProxyCountLowWatermark;
     static bool                                 sBinderProxyThrottleCreate;
     static std::unordered_map<int32_t,uint32_t> sLastLimitCallbackMap;
+    static std::atomic<uint32_t>                sBinderProxyCount;
+    static std::atomic<uint32_t>                sBinderProxyCountWarned;
+    static binder_proxy_warning_callback        sWarningCallback;
+    static uint32_t                             sBinderProxyCountWarningWatermark;
 };
 
 } // namespace android

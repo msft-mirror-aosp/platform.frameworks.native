@@ -16,7 +16,9 @@
 
 #include "InputTarget.h"
 
+#include <android-base/logging.h>
 #include <android-base/stringprintf.h>
+#include <input/PrintTools.h>
 #include <inttypes.h>
 #include <string>
 
@@ -24,49 +26,37 @@ using android::base::StringPrintf;
 
 namespace android::inputdispatcher {
 
-std::string dispatchModeToString(int32_t dispatchMode) {
-    switch (dispatchMode) {
-        case InputTarget::FLAG_DISPATCH_AS_IS:
-            return "DISPATCH_AS_IS";
-        case InputTarget::FLAG_DISPATCH_AS_OUTSIDE:
-            return "DISPATCH_AS_OUTSIDE";
-        case InputTarget::FLAG_DISPATCH_AS_HOVER_ENTER:
-            return "DISPATCH_AS_HOVER_ENTER";
-        case InputTarget::FLAG_DISPATCH_AS_HOVER_EXIT:
-            return "DISPATCH_AS_HOVER_EXIT";
-        case InputTarget::FLAG_DISPATCH_AS_SLIPPERY_EXIT:
-            return "DISPATCH_AS_SLIPPERY_EXIT";
-        case InputTarget::FLAG_DISPATCH_AS_SLIPPERY_ENTER:
-            return "DISPATCH_AS_SLIPPERY_ENTER";
-    }
-    return StringPrintf("%" PRId32, dispatchMode);
-}
-
-void InputTarget::addPointers(BitSet32 newPointerIds, const ui::Transform& transform) {
+void InputTarget::addPointers(std::bitset<MAX_POINTER_ID + 1> newPointerIds,
+                              const ui::Transform& transform) {
     // The pointerIds can be empty, but still a valid InputTarget. This can happen when there is no
     // valid pointer property from the input event.
-    if (newPointerIds.isEmpty()) {
+    if (newPointerIds.none()) {
         setDefaultPointerTransform(transform);
         return;
     }
 
     // Ensure that the new set of pointers doesn't overlap with the current set of pointers.
-    ALOG_ASSERT((pointerIds & newPointerIds) == 0);
+    if ((pointerIds & newPointerIds).any()) {
+        LOG(FATAL) << __func__ << " - overlap with incoming pointers "
+                   << bitsetToString(newPointerIds) << " in " << *this;
+    }
 
     pointerIds |= newPointerIds;
-    while (!newPointerIds.isEmpty()) {
-        int32_t pointerId = newPointerIds.clearFirstMarkedBit();
-        pointerTransforms[pointerId] = transform;
+    for (size_t i = 0; i < newPointerIds.size(); i++) {
+        if (!newPointerIds.test(i)) {
+            continue;
+        }
+        pointerTransforms[i] = transform;
     }
 }
 
 void InputTarget::setDefaultPointerTransform(const ui::Transform& transform) {
-    pointerIds.clear();
+    pointerIds.reset();
     pointerTransforms[0] = transform;
 }
 
 bool InputTarget::useDefaultPointerTransform() const {
-    return pointerIds.isEmpty();
+    return pointerIds.none();
 }
 
 const ui::Transform& InputTarget::getDefaultPointerTransform() const {
@@ -81,8 +71,8 @@ std::string InputTarget::getPointerInfoString() const {
         return out;
     }
 
-    for (uint32_t i = pointerIds.firstMarkedBit(); i <= pointerIds.lastMarkedBit(); i++) {
-        if (!pointerIds.hasBit(i)) {
+    for (uint32_t i = 0; i < pointerIds.size(); i++) {
+        if (!pointerIds.test(i)) {
             continue;
         }
 
@@ -91,4 +81,25 @@ std::string InputTarget::getPointerInfoString() const {
     }
     return out;
 }
+
+std::ostream& operator<<(std::ostream& out, const InputTarget& target) {
+    out << "{inputChannel=";
+    if (target.inputChannel != nullptr) {
+        out << target.inputChannel->getName();
+    } else {
+        out << "<null>";
+    }
+    out << ", windowHandle=";
+    if (target.windowHandle != nullptr) {
+        out << target.windowHandle->getName();
+    } else {
+        out << "<null>";
+    }
+    out << ", dispatchMode=" << ftl::enum_string(target.dispatchMode).c_str();
+    out << ", targetFlags=" << target.flags.string();
+    out << ", pointers=" << target.getPointerInfoString();
+    out << "}";
+    return out;
+}
+
 } // namespace android::inputdispatcher

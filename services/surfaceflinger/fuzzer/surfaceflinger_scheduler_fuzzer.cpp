@@ -19,11 +19,18 @@
 #include <fuzzer/FuzzedDataProvider.h>
 #include <processgroup/sched_policy.h>
 
-#include "Scheduler/DispSyncSource.h"
+#include <scheduler/IVsyncSource.h>
+#include <scheduler/PresentLatencyTracker.h>
+
 #include "Scheduler/OneShotTimer.h"
+#include "Scheduler/RefreshRateSelector.h"
 #include "Scheduler/VSyncDispatchTimerQueue.h"
 #include "Scheduler/VSyncPredictor.h"
 #include "Scheduler/VSyncReactor.h"
+
+#include "mock/DisplayHardware/MockDisplayMode.h"
+#include "mock/MockVSyncDispatch.h"
+#include "mock/MockVSyncTracker.h"
 
 #include "surfaceflinger_fuzzers_utils.h"
 #include "surfaceflinger_scheduler_fuzzer.h"
@@ -36,13 +43,15 @@ constexpr nsecs_t kVsyncPeriods[] = {(30_Hz).getPeriodNsecs(), (60_Hz).getPeriod
                                      (72_Hz).getPeriodNsecs(), (90_Hz).getPeriodNsecs(),
                                      (120_Hz).getPeriodNsecs()};
 
-constexpr auto kLayerVoteTypes = ftl::enum_range<scheduler::RefreshRateConfigs::LayerVoteType>();
+constexpr auto kLayerVoteTypes = ftl::enum_range<scheduler::RefreshRateSelector::LayerVoteType>();
+constexpr auto kCompositionCoverage = ftl::enum_range<CompositionCoverage>();
 
 constexpr PowerMode kPowerModes[] = {PowerMode::ON, PowerMode::DOZE, PowerMode::OFF,
                                      PowerMode::DOZE_SUSPEND, PowerMode::ON_SUSPEND};
 
 constexpr uint16_t kRandomStringLength = 256;
 constexpr std::chrono::duration kSyncPeriod(16ms);
+constexpr PhysicalDisplayId kDisplayId = PhysicalDisplayId::fromPort(42u);
 
 template <typename T>
 void dump(T* component, FuzzedDataProvider* fdp) {
@@ -50,19 +59,24 @@ void dump(T* component, FuzzedDataProvider* fdp) {
     component->dump(res);
 }
 
-class SchedulerFuzzer : private VSyncSource::Callback {
+inline sp<Fence> makeFakeFence() {
+    return sp<Fence>::make(memfd_create("fd", MFD_ALLOW_SEALING));
+}
+
+class SchedulerFuzzer {
 public:
     SchedulerFuzzer(const uint8_t* data, size_t size) : mFdp(data, size){};
     void process();
 
 private:
     void fuzzRefreshRateSelection();
-    void fuzzRefreshRateConfigs();
+    void fuzzRefreshRateSelector();
+    void fuzzPresentLatencyTracker();
+    void fuzzFrameTargeter();
     void fuzzVSyncModulator();
     void fuzzVSyncPredictor();
     void fuzzVSyncReactor();
     void fuzzLayerHistory();
-    void fuzzDispSyncSource();
     void fuzzCallbackToken(scheduler::VSyncDispatchTimerQueue* dispatch);
     void fuzzVSyncDispatchTimerQueue();
     void fuzzOneShotTimer();
@@ -71,8 +85,7 @@ private:
 
     FuzzedDataProvider mFdp;
 
-protected:
-    void onVSyncEvent(nsecs_t /* when */, VSyncSource::VSyncData) {}
+    std::shared_ptr<scheduler::VsyncSchedule> mVsyncSchedule;
 };
 
 PhysicalDisplayId SchedulerFuzzer::getPhysicalDisplayId() {
@@ -85,43 +98,34 @@ PhysicalDisplayId SchedulerFuzzer::getPhysicalDisplayId() {
     return displayId;
 }
 
+struct EventThreadCallback : public IEventThreadCallback {
+    bool throttleVsync(TimePoint, uid_t) override { return false; }
+    Period getVsyncPeriod(uid_t) override { return kSyncPeriod; }
+    void resync() override {}
+};
+
 void SchedulerFuzzer::fuzzEventThread() {
-    const auto getVsyncPeriod = [](uid_t /* uid */) { return kSyncPeriod.count(); };
+    mVsyncSchedule = std::shared_ptr<scheduler::VsyncSchedule>(
+            new scheduler::VsyncSchedule(getPhysicalDisplayId(),
+                                         std::make_shared<mock::VSyncTracker>(),
+                                         std::make_shared<mock::VSyncDispatch>(), nullptr));
+    EventThreadCallback callback;
     std::unique_ptr<android::impl::EventThread> thread = std::make_unique<
-            android::impl::EventThread>(std::move(std::make_unique<FuzzImplVSyncSource>()), nullptr,
-                                        nullptr, nullptr, getVsyncPeriod);
+            android::impl::EventThread>("fuzzer", mVsyncSchedule, nullptr, callback,
+                                        (std::chrono::nanoseconds)mFdp.ConsumeIntegral<uint64_t>(),
+                                        (std::chrono::nanoseconds)mFdp.ConsumeIntegral<uint64_t>());
 
     thread->onHotplugReceived(getPhysicalDisplayId(), mFdp.ConsumeBool());
     sp<EventThreadConnection> connection =
-            new EventThreadConnection(thread.get(), mFdp.ConsumeIntegral<uint16_t>(), nullptr,
-                                      {} /*eventRegistration*/);
+            sp<EventThreadConnection>::make(thread.get(), mFdp.ConsumeIntegral<uint16_t>());
     thread->requestNextVsync(connection);
     thread->setVsyncRate(mFdp.ConsumeIntegral<uint32_t>() /*rate*/, connection);
 
     thread->setDuration((std::chrono::nanoseconds)mFdp.ConsumeIntegral<uint64_t>(),
                         (std::chrono::nanoseconds)mFdp.ConsumeIntegral<uint64_t>());
     thread->registerDisplayEventConnection(connection);
-    thread->onScreenAcquired();
-    thread->onScreenReleased();
+    thread->enableSyntheticVsync(mFdp.ConsumeBool());
     dump<android::impl::EventThread>(thread.get(), &mFdp);
-}
-
-void SchedulerFuzzer::fuzzDispSyncSource() {
-    std::unique_ptr<FuzzImplVSyncDispatch> vSyncDispatch =
-            std::make_unique<FuzzImplVSyncDispatch>();
-    std::unique_ptr<FuzzImplVSyncTracker> vSyncTracker = std::make_unique<FuzzImplVSyncTracker>();
-    std::unique_ptr<scheduler::DispSyncSource> dispSyncSource = std::make_unique<
-            scheduler::DispSyncSource>(*vSyncDispatch, *vSyncTracker,
-                                       (std::chrono::nanoseconds)
-                                               mFdp.ConsumeIntegral<uint64_t>() /*workDuration*/,
-                                       (std::chrono::nanoseconds)mFdp.ConsumeIntegral<uint64_t>()
-                                       /*readyDuration*/,
-                                       mFdp.ConsumeBool(),
-                                       mFdp.ConsumeRandomLengthString(kRandomStringLength).c_str());
-    dispSyncSource->setVSyncEnabled(true);
-    dispSyncSource->setCallback(this);
-    dispSyncSource->setDuration((std::chrono::nanoseconds)mFdp.ConsumeIntegral<uint64_t>(), 0ns);
-    dump<scheduler::DispSyncSource>(dispSyncSource.get(), &mFdp);
 }
 
 void SchedulerFuzzer::fuzzCallbackToken(scheduler::VSyncDispatchTimerQueue* dispatch) {
@@ -142,7 +146,7 @@ void SchedulerFuzzer::fuzzCallbackToken(scheduler::VSyncDispatchTimerQueue* disp
 }
 
 void SchedulerFuzzer::fuzzVSyncDispatchTimerQueue() {
-    FuzzImplVSyncTracker stubTracker{mFdp.ConsumeIntegral<nsecs_t>()};
+    auto stubTracker = std::make_shared<FuzzImplVSyncTracker>(mFdp.ConsumeIntegral<nsecs_t>());
     scheduler::VSyncDispatchTimerQueue
             mDispatch{std::make_unique<scheduler::ControllableClock>(), stubTracker,
                       mFdp.ConsumeIntegral<nsecs_t>() /*dispatchGroupThreshold*/,
@@ -155,17 +159,17 @@ void SchedulerFuzzer::fuzzVSyncDispatchTimerQueue() {
     scheduler::VSyncDispatchTimerQueueEntry entry(
             "fuzz", [](auto, auto, auto) {},
             mFdp.ConsumeIntegral<nsecs_t>() /*vSyncMoveThreshold*/);
-    entry.update(stubTracker, 0);
+    entry.update(*stubTracker, 0);
     entry.schedule({.workDuration = mFdp.ConsumeIntegral<nsecs_t>(),
                     .readyDuration = mFdp.ConsumeIntegral<nsecs_t>(),
                     .earliestVsync = mFdp.ConsumeIntegral<nsecs_t>()},
-                   stubTracker, 0);
+                   *stubTracker, 0);
     entry.disarm();
     entry.ensureNotRunning();
     entry.schedule({.workDuration = mFdp.ConsumeIntegral<nsecs_t>(),
                     .readyDuration = mFdp.ConsumeIntegral<nsecs_t>(),
                     .earliestVsync = mFdp.ConsumeIntegral<nsecs_t>()},
-                   stubTracker, 0);
+                   *stubTracker, 0);
     auto const wakeup = entry.wakeupTime();
     auto const ready = entry.readyTime();
     entry.callback(entry.executing(), *wakeup, *ready);
@@ -175,15 +179,24 @@ void SchedulerFuzzer::fuzzVSyncDispatchTimerQueue() {
     dump<scheduler::VSyncDispatchTimerQueueEntry>(&entry, &mFdp);
 }
 
+struct VsyncTrackerCallback : public scheduler::IVsyncTrackerCallback {
+    void onVsyncGenerated(TimePoint, ftl::NonNull<DisplayModePtr>, Fps) override {}
+};
+
 void SchedulerFuzzer::fuzzVSyncPredictor() {
     uint16_t now = mFdp.ConsumeIntegral<uint16_t>();
     uint16_t historySize = mFdp.ConsumeIntegralInRange<uint16_t>(1, UINT16_MAX);
     uint16_t minimumSamplesForPrediction = mFdp.ConsumeIntegralInRange<uint16_t>(1, UINT16_MAX);
-    scheduler::VSyncPredictor tracker{mFdp.ConsumeIntegral<uint16_t>() /*period*/, historySize,
-                                      minimumSamplesForPrediction,
-                                      mFdp.ConsumeIntegral<uint32_t>() /*outlierTolerancePercent*/};
+    nsecs_t idealPeriod = mFdp.ConsumeIntegralInRange<nsecs_t>(1, UINT32_MAX);
+    VsyncTrackerCallback callback;
+    const auto mode = ftl::as_non_null(
+            mock::createDisplayMode(DisplayModeId(0), Fps::fromPeriodNsecs(idealPeriod)));
+    scheduler::VSyncPredictor tracker{mode, historySize, minimumSamplesForPrediction,
+                                      mFdp.ConsumeIntegral<uint32_t>() /*outlierTolerancePercent*/,
+                                      callback};
     uint16_t period = mFdp.ConsumeIntegral<uint16_t>();
-    tracker.setPeriod(period);
+    tracker.setDisplayModePtr(ftl::as_non_null(
+            mock::createDisplayMode(DisplayModeId(0), Fps::fromPeriodNsecs(period))));
     for (uint16_t i = 0; i < minimumSamplesForPrediction; ++i) {
         if (!tracker.needsMoreSamples()) {
             break;
@@ -224,19 +237,19 @@ void SchedulerFuzzer::fuzzLayerHistory() {
     nsecs_t time2 = time1;
     uint8_t historySize = mFdp.ConsumeIntegral<uint8_t>();
 
-    sp<FuzzImplLayer> layer1 = new FuzzImplLayer(flinger.flinger());
-    sp<FuzzImplLayer> layer2 = new FuzzImplLayer(flinger.flinger());
+    sp<FuzzImplLayer> layer1 = sp<FuzzImplLayer>::make(flinger.flinger());
+    sp<FuzzImplLayer> layer2 = sp<FuzzImplLayer>::make(flinger.flinger());
 
     for (int i = 0; i < historySize; ++i) {
-        historyV1.record(layer1.get(), time1, time1,
+        historyV1.record(layer1->getSequence(), layer1->getLayerProps(), time1, time1,
                          scheduler::LayerHistory::LayerUpdateType::Buffer);
-        historyV1.record(layer2.get(), time2, time2,
+        historyV1.record(layer2->getSequence(), layer2->getLayerProps(), time2, time2,
                          scheduler::LayerHistory::LayerUpdateType::Buffer);
         time1 += mFdp.PickValueInArray(kVsyncPeriods);
         time2 += mFdp.PickValueInArray(kVsyncPeriods);
     }
-    historyV1.summarize(*scheduler->refreshRateConfigs(), time1);
-    historyV1.summarize(*scheduler->refreshRateConfigs(), time2);
+    historyV1.summarize(*scheduler->refreshRateSelector(), time1);
+    historyV1.summarize(*scheduler->refreshRateSelector(), time2);
 
     scheduler->createConnection(std::make_unique<android::mock::EventThread>());
 
@@ -245,28 +258,35 @@ void SchedulerFuzzer::fuzzLayerHistory() {
     scheduler->setDuration(handle, (std::chrono::nanoseconds)mFdp.ConsumeIntegral<uint64_t>(),
                            (std::chrono::nanoseconds)mFdp.ConsumeIntegral<uint64_t>());
 
-    dump<scheduler::TestableScheduler>(scheduler, &mFdp);
+    std::string result = mFdp.ConsumeRandomLengthString(kRandomStringLength);
+    utils::Dumper dumper(result);
+    scheduler->dump(dumper);
 }
 
 void SchedulerFuzzer::fuzzVSyncReactor() {
     std::shared_ptr<FuzzImplVSyncTracker> vSyncTracker = std::make_shared<FuzzImplVSyncTracker>();
-    scheduler::VSyncReactor reactor(std::make_unique<ClockWrapper>(
+    scheduler::VSyncReactor reactor(kDisplayId,
+                                    std::make_unique<ClockWrapper>(
                                             std::make_shared<FuzzImplClock>()),
                                     *vSyncTracker, mFdp.ConsumeIntegral<uint8_t>() /*pendingLimit*/,
                                     false);
 
-    reactor.startPeriodTransition(mFdp.ConsumeIntegral<nsecs_t>());
-    bool periodFlushed = mFdp.ConsumeBool();
+    const auto mode = ftl::as_non_null(
+            mock::createDisplayMode(DisplayModeId(0),
+                                    Fps::fromPeriodNsecs(mFdp.ConsumeIntegral<nsecs_t>())));
+    reactor.onDisplayModeChanged(mode, mFdp.ConsumeBool());
+    bool periodFlushed = false; // Value does not matter, since this is an out
+                                // param from addHwVsyncTimestamp.
     reactor.addHwVsyncTimestamp(0, std::nullopt, &periodFlushed);
     reactor.addHwVsyncTimestamp(mFdp.ConsumeIntegral<nsecs_t>() /*newPeriod*/, std::nullopt,
                                 &periodFlushed);
-    sp<Fence> fence = new Fence(memfd_create("fd", MFD_ALLOW_SEALING));
-    std::shared_ptr<FenceTime> ft = std::make_shared<FenceTime>(fence);
+
+    const auto fence = std::make_shared<FenceTime>(makeFakeFence());
     vSyncTracker->addVsyncTimestamp(mFdp.ConsumeIntegral<nsecs_t>());
     FenceTime::Snapshot snap(mFdp.ConsumeIntegral<nsecs_t>());
-    ft->applyTrustedSnapshot(snap);
+    fence->applyTrustedSnapshot(snap);
     reactor.setIgnorePresentFences(mFdp.ConsumeBool());
-    reactor.addPresentFence(ft);
+    reactor.addPresentFence(fence);
     dump<scheduler::VSyncReactor>(&reactor, &mFdp);
 }
 
@@ -288,17 +308,14 @@ void SchedulerFuzzer::fuzzVSyncModulator() {
     };
     using Schedule = scheduler::TransactionSchedule;
     using nanos = std::chrono::nanoseconds;
-    using VsyncModulator = scheduler::VsyncModulator;
     using FuzzImplVsyncModulator = scheduler::FuzzImplVsyncModulator;
-    const VsyncModulator::VsyncConfig early{SF_OFFSET_EARLY, APP_OFFSET_EARLY,
-                                            nanos(SF_DURATION_LATE), nanos(APP_DURATION_LATE)};
-    const VsyncModulator::VsyncConfig earlyGpu{SF_OFFSET_EARLY_GPU, APP_OFFSET_EARLY_GPU,
-                                               nanos(SF_DURATION_EARLY), nanos(APP_DURATION_EARLY)};
-    const VsyncModulator::VsyncConfig late{SF_OFFSET_LATE, APP_OFFSET_LATE,
-                                           nanos(SF_DURATION_EARLY_GPU),
-                                           nanos(APP_DURATION_EARLY_GPU)};
-    const VsyncModulator::VsyncConfigSet offsets = {early, earlyGpu, late,
-                                                    nanos(HWC_MIN_WORK_DURATION)};
+    const scheduler::VsyncConfig early{SF_OFFSET_EARLY, APP_OFFSET_EARLY, nanos(SF_DURATION_LATE),
+                                       nanos(APP_DURATION_LATE)};
+    const scheduler::VsyncConfig earlyGpu{SF_OFFSET_EARLY_GPU, APP_OFFSET_EARLY_GPU,
+                                          nanos(SF_DURATION_EARLY), nanos(APP_DURATION_EARLY)};
+    const scheduler::VsyncConfig late{SF_OFFSET_LATE, APP_OFFSET_LATE, nanos(SF_DURATION_EARLY_GPU),
+                                      nanos(APP_DURATION_EARLY_GPU)};
+    const scheduler::VsyncConfigSet offsets = {early, earlyGpu, late, nanos(HWC_MIN_WORK_DURATION)};
     sp<FuzzImplVsyncModulator> vSyncModulator =
             sp<FuzzImplVsyncModulator>::make(offsets, scheduler::Now);
     (void)vSyncModulator->setVsyncConfigSet(offsets);
@@ -319,14 +336,14 @@ void SchedulerFuzzer::fuzzRefreshRateSelection() {
     LayerCreationArgs args(flinger.flinger(), client,
                            mFdp.ConsumeRandomLengthString(kRandomStringLength) /*name*/,
                            mFdp.ConsumeIntegral<uint16_t>() /*layerFlags*/, LayerMetadata());
-    sp<Layer> layer = new BufferQueueLayer(args);
+    sp<Layer> layer = sp<Layer>::make(args);
 
     layer->setFrameRateSelectionPriority(mFdp.ConsumeIntegral<int16_t>());
 }
 
-void SchedulerFuzzer::fuzzRefreshRateConfigs() {
-    using RefreshRateConfigs = scheduler::RefreshRateConfigs;
-    using LayerRequirement = RefreshRateConfigs::LayerRequirement;
+void SchedulerFuzzer::fuzzRefreshRateSelector() {
+    using RefreshRateSelector = scheduler::RefreshRateSelector;
+    using LayerRequirement = RefreshRateSelector::LayerRequirement;
     using RefreshRateStats = scheduler::RefreshRateStats;
 
     const uint16_t minRefreshRate = mFdp.ConsumeIntegralInRange<uint16_t>(1, UINT16_MAX >> 1);
@@ -342,54 +359,107 @@ void SchedulerFuzzer::fuzzRefreshRateConfigs() {
                                                          Fps::fromValue(static_cast<float>(fps))));
     }
 
-    RefreshRateConfigs refreshRateConfigs(displayModes, modeId);
+    RefreshRateSelector refreshRateSelector(displayModes, modeId);
 
-    const RefreshRateConfigs::GlobalSignals globalSignals = {.touch = false, .idle = false};
+    const RefreshRateSelector::GlobalSignals globalSignals = {.touch = false, .idle = false};
     std::vector<LayerRequirement> layers = {{.weight = mFdp.ConsumeFloatingPoint<float>()}};
 
-    refreshRateConfigs.getBestRefreshRate(layers, globalSignals);
+    refreshRateSelector.getRankedFrameRates(layers, globalSignals);
 
     layers[0].name = mFdp.ConsumeRandomLengthString(kRandomStringLength);
     layers[0].ownerUid = mFdp.ConsumeIntegral<uint16_t>();
     layers[0].desiredRefreshRate = Fps::fromValue(mFdp.ConsumeFloatingPoint<float>());
     layers[0].vote = mFdp.PickValueInArray(kLayerVoteTypes.values);
     auto frameRateOverrides =
-            refreshRateConfigs.getFrameRateOverrides(layers,
-                                                     Fps::fromValue(
+            refreshRateSelector.getFrameRateOverrides(layers,
+                                                      Fps::fromValue(
+                                                              mFdp.ConsumeFloatingPoint<float>()),
+                                                      globalSignals);
+
+    {
+        ftl::FakeGuard guard(kMainThreadContext);
+
+        refreshRateSelector.setPolicy(
+                RefreshRateSelector::
+                        DisplayManagerPolicy{modeId,
+                                             {Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
+                                              Fps::fromValue(mFdp.ConsumeFloatingPoint<float>())}});
+        refreshRateSelector.setPolicy(
+                RefreshRateSelector::OverridePolicy{modeId,
+                                                    {Fps::fromValue(
                                                              mFdp.ConsumeFloatingPoint<float>()),
-                                                     globalSignals);
+                                                     Fps::fromValue(
+                                                             mFdp.ConsumeFloatingPoint<float>())}});
+        refreshRateSelector.setPolicy(RefreshRateSelector::NoOverridePolicy{});
 
-    refreshRateConfigs.setDisplayManagerPolicy(
-            {modeId,
-             {Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
-              Fps::fromValue(mFdp.ConsumeFloatingPoint<float>())}});
-    refreshRateConfigs.setActiveModeId(modeId);
+        refreshRateSelector.setActiveMode(modeId,
+                                          Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()));
+    }
 
-    RefreshRateConfigs::isFractionalPairOrMultiple(Fps::fromValue(
-                                                           mFdp.ConsumeFloatingPoint<float>()),
-                                                   Fps::fromValue(
-                                                           mFdp.ConsumeFloatingPoint<float>()));
-    RefreshRateConfigs::getFrameRateDivisor(Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
-                                            Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()));
+    RefreshRateSelector::isFractionalPairOrMultiple(Fps::fromValue(
+                                                            mFdp.ConsumeFloatingPoint<float>()),
+                                                    Fps::fromValue(
+                                                            mFdp.ConsumeFloatingPoint<float>()));
+    RefreshRateSelector::getFrameRateDivisor(Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
+                                             Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()));
 
     android::mock::TimeStats timeStats;
     RefreshRateStats refreshRateStats(timeStats, Fps::fromValue(mFdp.ConsumeFloatingPoint<float>()),
                                       PowerMode::OFF);
 
-    const auto fpsOpt = displayModes.get(modeId, [](const auto& mode) { return mode->getFps(); });
+    const auto fpsOpt = displayModes.get(modeId).transform(
+            [](const DisplayModePtr& mode) { return mode->getVsyncRate(); });
     refreshRateStats.setRefreshRate(*fpsOpt);
 
     refreshRateStats.setPowerMode(mFdp.PickValueInArray(kPowerModes));
 }
 
+void SchedulerFuzzer::fuzzPresentLatencyTracker() {
+    scheduler::PresentLatencyTracker tracker;
+
+    int i = 5;
+    while (i-- > 0) {
+        tracker.trackPendingFrame(getFuzzedTimePoint(mFdp),
+                                  std::make_shared<FenceTime>(makeFakeFence()));
+    }
+}
+
+void SchedulerFuzzer::fuzzFrameTargeter() {
+    scheduler::FrameTargeter frameTargeter(kDisplayId, mFdp.ConsumeBool());
+
+    const struct VsyncSource final : scheduler::IVsyncSource {
+        explicit VsyncSource(FuzzedDataProvider& fuzzer) : fuzzer(fuzzer) {}
+        FuzzedDataProvider& fuzzer;
+
+        Period period() const { return getFuzzedDuration(fuzzer); }
+        TimePoint vsyncDeadlineAfter(TimePoint) const { return getFuzzedTimePoint(fuzzer); }
+        Period minFramePeriod() const { return period(); }
+    } vsyncSource{mFdp};
+
+    int i = 10;
+    while (i-- > 0) {
+        frameTargeter.beginFrame({.frameBeginTime = getFuzzedTimePoint(mFdp),
+                                  .vsyncId = getFuzzedVsyncId(mFdp),
+                                  .expectedVsyncTime = getFuzzedTimePoint(mFdp),
+                                  .sfWorkDuration = getFuzzedDuration(mFdp)},
+                                 vsyncSource);
+
+        frameTargeter.setPresentFence(makeFakeFence());
+
+        frameTargeter.endFrame(
+                {.compositionCoverage = mFdp.PickValueInArray(kCompositionCoverage.values)});
+    }
+}
+
 void SchedulerFuzzer::process() {
     fuzzRefreshRateSelection();
-    fuzzRefreshRateConfigs();
+    fuzzRefreshRateSelector();
+    fuzzPresentLatencyTracker();
+    fuzzFrameTargeter();
     fuzzVSyncModulator();
     fuzzVSyncPredictor();
     fuzzVSyncReactor();
     fuzzLayerHistory();
-    fuzzDispSyncSource();
     fuzzEventThread();
     fuzzVSyncDispatchTimerQueue();
     fuzzOneShotTimer();

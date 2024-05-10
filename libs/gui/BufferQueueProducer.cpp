@@ -32,9 +32,12 @@
 #include <gui/BufferItem.h>
 #include <gui/BufferQueueCore.h>
 #include <gui/BufferQueueProducer.h>
+
+#include <gui/FrameRateUtils.h>
 #include <gui/GLConsumer.h>
 #include <gui/IConsumerListener.h>
 #include <gui/IProducerListener.h>
+#include <gui/TraceUtils.h>
 #include <private/gui/BufferQueueThreadState.h>
 
 #include <utils/Log.h>
@@ -46,23 +49,23 @@ namespace android {
 
 // Macros for include BufferQueueCore information in log messages
 #define BQ_LOGV(x, ...)                                                                           \
-    ALOGV("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGV("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 #define BQ_LOGD(x, ...)                                                                           \
-    ALOGD("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGD("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 #define BQ_LOGI(x, ...)                                                                           \
-    ALOGI("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGI("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 #define BQ_LOGW(x, ...)                                                                           \
-    ALOGW("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGW("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 #define BQ_LOGE(x, ...)                                                                           \
-    ALOGE("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.string(),            \
+    ALOGE("[%s](id:%" PRIx64 ",api:%d,p:%d,c:%" PRIu64 ") " x, mConsumerName.c_str(),             \
           mCore->mUniqueId, mCore->mConnectedApi, mCore->mConnectedPid, (mCore->mUniqueId) >> 32, \
           ##__VA_ARGS__)
 
@@ -119,7 +122,13 @@ status_t BufferQueueProducer::requestBuffer(int slot, sp<GraphicBuffer>* buf) {
 
 status_t BufferQueueProducer::setMaxDequeuedBufferCount(
         int maxDequeuedBuffers) {
-    ATRACE_CALL();
+    int maxBufferCount;
+    return setMaxDequeuedBufferCount(maxDequeuedBuffers, &maxBufferCount);
+}
+
+status_t BufferQueueProducer::setMaxDequeuedBufferCount(int maxDequeuedBuffers,
+                                                        int* maxBufferCount) {
+    ATRACE_FORMAT("%s(%d)", __func__, maxDequeuedBuffers);
     BQ_LOGV("setMaxDequeuedBufferCount: maxDequeuedBuffers = %d",
             maxDequeuedBuffers);
 
@@ -133,6 +142,8 @@ status_t BufferQueueProducer::setMaxDequeuedBufferCount(
                     "abandoned");
             return NO_INIT;
         }
+
+        *maxBufferCount = mCore->getMaxBufferCountLocked();
 
         if (maxDequeuedBuffers == mCore->mMaxDequeuedBufferCount) {
             return NO_ERROR;
@@ -183,6 +194,7 @@ status_t BufferQueueProducer::setMaxDequeuedBufferCount(
             return BAD_VALUE;
         }
         mCore->mMaxDequeuedBufferCount = maxDequeuedBuffers;
+        *maxBufferCount = mCore->getMaxBufferCountLocked();
         VALIDATE_CONSISTENCY();
         if (delta < 0) {
             listener = mCore->mConsumerListener;
@@ -408,6 +420,9 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
     EGLSyncKHR eglFence = EGL_NO_SYNC_KHR;
     bool attachedByConsumer = false;
 
+    sp<IConsumerListener> listener;
+    bool callOnFrameDequeued = false;
+    uint64_t bufferId = 0; // Only used if callOnFrameDequeued == true
     { // Autolock scope
         std::unique_lock<std::mutex> lock(mCore->mMutex);
 
@@ -493,6 +508,20 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
         if ((buffer == nullptr) ||
                 buffer->needsReallocation(width, height, format, BQ_LAYER_COUNT, usage))
         {
+            if (CC_UNLIKELY(ATRACE_ENABLED())) {
+                if (buffer == nullptr) {
+                    ATRACE_FORMAT_INSTANT("%s buffer reallocation: null", mConsumerName.c_str());
+                } else {
+                    ATRACE_FORMAT_INSTANT("%s buffer reallocation actual %dx%d format:%d "
+                                          "layerCount:%d "
+                                          "usage:%d requested: %dx%d format:%d layerCount:%d "
+                                          "usage:%d ",
+                                          mConsumerName.c_str(), width, height, format,
+                                          BQ_LAYER_COUNT, usage, buffer->getWidth(),
+                                          buffer->getHeight(), buffer->getPixelFormat(),
+                                          buffer->getLayerCount(), buffer->getUsage());
+                }
+            }
             mSlots[found].mAcquireCalled = false;
             mSlots[found].mGraphicBuffer = nullptr;
             mSlots[found].mRequestBufferCalled = false;
@@ -537,17 +566,18 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
         }
 
         if (!(returnFlags & BUFFER_NEEDS_REALLOCATION)) {
-            if (mCore->mConsumerListener != nullptr) {
-                mCore->mConsumerListener->onFrameDequeued(mSlots[*outSlot].mGraphicBuffer->getId());
-            }
+            callOnFrameDequeued = true;
+            bufferId = mSlots[*outSlot].mGraphicBuffer->getId();
         }
+
+        listener = mCore->mConsumerListener;
     } // Autolock scope
 
     if (returnFlags & BUFFER_NEEDS_REALLOCATION) {
         BQ_LOGV("dequeueBuffer: allocating a new buffer for slot %d", *outSlot);
-        sp<GraphicBuffer> graphicBuffer = new GraphicBuffer(
-                width, height, format, BQ_LAYER_COUNT, usage,
-                {mConsumerName.string(), mConsumerName.size()});
+        sp<GraphicBuffer> graphicBuffer =
+                new GraphicBuffer(width, height, format, BQ_LAYER_COUNT, usage,
+                                  {mConsumerName.c_str(), mConsumerName.size()});
 
         status_t error = graphicBuffer->initCheck();
 
@@ -557,10 +587,8 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
             if (error == NO_ERROR && !mCore->mIsAbandoned) {
                 graphicBuffer->setGenerationNumber(mCore->mGenerationNumber);
                 mSlots[*outSlot].mGraphicBuffer = graphicBuffer;
-                if (mCore->mConsumerListener != nullptr) {
-                    mCore->mConsumerListener->onFrameDequeued(
-                            mSlots[*outSlot].mGraphicBuffer->getId());
-                }
+                callOnFrameDequeued = true;
+                bufferId = mSlots[*outSlot].mGraphicBuffer->getId();
             }
 
             mCore->mIsAllocating = false;
@@ -582,6 +610,10 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
 
             VALIDATE_CONSISTENCY();
         } // Autolock scope
+    }
+
+    if (listener != nullptr && callOnFrameDequeued) {
+        listener->onFrameDequeued(bufferId);
     }
 
     if (attachedByConsumer) {
@@ -606,7 +638,8 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
     BQ_LOGV("dequeueBuffer: returning slot=%d/%" PRIu64 " buf=%p flags=%#x",
             *outSlot,
             mSlots[*outSlot].mFrameNumber,
-            mSlots[*outSlot].mGraphicBuffer->handle, returnFlags);
+            mSlots[*outSlot].mGraphicBuffer != nullptr ?
+            mSlots[*outSlot].mGraphicBuffer->handle : nullptr, returnFlags);
 
     if (outBufferAge) {
         *outBufferAge = mCore->mBufferAge;
@@ -622,6 +655,8 @@ status_t BufferQueueProducer::detachBuffer(int slot) {
     BQ_LOGV("detachBuffer: slot %d", slot);
 
     sp<IConsumerListener> listener;
+    bool callOnFrameDetached = false;
+    uint64_t bufferId = 0; // Only used if callOnFrameDetached is true
     {
         std::lock_guard<std::mutex> lock(mCore->mMutex);
 
@@ -659,8 +694,9 @@ status_t BufferQueueProducer::detachBuffer(int slot) {
 
         listener = mCore->mConsumerListener;
         auto gb = mSlots[slot].mGraphicBuffer;
-        if (listener != nullptr && gb != nullptr) {
-            listener->onFrameDetached(gb->getId());
+        if (gb != nullptr) {
+            callOnFrameDetached = true;
+            bufferId = gb->getId();
         }
         mSlots[slot].mBufferState.detachProducer();
         mCore->mActiveBuffers.erase(slot);
@@ -668,6 +704,10 @@ status_t BufferQueueProducer::detachBuffer(int slot) {
         mCore->clearBufferSlotLocked(slot);
         mCore->mDequeueCondition.notify_all();
         VALIDATE_CONSISTENCY();
+    }
+
+    if (listener != nullptr && callOnFrameDetached) {
+        listener->onFrameDetached(bufferId);
     }
 
     if (listener != nullptr) {
@@ -1008,8 +1048,7 @@ status_t BufferQueueProducer::queueBuffer(int slot,
         output->numPendingBuffers = static_cast<uint32_t>(mCore->mQueue.size());
         output->nextFrameNumber = mCore->mFrameCounter + 1;
 
-        ATRACE_INT(mCore->mConsumerName.string(),
-                static_cast<int32_t>(mCore->mQueue.size()));
+        ATRACE_INT(mCore->mConsumerName.c_str(), static_cast<int32_t>(mCore->mQueue.size()));
 #ifndef NO_BINDER
         mCore->mOccupancyTracker.registerOccupancyChange(mCore->mQueue.size());
 #endif
@@ -1080,57 +1119,70 @@ status_t BufferQueueProducer::queueBuffer(int slot,
 status_t BufferQueueProducer::cancelBuffer(int slot, const sp<Fence>& fence) {
     ATRACE_CALL();
     BQ_LOGV("cancelBuffer: slot %d", slot);
-    std::lock_guard<std::mutex> lock(mCore->mMutex);
 
-    if (mCore->mIsAbandoned) {
-        BQ_LOGE("cancelBuffer: BufferQueue has been abandoned");
-        return NO_INIT;
+    sp<IConsumerListener> listener;
+    bool callOnFrameCancelled = false;
+    uint64_t bufferId = 0; // Only used if callOnFrameCancelled == true
+    {
+        std::lock_guard<std::mutex> lock(mCore->mMutex);
+
+        if (mCore->mIsAbandoned) {
+            BQ_LOGE("cancelBuffer: BufferQueue has been abandoned");
+            return NO_INIT;
+        }
+
+        if (mCore->mConnectedApi == BufferQueueCore::NO_CONNECTED_API) {
+            BQ_LOGE("cancelBuffer: BufferQueue has no connected producer");
+            return NO_INIT;
+        }
+
+        if (mCore->mSharedBufferMode) {
+            BQ_LOGE("cancelBuffer: cannot cancel a buffer in shared buffer mode");
+            return BAD_VALUE;
+        }
+
+        if (slot < 0 || slot >= BufferQueueDefs::NUM_BUFFER_SLOTS) {
+            BQ_LOGE("cancelBuffer: slot index %d out of range [0, %d)", slot,
+                    BufferQueueDefs::NUM_BUFFER_SLOTS);
+            return BAD_VALUE;
+        } else if (!mSlots[slot].mBufferState.isDequeued()) {
+            BQ_LOGE("cancelBuffer: slot %d is not owned by the producer "
+                    "(state = %s)",
+                    slot, mSlots[slot].mBufferState.string());
+            return BAD_VALUE;
+        } else if (fence == nullptr) {
+            BQ_LOGE("cancelBuffer: fence is NULL");
+            return BAD_VALUE;
+        }
+
+        mSlots[slot].mBufferState.cancel();
+
+        // After leaving shared buffer mode, the shared buffer will still be around.
+        // Mark it as no longer shared if this operation causes it to be free.
+        if (!mCore->mSharedBufferMode && mSlots[slot].mBufferState.isFree()) {
+            mSlots[slot].mBufferState.mShared = false;
+        }
+
+        // Don't put the shared buffer on the free list.
+        if (!mSlots[slot].mBufferState.isShared()) {
+            mCore->mActiveBuffers.erase(slot);
+            mCore->mFreeBuffers.push_back(slot);
+        }
+
+        auto gb = mSlots[slot].mGraphicBuffer;
+        if (gb != nullptr) {
+            callOnFrameCancelled = true;
+            bufferId = gb->getId();
+        }
+        mSlots[slot].mFence = fence;
+        mCore->mDequeueCondition.notify_all();
+        listener = mCore->mConsumerListener;
+        VALIDATE_CONSISTENCY();
     }
 
-    if (mCore->mConnectedApi == BufferQueueCore::NO_CONNECTED_API) {
-        BQ_LOGE("cancelBuffer: BufferQueue has no connected producer");
-        return NO_INIT;
+    if (listener != nullptr && callOnFrameCancelled) {
+        listener->onFrameCancelled(bufferId);
     }
-
-    if (mCore->mSharedBufferMode) {
-        BQ_LOGE("cancelBuffer: cannot cancel a buffer in shared buffer mode");
-        return BAD_VALUE;
-    }
-
-    if (slot < 0 || slot >= BufferQueueDefs::NUM_BUFFER_SLOTS) {
-        BQ_LOGE("cancelBuffer: slot index %d out of range [0, %d)",
-                slot, BufferQueueDefs::NUM_BUFFER_SLOTS);
-        return BAD_VALUE;
-    } else if (!mSlots[slot].mBufferState.isDequeued()) {
-        BQ_LOGE("cancelBuffer: slot %d is not owned by the producer "
-                "(state = %s)", slot, mSlots[slot].mBufferState.string());
-        return BAD_VALUE;
-    } else if (fence == nullptr) {
-        BQ_LOGE("cancelBuffer: fence is NULL");
-        return BAD_VALUE;
-    }
-
-    mSlots[slot].mBufferState.cancel();
-
-    // After leaving shared buffer mode, the shared buffer will still be around.
-    // Mark it as no longer shared if this operation causes it to be free.
-    if (!mCore->mSharedBufferMode && mSlots[slot].mBufferState.isFree()) {
-        mSlots[slot].mBufferState.mShared = false;
-    }
-
-    // Don't put the shared buffer on the free list.
-    if (!mSlots[slot].mBufferState.isShared()) {
-        mCore->mActiveBuffers.erase(slot);
-        mCore->mFreeBuffers.push_back(slot);
-    }
-
-    auto gb = mSlots[slot].mGraphicBuffer;
-    if (mCore->mConsumerListener != nullptr && gb != nullptr) {
-        mCore->mConsumerListener->onFrameCancelled(gb->getId());
-    }
-    mSlots[slot].mFence = fence;
-    mCore->mDequeueCondition.notify_all();
-    VALIDATE_CONSISTENCY();
 
     return NO_ERROR;
 }
@@ -1436,7 +1488,7 @@ void BufferQueueProducer::allocateBuffers(uint32_t width, uint32_t height,
 
             allocFormat = format != 0 ? format : mCore->mDefaultBufferFormat;
             allocUsage = usage | mCore->mConsumerUsageBits;
-            allocName.assign(mCore->mConsumerName.string(), mCore->mConsumerName.size());
+            allocName.assign(mCore->mConsumerName.c_str(), mCore->mConsumerName.size());
 
             mCore->mIsAllocating = true;
         } // Autolock scope
@@ -1538,7 +1590,7 @@ status_t BufferQueueProducer::setGenerationNumber(uint32_t generationNumber) {
 String8 BufferQueueProducer::getConsumerName() const {
     ATRACE_CALL();
     std::lock_guard<std::mutex> lock(mCore->mMutex);
-    BQ_LOGV("getConsumerName: %s", mConsumerName.string());
+    BQ_LOGV("getConsumerName: %s", mConsumerName.c_str());
     return mConsumerName;
 }
 
@@ -1700,5 +1752,28 @@ status_t BufferQueueProducer::setAutoPrerotation(bool autoPrerotation) {
     mCore->mAutoPrerotation = autoPrerotation;
     return NO_ERROR;
 }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_SETFRAMERATE)
+status_t BufferQueueProducer::setFrameRate(float frameRate, int8_t compatibility,
+                                           int8_t changeFrameRateStrategy) {
+    ATRACE_CALL();
+    BQ_LOGV("setFrameRate: %.2f", frameRate);
+
+    if (!ValidateFrameRate(frameRate, compatibility, changeFrameRateStrategy,
+                           "BufferQueueProducer::setFrameRate")) {
+        return BAD_VALUE;
+    }
+
+    sp<IConsumerListener> listener;
+    {
+        std::lock_guard<std::mutex> lock(mCore->mMutex);
+        listener = mCore->mConsumerListener;
+    }
+    if (listener != nullptr) {
+        listener->onSetFrameRate(frameRate, compatibility, changeFrameRateStrategy);
+    }
+    return NO_ERROR;
+}
+#endif
 
 } // namespace android

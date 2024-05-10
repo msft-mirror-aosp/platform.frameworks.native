@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef _UI_INPUT_INPUTDISPATCHER_CONNECTION_H
-#define _UI_INPUT_INPUTDISPATCHER_CONNECTION_H
+#pragma once
 
 #include "InputState.h"
 
@@ -28,10 +27,7 @@ namespace android::inputdispatcher {
 struct DispatchEntry;
 
 /* Manages the dispatch state associated with a single input channel. */
-class Connection : public RefBase {
-protected:
-    virtual ~Connection();
-
+class Connection {
 public:
     enum class Status {
         // Everything is peachy.
@@ -57,11 +53,11 @@ public:
     bool responsive = true;
 
     // Queue of events that need to be published to the connection.
-    std::deque<DispatchEntry*> outboundQueue;
+    std::deque<std::unique_ptr<DispatchEntry>> outboundQueue;
 
     // Queue of events that have been published to the connection but that have not
     // yet received a "finished" response from the application.
-    std::deque<DispatchEntry*> waitQueue;
+    std::deque<std::unique_ptr<DispatchEntry>> waitQueue;
 
     Connection(const std::shared_ptr<InputChannel>& inputChannel, bool monitor,
                const IdGenerator& idGenerator);
@@ -69,10 +65,6 @@ public:
     inline const std::string getInputChannelName() const { return inputChannel->getName(); }
 
     const std::string getWindowName() const;
-
-    std::deque<DispatchEntry*>::iterator findWaitQueueEntry(uint32_t seq);
 };
 
 } // namespace android::inputdispatcher
-
-#endif // _UI_INPUT_INPUTDISPATCHER_CONNECTION_H
