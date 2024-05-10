@@ -62,8 +62,13 @@ public:
 
             /**
              * Returns the PID of the process which has made the current binder
-             * call. If not in a binder call, this will return getpid. If the
-             * call is oneway, this will return 0.
+             * call. If not in a binder call, this will return getpid.
+             *
+             * Warning: oneway transactions do not receive PID. Even if you expect
+             * a transaction to be synchronous, a misbehaving client could send it
+             * as an asynchronous call and result in a 0 PID here. Additionally, if
+             * there is a race and the calling process dies, the PID may still be
+             * 0 for a synchronous call.
              */
             [[nodiscard]] pid_t getCallingPid() const;
 
@@ -147,7 +152,12 @@ public:
             void                flushCommands();
             bool                flushIfNeeded();
 
-            // For main functions - dangerous for libraries to use
+            // Adds the current thread into the binder threadpool.
+            //
+            // This is in addition to any threads which are started
+            // with startThreadPool. Libraries should not call this
+            // function, as they may be loaded into processes which
+            // try to configure the threadpool differently.
             void                joinThreadPool(bool isMain = true);
             
             // Stop the local process.

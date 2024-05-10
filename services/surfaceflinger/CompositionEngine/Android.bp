@@ -9,7 +9,14 @@ package {
 
 cc_defaults {
     name: "libcompositionengine_defaults",
-    defaults: ["surfaceflinger_defaults"],
+    defaults: [
+        "aconfig_lib_cc_static_link.defaults",
+        "android.hardware.graphics.composer3-ndk_shared",
+        "android.hardware.power-ndk_shared",
+        "librenderengine_deps",
+        "libtimestats_deps",
+        "surfaceflinger_defaults",
+    ],
     cflags: [
         "-DLOG_TAG=\"CompositionEngine\"",
         "-DATRACE_TAG=ATRACE_TAG_GRAPHICS",
@@ -20,27 +27,25 @@ cc_defaults {
         "android.hardware.graphics.composer@2.2",
         "android.hardware.graphics.composer@2.3",
         "android.hardware.graphics.composer@2.4",
-        "android.hardware.graphics.composer3-V1-ndk",
         "android.hardware.power@1.0",
         "android.hardware.power@1.3",
-        "android.hardware.power-V2-cpp",
         "libbase",
         "libcutils",
         "libgui",
-        "liblayers_proto",
         "liblog",
         "libnativewindow",
         "libprotobuf-cpp-lite",
         "libSurfaceFlingerProp",
-        "libtimestats",
         "libui",
         "libutils",
+        "server_configurable_flags",
     ],
     static_libs: [
+        "liblayers_proto",
         "libmath",
         "librenderengine",
+        "libtimestats",
         "libtonemap",
-        "libtrace_proto",
         "libaidlcommonsupport",
         "libprocessgroup",
         "libcgrouprc",
@@ -57,9 +62,8 @@ cc_defaults {
     ],
 }
 
-cc_library {
-    name: "libcompositionengine",
-    defaults: ["libcompositionengine_defaults"],
+filegroup {
+    name: "libcompositionengine_sources",
     srcs: [
         "src/planner/CachedSet.cpp",
         "src/planner/Flattener.cpp",
@@ -82,8 +86,23 @@ cc_library {
         "src/OutputLayerCompositionState.cpp",
         "src/RenderSurface.cpp",
     ],
+}
+
+cc_library {
+    name: "libcompositionengine",
+    defaults: ["libcompositionengine_defaults"],
+    static_libs: [
+        "libsurfaceflinger_common",
+        "libsurfaceflingerflags",
+    ],
+    srcs: [
+        ":libcompositionengine_sources",
+    ],
     local_include_dirs: ["include"],
     export_include_dirs: ["include"],
+    shared_libs: [
+        "server_configurable_flags",
+    ],
 }
 
 cc_library {
@@ -104,6 +123,11 @@ cc_library {
         "libgtest",
         "libgmock",
         "libcompositionengine",
+        "libsurfaceflinger_common_test",
+        "libsurfaceflingerflags_test",
+    ],
+    shared_libs: [
+        "server_configurable_flags",
     ],
     local_include_dirs: ["include"],
     export_include_dirs: ["include"],
@@ -112,8 +136,13 @@ cc_library {
 cc_test {
     name: "libcompositionengine_test",
     test_suites: ["device-tests"],
+    include_dirs: [
+        "frameworks/native/services/surfaceflinger/common/include",
+        "frameworks/native/services/surfaceflinger/tests/unittests",
+    ],
     defaults: ["libcompositionengine_defaults"],
     srcs: [
+        ":libcompositionengine_sources",
         "tests/planner/CachedSetTest.cpp",
         "tests/planner/FlattenerTest.cpp",
         "tests/planner/LayerStateTest.cpp",
@@ -132,26 +161,21 @@ cc_test {
         "tests/RenderSurfaceTest.cpp",
     ],
     static_libs: [
-        "libcompositionengine",
         "libcompositionengine_mocks",
         "libgui_mocks",
         "librenderengine_mocks",
         "libgmock",
         "libgtest",
+        "libsurfaceflinger_common_test",
+        "libsurfaceflingerflags_test",
+    ],
+    shared_libs: [
+        // For some reason, libvulkan isn't picked up from librenderengine
+        // Probably ASAN related?
+        "libvulkan",
+        "server_configurable_flags",
     ],
     sanitize: {
-        // By using the address sanitizer, we not only uncover any issues
-        // with the test, but also any issues with the code under test.
-        //
-        // Note: If you get an runtime link error like:
-        //
-        //   CANNOT LINK EXECUTABLE "/data/local/tmp/libcompositionengine_test": library "libclang_rt.asan-aarch64-android.so" not found
-        //
-        // it is because the address sanitizer shared objects are not installed
-        // by default in the system image.
-        //
-        // You can either "make dist tests" before flashing, or set this
-        // option to false temporarily.
-        address: true,
+        hwaddress: true,
     },
 }

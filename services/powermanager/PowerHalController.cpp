@@ -15,11 +15,11 @@
  */
 
 #define LOG_TAG "PowerHalController"
+#include <aidl/android/hardware/power/Boost.h>
+#include <aidl/android/hardware/power/IPower.h>
+#include <aidl/android/hardware/power/IPowerHintSession.h>
+#include <aidl/android/hardware/power/Mode.h>
 #include <android/hardware/power/1.1/IPower.h>
-#include <android/hardware/power/Boost.h>
-#include <android/hardware/power/IPower.h>
-#include <android/hardware/power/IPowerHintSession.h>
-#include <android/hardware/power/Mode.h>
 #include <powermanager/PowerHalController.h>
 #include <powermanager/PowerHalLoader.h>
 #include <utils/Log.h>
@@ -33,16 +33,21 @@ namespace power {
 // -------------------------------------------------------------------------------------------------
 
 std::unique_ptr<HalWrapper> HalConnector::connect() {
-    sp<IPower> halAidl = PowerHalLoader::loadAidl();
-    if (halAidl) {
+    if (std::shared_ptr<aidl::android::hardware::power::IPower> halAidl =
+                PowerHalLoader::loadAidl()) {
         return std::make_unique<AidlHalWrapper>(halAidl);
     }
-    sp<V1_0::IPower> halHidlV1_0 = PowerHalLoader::loadHidlV1_0();
-    sp<V1_1::IPower> halHidlV1_1 = PowerHalLoader::loadHidlV1_1();
-    if (halHidlV1_1) {
-        return std::make_unique<HidlHalWrapperV1_1>(halHidlV1_0, halHidlV1_1);
-    }
-    if (halHidlV1_0) {
+    // If V1_0 isn't defined, none of them are
+    if (sp<V1_0::IPower> halHidlV1_0 = PowerHalLoader::loadHidlV1_0()) {
+        if (sp<V1_3::IPower> halHidlV1_3 = PowerHalLoader::loadHidlV1_3()) {
+            return std::make_unique<HidlHalWrapperV1_3>(halHidlV1_3);
+        }
+        if (sp<V1_2::IPower> halHidlV1_2 = PowerHalLoader::loadHidlV1_2()) {
+            return std::make_unique<HidlHalWrapperV1_2>(halHidlV1_2);
+        }
+        if (sp<V1_1::IPower> halHidlV1_1 = PowerHalLoader::loadHidlV1_1()) {
+            return std::make_unique<HidlHalWrapperV1_1>(halHidlV1_1);
+        }
         return std::make_unique<HidlHalWrapperV1_0>(halHidlV1_0);
     }
     return nullptr;
@@ -86,20 +91,24 @@ HalResult<T> PowerHalController::processHalResult(HalResult<T> result, const cha
     return result;
 }
 
-HalResult<void> PowerHalController::setBoost(Boost boost, int32_t durationMs) {
+HalResult<void> PowerHalController::setBoost(aidl::android::hardware::power::Boost boost,
+                                             int32_t durationMs) {
     std::shared_ptr<HalWrapper> handle = initHal();
     auto result = handle->setBoost(boost, durationMs);
     return processHalResult(result, "setBoost");
 }
 
-HalResult<void> PowerHalController::setMode(Mode mode, bool enabled) {
+HalResult<void> PowerHalController::setMode(aidl::android::hardware::power::Mode mode,
+                                            bool enabled) {
     std::shared_ptr<HalWrapper> handle = initHal();
     auto result = handle->setMode(mode, enabled);
     return processHalResult(result, "setMode");
 }
 
-HalResult<sp<IPowerHintSession>> PowerHalController::createHintSession(
-        int32_t tgid, int32_t uid, const std::vector<int32_t>& threadIds, int64_t durationNanos) {
+HalResult<std::shared_ptr<aidl::android::hardware::power::IPowerHintSession>>
+PowerHalController::createHintSession(int32_t tgid, int32_t uid,
+                                      const std::vector<int32_t>& threadIds,
+                                      int64_t durationNanos) {
     std::shared_ptr<HalWrapper> handle = initHal();
     auto result = handle->createHintSession(tgid, uid, threadIds, durationNanos);
     return processHalResult(result, "createHintSession");

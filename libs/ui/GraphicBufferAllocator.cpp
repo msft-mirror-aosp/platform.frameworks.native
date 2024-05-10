@@ -34,6 +34,7 @@
 #include <ui/Gralloc2.h>
 #include <ui/Gralloc3.h>
 #include <ui/Gralloc4.h>
+#include <ui/Gralloc5.h>
 #include <ui/GraphicBufferMapper.h>
 
 namespace android {
@@ -48,23 +49,27 @@ KeyedVector<buffer_handle_t,
     GraphicBufferAllocator::alloc_rec_t> GraphicBufferAllocator::sAllocList;
 
 GraphicBufferAllocator::GraphicBufferAllocator() : mMapper(GraphicBufferMapper::getInstance()) {
-    mAllocator = std::make_unique<const Gralloc4Allocator>(
-            reinterpret_cast<const Gralloc4Mapper&>(mMapper.getGrallocMapper()));
-    if (mAllocator->isLoaded()) {
-        return;
+    switch (mMapper.getMapperVersion()) {
+        case GraphicBufferMapper::GRALLOC_5:
+            mAllocator = std::make_unique<const Gralloc5Allocator>(
+                    reinterpret_cast<const Gralloc5Mapper&>(mMapper.getGrallocMapper()));
+            break;
+        case GraphicBufferMapper::GRALLOC_4:
+            mAllocator = std::make_unique<const Gralloc4Allocator>(
+                    reinterpret_cast<const Gralloc4Mapper&>(mMapper.getGrallocMapper()));
+            break;
+        case GraphicBufferMapper::GRALLOC_3:
+            mAllocator = std::make_unique<const Gralloc3Allocator>(
+                    reinterpret_cast<const Gralloc3Mapper&>(mMapper.getGrallocMapper()));
+            break;
+        case GraphicBufferMapper::GRALLOC_2:
+            mAllocator = std::make_unique<const Gralloc2Allocator>(
+                    reinterpret_cast<const Gralloc2Mapper&>(mMapper.getGrallocMapper()));
+            break;
     }
-    mAllocator = std::make_unique<const Gralloc3Allocator>(
-            reinterpret_cast<const Gralloc3Mapper&>(mMapper.getGrallocMapper()));
-    if (mAllocator->isLoaded()) {
-        return;
-    }
-    mAllocator = std::make_unique<const Gralloc2Allocator>(
-            reinterpret_cast<const Gralloc2Mapper&>(mMapper.getGrallocMapper()));
-    if (mAllocator->isLoaded()) {
-        return;
-    }
-
-    LOG_ALWAYS_FATAL("gralloc-allocator is missing");
+    LOG_ALWAYS_FATAL_IF(!mAllocator->isLoaded(),
+                        "Failed to load matching allocator for mapper version %d",
+                        mMapper.getMapperVersion());
 }
 
 GraphicBufferAllocator::~GraphicBufferAllocator() {}
@@ -84,14 +89,14 @@ void GraphicBufferAllocator::dump(std::string& result, bool less) const {
     uint64_t total = 0;
     result.append("GraphicBufferAllocator buffers:\n");
     const size_t count = list.size();
-    StringAppendF(&result, "%10s | %11s | %18s | %s | %8s | %10s | %s\n", "Handle", "Size",
+    StringAppendF(&result, "%14s | %11s | %18s | %s | %8s | %10s | %s\n", "Handle", "Size",
                   "W (Stride) x H", "Layers", "Format", "Usage", "Requestor");
     for (size_t i = 0; i < count; i++) {
         const alloc_rec_t& rec(list.valueAt(i));
         std::string sizeStr = (rec.size)
                 ? base::StringPrintf("%7.2f KiB", static_cast<double>(rec.size) / 1024.0)
                 : "unknown";
-        StringAppendF(&result, "%10p | %11s | %4u (%4u) x %4u | %6u | %8X | 0x%8" PRIx64 " | %s\n",
+        StringAppendF(&result, "%14p | %11s | %4u (%4u) x %4u | %6u | %8X | 0x%8" PRIx64 " | %s\n",
                       list.keyAt(i), sizeStr.c_str(), rec.width, rec.stride, rec.height,
                       rec.layerCount, rec.format, rec.usage, rec.requestorName.c_str());
         total += rec.size;

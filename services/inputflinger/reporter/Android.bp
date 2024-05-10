@@ -23,19 +23,21 @@ package {
 
 cc_library_headers {
     name: "libinputreporter_headers",
+    host_supported: true,
     export_include_dirs: ["."],
 }
 
 filegroup {
     name: "libinputreporter_sources",
     srcs: [
-            "InputReporter.cpp",
+        "InputReporter.cpp",
     ],
 }
 
 cc_defaults {
     name: "libinputreporter_defaults",
     srcs: [":libinputreporter_sources"],
+    host_supported: true,
     shared_libs: [
         "liblog",
         "libutils",

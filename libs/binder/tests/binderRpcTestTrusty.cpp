@@ -16,12 +16,13 @@
 
 #define LOG_TAG "binderRpcTest"
 
-#include <android-base/stringprintf.h>
 #include <binder/RpcTransportTipcTrusty.h>
 #include <trusty-gtest.h>
 #include <trusty_ipc.h>
 
 #include "binderRpcTestFixture.h"
+
+using android::binder::unique_fd;
 
 namespace android {
 
@@ -39,46 +40,43 @@ public:
     void terminate() override { LOG_ALWAYS_FATAL("terminate() not supported"); }
 };
 
-std::string BinderRpc::PrintParamInfo(const testing::TestParamInfo<ParamType>& info) {
-    auto [type, security, clientVersion, serverVersion, singleThreaded, noKernel] = info.param;
-    auto ret = PrintToString(type) + "_clientV" + std::to_string(clientVersion) + "_serverV" +
-            std::to_string(serverVersion);
-    if (singleThreaded) {
-        ret += "_single_threaded";
+std::unique_ptr<RpcTransportCtxFactory> BinderRpc::newFactory(RpcSecurity rpcSecurity) {
+    switch (rpcSecurity) {
+        case RpcSecurity::RAW:
+            return RpcTransportCtxFactoryTipcTrusty::make();
+        default:
+            LOG_ALWAYS_FATAL("Unknown RpcSecurity %d", rpcSecurity);
     }
-    if (noKernel) {
-        ret += "_no_kernel";
-    }
-    return ret;
 }
 
 // This creates a new process serving an interface on a certain number of
 // threads.
 std::unique_ptr<ProcessSession> BinderRpc::createRpcTestSocketServerProcessEtc(
         const BinderRpcOptions& options) {
-    LOG_ALWAYS_FATAL_IF(options.numIncomingConnections != 0,
-                        "Non-zero incoming connections %zu on Trusty",
-                        options.numIncomingConnections);
+    LOG_ALWAYS_FATAL_IF(std::any_of(options.numIncomingConnectionsBySession.begin(),
+                                    options.numIncomingConnectionsBySession.end(),
+                                    [](size_t n) { return n != 0; }),
+                        "Non-zero incoming connections on Trusty");
 
-    uint32_t clientVersion = std::get<2>(GetParam());
-    uint32_t serverVersion = std::get<3>(GetParam());
+    RpcSecurity rpcSecurity = GetParam().security;
+    uint32_t clientVersion = GetParam().clientVersion;
+    uint32_t serverVersion = GetParam().serverVersion;
 
     auto ret = std::make_unique<TrustyProcessSession>();
 
     status_t status;
     for (size_t i = 0; i < options.numSessions; i++) {
-        auto factory = android::RpcTransportCtxFactoryTipcTrusty::make();
-        auto session = android::RpcSession::make(std::move(factory));
+        auto session = android::RpcSession::make(newFactory(rpcSecurity));
 
         EXPECT_TRUE(session->setProtocolVersion(clientVersion));
-        session->setMaxOutgoingThreads(options.numOutgoingConnections);
+        session->setMaxOutgoingConnections(options.numOutgoingConnections);
         session->setFileDescriptorTransportMode(options.clientFileDescriptorTransportMode);
 
         status = session->setupPreconnectedClient({}, [&]() {
             auto port = trustyIpcPort(serverVersion);
             int rc = connect(port.c_str(), IPC_CONNECT_WAIT_FOR_PORT);
             LOG_ALWAYS_FATAL_IF(rc < 0, "Failed to connect to service: %d", rc);
-            return base::unique_fd(rc);
+            return unique_fd(rc);
         });
         if (options.allowConnectFailure && status != OK) {
             ret->sessions.clear();
@@ -92,12 +90,27 @@ std::unique_ptr<ProcessSession> BinderRpc::createRpcTestSocketServerProcessEtc(
     return ret;
 }
 
-INSTANTIATE_TEST_CASE_P(Trusty, BinderRpc,
-                        ::testing::Combine(::testing::Values(SocketType::TIPC),
-                                           ::testing::Values(RpcSecurity::RAW),
-                                           ::testing::ValuesIn(testVersions()),
-                                           ::testing::ValuesIn(testVersions()),
-                                           ::testing::Values(false), ::testing::Values(true)),
+static std::vector<BinderRpc::ParamType> getTrustyBinderRpcParams() {
+    std::vector<BinderRpc::ParamType> ret;
+
+    for (const auto& clientVersion : testVersions()) {
+        for (const auto& serverVersion : testVersions()) {
+            ret.push_back(BinderRpc::ParamType{
+                    .type = SocketType::TIPC,
+                    .security = RpcSecurity::RAW,
+                    .clientVersion = clientVersion,
+                    .serverVersion = serverVersion,
+                    // TODO: should we test both versions here?
+                    .singleThreaded = false,
+                    .noKernel = true,
+            });
+        }
+    }
+
+    return ret;
+}
+
+INSTANTIATE_TEST_CASE_P(Trusty, BinderRpc, ::testing::ValuesIn(getTrustyBinderRpcParams()),
                         BinderRpc::PrintParamInfo);
 
 } // namespace android

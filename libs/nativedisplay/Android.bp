@@ -53,6 +53,7 @@ cc_library_shared {
     version_script: "libnativedisplay.map.txt",
 
     srcs: [
+        ":libgui_frame_event_aidl",
         "AChoreographer.cpp",
         "ADisplay.cpp",
         "surfacetexture/surface_texture.cpp",
@@ -71,6 +72,8 @@ cc_library_shared {
         "libEGL",
         "libGLESv2",
     ],
+
+    static_libs: ["libguiflags"],
 
     export_header_lib_headers: ["jni_headers"],
 

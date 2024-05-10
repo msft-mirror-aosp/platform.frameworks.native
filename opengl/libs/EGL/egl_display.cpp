@@ -64,11 +64,6 @@ bool findExtension(const char* exts, const char* name, size_t nameLen) {
     return false;
 }
 
-bool needsAndroidPEglMitigation() {
-    static const int32_t vndk_version = base::GetIntProperty("ro.vndk.version", -1);
-    return vndk_version <= 28;
-}
-
 int egl_get_init_count(EGLDisplay dpy) {
     egl_display_t* eglDisplay = egl_display_t::get(dpy);
     return eglDisplay ? eglDisplay->getRefsCount() : 0;
@@ -168,7 +163,7 @@ static EGLDisplay getPlatformDisplayAngle(EGLNativeDisplayType display, egl_conn
         if (dpy == EGL_NO_DISPLAY) {
             ALOGE("eglGetPlatformDisplay failed!");
         } else {
-            if (!angle::initializeAnglePlatform(dpy)) {
+            if (!angle::initializeAnglePlatform(dpy, cnx)) {
                 ALOGE("initializeAnglePlatform failed!");
             }
         }
@@ -191,7 +186,7 @@ EGLDisplay egl_display_t::getPlatformDisplay(EGLNativeDisplayType display,
     if (cnx->dso) {
         EGLDisplay dpy = EGL_NO_DISPLAY;
 
-        if (cnx->useAngle) {
+        if (cnx->angleLoaded) {
             EGLint error;
             dpy = getPlatformDisplayAngle(display, cnx, attrib_list, &error);
             if (error != EGL_NONE) {
@@ -322,6 +317,16 @@ EGLBoolean egl_display_t::initialize(EGLint* major, EGLint* minor) {
 
         mExtensionString = gBuiltinExtensionString;
 
+        // b/269060366 Conditionally enabled EGL_ANDROID_get_frame_timestamps extension if the
+        // device's present timestamps are reliable (which may not be the case on emulators).
+        if (cnx->angleLoaded) {
+            if (android::base::GetBoolProperty("service.sf.present_timestamp", false)) {
+                mExtensionString.append("EGL_ANDROID_get_frame_timestamps ");
+            }
+        } else {
+            mExtensionString.append("EGL_ANDROID_get_frame_timestamps ");
+        }
+
         hasColorSpaceSupport = findExtension(disp.queryString.extensions, "EGL_KHR_gl_colorspace");
 
         // Note: CDD requires that devices supporting wide color and/or HDR color also support
@@ -343,8 +348,9 @@ EGLBoolean egl_display_t::initialize(EGLint* major, EGLint* minor) {
             // Typically that means there is an HDR capable display attached, but could be
             // support for attaching an HDR display. In either case, advertise support for
             // HDR color spaces.
-            mExtensionString.append(
-                    "EGL_EXT_gl_colorspace_bt2020_linear EGL_EXT_gl_colorspace_bt2020_pq ");
+            mExtensionString.append("EGL_EXT_gl_colorspace_bt2020_hlg "
+                                    "EGL_EXT_gl_colorspace_bt2020_linear "
+                                    "EGL_EXT_gl_colorspace_bt2020_pq ");
         }
 
         char const* start = gExtensionString;
@@ -354,13 +360,6 @@ EGLBoolean egl_display_t::initialize(EGLint* major, EGLint* minor) {
             if (len) {
                 // NOTE: we could avoid the copy if we had strnstr.
                 const std::string ext(start, len);
-                // Mitigation for Android P vendor partitions: Adreno 530 driver shipped on
-                // some Android P vendor partitions this extension under the draft KHR name,
-                // but during Khronos review it was decided to demote it to EXT.
-                if (needsAndroidPEglMitigation() && ext == "EGL_EXT_image_gl_colorspace" &&
-                    findExtension(disp.queryString.extensions, "EGL_KHR_image_gl_colorspace")) {
-                    mExtensionString.append("EGL_EXT_image_gl_colorspace ");
-                }
                 if (findExtension(disp.queryString.extensions, ext.c_str(), len)) {
                     mExtensionString.append(ext + " ");
                 }
@@ -420,8 +419,8 @@ EGLBoolean egl_display_t::terminate() {
         egl_connection_t* const cnx = &gEGLImpl;
         if (cnx->dso && disp.state == egl_display_t::INITIALIZED) {
             // If we're using ANGLE reset any custom DisplayPlatform
-            if (cnx->useAngle) {
-                angle::resetAnglePlatform(disp.dpy);
+            if (cnx->angleLoaded) {
+                angle::resetAnglePlatform(disp.dpy, cnx);
             }
             if (cnx->egl.eglTerminate(disp.dpy) == EGL_FALSE) {
                 ALOGW("eglTerminate(%p) failed (%s)", disp.dpy,

@@ -27,7 +27,6 @@
 #include "Clock.h"
 #include "Layer.h"
 #include "Scheduler/EventThread.h"
-#include "Scheduler/RefreshRateConfigs.h"
 #include "Scheduler/Scheduler.h"
 #include "Scheduler/VSyncTracker.h"
 #include "Scheduler/VsyncModulator.h"
@@ -76,23 +75,7 @@ public:
 
     bool isVisible() const override { return true; }
 
-    sp<Layer> createClone() override { return nullptr; }
-};
-
-class FuzzImplVSyncSource : public VSyncSource {
-public:
-    const char* getName() const override { return "fuzz"; }
-
-    void setVSyncEnabled(bool /* enable */) override {}
-
-    void setCallback(Callback* /* callback */) override {}
-
-    void setDuration(std::chrono::nanoseconds /* workDuration */,
-                     std::chrono::nanoseconds /* readyDuration */) override {}
-
-    VSyncData getLatestVSyncData() const override { return {}; }
-
-    void dump(std::string& /* result */) const override {}
+    sp<Layer> createClone(uint32_t /* mirrorRootId */) override { return nullptr; }
 };
 
 class FuzzImplVSyncTracker : public scheduler::VSyncTracker {
@@ -106,8 +89,7 @@ public:
     nsecs_t nextAnticipatedVSyncTimeFrom(nsecs_t /* timePoint */) const override { return 1; }
 
     nsecs_t currentPeriod() const override { return 1; }
-
-    void setPeriod(nsecs_t /* period */) override {}
+    Period minFramePeriod() const override { return Period::fromNs(currentPeriod()); }
 
     void resetModel() override {}
 
@@ -117,12 +99,20 @@ public:
         return true;
     }
 
+    void setDisplayModePtr(ftl::NonNull<DisplayModePtr>) override {}
+
     nsecs_t nextVSyncTime(nsecs_t timePoint) const {
         if (timePoint % mPeriod == 0) {
             return timePoint;
         }
         return (timePoint - (timePoint % mPeriod) + mPeriod);
     }
+
+    void setRenderRate(Fps) override {}
+
+    void onFrameBegin(TimePoint, TimePoint) override {}
+
+    void onFrameMissed(TimePoint) override {}
 
     void dump(std::string& /* result */) const override {}
 
@@ -141,6 +131,11 @@ public:
 
     scheduler::ScheduleResult schedule(CallbackToken /* token */,
                                        ScheduleTiming /* scheduleTiming */) override {
+        return (scheduler::ScheduleResult)0;
+    }
+
+    scheduler::ScheduleResult update(CallbackToken /* token */,
+                                     ScheduleTiming /* scheduleTiming */) override {
         return (scheduler::ScheduleResult)0;
     }
 

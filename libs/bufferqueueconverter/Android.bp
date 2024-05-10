@@ -13,15 +13,13 @@ cc_library_headers {
     export_include_dirs: ["include"],
 }
 
-cc_library_shared {
+cc_library {
     name: "libbufferqueueconverter",
     vendor_available: true,
-    vndk: {
-        enabled: true,
-    },
     double_loadable: true,
 
     srcs: [
+        ":libgui_frame_event_aidl",
         "BufferQueueConverter.cpp",
     ],
 
@@ -33,5 +31,7 @@ cc_library_shared {
         "libbase",
         "liblog",
     ],
+    static_libs: ["libguiflags"],
     export_include_dirs: ["include"],
+    export_static_lib_headers: ["libguiflags"],
 }

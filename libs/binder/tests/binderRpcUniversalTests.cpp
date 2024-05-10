@@ -48,10 +48,13 @@ TEST(BinderRpc, CannotUseNextWireVersion) {
     EXPECT_FALSE(session->setProtocolVersion(RPC_WIRE_PROTOCOL_VERSION_NEXT + 15));
 }
 
+#ifndef BINDER_RPC_TO_TRUSTY_TEST
 TEST(BinderRpc, CanUseExperimentalWireVersion) {
     auto session = RpcSession::make();
-    EXPECT_TRUE(session->setProtocolVersion(RPC_WIRE_PROTOCOL_VERSION_EXPERIMENTAL));
+    EXPECT_EQ(hasExperimentalRpc(),
+              session->setProtocolVersion(RPC_WIRE_PROTOCOL_VERSION_EXPERIMENTAL));
 }
+#endif
 
 TEST_P(BinderRpc, Ping) {
     auto proc = createRpcTestSocketServerProcess({});
@@ -84,7 +87,7 @@ TEST_P(BinderRpc, SeparateRootObject) {
         GTEST_SKIP() << "This test requires a multi-threaded service";
     }
 
-    SocketType type = std::get<0>(GetParam());
+    SocketType type = GetParam().type;
     if (type == SocketType::PRECONNECTED || type == SocketType::UNIX ||
         type == SocketType::UNIX_BOOTSTRAP || type == SocketType::UNIX_RAW) {
         // we can't get port numbers for unix sockets
@@ -463,7 +466,7 @@ TEST_P(BinderRpc, Callbacks) {
                 auto proc = createRpcTestSocketServerProcess(
                         {.numThreads = 1,
                          .numSessions = 1,
-                         .numIncomingConnections = numIncomingConnections});
+                         .numIncomingConnectionsBySession = {numIncomingConnections}});
                 auto cb = sp<MyBinderRpcCallback>::make();
 
                 if (callIsOneway) {
@@ -491,16 +494,7 @@ TEST_P(BinderRpc, Callbacks) {
                         << "callIsOneway: " << callIsOneway
                         << " callbackIsOneway: " << callbackIsOneway << " delayed: " << delayed;
 
-                // since we are severing the connection, we need to go ahead and
-                // tell the server to shutdown and exit so that waitpid won't hang
-                if (auto status = proc.rootIface->scheduleShutdown(); !status.isOk()) {
-                    EXPECT_EQ(DEAD_OBJECT, status.transactionError()) << status;
-                }
-
-                // since this session has an incoming connection w/ a threadpool, we
-                // need to manually shut it down
-                EXPECT_TRUE(proc.proc->sessions.at(0).session->shutdownAndWait(true));
-                proc.expectAlreadyShutdown = true;
+                proc.forceShutdown();
             }
         }
     }
