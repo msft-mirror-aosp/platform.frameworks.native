@@ -1411,11 +1411,12 @@ void SurfaceFlinger::applyActiveMode(const sp<DisplayDevice>& display) {
     }
 }
 
-void SurfaceFlinger::initiateDisplayModeChanges() {
+bool SurfaceFlinger::initiateDisplayModeChanges() {
     ATRACE_CALL();
 
     std::optional<PhysicalDisplayId> displayToUpdateImmediately;
 
+    bool mustComposite = false;
     for (const auto& [id, physical] : mPhysicalDisplays) {
         const auto display = getDisplayDeviceLocked(id);
         if (!display) continue;
@@ -1472,7 +1473,11 @@ void SurfaceFlinger::initiateDisplayModeChanges() {
         mScheduler->onNewVsyncPeriodChangeTimeline(outTimeline);
 
         if (outTimeline.refreshRequired) {
-            scheduleComposite(FrameHint::kNone);
+            if (FlagManager::getInstance().vrr_bugfix_24q4()) {
+                mustComposite = true;
+            } else {
+                scheduleComposite(FrameHint::kNone);
+            }
         } else {
             // TODO(b/255635711): Remove `displayToUpdateImmediately` to `finalizeDisplayModeChange`
             // for all displays. This was only needed when the loop iterated over `mDisplays` rather
@@ -1490,6 +1495,8 @@ void SurfaceFlinger::initiateDisplayModeChanges() {
             applyActiveMode(display);
         }
     }
+
+    return mustComposite;
 }
 
 void SurfaceFlinger::disableExpensiveRendering() {
@@ -2439,7 +2446,12 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
         mUpdateAttachedChoreographer = true;
     }
     outTransactionsAreEmpty = mLayerLifecycleManager.getGlobalChanges().get() == 0;
-    mustComposite |= mLayerLifecycleManager.getGlobalChanges().get() != 0;
+    if (FlagManager::getInstance().vrr_bugfix_24q4()) {
+        mustComposite |= mLayerLifecycleManager.getGlobalChanges().test(
+                frontend::RequestedLayerState::Changes::RequiresComposition);
+    } else {
+        mustComposite |= mLayerLifecycleManager.getGlobalChanges().get() != 0;
+    }
 
     bool newDataLatched = false;
     ATRACE_NAME("DisplayCallbackAndStatsUpdates");
@@ -2664,7 +2676,7 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
                                                         ? &mLayerHierarchyBuilder.getHierarchy()
                                                         : nullptr,
                                                 updateAttachedChoreographer);
-        initiateDisplayModeChanges();
+        mustComposite |= initiateDisplayModeChanges();
     }
 
     updateCursorAsync();
@@ -4403,6 +4415,12 @@ void SurfaceFlinger::sendNotifyExpectedPresentHint(PhysicalDisplayId displayId) 
         return;
     }
     scheduleNotifyExpectedPresentHint(displayId);
+}
+
+void SurfaceFlinger::onCommitNotComposited(PhysicalDisplayId pacesetterDisplayId) {
+    if (FlagManager::getInstance().commit_not_composited()) {
+        mFrameTimeline->onCommitNotComposited();
+    }
 }
 
 void SurfaceFlinger::initScheduler(const sp<const DisplayDevice>& display) {
@@ -7501,14 +7519,11 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                 auto future = mScheduler->schedule(
                         [&]() FTL_FAKE_GUARD(mStateLock) FTL_FAKE_GUARD(kMainThreadContext) {
                             n = data.readInt32();
-                            mHdrSdrRatioOverlay = n != 0;
-                            switch (n) {
-                                case 0:
-                                case 1:
-                                    enableHdrSdrRatioOverlay(mHdrSdrRatioOverlay);
-                                    break;
-                                default:
-                                    reply->writeBool(isHdrSdrRatioOverlayEnabled());
+                            if (n == 0 || n == 1) {
+                                mHdrSdrRatioOverlay = n != 0;
+                                enableHdrSdrRatioOverlay(mHdrSdrRatioOverlay);
+                            } else {
+                                reply->writeBool(isHdrSdrRatioOverlayEnabled());
                             }
                         });
                 future.wait();
@@ -8328,10 +8343,7 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
                                       renderArea->getHintForSeamlessTransition());
             sdrWhitePointNits = state.sdrWhitePointNits;
 
-             // TODO(b/298219334): Clean this up once we verify this doesn't break anything
-             static constexpr bool kScreenshotsDontDim = true;
-
-            if (kScreenshotsDontDim && !captureResults.capturedHdrLayers) {
+            if (!captureResults.capturedHdrLayers) {
                 displayBrightnessNits = sdrWhitePointNits;
             } else {
                 displayBrightnessNits = state.displayBrightnessNits;
@@ -9227,7 +9239,9 @@ std::vector<std::pair<Layer*, LayerFE*>> SurfaceFlinger::moveSnapshotsToComposit
     std::vector<std::pair<Layer*, LayerFE*>> layers;
     if (mLayerLifecycleManagerEnabled) {
         nsecs_t currentTime = systemTime();
-        mLayerSnapshotBuilder.forEachVisibleSnapshot(
+        const bool needsMetadata = mCompositionEngine->getFeatureFlags().test(
+                compositionengine::Feature::kSnapshotLayerMetadata);
+        mLayerSnapshotBuilder.forEachSnapshot(
                 [&](std::unique_ptr<frontend::LayerSnapshot>& snapshot) FTL_FAKE_GUARD(
                         kMainThreadContext) {
                     if (cursorOnly &&
@@ -9250,6 +9264,12 @@ std::vector<std::pair<Layer*, LayerFE*>> SurfaceFlinger::moveSnapshotsToComposit
                     layerFE->mSnapshot = std::move(snapshot);
                     refreshArgs.layers.push_back(layerFE);
                     layers.emplace_back(legacyLayer.get(), layerFE.get());
+                },
+                [needsMetadata](const frontend::LayerSnapshot& snapshot) {
+                    return snapshot.isVisible ||
+                            (needsMetadata &&
+                             snapshot.changes.test(
+                                     frontend::RequestedLayerState::Changes::Metadata));
                 });
     }
     if (!mLayerLifecycleManagerEnabled) {
