@@ -313,6 +313,21 @@ void updateMetadata(LayerSnapshot& snapshot, const RequestedLayerState& requeste
     }
 }
 
+void updateMetadataAndGameMode(LayerSnapshot& snapshot, const RequestedLayerState& requested,
+                               const LayerSnapshotBuilder::Args& args,
+                               const LayerSnapshot& parentSnapshot) {
+    if (snapshot.changes.test(RequestedLayerState::Changes::GameMode)) {
+        snapshot.gameMode = requested.metadata.has(gui::METADATA_GAME_MODE)
+                ? requested.gameMode
+                : parentSnapshot.gameMode;
+    }
+    updateMetadata(snapshot, requested, args);
+    if (args.includeMetadata) {
+        snapshot.layerMetadata = parentSnapshot.layerMetadata;
+        snapshot.layerMetadata.merge(requested.metadata);
+    }
+}
+
 void clearChanges(LayerSnapshot& snapshot) {
     snapshot.changes.clear();
     snapshot.clientChanges = 0;
@@ -362,6 +377,7 @@ LayerSnapshot LayerSnapshotBuilder::getRootSnapshot() {
     snapshot.gameMode = gui::GameMode::Unsupported;
     snapshot.frameRate = {};
     snapshot.fixedTransformHint = ui::Transform::ROT_INVALID;
+    snapshot.ignoreLocalTransform = false;
     return snapshot;
 }
 
@@ -745,6 +761,11 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
                                  RequestedLayerState::Changes::Input)) {
             updateInput(snapshot, requested, parentSnapshot, path, args);
         }
+        if (forceUpdate ||
+            (args.includeMetadata &&
+             snapshot.changes.test(RequestedLayerState::Changes::Metadata))) {
+            updateMetadataAndGameMode(snapshot, requested, args, parentSnapshot);
+        }
         return;
     }
 
@@ -784,15 +805,8 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
         }
     }
 
-    if (forceUpdate || snapshot.changes.test(RequestedLayerState::Changes::GameMode)) {
-        snapshot.gameMode = requested.metadata.has(gui::METADATA_GAME_MODE)
-                ? requested.gameMode
-                : parentSnapshot.gameMode;
-        updateMetadata(snapshot, requested, args);
-        if (args.includeMetadata) {
-            snapshot.layerMetadata = parentSnapshot.layerMetadata;
-            snapshot.layerMetadata.merge(requested.metadata);
-        }
+    if (forceUpdate || snapshot.changes.test(RequestedLayerState::Changes::Metadata)) {
+        updateMetadataAndGameMode(snapshot, requested, args, parentSnapshot);
     }
 
     if (forceUpdate || snapshot.clientChanges & layer_state_t::eFixedTransformHintChanged ||
@@ -1044,7 +1058,8 @@ void LayerSnapshotBuilder::updateInput(LayerSnapshot& snapshot,
     snapshot.touchCropId = requested.touchCropId;
 
     snapshot.inputInfo.id = static_cast<int32_t>(snapshot.uniqueSequence);
-    snapshot.inputInfo.displayId = static_cast<int32_t>(snapshot.outputFilter.layerStack.id);
+    snapshot.inputInfo.displayId =
+            ui::LogicalDisplayId{static_cast<int32_t>(snapshot.outputFilter.layerStack.id)};
     snapshot.inputInfo.touchOcclusionMode = requested.hasInputInfo()
             ? requested.windowInfoHandle->getInfo()->touchOcclusionMode
             : parentSnapshot.inputInfo.touchOcclusionMode;
@@ -1061,8 +1076,8 @@ void LayerSnapshotBuilder::updateInput(LayerSnapshot& snapshot,
     }
 
     if (snapshot.isSecure ||
-        parentSnapshot.inputInfo.inputConfig.test(InputConfig::SENSITIVE_FOR_TRACING)) {
-        snapshot.inputInfo.inputConfig |= InputConfig::SENSITIVE_FOR_TRACING;
+        parentSnapshot.inputInfo.inputConfig.test(InputConfig::SENSITIVE_FOR_PRIVACY)) {
+        snapshot.inputInfo.inputConfig |= InputConfig::SENSITIVE_FOR_PRIVACY;
     }
 
     updateVisibility(snapshot, snapshot.isVisible);
@@ -1156,6 +1171,15 @@ void LayerSnapshotBuilder::forEachVisibleSnapshot(const Visitor& visitor) {
     for (int i = 0; i < mNumInterestingSnapshots; i++) {
         std::unique_ptr<LayerSnapshot>& snapshot = mSnapshots.at((size_t)i);
         if (!snapshot->isVisible) continue;
+        visitor(snapshot);
+    }
+}
+
+void LayerSnapshotBuilder::forEachSnapshot(const Visitor& visitor,
+                                           const ConstPredicate& predicate) {
+    for (int i = 0; i < mNumInterestingSnapshots; i++) {
+        std::unique_ptr<LayerSnapshot>& snapshot = mSnapshots.at((size_t)i);
+        if (!predicate(*snapshot)) continue;
         visitor(snapshot);
     }
 }

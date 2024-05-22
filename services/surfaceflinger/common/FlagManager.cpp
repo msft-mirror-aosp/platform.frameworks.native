@@ -134,6 +134,7 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(screenshot_fence_preservation);
     DUMP_READ_ONLY_FLAG(vulkan_renderengine);
     DUMP_READ_ONLY_FLAG(renderable_buffer_usage);
+    DUMP_READ_ONLY_FLAG(vrr_bugfix_24q4);
     DUMP_READ_ONLY_FLAG(restore_blur_step);
     DUMP_READ_ONLY_FLAG(dont_skip_on_early_ro);
     DUMP_READ_ONLY_FLAG(protected_if_client);
@@ -144,6 +145,8 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(deprecate_vsync_sf);
     DUMP_READ_ONLY_FLAG(allow_n_vsyncs_in_targeter);
     DUMP_READ_ONLY_FLAG(detached_mirror);
+    DUMP_READ_ONLY_FLAG(commit_not_composited);
+    DUMP_READ_ONLY_FLAG(local_tonemap_screenshots);
 
 #undef DUMP_READ_ONLY_FLAG
 #undef DUMP_SERVER_FLAG
@@ -232,12 +235,15 @@ FLAG_MANAGER_READ_ONLY_FLAG(renderable_buffer_usage, "")
 FLAG_MANAGER_READ_ONLY_FLAG(restore_blur_step, "debug.renderengine.restore_blur_step")
 FLAG_MANAGER_READ_ONLY_FLAG(dont_skip_on_early_ro, "")
 FLAG_MANAGER_READ_ONLY_FLAG(protected_if_client, "")
+FLAG_MANAGER_READ_ONLY_FLAG(vrr_bugfix_24q4, "");
 FLAG_MANAGER_READ_ONLY_FLAG(ce_fence_promise, "");
 FLAG_MANAGER_READ_ONLY_FLAG(graphite_renderengine, "debug.renderengine.graphite")
 FLAG_MANAGER_READ_ONLY_FLAG(latch_unsignaled_with_auto_refresh_changed, "");
 FLAG_MANAGER_READ_ONLY_FLAG(deprecate_vsync_sf, "");
 FLAG_MANAGER_READ_ONLY_FLAG(allow_n_vsyncs_in_targeter, "");
 FLAG_MANAGER_READ_ONLY_FLAG(detached_mirror, "");
+FLAG_MANAGER_READ_ONLY_FLAG(commit_not_composited, "");
+FLAG_MANAGER_READ_ONLY_FLAG(local_tonemap_screenshots, "debug.sf.local_tonemap_screenshots");
 
 /// Trunk stable server flags ///
 FLAG_MANAGER_SERVER_FLAG(refresh_rate_overlay_on_external_display, "")
@@ -249,5 +255,6 @@ FLAG_MANAGER_SERVER_FLAG_IMPORTED(adpf_use_fmq_channel, "", android::os)
 /// Trunk stable readonly flags from outside SurfaceFlinger ///
 FLAG_MANAGER_READ_ONLY_FLAG_IMPORTED(idle_screen_refresh_rate_timeout, "",
                                      com::android::server::display::feature::flags)
+FLAG_MANAGER_READ_ONLY_FLAG_IMPORTED(adpf_use_fmq_channel_fixed, "", android::os)
 
 } // namespace android

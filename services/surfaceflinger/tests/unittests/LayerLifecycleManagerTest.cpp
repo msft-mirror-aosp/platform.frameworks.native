@@ -461,8 +461,8 @@ TEST_F(LayerLifecycleManagerTest, layerOpacityChangesSetsVisibilityChangeFlag) {
                                                                HAL_PIXEL_FORMAT_RGBA_8888,
                                                                GRALLOC_USAGE_PROTECTED /*usage*/));
     EXPECT_EQ(mLifecycleManager.getGlobalChanges().get(),
-              ftl::Flags<RequestedLayerState::Changes>(RequestedLayerState::Changes::Buffer |
-                                                       RequestedLayerState::Changes::Content)
+              ftl::Flags<RequestedLayerState::Changes>(
+                      RequestedLayerState::Changes::Buffer | RequestedLayerState::Changes::Content)
                       .get());
     mLifecycleManager.commitChanges();
 
@@ -493,10 +493,10 @@ TEST_F(LayerLifecycleManagerTest, bufferFormatChangesSetsVisibilityChangeFlag) {
                                                                HAL_PIXEL_FORMAT_RGB_888,
                                                                GRALLOC_USAGE_PROTECTED /*usage*/));
     EXPECT_EQ(mLifecycleManager.getGlobalChanges().get(),
-              ftl::Flags<RequestedLayerState::Changes>(RequestedLayerState::Changes::Buffer |
-                                                       RequestedLayerState::Changes::Content |
-                                                       RequestedLayerState::Changes::VisibleRegion |
-                                                       RequestedLayerState::Changes::Visibility)
+              ftl::Flags<RequestedLayerState::Changes>(
+                      RequestedLayerState::Changes::Buffer | RequestedLayerState::Changes::Content |
+                      RequestedLayerState::Changes::VisibleRegion |
+                      RequestedLayerState::Changes::Visibility)
                       .get());
     mLifecycleManager.commitChanges();
 }
@@ -580,8 +580,8 @@ TEST_F(LayerLifecycleManagerTest, layerSecureChangesSetsVisibilityChangeFlag) {
                                                             HAL_PIXEL_FORMAT_RGBA_8888,
                                                             GRALLOC_USAGE_SW_READ_NEVER /*usage*/));
     EXPECT_EQ(mLifecycleManager.getGlobalChanges().get(),
-              ftl::Flags<RequestedLayerState::Changes>(RequestedLayerState::Changes::Buffer |
-                                                       RequestedLayerState::Changes::Content)
+              ftl::Flags<RequestedLayerState::Changes>(
+                      RequestedLayerState::Changes::Buffer | RequestedLayerState::Changes::Content)
                       .get());
     mLifecycleManager.commitChanges();
 

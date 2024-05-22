@@ -221,6 +221,7 @@ void Scheduler::onFrameSignal(ICompositor& compositor, VsyncId vsyncId,
             if (FlagManager::getInstance().vrr_config()) {
                 compositor.sendNotifyExpectedPresentHint(pacesetterPtr->displayId);
             }
+            mSchedulerCallback.onCommitNotComposited(pacesetterPtr->displayId);
             return;
         }
     }
@@ -1152,8 +1153,10 @@ auto Scheduler::chooseDisplayModes() const -> DisplayModeChoiceMap {
         return pacesetterFps;
     }();
 
+    // Choose a mode for powered-on follower displays.
     for (const auto& [id, display] : mDisplays) {
         if (id == *mPacesetterDisplayId) continue;
+        if (display.powerMode != hal::PowerMode::ON) continue;
 
         auto rankedFrameRates =
                 display.selectorPtr->getRankedFrameRates(mPolicy.contentRequirements, globalSignals,

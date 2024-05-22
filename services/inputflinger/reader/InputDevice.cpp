@@ -281,14 +281,14 @@ std::list<NotifyArgs> InputDevice::configureInternal(nsecs_t when,
             const std::string& inputDeviceDescriptor = mIdentifier.descriptor;
             if (!inputDeviceDescriptor.empty()) {
                 const std::unordered_map<std::string, uint8_t>& ports =
-                        readerConfig.portAssociations;
+                        readerConfig.inputPortToDisplayPortAssociations;
                 const auto& displayPort = ports.find(inputDeviceDescriptor);
                 if (displayPort != ports.end()) {
                     mAssociatedDisplayPort = std::make_optional(displayPort->second);
                 } else {
                     const std::unordered_map<std::string, std::string>&
                             displayUniqueIdsByDescriptor =
-                                    readerConfig.uniqueIdAssociationsByDescriptor;
+                                    readerConfig.inputDeviceDescriptorToDisplayUniqueIdAssociations;
                     const auto& displayUniqueIdByDescriptor =
                             displayUniqueIdsByDescriptor.find(inputDeviceDescriptor);
                     if (displayUniqueIdByDescriptor != displayUniqueIdsByDescriptor.end()) {
@@ -301,13 +301,13 @@ std::list<NotifyArgs> InputDevice::configureInternal(nsecs_t when,
             const std::string& inputPort = mIdentifier.location;
             if (!inputPort.empty()) {
                 const std::unordered_map<std::string, uint8_t>& ports =
-                        readerConfig.portAssociations;
+                        readerConfig.inputPortToDisplayPortAssociations;
                 const auto& displayPort = ports.find(inputPort);
                 if (displayPort != ports.end()) {
                     mAssociatedDisplayPort = std::make_optional(displayPort->second);
                 } else {
                     const std::unordered_map<std::string, std::string>& displayUniqueIdsByPort =
-                            readerConfig.uniqueIdAssociationsByPort;
+                            readerConfig.inputPortToDisplayUniqueIdAssociations;
                     const auto& displayUniqueIdByPort = displayUniqueIdsByPort.find(inputPort);
                     if (displayUniqueIdByPort != displayUniqueIdsByPort.end()) {
                         mAssociatedDisplayUniqueIdByPort = displayUniqueIdByPort->second;
@@ -442,7 +442,8 @@ std::list<NotifyArgs> InputDevice::updateExternalStylusState(const StylusState& 
 InputDeviceInfo InputDevice::getDeviceInfo() {
     InputDeviceInfo outDeviceInfo;
     outDeviceInfo.initialize(mId, mGeneration, mControllerNumber, mIdentifier, mAlias, mIsExternal,
-                             mHasMic, getAssociatedDisplayId().value_or(ADISPLAY_ID_NONE),
+                             mHasMic,
+                             getAssociatedDisplayId().value_or(ui::LogicalDisplayId::INVALID),
                              {mShouldSmoothScroll}, isEnabled());
 
     for_each_mapper(
@@ -699,14 +700,14 @@ NotifyDeviceResetArgs InputDevice::notifyReset(nsecs_t when) {
     return NotifyDeviceResetArgs(mContext->getNextId(), when, mId);
 }
 
-std::optional<int32_t> InputDevice::getAssociatedDisplayId() {
+std::optional<ui::LogicalDisplayId> InputDevice::getAssociatedDisplayId() {
     // Check if we had associated to the specific display.
     if (mAssociatedViewport) {
         return mAssociatedViewport->displayId;
     }
 
     // No associated display port, check if some InputMapper is associated.
-    return first_in_mappers<int32_t>(
+    return first_in_mappers<ui::LogicalDisplayId>(
             [](InputMapper& mapper) { return mapper.getAssociatedDisplayId(); });
 }
 
