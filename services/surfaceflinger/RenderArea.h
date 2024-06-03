@@ -4,6 +4,8 @@
 #include <ui/Transform.h>
 
 #include <functional>
+
+#include "FrontEnd/LayerSnapshot.h"
 #include "Layer.h"
 
 namespace android {
@@ -47,9 +49,6 @@ public:
 
     virtual ~RenderArea() = default;
 
-    // Invoke drawLayers to render layers into the render area.
-    virtual void render(std::function<void()> drawLayers) { drawLayers(); }
-
     // Returns true if the render area is secure.  A secure layer should be
     // blacked out / skipped when rendered to an insecure render area.
     virtual bool isSecure() const = 0;
@@ -84,6 +83,10 @@ public:
     // If this is a LayerRenderArea, return the root layer of the
     // capture operation.
     virtual sp<Layer> getParentLayer() const { return nullptr; }
+
+    // If this is a LayerRenderArea, return the layer snapshot
+    // of the root layer of the capture operation
+    virtual const frontend::LayerSnapshot* getLayerSnapshot() const { return nullptr; }
 
     // Returns whether the render result may be used for system animations that
     // must preserve the exact colors of the display.

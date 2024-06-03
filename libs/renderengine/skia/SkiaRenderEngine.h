@@ -59,10 +59,10 @@ class BlurFilter;
 class SkiaRenderEngine : public RenderEngine {
 public:
     static std::unique_ptr<SkiaRenderEngine> create(const RenderEngineCreationArgs& args);
-    SkiaRenderEngine(Threaded, PixelFormat pixelFormat, bool supportsBackgroundBlur);
+    SkiaRenderEngine(Threaded, PixelFormat pixelFormat, BlurAlgorithm);
     ~SkiaRenderEngine() override;
 
-    std::future<void> primeCache(bool shouldPrimeUltraHDR) override final;
+    std::future<void> primeCache(PrimeCacheConfig config) override final;
     void cleanupPostRender() override final;
     bool supportsBackgroundBlur() override final {
         return mBlurFilter != nullptr;
@@ -79,9 +79,9 @@ public:
     void ensureContextsCreated();
 
 protected:
-    // This is so backends can stop the generic rendering state first before
-    // cleaning up backend-specific state
-    void finishRenderingAndAbandonContext();
+    // This is so backends can stop the generic rendering state first before cleaning up
+    // backend-specific state. SkiaGpuContexts are invalid after invocation.
+    void finishRenderingAndAbandonContexts();
 
     // Functions that a given backend (GLES, Vulkan) must implement
     using Contexts = std::pair<unique_ptr<SkiaGpuContext>, unique_ptr<SkiaGpuContext>>;
@@ -89,7 +89,8 @@ protected:
     virtual bool supportsProtectedContentImpl() const = 0;
     virtual bool useProtectedContextImpl(GrProtected isProtected) = 0;
     virtual void waitFence(SkiaGpuContext* context, base::borrowed_fd fenceFd) = 0;
-    virtual base::unique_fd flushAndSubmit(SkiaGpuContext* context) = 0;
+    virtual base::unique_fd flushAndSubmit(SkiaGpuContext* context,
+                                           sk_sp<SkSurface> dstSurface) = 0;
     virtual void appendBackendSpecificInfoToDump(std::string& result) = 0;
 
     size_t getMaxTextureSize() const override final;
@@ -167,9 +168,6 @@ private:
     // Number of external holders of ExternalTexture references, per GraphicBuffer ID.
     std::unordered_map<GraphicBufferId, int32_t> mGraphicBufferExternalRefs
             GUARDED_BY(mRenderingMutex);
-    // For GL, this cache is shared between protected and unprotected contexts. For Vulkan, it is
-    // only used for the unprotected context, because Vulkan does not allow sharing between
-    // contexts, and protected is less common.
     std::unordered_map<GraphicBufferId, std::shared_ptr<AutoBackendTexture::LocalRef>> mTextureCache
             GUARDED_BY(mRenderingMutex);
     std::unordered_map<shaders::LinearEffect, sk_sp<SkRuntimeEffect>, shaders::LinearEffectHasher>

@@ -20,6 +20,8 @@
 #include "VulkanInterface.h"
 
 #include <include/gpu/GpuTypes.h>
+#include <include/gpu/vk/VulkanBackendContext.h>
+
 #include <log/log_main.h>
 #include <utils/Timers.h>
 
@@ -32,6 +34,23 @@ namespace skia {
 
 GrVkBackendContext VulkanInterface::getGaneshBackendContext() {
     GrVkBackendContext backendContext;
+    backendContext.fInstance = mInstance;
+    backendContext.fPhysicalDevice = mPhysicalDevice;
+    backendContext.fDevice = mDevice;
+    backendContext.fQueue = mQueue;
+    backendContext.fGraphicsQueueIndex = mQueueIndex;
+    backendContext.fMaxAPIVersion = mApiVersion;
+    backendContext.fVkExtensions = &mGrExtensions;
+    backendContext.fDeviceFeatures2 = mPhysicalDeviceFeatures2;
+    backendContext.fGetProc = mGrGetProc;
+    backendContext.fProtectedContext = mIsProtected ? Protected::kYes : Protected::kNo;
+    backendContext.fDeviceLostContext = this; // VulkanInterface is long-lived
+    backendContext.fDeviceLostProc = onVkDeviceFault;
+    return backendContext;
+};
+
+VulkanBackendContext VulkanInterface::getGraphiteBackendContext() {
+    VulkanBackendContext backendContext;
     backendContext.fInstance = mInstance;
     backendContext.fPhysicalDevice = mPhysicalDevice;
     backendContext.fDevice = mDevice;
@@ -225,7 +244,9 @@ void VulkanInterface::init(bool protectedContent) {
     VK_CHECK(vkEnumerateInstanceVersion(&instanceVersion));
 
     if (instanceVersion < VK_MAKE_VERSION(1, 1, 0)) {
-        return;
+        BAIL("Vulkan instance API version %" PRIu32 ".%" PRIu32 ".%" PRIu32 " < 1.1.0",
+             VK_VERSION_MAJOR(instanceVersion), VK_VERSION_MINOR(instanceVersion),
+             VK_VERSION_PATCH(instanceVersion));
     }
 
     const VkApplicationInfo appInfo = {
@@ -304,13 +325,11 @@ void VulkanInterface::init(bool protectedContent) {
     }
 
     vkGetPhysicalDeviceProperties2(physicalDevice, &physDevProps);
-    if (physDevProps.properties.apiVersion < VK_MAKE_VERSION(1, 1, 0)) {
-        BAIL("Could not find a Vulkan 1.1+ physical device");
-    }
-
-    if (physDevProps.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
-        // TODO: b/326633110 - SkiaVK is not working correctly on swiftshader path.
-        BAIL("CPU implementations of Vulkan is not supported");
+    const uint32_t physicalDeviceApiVersion = physDevProps.properties.apiVersion;
+    if (physicalDeviceApiVersion < VK_MAKE_VERSION(1, 1, 0)) {
+        BAIL("Vulkan physical device API version %" PRIu32 ".%" PRIu32 ".%" PRIu32 " < 1.1.0",
+             VK_VERSION_MAJOR(physicalDeviceApiVersion), VK_VERSION_MINOR(physicalDeviceApiVersion),
+             VK_VERSION_PATCH(physicalDeviceApiVersion));
     }
 
     // Check for syncfd support. Bail if we cannot both import and export them.
@@ -525,7 +544,7 @@ void VulkanInterface::init(bool protectedContent) {
     mDevice = device;
     mQueue = graphicsQueue;
     mQueueIndex = graphicsQueueIndex;
-    mApiVersion = physDevProps.properties.apiVersion;
+    mApiVersion = physicalDeviceApiVersion;
     // grExtensions already constructed
     // feature pointers already constructed
     mGrGetProc = sGetProc;
@@ -538,13 +557,16 @@ void VulkanInterface::init(bool protectedContent) {
     ALOGD("%s: Success init Vulkan interface in %f ms", __func__, initTimeMs);
 }
 
-// TODO: b/293371537 - Iterate on this.
-// Currently unused, but copied over from its original location for potential future use. This
-// should likely be improved to walk the pNext chain of mPhysicalDeviceFeatures2 and free everything
-// like HWUI's VulkanManager. Also, not all fields are being reset.
-void VulkanInterface::teardown() {
-    mInitialized = false;
+bool VulkanInterface::takeOwnership() {
+    if (!isInitialized() || mIsOwned) {
+        return false;
+    }
+    mIsOwned = true;
+    return true;
+}
 
+void VulkanInterface::teardown() {
+    // Core resources that must be destroyed using Vulkan functions.
     if (mDevice != VK_NULL_HANDLE) {
         mFuncs.vkDeviceWaitIdle(mDevice);
         mFuncs.vkDestroyDevice(mDevice, nullptr);
@@ -555,26 +577,42 @@ void VulkanInterface::teardown() {
         mInstance = VK_NULL_HANDLE;
     }
 
+    // Optional features that can be deleted directly.
+    // TODO: b/293371537 - This section should likely be improved to walk the pNext chain of
+    // mPhysicalDeviceFeatures2 and free everything like HWUI's VulkanManager.
     if (mProtectedMemoryFeatures) {
         delete mProtectedMemoryFeatures;
+        mProtectedMemoryFeatures = nullptr;
     }
-
     if (mSamplerYcbcrConversionFeatures) {
         delete mSamplerYcbcrConversionFeatures;
+        mSamplerYcbcrConversionFeatures = nullptr;
     }
-
     if (mPhysicalDeviceFeatures2) {
         delete mPhysicalDeviceFeatures2;
+        mPhysicalDeviceFeatures2 = nullptr;
     }
-
     if (mDeviceFaultFeatures) {
         delete mDeviceFaultFeatures;
+        mDeviceFaultFeatures = nullptr;
     }
 
-    mSamplerYcbcrConversionFeatures = nullptr;
-    mPhysicalDeviceFeatures2 = nullptr;
-    mProtectedMemoryFeatures = nullptr;
-    mDeviceFaultFeatures = nullptr;
+    // Misc. fields that can be trivially reset without special deletion:
+    mInitialized = false;
+    mIsOwned = false;
+    mPhysicalDevice = VK_NULL_HANDLE; // Implicitly destroyed by destroying mInstance.
+    mQueue = VK_NULL_HANDLE;          // Implicitly destroyed by destroying mDevice.
+    mQueueIndex = 0;
+    mApiVersion = 0;
+    mGrExtensions = GrVkExtensions();
+    mGrGetProc = nullptr;
+    mIsProtected = false;
+    mIsRealtimePriority = false;
+
+    mFuncs = VulkanFuncs();
+
+    mInstanceExtensionNames.clear();
+    mDeviceExtensionNames.clear();
 }
 
 } // namespace skia

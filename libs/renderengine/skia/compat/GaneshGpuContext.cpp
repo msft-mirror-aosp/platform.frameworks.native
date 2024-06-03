@@ -38,7 +38,6 @@
 namespace android::renderengine::skia {
 
 namespace {
-// TODO: b/293371537 - Graphite variant.
 static GrContextOptions ganeshOptions(GrContextOptions::PersistentCache& skSLCacheMonitor) {
     GrContextOptions options;
     options.fDisableDriverCorrectnessWorkarounds = true;
@@ -67,6 +66,11 @@ GaneshGpuContext::GaneshGpuContext(sk_sp<GrDirectContext> grContext) : mGrContex
     LOG_ALWAYS_FATAL_IF(mGrContext.get() == nullptr, "GrDirectContext creation failed");
 }
 
+GaneshGpuContext::~GaneshGpuContext() {
+    mGrContext->flushAndSubmit(GrSyncCpu::kYes);
+    mGrContext->abandonContext();
+};
+
 sk_sp<GrDirectContext> GaneshGpuContext::grDirectContext() {
     return mGrContext;
 }
@@ -93,18 +97,13 @@ size_t GaneshGpuContext::getMaxTextureSize() const {
     return mGrContext->maxTextureSize();
 };
 
-bool GaneshGpuContext::isAbandoned() {
+bool GaneshGpuContext::isAbandonedOrDeviceLost() {
     return mGrContext->abandoned();
 }
 
 void GaneshGpuContext::setResourceCacheLimit(size_t maxResourceBytes) {
     mGrContext->setResourceCacheLimit(maxResourceBytes);
 }
-
-void GaneshGpuContext::finishRenderingAndAbandonContext() {
-    mGrContext->flushAndSubmit(GrSyncCpu::kYes);
-    mGrContext->abandonContext();
-};
 
 void GaneshGpuContext::purgeUnlockedScratchResources() {
     mGrContext->purgeUnlockedResources(GrPurgeResourceOptions::kScratchResourcesOnly);

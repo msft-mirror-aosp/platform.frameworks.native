@@ -137,7 +137,7 @@ void DisplayDevice::setDisplayName(const std::string& displayName) {
 
 auto DisplayDevice::getFrontEndInfo() const -> frontend::DisplayInfo {
     gui::DisplayInfo info;
-    info.displayId = getLayerStack().id;
+    info.displayId = ui::LogicalDisplayId{static_cast<int32_t>(getLayerStack().id)};
 
     // The physical orientation is set when the orientation of the display panel is
     // different than the default orientation of the device. Other services like
@@ -485,11 +485,11 @@ void DisplayDevice::enableRefreshRateOverlay(bool enable, bool setByHwc, bool sh
     }
 }
 
-void DisplayDevice::updateRefreshRateOverlayRate(Fps vsyncRate, Fps renderFps, bool setByHwc) {
+void DisplayDevice::updateRefreshRateOverlayRate(Fps refreshRate, Fps renderFps, bool setByHwc) {
     ATRACE_CALL();
     if (mRefreshRateOverlay) {
         if (!mRefreshRateOverlay->isSetByHwc() || setByHwc) {
-            mRefreshRateOverlay->changeRefreshRate(vsyncRate, renderFps);
+            mRefreshRateOverlay->changeRefreshRate(refreshRate, renderFps);
         } else {
             mRefreshRateOverlay->changeRenderRate(renderFps);
         }
@@ -560,10 +560,8 @@ auto DisplayDevice::setDesiredMode(display::DisplayModeRequest&& desiredMode) ->
         return DesiredModeAction::InitiateRenderRateSwitch;
     }
 
-    // Set the render frame rate to the active physical refresh rate to schedule the next
-    // frame as soon as possible.
     setActiveMode(activeMode.modePtr->getId(), activeMode.modePtr->getVsyncRate(),
-                  activeMode.modePtr->getVsyncRate());
+                  activeMode.modePtr->getPeakFps());
 
     // Initiate a mode change.
     mDesiredModeOpt = std::move(desiredMode);

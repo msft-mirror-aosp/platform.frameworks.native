@@ -36,6 +36,7 @@ cc_test {
         "tensorflow_headers",
     ],
     static_libs: [
+        "libflagtest",
         "libgmock",
         "libgui_window_info_static",
         "libinput",
@@ -64,6 +65,7 @@ cc_test {
         "libcutils",
         "liblog",
         "libPlatformProperties",
+        "libstatslog",
         "libtinyxml2",
         "libutils",
         "server_configurable_flags",
@@ -77,18 +79,16 @@ cc_test {
     },
     test_suites: ["device-tests"],
     target: {
+        android: {
+            static_libs: [
+                "libstatslog_libinput",
+                "libstatssocket_lazy",
+            ],
+        },
         host: {
             sanitize: {
                 address: true,
             },
-        },
-        android: {
-            static_libs: [
-                // Stats logging library and its dependencies.
-                "libstatslog_libinput",
-                "libstatsbootstrap",
-                "android.os.statsbootstrap_aidl-cpp",
-            ],
         },
     },
 }

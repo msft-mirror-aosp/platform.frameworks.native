@@ -79,6 +79,7 @@
 #include "filters/GaussianBlurFilter.h"
 #include "filters/KawaseBlurFilter.h"
 #include "filters/LinearEffect.h"
+#include "filters/MouriMap.h"
 #include "log/log_main.h"
 #include "skia/compat/SkiaBackendTexture.h"
 #include "skia/debug/SkiaCapture.h"
@@ -90,8 +91,7 @@ namespace {
 
 // Debugging settings
 static const bool kPrintLayerSettings = false;
-static const bool kFlushAfterEveryLayer = kPrintLayerSettings;
-static constexpr bool kEnableLayerBrightening = true;
+static const bool kGaneshFlushAfterEveryLayer = kPrintLayerSettings;
 
 } // namespace
 
@@ -246,8 +246,8 @@ namespace skia {
 
 using base::StringAppendF;
 
-std::future<void> SkiaRenderEngine::primeCache(bool shouldPrimeUltraHDR) {
-    Cache::primeShaderCache(this, shouldPrimeUltraHDR);
+std::future<void> SkiaRenderEngine::primeCache(PrimeCacheConfig config) {
+    Cache::primeShaderCache(this, config);
     return {};
 }
 
@@ -273,32 +273,47 @@ void SkiaRenderEngine::setEnableTracing(bool tracingEnabled) {
 }
 
 SkiaRenderEngine::SkiaRenderEngine(Threaded threaded, PixelFormat pixelFormat,
-                                   bool supportsBackgroundBlur)
+                                   BlurAlgorithm blurAlgorithm)
       : RenderEngine(threaded), mDefaultPixelFormat(pixelFormat) {
-    if (supportsBackgroundBlur) {
-        ALOGD("Background Blurs Enabled");
-        mBlurFilter = new KawaseBlurFilter();
+    switch (blurAlgorithm) {
+        case BlurAlgorithm::GAUSSIAN: {
+            ALOGD("Background Blurs Enabled (Gaussian algorithm)");
+            mBlurFilter = new GaussianBlurFilter();
+            break;
+        }
+        case BlurAlgorithm::KAWASE: {
+            ALOGD("Background Blurs Enabled (Kawase algorithm)");
+            mBlurFilter = new KawaseBlurFilter();
+            break;
+        }
+        default: {
+            mBlurFilter = nullptr;
+            break;
+        }
     }
+
     mCapture = std::make_unique<SkiaCapture>();
 }
 
 SkiaRenderEngine::~SkiaRenderEngine() { }
 
-// To be called from backend dtors.
-void SkiaRenderEngine::finishRenderingAndAbandonContext() {
+// To be called from backend dtors. Used to clean up Skia objects before GPU API contexts are
+// destroyed by subclasses.
+void SkiaRenderEngine::finishRenderingAndAbandonContexts() {
     std::lock_guard<std::mutex> lock(mRenderingMutex);
 
     if (mBlurFilter) {
         delete mBlurFilter;
     }
 
-    if (mContext) {
-        mContext->finishRenderingAndAbandonContext();
-    }
+    // Leftover textures may hold refs to backend-specific Skia contexts, which must be released
+    // before ~SkiaGpuContext is called.
+    mTextureCleanupMgr.setDeferredStatus(false);
+    mTextureCleanupMgr.cleanup();
 
-    if (mProtectedContext) {
-        mProtectedContext->finishRenderingAndAbandonContext();
-    }
+    // ~SkiaGpuContext must be called before GPU API contexts are torn down.
+    mContext.reset();
+    mProtectedContext.reset();
 }
 
 void SkiaRenderEngine::useProtectedContext(bool useProtectedContext) {
@@ -405,9 +420,7 @@ void SkiaRenderEngine::mapExternalTextureBuffer(const sp<GraphicBuffer>& buffer,
 
     // If we were to support caching protected buffers then we will need to switch the
     // currently bound context if we are not already using the protected context (and subsequently
-    // switch back after the buffer is cached).  However, for non-protected content we can bind
-    // the texture in either GL context because they are initialized with the same share_context
-    // which allows the texture state to be shared between them.
+    // switch back after the buffer is cached).
     auto context = getActiveContext();
     auto& cache = mTextureCache;
 
@@ -497,9 +510,9 @@ sk_sp<SkShader> SkiaRenderEngine::createRuntimeEffectShader(
     // Determine later on if we need to leverage the stertch shader within
     // surface flinger
     const auto& stretchEffect = parameters.layer.stretchEffect;
+    const auto& targetBuffer = parameters.layer.source.buffer.buffer;
     auto shader = parameters.shader;
     if (stretchEffect.hasEffect()) {
-        const auto targetBuffer = parameters.layer.source.buffer.buffer;
         const auto graphicBuffer = targetBuffer ? targetBuffer->getBuffer() : nullptr;
         if (graphicBuffer && parameters.shader) {
             shader = mStretchShaderFactory.createSkShader(shader, stretchEffect);
@@ -507,6 +520,24 @@ sk_sp<SkShader> SkiaRenderEngine::createRuntimeEffectShader(
     }
 
     if (parameters.requiresLinearEffect) {
+        const auto format = targetBuffer != nullptr
+                ? std::optional<ui::PixelFormat>(
+                          static_cast<ui::PixelFormat>(targetBuffer->getPixelFormat()))
+                : std::nullopt;
+
+        if (parameters.display.tonemapStrategy == DisplaySettings::TonemapStrategy::Local) {
+            // TODO: Handle color matrix transforms in linear space.
+            SkImage* image = parameters.shader->isAImage((SkMatrix*)nullptr, (SkTileMode*)nullptr);
+            if (image) {
+                static MouriMap kMapper;
+                const float ratio = getHdrRenderType(parameters.layer.sourceDataspace, format) ==
+                                HdrRenderType::GENERIC_HDR
+                        ? 1.0f
+                        : parameters.layerDimmingRatio;
+                return kMapper.mouriMap(getActiveContext(), parameters.shader, ratio);
+            }
+        }
+
         auto effect =
                 shaders::LinearEffect{.inputDataspace = parameters.layer.sourceDataspace,
                                       .outputDataspace = parameters.outputDataSpace,
@@ -665,8 +696,8 @@ void SkiaRenderEngine::drawLayersInternal(
     validateOutputBufferUsage(buffer->getBuffer());
 
     auto context = getActiveContext();
-    LOG_ALWAYS_FATAL_IF(context->isAbandoned(), "Context is abandoned/device lost at start of %s",
-                        __func__);
+    LOG_ALWAYS_FATAL_IF(context->isAbandonedOrDeviceLost(),
+                        "Context is abandoned/device lost at start of %s", __func__);
 
     // any AutoBackendTexture deletions will now be deferred until cleanupPostRender is called
     DeferTextureCleanup dtc(mTextureCleanupMgr);
@@ -700,9 +731,7 @@ void SkiaRenderEngine::drawLayersInternal(
             [&](const auto& l) { return l.whitePointNits; });
 
     // ...and compute the dimming ratio if dimming is requested
-    const float displayDimmingRatio = display.targetLuminanceNits > 0.f &&
-                    maxLayerWhitePoint > 0.f &&
-                    (kEnableLayerBrightening || display.targetLuminanceNits > maxLayerWhitePoint)
+    const float displayDimmingRatio = display.targetLuminanceNits > 0.f && maxLayerWhitePoint > 0.f
             ? maxLayerWhitePoint / display.targetLuminanceNits
             : 1.f;
 
@@ -1122,40 +1151,21 @@ void SkiaRenderEngine::drawLayersInternal(
         } else {
             canvas->drawRect(bounds.rect(), paint);
         }
-        if (kFlushAfterEveryLayer) {
+        if (kGaneshFlushAfterEveryLayer) {
             ATRACE_NAME("flush surface");
+            // No-op in Graphite. If "flushing" Skia's drawing commands after each layer is desired
+            // in Graphite, then a graphite::Recording would need to be snapped and tracked for each
+            // layer, which is likely possible but adds non-trivial complexity (in both bookkeeping
+            // and refactoring).
             skgpu::ganesh::Flush(activeSurface);
         }
-    }
-    for (const auto& borderRenderInfo : display.borderInfoList) {
-        SkPaint p;
-        p.setColor(SkColor4f{borderRenderInfo.color.r, borderRenderInfo.color.g,
-                             borderRenderInfo.color.b, borderRenderInfo.color.a});
-        p.setAntiAlias(true);
-        p.setStyle(SkPaint::kStroke_Style);
-        p.setStrokeWidth(borderRenderInfo.width);
-        SkRegion sk_region;
-        SkPath path;
-
-        // Construct a final SkRegion using Regions
-        for (const auto& r : borderRenderInfo.combinedRegion) {
-            sk_region.op({r.left, r.top, r.right, r.bottom}, SkRegion::kUnion_Op);
-        }
-
-        sk_region.getBoundaryPath(&path);
-        canvas->drawPath(path, p);
-        path.close();
     }
 
     surfaceAutoSaveRestore.restore();
     mCapture->endCapture();
-    {
-        ATRACE_NAME("flush surface");
-        LOG_ALWAYS_FATAL_IF(activeSurface != dstSurface);
-        skgpu::ganesh::Flush(activeSurface);
-    }
 
-    auto drawFence = sp<Fence>::make(flushAndSubmit(context));
+    LOG_ALWAYS_FATAL_IF(activeSurface != dstSurface);
+    auto drawFence = sp<Fence>::make(flushAndSubmit(context, dstSurface));
 
     if (ATRACE_ENABLED()) {
         static gui::FenceMonitor sMonitor("RE Completion");

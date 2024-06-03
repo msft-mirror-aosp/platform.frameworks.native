@@ -20,6 +20,7 @@
 
 #include "InputTracingPerfettoBackendConfig.h"
 
+#include <android/content/pm/IPackageManagerNative.h>
 #include <ftl/flags.h>
 #include <perfetto/tracing.h>
 #include <mutex>
@@ -49,18 +50,20 @@ namespace android::inputdispatcher::trace::impl {
  */
 class PerfettoBackend : public InputTracingBackendInterface {
 public:
-    using GetPackageUid = std::function<gui::Uid(std::string)>;
+    static bool sUseInProcessBackendForTest;
+    static std::function<sp<content::pm::IPackageManagerNative>()> sPackageManagerProvider;
 
-    explicit PerfettoBackend(GetPackageUid);
+    explicit PerfettoBackend();
     ~PerfettoBackend() override = default;
 
-    void traceKeyEvent(const TracedKeyEvent&, const TracedEventArgs&) override;
-    void traceMotionEvent(const TracedMotionEvent&, const TracedEventArgs&) override;
-    void traceWindowDispatch(const WindowDispatchArgs&, const TracedEventArgs&) override;
+    void traceKeyEvent(const TracedKeyEvent&, const TracedEventMetadata&) override;
+    void traceMotionEvent(const TracedMotionEvent&, const TracedEventMetadata&) override;
+    void traceWindowDispatch(const WindowDispatchArgs&, const TracedEventMetadata&) override;
 
 private:
     // Implementation of the perfetto data source.
     // Each instance of the InputEventDataSource represents a different tracing session.
+    // Its lifecycle is controlled by perfetto.
     class InputEventDataSource : public perfetto::DataSource<InputEventDataSource> {
     public:
         explicit InputEventDataSource();
@@ -69,23 +72,19 @@ private:
         void OnStart(const StartArgs&) override;
         void OnStop(const StopArgs&) override;
 
-        void initializeUidMap(GetPackageUid);
+        void initializeUidMap();
         bool shouldIgnoreTracedInputEvent(const EventType&) const;
         inline ftl::Flags<TraceFlag> getFlags() const { return mConfig.flags; }
-        TraceLevel resolveTraceLevel(const TracedEventArgs&) const;
+        TraceLevel resolveTraceLevel(const TracedEventMetadata&) const;
 
     private:
         const int32_t mInstanceId;
         TraceConfig mConfig;
 
-        bool ruleMatches(const TraceRule&, const TracedEventArgs&) const;
+        bool ruleMatches(const TraceRule&, const TracedEventMetadata&) const;
 
         std::optional<std::map<std::string, gui::Uid>> mUidMap;
     };
-
-    // TODO(b/330360505): Query the native package manager directly from the data source,
-    //   and remove this.
-    GetPackageUid mGetPackageUid;
 
     static std::once_flag sDataSourceRegistrationFlag;
     static std::atomic<int32_t> sNextInstanceId;

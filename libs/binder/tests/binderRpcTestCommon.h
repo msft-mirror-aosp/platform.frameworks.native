@@ -60,7 +60,6 @@
 #include "../FdUtils.h"
 #include "../RpcState.h" // for debugging
 #include "FileUtils.h"
-#include "format.h"
 #include "utils/Errors.h"
 
 namespace android {
@@ -74,6 +73,12 @@ static inline std::vector<RpcSecurity> RpcSecurityValues() {
 }
 
 static inline bool hasExperimentalRpc() {
+#ifdef BINDER_RPC_TO_TRUSTY_TEST
+    // Trusty services do not support the experimental version,
+    // so that we can update the prebuilts separately.
+    // This covers the binderRpcToTrustyTest case on Android.
+    return false;
+#endif
 #ifdef __ANDROID__
     return base::GetProperty("ro.build.version.codename", "") != "REL";
 #else
@@ -93,7 +98,7 @@ static inline std::vector<uint32_t> testVersions() {
 }
 
 static inline std::string trustyIpcPort(uint32_t serverVersion) {
-    return std::format("com.android.trusty.binderRpcTestService.V{}", serverVersion);
+    return "com.android.trusty.binderRpcTestService.V" + std::to_string(serverVersion);
 }
 
 enum class SocketType {
@@ -204,7 +209,7 @@ static inline std::unique_ptr<RpcTransportCtxFactory> newTlsFactory(
             return RpcTransportCtxFactoryTls::make(std::move(verifier), std::move(auth));
         }
         default:
-            LOG_ALWAYS_FATAL("Unknown RpcSecurity %d", rpcSecurity);
+            LOG_ALWAYS_FATAL("Unknown RpcSecurity %d", static_cast<int>(rpcSecurity));
     }
 }
 
@@ -250,7 +255,7 @@ public:
         mValue.reset();
         lock.unlock();
         mCvEmpty.notify_all();
-        return std::move(v);
+        return v;
     }
 
 private:

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cstdint>
 #define LOG_TAG "InputTransport"
 #define ATRACE_TAG ATRACE_TAG_INPUT
 
@@ -80,10 +81,10 @@ bool debugResampling() {
 
 void initializeKeyEvent(KeyEvent& event, const InputMessage& msg) {
     event.initialize(msg.body.key.eventId, msg.body.key.deviceId, msg.body.key.source,
-                     msg.body.key.displayId, msg.body.key.hmac, msg.body.key.action,
-                     msg.body.key.flags, msg.body.key.keyCode, msg.body.key.scanCode,
-                     msg.body.key.metaState, msg.body.key.repeatCount, msg.body.key.downTime,
-                     msg.body.key.eventTime);
+                     ui::LogicalDisplayId{msg.body.key.displayId}, msg.body.key.hmac,
+                     msg.body.key.action, msg.body.key.flags, msg.body.key.keyCode,
+                     msg.body.key.scanCode, msg.body.key.metaState, msg.body.key.repeatCount,
+                     msg.body.key.downTime, msg.body.key.eventTime);
 }
 
 void initializeFocusEvent(FocusEvent& event, const InputMessage& msg) {
@@ -116,13 +117,14 @@ void initializeMotionEvent(MotionEvent& event, const InputMessage& msg) {
                           msg.body.motion.dtdyRaw, msg.body.motion.dsdyRaw, msg.body.motion.tyRaw,
                           0, 0, 1});
     event.initialize(msg.body.motion.eventId, msg.body.motion.deviceId, msg.body.motion.source,
-                     msg.body.motion.displayId, msg.body.motion.hmac, msg.body.motion.action,
-                     msg.body.motion.actionButton, msg.body.motion.flags, msg.body.motion.edgeFlags,
-                     msg.body.motion.metaState, msg.body.motion.buttonState,
-                     msg.body.motion.classification, transform, msg.body.motion.xPrecision,
-                     msg.body.motion.yPrecision, msg.body.motion.xCursorPosition,
-                     msg.body.motion.yCursorPosition, displayTransform, msg.body.motion.downTime,
-                     msg.body.motion.eventTime, pointerCount, pointerProperties, pointerCoords);
+                     ui::LogicalDisplayId{msg.body.motion.displayId}, msg.body.motion.hmac,
+                     msg.body.motion.action, msg.body.motion.actionButton, msg.body.motion.flags,
+                     msg.body.motion.edgeFlags, msg.body.motion.metaState,
+                     msg.body.motion.buttonState, msg.body.motion.classification, transform,
+                     msg.body.motion.xPrecision, msg.body.motion.yPrecision,
+                     msg.body.motion.xCursorPosition, msg.body.motion.yCursorPosition,
+                     displayTransform, msg.body.motion.downTime, msg.body.motion.eventTime,
+                     pointerCount, pointerProperties, pointerCoords);
 }
 
 void addSample(MotionEvent& event, const InputMessage& msg) {
@@ -179,7 +181,8 @@ inline bool isPointerEvent(int32_t source) {
 }
 
 bool shouldResampleTool(ToolType toolType) {
-    return toolType == ToolType::FINGER || toolType == ToolType::UNKNOWN;
+    return toolType == ToolType::FINGER || toolType == ToolType::MOUSE ||
+            toolType == ToolType::STYLUS || toolType == ToolType::UNKNOWN;
 }
 
 } // namespace
@@ -194,9 +197,21 @@ InputConsumer::InputConsumer(const std::shared_ptr<InputChannel>& channel)
 
 InputConsumer::InputConsumer(const std::shared_ptr<InputChannel>& channel,
                              bool enableTouchResampling)
-      : mResampleTouch(enableTouchResampling), mChannel(channel), mMsgDeferred(false) {}
+      : mResampleTouch(enableTouchResampling),
+        mChannel(channel),
+        mProcessingTraceTag(StringPrintf("InputConsumer processing on %s (%p)",
+                                         mChannel->getName().c_str(), this)),
+        mLifetimeTraceTag(StringPrintf("InputConsumer lifetime on %s (%p)",
+                                       mChannel->getName().c_str(), this)),
+        mLifetimeTraceCookie(
+                static_cast<int32_t>(reinterpret_cast<std::uintptr_t>(this) & 0xFFFFFFFF)),
+        mMsgDeferred(false) {
+    ATRACE_ASYNC_BEGIN(mLifetimeTraceTag.c_str(), /*cookie=*/mLifetimeTraceCookie);
+}
 
-InputConsumer::~InputConsumer() {}
+InputConsumer::~InputConsumer() {
+    ATRACE_ASYNC_END(mLifetimeTraceTag.c_str(), /*cookie=*/mLifetimeTraceCookie);
+}
 
 bool InputConsumer::isTouchResamplingEnabled() {
     return property_get_bool(PROPERTY_RESAMPLING_ENABLED, true);
@@ -228,7 +243,7 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
                                     mMsg.header.seq);
 
                 // Trace the event processing timeline - event was just read from the socket
-                ATRACE_ASYNC_BEGIN("InputConsumer processing", /*cookie=*/mMsg.header.seq);
+                ATRACE_ASYNC_BEGIN(mProcessingTraceTag.c_str(), /*cookie=*/mMsg.header.seq);
             }
             if (result) {
                 // Consume the next batched event unless batches are being held for later.
@@ -325,9 +340,10 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
 
             case InputMessage::Type::FINISHED:
             case InputMessage::Type::TIMELINE: {
-                LOG_ALWAYS_FATAL("Consumed a %s message, which should never be seen by "
-                                 "InputConsumer!",
-                                 ftl::enum_string(mMsg.header.type).c_str());
+                LOG(FATAL) << "Consumed a " << ftl::enum_string(mMsg.header.type)
+                           << " message, which should never be seen by "
+                              "InputConsumer on "
+                           << mChannel->getName();
                 break;
             }
 
@@ -577,6 +593,11 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
             ALOGD_IF(debugResampling(), "Not resampled, missing id %d", id);
             return;
         }
+        if (!shouldResampleTool(event->getToolType(i))) {
+            ALOGD_IF(debugResampling(),
+                     "Not resampled, containing unsupported tool type at pointer %d", id);
+            return;
+        }
     }
 
     // Find the data to use for resampling.
@@ -624,8 +645,16 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
     }
 
     if (current->eventTime == sampleTime) {
-        // Prevents having 2 events with identical times and coordinates.
+        ALOGD_IF(debugResampling(), "Not resampled, 2 events with identical times.");
         return;
+    }
+
+    for (size_t i = 0; i < pointerCount; i++) {
+        uint32_t id = event->getPointerId(i);
+        if (!other->idBits.hasBit(id)) {
+            ALOGD_IF(debugResampling(), "Not resampled, the other doesn't have pointer id %d.", id);
+            return;
+        }
     }
 
     // Resample touch coordinates.
@@ -655,22 +684,16 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
         const PointerCoords& currentCoords = current->getPointerById(id);
         resampledCoords = currentCoords;
         resampledCoords.isResampled = true;
-        if (other->idBits.hasBit(id) && shouldResampleTool(event->getToolType(i))) {
-            const PointerCoords& otherCoords = other->getPointerById(id);
-            resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_X,
-                                         lerp(currentCoords.getX(), otherCoords.getX(), alpha));
-            resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_Y,
-                                         lerp(currentCoords.getY(), otherCoords.getY(), alpha));
-            ALOGD_IF(debugResampling(),
-                     "[%d] - out (%0.3f, %0.3f), cur (%0.3f, %0.3f), "
-                     "other (%0.3f, %0.3f), alpha %0.3f",
-                     id, resampledCoords.getX(), resampledCoords.getY(), currentCoords.getX(),
-                     currentCoords.getY(), otherCoords.getX(), otherCoords.getY(), alpha);
-        } else {
-            ALOGD_IF(debugResampling(), "[%d] - out (%0.3f, %0.3f), cur (%0.3f, %0.3f)", id,
-                     resampledCoords.getX(), resampledCoords.getY(), currentCoords.getX(),
-                     currentCoords.getY());
-        }
+        const PointerCoords& otherCoords = other->getPointerById(id);
+        resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_X,
+                                     lerp(currentCoords.getX(), otherCoords.getX(), alpha));
+        resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_Y,
+                                     lerp(currentCoords.getY(), otherCoords.getY(), alpha));
+        ALOGD_IF(debugResampling(),
+                 "[%d] - out (%0.3f, %0.3f), cur (%0.3f, %0.3f), "
+                 "other (%0.3f, %0.3f), alpha %0.3f",
+                 id, resampledCoords.getX(), resampledCoords.getY(), currentCoords.getX(),
+                 currentCoords.getY(), otherCoords.getX(), otherCoords.getY(), alpha);
     }
 
     event->addSample(sampleTime, touchState.lastResample.pointers);
@@ -768,7 +791,7 @@ status_t InputConsumer::sendUnchainedFinishedSignal(uint32_t seq, bool handled) 
         popConsumeTime(seq);
 
         // Trace the event processing timeline - event was just finished
-        ATRACE_ASYNC_END("InputConsumer processing", /*cookie=*/seq);
+        ATRACE_ASYNC_END(mProcessingTraceTag.c_str(), /*cookie=*/seq);
     }
     return result;
 }

@@ -30,6 +30,7 @@ filegroup {
         "android/os/InputEventInjectionResult.aidl",
         "android/os/InputEventInjectionSync.aidl",
         "android/os/InputConfig.aidl",
+        "android/os/PointerIconType.aidl",
     ],
 }
 
@@ -80,19 +81,10 @@ rust_bindgen {
     visibility: ["//frameworks/native/services/inputflinger"],
     wrapper_src: "InputWrapper.hpp",
 
-    include_dirs: [
-        "frameworks/native/include",
-    ],
-
     source_stem: "bindings",
 
     bindgen_flags: [
         "--verbose",
-        "--allowlist-var=AMOTION_EVENT_FLAG_CANCELED",
-        "--allowlist-var=AMOTION_EVENT_FLAG_WINDOW_IS_OBSCURED",
-        "--allowlist-var=AMOTION_EVENT_FLAG_WINDOW_IS_PARTIALLY_OBSCURED",
-        "--allowlist-var=AMOTION_EVENT_FLAG_IS_ACCESSIBILITY_EVENT",
-        "--allowlist-var=AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE",
         "--allowlist-var=AMOTION_EVENT_ACTION_CANCEL",
         "--allowlist-var=AMOTION_EVENT_ACTION_UP",
         "--allowlist-var=AMOTION_EVENT_ACTION_POINTER_DOWN",
@@ -245,6 +237,7 @@ cc_library {
     shared_libs: [
         "libbase",
         "libbinder",
+        "libbinder_ndk",
         "libcutils",
         "liblog",
         "libPlatformProperties",
@@ -288,20 +281,13 @@ cc_library {
 
     target: {
         android: {
-            export_shared_lib_headers: ["libbinder"],
-
-            shared_libs: [
-                "libutils",
-                "libbinder",
-                // Stats logging library and its dependencies.
-                "libstatslog_libinput",
-                "libstatsbootstrap",
-                "android.os.statsbootstrap_aidl-cpp",
-            ],
-
             required: [
                 "motion_predictor_model_prebuilt",
                 "motion_predictor_model_config",
+            ],
+            static_libs: [
+                "libstatslog_libinput",
+                "libstatssocket_lazy",
             ],
         },
         host: {
@@ -313,27 +299,30 @@ cc_library {
     },
 }
 
-// Use bootstrap version of stats logging library.
-// libinput is a bootstrap process (starts early in the boot process), and thus can't use the normal
-// `libstatslog` because that requires `libstatssocket`, which is only available later in the boot.
-cc_library {
+cc_library_static {
     name: "libstatslog_libinput",
     generated_sources: ["statslog_libinput.cpp"],
     generated_headers: ["statslog_libinput.h"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
     export_generated_headers: ["statslog_libinput.h"],
     shared_libs: [
-        "libbinder",
-        "libstatsbootstrap",
+        "libcutils",
+        "liblog",
         "libutils",
-        "android.os.statsbootstrap_aidl-cpp",
+    ],
+    static_libs: [
+        "libstatssocket_lazy",
     ],
 }
 
 genrule {
     name: "statslog_libinput.h",
     tools: ["stats-log-api-gen"],
-    cmd: "$(location stats-log-api-gen) --header $(genDir)/statslog_libinput.h --module libinput" +
-        " --namespace android,stats,libinput --bootstrap",
+    cmd: "$(location stats-log-api-gen) --header $(genDir)/statslog_libinput.h " +
+        "--module libinput --namespace android,libinput",
     out: [
         "statslog_libinput.h",
     ],
@@ -342,9 +331,9 @@ genrule {
 genrule {
     name: "statslog_libinput.cpp",
     tools: ["stats-log-api-gen"],
-    cmd: "$(location stats-log-api-gen) --cpp $(genDir)/statslog_libinput.cpp --module libinput" +
-        " --namespace android,stats,libinput --importHeader statslog_libinput.h" +
-        " --bootstrap",
+    cmd: "$(location stats-log-api-gen) --cpp $(genDir)/statslog_libinput.cpp " +
+        "--module libinput --namespace android,libinput " +
+        "--importHeader statslog_libinput.h",
     out: [
         "statslog_libinput.cpp",
     ],

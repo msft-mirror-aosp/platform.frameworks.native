@@ -89,7 +89,7 @@ public:
         return mCompositionDisplay;
     }
 
-    bool isVirtual() const { return VirtualDisplayId::tryCast(getId()).has_value(); }
+    bool isVirtual() const { return getId().isVirtual(); }
     bool isPrimary() const { return mIsPrimary; }
 
     // isSecure indicates whether this display can be trusted to display
@@ -226,7 +226,7 @@ public:
     // Enables an overlay to be displayed with the current refresh rate
     void enableRefreshRateOverlay(bool enable, bool setByHwc, bool showSpinner, bool showRenderRate,
                                   bool showInMiddle) REQUIRES(kMainThreadContext);
-    void updateRefreshRateOverlayRate(Fps vsyncRate, Fps renderFps, bool setByHwc = false);
+    void updateRefreshRateOverlayRate(Fps refreshRate, Fps renderFps, bool setByHwc = false);
     bool isRefreshRateOverlayEnabled() const { return mRefreshRateOverlay != nullptr; }
     bool onKernelTimerChanged(std::optional<DisplayModeId>, bool timerExpired);
 
@@ -329,6 +329,7 @@ struct DisplayDeviceState {
     uint32_t width = 0;
     uint32_t height = 0;
     std::string displayName;
+    std::string uniqueId;
     bool isSecure = false;
     bool isProtected = false;
     // Refer to DisplayDevice::mRequestedRefreshRate, for virtual display only
@@ -363,7 +364,6 @@ struct DisplayDeviceCreationArgs {
     hardware::graphics::composer::hal::PowerMode initialPowerMode{
             hardware::graphics::composer::hal::PowerMode::OFF};
     bool isPrimary{false};
-    DisplayModeId activeModeId;
     // Refer to DisplayDevice::mRequestedRefreshRate, for virtual display only
     Fps requestedRefreshRate;
 };

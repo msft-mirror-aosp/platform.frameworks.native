@@ -427,6 +427,7 @@ void VSyncPredictor::setDisplayModePtr(ftl::NonNull<DisplayModePtr> modePtr) {
         mRateMap[idealPeriod()] = {idealPeriod(), 0};
     }
 
+    mTimelines.clear();
     clearTimestamps();
 }
 
@@ -553,10 +554,23 @@ void VSyncPredictor::clearTimestamps() {
         mLastTimestampIndex = 0;
     }
 
-    mTimelines.clear();
-    mLastCommittedVsync = TimePoint::fromNs(0);
     mIdealPeriod = Period::fromNs(idealPeriod());
-    mTimelines.emplace_back(mLastCommittedVsync, mIdealPeriod, mRenderRateOpt);
+    if (mTimelines.empty()) {
+        mLastCommittedVsync = TimePoint::fromNs(0);
+        mTimelines.emplace_back(mLastCommittedVsync, mIdealPeriod, mRenderRateOpt);
+    } else {
+        while (mTimelines.size() > 1) {
+            mTimelines.pop_front();
+        }
+        mTimelines.front().setRenderRate(mRenderRateOpt);
+        // set mLastCommittedVsync to a valid vsync but don't commit too much in the future
+        const auto vsyncOpt = mTimelines.front().nextAnticipatedVSyncTimeFrom(
+            getVSyncPredictionModelLocked(),
+            /* minFramePeriodOpt */ std::nullopt,
+            snapToVsync(mClock->now()), MissedVsync{},
+            /* lastVsyncOpt */ std::nullopt);
+        mLastCommittedVsync = *vsyncOpt;
+    }
 }
 
 bool VSyncPredictor::needsMoreSamples() const {
@@ -588,6 +602,7 @@ void VSyncPredictor::purgeTimelines(android::TimePoint now) {
     if (mRenderRateOpt &&
         mLastCommittedVsync.ns() + mRenderRateOpt->getPeriodNsecs() * kEnoughFramesToBreakPhase <
                 mClock->now()) {
+        ATRACE_FORMAT_INSTANT("kEnoughFramesToBreakPhase");
         mTimelines.clear();
         mLastCommittedVsync = TimePoint::fromNs(0);
         mTimelines.emplace_back(mLastCommittedVsync, mIdealPeriod, mRenderRateOpt);
@@ -635,29 +650,33 @@ std::optional<TimePoint> VSyncPredictor::VsyncTimeline::nextAnticipatedVSyncTime
     const auto threshold = model.slope / 2;
     const auto lastFrameMissed =
             lastVsyncOpt && std::abs(*lastVsyncOpt - missedVsync.vsync.ns()) < threshold;
-    if (FlagManager::getInstance().vrr_config() && lastFrameMissed) {
-        // If the last frame missed is the last vsync, we already shifted the timeline. Depends on
-        // whether we skipped the frame (onFrameMissed) or not (onFrameBegin) we apply a different
-        // fixup. There is no need to to shift the vsync timeline again.
-        vsyncTime += missedVsync.fixup.ns();
-        ATRACE_FORMAT_INSTANT("lastFrameMissed");
-    } else if (FlagManager::getInstance().vrr_config() && minFramePeriodOpt && mRenderRateOpt &&
-               lastVsyncOpt) {
-        // lastVsyncOpt is based on the old timeline before we shifted it. we should correct it
-        // first before trying to use it.
-        lastVsyncOpt = snapToVsyncAlignedWithRenderRate(model, *lastVsyncOpt);
-        const auto vsyncDiff = vsyncTime - *lastVsyncOpt;
-        if (vsyncDiff <= minFramePeriodOpt->ns() - threshold) {
-            // avoid a duplicate vsync
-            ATRACE_FORMAT_INSTANT("skipping a vsync to avoid duplicate frame. next in %.2f which "
-                                  "is %.2f "
-                                  "from "
-                                  "prev. "
-                                  "adjust by %.2f",
-                                  static_cast<float>(vsyncTime - TimePoint::now().ns()) / 1e6f,
-                                  static_cast<float>(vsyncDiff) / 1e6f,
-                                  static_cast<float>(mRenderRateOpt->getPeriodNsecs()) / 1e6f);
-            vsyncTime += mRenderRateOpt->getPeriodNsecs();
+    const auto mightBackpressure = minFramePeriodOpt && mRenderRateOpt &&
+            mRenderRateOpt->getPeriod() < 2 * (*minFramePeriodOpt);
+    if (FlagManager::getInstance().vrr_config()) {
+        if (lastFrameMissed) {
+            // If the last frame missed is the last vsync, we already shifted the timeline. Depends
+            // on whether we skipped the frame (onFrameMissed) or not (onFrameBegin) we apply a
+            // different fixup. There is no need to to shift the vsync timeline again.
+            vsyncTime += missedVsync.fixup.ns();
+            ATRACE_FORMAT_INSTANT("lastFrameMissed");
+        } else if (mightBackpressure && lastVsyncOpt) {
+            // lastVsyncOpt is based on the old timeline before we shifted it. we should correct it
+            // first before trying to use it.
+            lastVsyncOpt = snapToVsyncAlignedWithRenderRate(model, *lastVsyncOpt);
+            const auto vsyncDiff = vsyncTime - *lastVsyncOpt;
+            if (vsyncDiff <= minFramePeriodOpt->ns() - threshold) {
+                // avoid a duplicate vsync
+                ATRACE_FORMAT_INSTANT("skipping a vsync to avoid duplicate frame. next in %.2f "
+                                      "which "
+                                      "is %.2f "
+                                      "from "
+                                      "prev. "
+                                      "adjust by %.2f",
+                                      static_cast<float>(vsyncTime - TimePoint::now().ns()) / 1e6f,
+                                      static_cast<float>(vsyncDiff) / 1e6f,
+                                      static_cast<float>(mRenderRateOpt->getPeriodNsecs()) / 1e6f);
+                vsyncTime += mRenderRateOpt->getPeriodNsecs();
+            }
         }
     }
 

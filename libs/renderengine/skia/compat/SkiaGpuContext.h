@@ -22,7 +22,9 @@
 #include <include/core/SkSurface.h>
 #include <include/gpu/GrDirectContext.h>
 #include <include/gpu/gl/GrGLInterface.h>
+#include <include/gpu/graphite/Context.h>
 #include <include/gpu/vk/GrVkBackendContext.h>
+#include "include/gpu/vk/VulkanBackendContext.h"
 
 #include "SkiaBackendTexture.h"
 
@@ -34,26 +36,56 @@ namespace android::renderengine::skia {
 
 /**
  * Abstraction over Ganesh and Graphite's underlying context-like objects.
+ *
+ * On destruction, subclasses will submit any pending work before destroying their internal Skia
+ * context(s). Any unused cached SkiaBackendTextures created from a SkiaGpuContext that are awaiting
+ * cleanup must be deleted before destroying that SkiaGpuContext, and any textures that are released
+ * during ~SkiaGpuContext must be configured to be deleted immediately.
  */
 class SkiaGpuContext {
 public:
+    /**
+     * glInterface must remain valid until after SkiaGpuContext is destroyed.
+     */
     static std::unique_ptr<SkiaGpuContext> MakeGL_Ganesh(
             sk_sp<const GrGLInterface> glInterface,
             GrContextOptions::PersistentCache& skSLCacheMonitor);
 
-    // TODO: b/293371537 - Graphite variant.
+    /**
+     * grVkBackendContext must remain valid until after SkiaGpuContext is destroyed.
+     */
     static std::unique_ptr<SkiaGpuContext> MakeVulkan_Ganesh(
             const GrVkBackendContext& grVkBackendContext,
             GrContextOptions::PersistentCache& skSLCacheMonitor);
 
+    // TODO: b/293371537 - Need shader / pipeline monitoring support in Graphite.
+    /**
+     * vulkanBackendContext must remain valid until after SkiaGpuContext is destroyed.
+     */
+    static std::unique_ptr<SkiaGpuContext> MakeVulkan_Graphite(
+            const skgpu::VulkanBackendContext& vulkanBackendContext);
+
     virtual ~SkiaGpuContext() = default;
 
-    // TODO: b/293371537 - Maybe expose whether this SkiaGpuContext is using Ganesh or Graphite?
     /**
      * Only callable on Ganesh-backed instances of SkiaGpuContext, otherwise fatal.
      */
     virtual sk_sp<GrDirectContext> grDirectContext() {
         LOG_ALWAYS_FATAL("grDirectContext() called on a non-Ganesh instance of SkiaGpuContext!");
+    }
+
+    /**
+     * Only callable on Graphite-backed instances of SkiaGpuContext, otherwise fatal.
+     */
+    virtual std::shared_ptr<skgpu::graphite::Context> graphiteContext() {
+        LOG_ALWAYS_FATAL("graphiteContext() called on a non-Graphite instance of SkiaGpuContext!");
+    }
+
+    /**
+     * Only callable on Graphite-backed instances of SkiaGpuContext, otherwise fatal.
+     */
+    virtual std::shared_ptr<skgpu::graphite::Recorder> graphiteRecorder() {
+        LOG_ALWAYS_FATAL("graphiteRecorder() called on a non-Graphite instance of SkiaGpuContext!");
     }
 
     virtual std::unique_ptr<SkiaBackendTexture> makeBackendTexture(AHardwareBuffer* buffer,
@@ -68,12 +100,11 @@ public:
      */
     virtual sk_sp<SkSurface> createRenderTarget(SkImageInfo imageInfo) = 0;
 
-    virtual bool isAbandoned() = 0;
+    virtual bool isAbandonedOrDeviceLost() = 0;
     virtual size_t getMaxRenderTargetSize() const = 0;
     virtual size_t getMaxTextureSize() const = 0;
     virtual void setResourceCacheLimit(size_t maxResourceBytes) = 0;
 
-    virtual void finishRenderingAndAbandonContext() = 0;
     virtual void purgeUnlockedScratchResources() = 0;
     virtual void resetContextIfApplicable() = 0; // No-op outside of GL (&& Ganesh at this point.)
 

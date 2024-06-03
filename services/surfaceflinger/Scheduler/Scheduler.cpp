@@ -221,6 +221,7 @@ void Scheduler::onFrameSignal(ICompositor& compositor, VsyncId vsyncId,
             if (FlagManager::getInstance().vrr_config()) {
                 compositor.sendNotifyExpectedPresentHint(pacesetterPtr->displayId);
             }
+            mSchedulerCallback.onCommitNotComposited(pacesetterPtr->displayId);
             return;
         }
     }
@@ -248,18 +249,6 @@ void Scheduler::onFrameSignal(ICompositor& compositor, VsyncId vsyncId,
                       mPacesetterFrameDurationFractionToSkip * 100, skipDuration.ns());
         std::this_thread::sleep_for(skipDuration);
         mPacesetterFrameDurationFractionToSkip = 0.f;
-    }
-
-    if (FlagManager::getInstance().vrr_config()) {
-        const auto minFramePeriod = pacesetterPtr->schedulePtr->minFramePeriod();
-        const auto presentFenceForPastVsync =
-                pacesetterPtr->targeterPtr->target().presentFenceForPastVsync(minFramePeriod);
-        const auto lastConfirmedPresentTime = presentFenceForPastVsync->getSignalTime();
-        if (lastConfirmedPresentTime != Fence::SIGNAL_TIME_PENDING &&
-            lastConfirmedPresentTime != Fence::SIGNAL_TIME_INVALID) {
-            pacesetterPtr->schedulePtr->getTracker()
-                    .onFrameBegin(expectedVsyncTime, TimePoint::fromNs(lastConfirmedPresentTime));
-        }
     }
 
     const auto resultsPerDisplay = compositor.composite(pacesetterPtr->displayId, targeters);
@@ -1164,8 +1153,10 @@ auto Scheduler::chooseDisplayModes() const -> DisplayModeChoiceMap {
         return pacesetterFps;
     }();
 
+    // Choose a mode for powered-on follower displays.
     for (const auto& [id, display] : mDisplays) {
         if (id == *mPacesetterDisplayId) continue;
+        if (display.powerMode != hal::PowerMode::ON) continue;
 
         auto rankedFrameRates =
                 display.selectorPtr->getRankedFrameRates(mPolicy.contentRequirements, globalSignals,
