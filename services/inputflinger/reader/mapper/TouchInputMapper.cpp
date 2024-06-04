@@ -537,18 +537,6 @@ std::optional<DisplayViewport> TouchInputMapper::findViewport() {
             return getDeviceContext().getAssociatedViewport();
         }
 
-        const std::optional<std::string> associatedDisplayUniqueIdByDescriptor =
-                getDeviceContext().getAssociatedDisplayUniqueIdByDescriptor();
-        if (associatedDisplayUniqueIdByDescriptor) {
-            return getDeviceContext().getAssociatedViewport();
-        }
-
-        const std::optional<std::string> associatedDisplayUniqueIdByPort =
-                getDeviceContext().getAssociatedDisplayUniqueIdByPort();
-        if (associatedDisplayUniqueIdByPort) {
-            return getDeviceContext().getAssociatedViewport();
-        }
-
         if (mDeviceMode == DeviceMode::POINTER) {
             std::optional<DisplayViewport> viewport =
                     mConfig.getDisplayViewportById(mConfig.defaultPointerDisplayId);
@@ -1416,9 +1404,9 @@ void TouchInputMapper::clearStylusDataPendingFlags() {
 }
 
 std::list<NotifyArgs> TouchInputMapper::process(const RawEvent* rawEvent) {
-    mCursorButtonAccumulator.process(rawEvent);
-    mCursorScrollAccumulator.process(rawEvent);
-    mTouchButtonAccumulator.process(rawEvent);
+    mCursorButtonAccumulator.process(*rawEvent);
+    mCursorScrollAccumulator.process(*rawEvent);
+    mTouchButtonAccumulator.process(*rawEvent);
 
     std::list<NotifyArgs> out;
     if (rawEvent->type == EV_SYN && rawEvent->code == SYN_REPORT) {
