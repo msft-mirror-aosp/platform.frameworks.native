@@ -19,6 +19,8 @@
 #include <bitset>
 #include <climits>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <ostream>
 #include <string>
 #include <unordered_map>
@@ -175,6 +177,8 @@ enum class InputLightClass : uint32_t {
     MAX_BRIGHTNESS = 0x00000080,
     /* The input light has kbd_backlight name */
     KEYBOARD_BACKLIGHT = 0x00000100,
+    /* The input light has mic_mute name */
+    KEYBOARD_MIC_MUTE = 0x00000200,
 };
 
 enum class InputBatteryClass : uint32_t {
@@ -334,6 +338,10 @@ public:
     virtual int32_t getSwitchState(int32_t deviceId, int32_t sw) const = 0;
     virtual status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
                                           int32_t* outValue) const = 0;
+    /* Query Multi-Touch slot values for an axis. Returns error or an 1 indexed array of size
+     * (slotCount + 1). The value at the 0 index is set to queried axis. */
+    virtual base::Result<std::vector<int32_t>> getMtSlotValues(int32_t deviceId, int32_t axis,
+                                                               size_t slotCount) const = 0;
     virtual int32_t getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const = 0;
 
     /*
@@ -411,7 +419,17 @@ public:
      * Note the parameter "bit" is an index to the bit, 0 <= bit < BITS.
      */
     inline bool test(size_t bit) const {
-        return (bit < BITS) ? mData[bit / WIDTH].test(bit % WIDTH) : false;
+        return (bit < BITS) && mData[bit / WIDTH].test(bit % WIDTH);
+    }
+    /* Sets the given bit in the bit array to given value.
+     * Returns true if the given bit is a valid index and thus was set successfully.
+     */
+    inline bool set(size_t bit, bool value) {
+        if (bit >= BITS) {
+            return false;
+        }
+        mData[bit / WIDTH].set(bit % WIDTH, value);
+        return true;
     }
     /* Returns total number of bytes needed for the array */
     inline size_t bytes() { return (BITS + CHAR_BIT - 1) / CHAR_BIT; }
@@ -458,6 +476,20 @@ public:
         for (size_t i = 0; i < COUNT; i++) {
             mData[i] = std::bitset<WIDTH>(buffer[i]);
         }
+    }
+    /* Dump the indices in the bit array that are set. */
+    inline std::string dumpSetIndices(std::string separator,
+                                      std::function<std::string(size_t /*index*/)> format) {
+        std::string dmp;
+        for (size_t i = 0; i < BITS; i++) {
+            if (test(i)) {
+                if (!dmp.empty()) {
+                    dmp += separator;
+                }
+                dmp += format(i);
+            }
+        }
+        return dmp.empty() ? "<none>" : dmp;
     }
 
 private:
@@ -526,6 +558,8 @@ public:
                                      int32_t locationKeyCode) const override final;
     status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
                                   int32_t* outValue) const override final;
+    base::Result<std::vector<int32_t>> getMtSlotValues(int32_t deviceId, int32_t axis,
+                                                       size_t slotCount) const override final;
 
     bool markSupportedKeyCodes(int32_t deviceId, const std::vector<int32_t>& keyCodes,
                                uint8_t* outFlags) const override final;
@@ -600,16 +634,21 @@ private:
 
         ftl::Flags<InputDeviceClass> classes;
 
-        BitArray<KEY_MAX> keyBitmask;
-        BitArray<KEY_MAX> keyState;
-        BitArray<ABS_MAX> absBitmask;
-        BitArray<REL_MAX> relBitmask;
-        BitArray<SW_MAX> swBitmask;
-        BitArray<SW_MAX> swState;
-        BitArray<LED_MAX> ledBitmask;
-        BitArray<FF_MAX> ffBitmask;
-        BitArray<INPUT_PROP_MAX> propBitmask;
-        BitArray<MSC_MAX> mscBitmask;
+        BitArray<KEY_CNT> keyBitmask;
+        BitArray<KEY_CNT> keyState;
+        BitArray<REL_CNT> relBitmask;
+        BitArray<SW_CNT> swBitmask;
+        BitArray<SW_CNT> swState;
+        BitArray<LED_CNT> ledBitmask;
+        BitArray<FF_CNT> ffBitmask;
+        BitArray<INPUT_PROP_CNT> propBitmask;
+        BitArray<MSC_CNT> mscBitmask;
+        BitArray<ABS_CNT> absBitmask;
+        struct AxisState {
+            RawAbsoluteAxisInfo info;
+            int value;
+        };
+        std::map<int /*axis*/, AxisState> absState;
 
         std::string configurationFile;
         std::unique_ptr<PropertyMap> configuration;
@@ -643,6 +682,7 @@ private:
         status_t readDeviceBitMask(unsigned long ioctlCode, BitArray<N>& bitArray);
 
         void configureFd();
+        void populateAbsoluteAxisStates();
         bool hasKeycodeLocked(int keycode) const;
         void loadConfigurationLocked();
         bool loadVirtualKeyMapLocked();
@@ -652,6 +692,10 @@ private:
         void setLedForControllerLocked();
         status_t mapLed(int32_t led, int32_t* outScanCode) const;
         void setLedStateLocked(int32_t led, bool on);
+
+        bool currentFrameDropped;
+        void trackInputEvent(const struct input_event& event);
+        void readDeviceState();
     };
 
     /**

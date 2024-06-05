@@ -27,15 +27,12 @@
 #include <android-base/logging.h>
 #include <android-base/stringprintf.h>
 #include <cutils/compiler.h>
-#include <gui/constants.h>
 #include <input/DisplayViewport.h>
 #include <input/Input.h>
 #include <input/InputDevice.h>
 #include <input/InputEventLabels.h>
 
-#ifdef __linux__
 #include <binder/Parcel.h>
-#endif
 #if defined(__ANDROID__)
 #include <sys/random.h>
 #endif
@@ -58,6 +55,45 @@ bool shouldDisregardOffset(uint32_t source) {
     // so we should apply the entire window transform. For other types of events, we should make
     // sure to not apply the window translation/offset.
     return !isFromSource(source, AINPUT_SOURCE_CLASS_POINTER);
+}
+
+int32_t resolveActionForSplitMotionEvent(
+        int32_t action, int32_t flags, const std::vector<PointerProperties>& pointerProperties,
+        const std::vector<PointerProperties>& splitPointerProperties) {
+    LOG_ALWAYS_FATAL_IF(splitPointerProperties.empty());
+    const auto maskedAction = MotionEvent::getActionMasked(action);
+    if (maskedAction != AMOTION_EVENT_ACTION_POINTER_DOWN &&
+        maskedAction != AMOTION_EVENT_ACTION_POINTER_UP) {
+        // The action is unaffected by splitting this motion event.
+        return action;
+    }
+    const auto actionIndex = MotionEvent::getActionIndex(action);
+    if (CC_UNLIKELY(actionIndex >= pointerProperties.size())) {
+        LOG(FATAL) << "Action index is out of bounds, index: " << actionIndex;
+    }
+
+    const auto affectedPointerId = pointerProperties[actionIndex].id;
+    std::optional<uint32_t> splitActionIndex;
+    for (uint32_t i = 0; i < splitPointerProperties.size(); i++) {
+        if (affectedPointerId == splitPointerProperties[i].id) {
+            splitActionIndex = i;
+            break;
+        }
+    }
+    if (!splitActionIndex.has_value()) {
+        // The affected pointer is not part of the split motion event.
+        return AMOTION_EVENT_ACTION_MOVE;
+    }
+
+    if (splitPointerProperties.size() > 1) {
+        return maskedAction | (*splitActionIndex << AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+    }
+
+    if (maskedAction == AMOTION_EVENT_ACTION_POINTER_UP) {
+        return ((flags & AMOTION_EVENT_FLAG_CANCELED) != 0) ? AMOTION_EVENT_ACTION_CANCEL
+                                                            : AMOTION_EVENT_ACTION_UP;
+    }
+    return AMOTION_EVENT_ACTION_DOWN;
 }
 
 } // namespace
@@ -217,6 +253,19 @@ bool isStylusToolType(ToolType toolType) {
     return toolType == ToolType::STYLUS || toolType == ToolType::ERASER;
 }
 
+bool isStylusEvent(uint32_t source, const std::vector<PointerProperties>& properties) {
+    if (!isFromSource(source, AINPUT_SOURCE_STYLUS)) {
+        return false;
+    }
+    // Need at least one stylus pointer for this event to be considered a stylus event
+    for (const PointerProperties& pointerProperties : properties) {
+        if (isStylusToolType(pointerProperties.toolType)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 VerifiedKeyEvent verifiedKeyEventFromKeyEvent(const KeyEvent& event) {
     return {{VerifiedInputEvent::Type::KEY, event.getDeviceId(), event.getEventTime(),
              event.getSource(), event.getDisplayId()},
@@ -241,8 +290,8 @@ VerifiedMotionEvent verifiedMotionEventFromMotionEvent(const MotionEvent& event)
             event.getButtonState()};
 }
 
-void InputEvent::initialize(int32_t id, int32_t deviceId, uint32_t source, int32_t displayId,
-                            std::array<uint8_t, 32> hmac) {
+void InputEvent::initialize(int32_t id, int32_t deviceId, uint32_t source,
+                            ui::LogicalDisplayId displayId, std::array<uint8_t, 32> hmac) {
     mId = id;
     mDeviceId = deviceId;
     mSource = source;
@@ -304,10 +353,11 @@ std::optional<int> KeyEvent::getKeyCodeFromLabel(const char* label) {
     return InputEventLookup::getKeyCodeByLabel(label);
 }
 
-void KeyEvent::initialize(int32_t id, int32_t deviceId, uint32_t source, int32_t displayId,
-                          std::array<uint8_t, 32> hmac, int32_t action, int32_t flags,
-                          int32_t keyCode, int32_t scanCode, int32_t metaState, int32_t repeatCount,
-                          nsecs_t downTime, nsecs_t eventTime) {
+void KeyEvent::initialize(int32_t id, int32_t deviceId, uint32_t source,
+                          ui::LogicalDisplayId displayId, std::array<uint8_t, 32> hmac,
+                          int32_t action, int32_t flags, int32_t keyCode, int32_t scanCode,
+                          int32_t metaState, int32_t repeatCount, nsecs_t downTime,
+                          nsecs_t eventTime) {
     InputEvent::initialize(id, deviceId, source, displayId, hmac);
     mAction = action;
     mFlags = flags;
@@ -361,8 +411,13 @@ std::ostream& operator<<(std::ostream& out, const KeyEvent& event) {
     out << ", deviceId=" << event.getDeviceId();
     out << ", source=" << inputEventSourceToString(event.getSource());
     out << ", displayId=" << event.getDisplayId();
-    out << ", eventId=" << event.getId();
+    out << ", eventId=0x" << std::hex << event.getId() << std::dec;
     out << "}";
+    return out;
+}
+
+std::ostream& operator<<(std::ostream& out, const PointerProperties& properties) {
+    out << "Pointer(id=" << properties.id << ", " << ftl::enum_string(properties.toolType) << ")";
     return out;
 }
 
@@ -426,7 +481,6 @@ void PointerCoords::scale(float globalScaleFactor, float windowXScale, float win
     scaleAxisValue(*this, AMOTION_EVENT_AXIS_RELATIVE_Y, windowYScale);
 }
 
-#ifdef __linux__
 status_t PointerCoords::readFromParcel(Parcel* parcel) {
     bits = parcel->readInt64();
 
@@ -454,7 +508,6 @@ status_t PointerCoords::writeToParcel(Parcel* parcel) const {
     parcel->writeBool(isResampled);
     return OK;
 }
-#endif
 
 void PointerCoords::tooManyAxes(int axis) {
     ALOGW("Could not set value for axis %d because the PointerCoords structure is full and "
@@ -497,29 +550,17 @@ void PointerCoords::transform(const ui::Transform& transform) {
     }
 }
 
-// --- PointerProperties ---
-
-bool PointerProperties::operator==(const PointerProperties& other) const {
-    return id == other.id
-            && toolType == other.toolType;
-}
-
-void PointerProperties::copyFrom(const PointerProperties& other) {
-    id = other.id;
-    toolType = other.toolType;
-}
-
-
 // --- MotionEvent ---
 
-void MotionEvent::initialize(int32_t id, int32_t deviceId, uint32_t source, int32_t displayId,
-                             std::array<uint8_t, 32> hmac, int32_t action, int32_t actionButton,
-                             int32_t flags, int32_t edgeFlags, int32_t metaState,
-                             int32_t buttonState, MotionClassification classification,
-                             const ui::Transform& transform, float xPrecision, float yPrecision,
-                             float rawXCursorPosition, float rawYCursorPosition,
-                             const ui::Transform& rawTransform, nsecs_t downTime, nsecs_t eventTime,
-                             size_t pointerCount, const PointerProperties* pointerProperties,
+void MotionEvent::initialize(int32_t id, int32_t deviceId, uint32_t source,
+                             ui::LogicalDisplayId displayId, std::array<uint8_t, 32> hmac,
+                             int32_t action, int32_t actionButton, int32_t flags, int32_t edgeFlags,
+                             int32_t metaState, int32_t buttonState,
+                             MotionClassification classification, const ui::Transform& transform,
+                             float xPrecision, float yPrecision, float rawXCursorPosition,
+                             float rawYCursorPosition, const ui::Transform& rawTransform,
+                             nsecs_t downTime, nsecs_t eventTime, size_t pointerCount,
+                             const PointerProperties* pointerProperties,
                              const PointerCoords* pointerCoords) {
     InputEvent::initialize(id, deviceId, source, displayId, hmac);
     mAction = action;
@@ -577,6 +618,28 @@ void MotionEvent::copyFrom(const MotionEvent* other, bool keepHistory) {
                         &other->mSamplePointerCoords[historySize * pointerCount],
                         &other->mSamplePointerCoords[historySize * pointerCount + pointerCount]);
     }
+}
+
+void MotionEvent::splitFrom(const android::MotionEvent& other,
+                            std::bitset<MAX_POINTER_ID + 1> splitPointerIds, int32_t newEventId) {
+    // TODO(b/327503168): The down time should be a parameter to the split function, because only
+    //   the caller can know when the first event went down on the target.
+    const nsecs_t splitDownTime = other.mDownTime;
+
+    auto [action, pointerProperties, pointerCoords] =
+            split(other.getAction(), other.getFlags(), other.getHistorySize(),
+                  other.mPointerProperties, other.mSamplePointerCoords, splitPointerIds);
+
+    // Initialize the event with zero pointers, and manually set the split pointers.
+    initialize(newEventId, other.mDeviceId, other.mSource, other.mDisplayId, /*hmac=*/{}, action,
+               other.mActionButton, other.mFlags, other.mEdgeFlags, other.mMetaState,
+               other.mButtonState, other.mClassification, other.mTransform, other.mXPrecision,
+               other.mYPrecision, other.mRawXCursorPosition, other.mRawYCursorPosition,
+               other.mRawTransform, splitDownTime, other.getEventTime(), /*pointerCount=*/0,
+               pointerProperties.data(), pointerCoords.data());
+    mPointerProperties = std::move(pointerProperties);
+    mSamplePointerCoords = std::move(pointerCoords);
+    mSampleEventTimes = other.mSampleEventTimes;
 }
 
 void MotionEvent::addSample(
@@ -685,6 +748,18 @@ void MotionEvent::offsetLocation(float xOffset, float yOffset) {
     mTransform.set(currXOffset + xOffset, currYOffset + yOffset);
 }
 
+float MotionEvent::getRawXOffset() const {
+    // This is equivalent to the x-coordinate of the point that the origin of the raw coordinate
+    // space maps to.
+    return (mTransform * mRawTransform.inverse()).tx();
+}
+
+float MotionEvent::getRawYOffset() const {
+    // This is equivalent to the y-coordinate of the point that the origin of the raw coordinate
+    // space maps to.
+    return (mTransform * mRawTransform.inverse()).ty();
+}
+
 void MotionEvent::scale(float globalScaleFactor) {
     mTransform.set(mTransform.tx() * globalScaleFactor, mTransform.ty() * globalScaleFactor);
     mRawTransform.set(mRawTransform.tx() * globalScaleFactor,
@@ -722,7 +797,6 @@ void MotionEvent::applyTransform(const std::array<float, 9>& matrix) {
     }
 }
 
-#ifdef __linux__
 static status_t readFromParcel(ui::Transform& transform, const Parcel& parcel) {
     float dsdx, dtdx, tx, dtdy, dsdy, ty;
     status_t status = parcel.readFloat(&dsdx);
@@ -757,7 +831,7 @@ status_t MotionEvent::readFromParcel(Parcel* parcel) {
     mId = parcel->readInt32();
     mDeviceId = parcel->readInt32();
     mSource = parcel->readUint32();
-    mDisplayId = parcel->readInt32();
+    mDisplayId = ui::LogicalDisplayId{parcel->readInt32()};
     std::vector<uint8_t> hmac;
     status_t result = parcel->readByteVector(&hmac);
     if (result != OK || hmac.size() != 32) {
@@ -825,7 +899,7 @@ status_t MotionEvent::writeToParcel(Parcel* parcel) const {
     parcel->writeInt32(mId);
     parcel->writeInt32(mDeviceId);
     parcel->writeUint32(mSource);
-    parcel->writeInt32(mDisplayId);
+    parcel->writeInt32(mDisplayId.val());
     std::vector<uint8_t> hmac(mHmac.begin(), mHmac.end());
     parcel->writeByteVector(hmac);
     parcel->writeInt32(mAction);
@@ -869,7 +943,6 @@ status_t MotionEvent::writeToParcel(Parcel* parcel) const {
     }
     return OK;
 }
-#endif
 
 bool MotionEvent::isTouchEvent(uint32_t source, int32_t action) {
     if (isFromSource(source, AINPUT_SOURCE_CLASS_POINTER)) {
@@ -927,6 +1000,46 @@ std::string MotionEvent::actionToString(int32_t action) {
             return "BUTTON_RELEASE";
     }
     return android::base::StringPrintf("%" PRId32, action);
+}
+
+std::tuple<int32_t, std::vector<PointerProperties>, std::vector<PointerCoords>> MotionEvent::split(
+        int32_t action, int32_t flags, int32_t historySize,
+        const std::vector<PointerProperties>& pointerProperties,
+        const std::vector<PointerCoords>& pointerCoords,
+        std::bitset<MAX_POINTER_ID + 1> splitPointerIds) {
+    LOG_ALWAYS_FATAL_IF(!splitPointerIds.any());
+    const auto pointerCount = pointerProperties.size();
+    LOG_ALWAYS_FATAL_IF(pointerCoords.size() != (pointerCount * (historySize + 1)));
+    const auto splitCount = splitPointerIds.count();
+
+    std::vector<PointerProperties> splitPointerProperties;
+    std::vector<PointerCoords> splitPointerCoords;
+
+    for (uint32_t i = 0; i < pointerCount; i++) {
+        if (splitPointerIds.test(pointerProperties[i].id)) {
+            splitPointerProperties.emplace_back(pointerProperties[i]);
+        }
+    }
+    for (uint32_t i = 0; i < pointerCoords.size(); i++) {
+        if (splitPointerIds.test(pointerProperties[i % pointerCount].id)) {
+            splitPointerCoords.emplace_back(pointerCoords[i]);
+        }
+    }
+    LOG_ALWAYS_FATAL_IF(splitPointerCoords.size() !=
+                        (splitPointerProperties.size() * (historySize + 1)));
+
+    if (CC_UNLIKELY(splitPointerProperties.size() != splitCount)) {
+        // TODO(b/329107108): Promote this to a fatal check once bugs in the caller are resolved.
+        LOG(ERROR) << "Cannot split MotionEvent: Requested splitting " << splitCount
+                   << " pointers from the original event, but the original event only contained "
+                   << splitPointerProperties.size() << " of those pointers.";
+    }
+
+    // TODO(b/327503168): Verify the splitDownTime here once it is used correctly.
+
+    const auto splitAction = resolveActionForSplitMotionEvent(action, flags, pointerProperties,
+                                                              splitPointerProperties);
+    return {splitAction, splitPointerProperties, splitPointerCoords};
 }
 
 // Apply the given transformation to the point without checking whether the entire transform
@@ -1002,6 +1115,33 @@ PointerCoords MotionEvent::calculateTransformedCoords(uint32_t source,
     return out;
 }
 
+bool MotionEvent::operator==(const android::MotionEvent& o) const {
+    // We use NaN values to represent invalid cursor positions. Since NaN values are not equal
+    // to themselves according to IEEE 754, we cannot use the default equality operator to compare
+    // MotionEvents. Therefore we define a custom equality operator with special handling for NaNs.
+    // clang-format off
+    return InputEvent::operator==(static_cast<const InputEvent&>(o)) &&
+            mAction == o.mAction &&
+            mActionButton == o.mActionButton &&
+            mFlags == o.mFlags &&
+            mEdgeFlags == o.mEdgeFlags &&
+            mMetaState == o.mMetaState &&
+            mButtonState == o.mButtonState &&
+            mClassification == o.mClassification &&
+            mTransform == o.mTransform &&
+            mXPrecision == o.mXPrecision &&
+            mYPrecision == o.mYPrecision &&
+            ((std::isnan(mRawXCursorPosition) && std::isnan(o.mRawXCursorPosition)) ||
+                mRawXCursorPosition == o.mRawXCursorPosition) &&
+            ((std::isnan(mRawYCursorPosition) && std::isnan(o.mRawYCursorPosition)) ||
+                mRawYCursorPosition == o.mRawYCursorPosition) &&
+            mRawTransform == o.mRawTransform && mDownTime == o.mDownTime &&
+            mPointerProperties == o.mPointerProperties &&
+            mSampleEventTimes == o.mSampleEventTimes &&
+            mSamplePointerCoords == o.mSamplePointerCoords;
+    // clang-format on
+}
+
 std::ostream& operator<<(std::ostream& out, const MotionEvent& event) {
     out << "MotionEvent { action=" << MotionEvent::actionToString(event.getAction());
     if (event.getActionButton() != 0) {
@@ -1032,6 +1172,9 @@ std::ostream& operator<<(std::ostream& out, const MotionEvent& event) {
     if (event.getMetaState() != 0) {
         out << ", metaState=" << event.getMetaState();
     }
+    if (event.getFlags() != 0) {
+        out << ", flags=0x" << std::hex << event.getFlags() << std::dec;
+    }
     if (event.getEdgeFlags() != 0) {
         out << ", edgeFlags=" << event.getEdgeFlags();
     }
@@ -1046,7 +1189,7 @@ std::ostream& operator<<(std::ostream& out, const MotionEvent& event) {
     out << ", deviceId=" << event.getDeviceId();
     out << ", source=" << inputEventSourceToString(event.getSource());
     out << ", displayId=" << event.getDisplayId();
-    out << ", eventId=" << event.getId();
+    out << ", eventId=0x" << std::hex << event.getId() << std::dec;
     out << "}";
     return out;
 }
@@ -1055,7 +1198,7 @@ std::ostream& operator<<(std::ostream& out, const MotionEvent& event) {
 
 void FocusEvent::initialize(int32_t id, bool hasFocus) {
     InputEvent::initialize(id, ReservedInputDeviceId::VIRTUAL_KEYBOARD_ID, AINPUT_SOURCE_UNKNOWN,
-                           ADISPLAY_ID_NONE, INVALID_HMAC);
+                           ui::LogicalDisplayId::INVALID, INVALID_HMAC);
     mHasFocus = hasFocus;
 }
 
@@ -1068,7 +1211,7 @@ void FocusEvent::initialize(const FocusEvent& from) {
 
 void CaptureEvent::initialize(int32_t id, bool pointerCaptureEnabled) {
     InputEvent::initialize(id, ReservedInputDeviceId::VIRTUAL_KEYBOARD_ID, AINPUT_SOURCE_UNKNOWN,
-                           ADISPLAY_ID_NONE, INVALID_HMAC);
+                           ui::LogicalDisplayId::INVALID, INVALID_HMAC);
     mPointerCaptureEnabled = pointerCaptureEnabled;
 }
 
@@ -1081,7 +1224,7 @@ void CaptureEvent::initialize(const CaptureEvent& from) {
 
 void DragEvent::initialize(int32_t id, float x, float y, bool isExiting) {
     InputEvent::initialize(id, ReservedInputDeviceId::VIRTUAL_KEYBOARD_ID, AINPUT_SOURCE_UNKNOWN,
-                           ADISPLAY_ID_NONE, INVALID_HMAC);
+                           ui::LogicalDisplayId::INVALID, INVALID_HMAC);
     mIsExiting = isExiting;
     mX = x;
     mY = y;
@@ -1098,7 +1241,7 @@ void DragEvent::initialize(const DragEvent& from) {
 
 void TouchModeEvent::initialize(int32_t id, bool isInTouchMode) {
     InputEvent::initialize(id, ReservedInputDeviceId::VIRTUAL_KEYBOARD_ID, AINPUT_SOURCE_UNKNOWN,
-                           ADISPLAY_ID_NONE, INVALID_HMAC);
+                           ui::LogicalDisplayId::INVALID, INVALID_HMAC);
     mIsInTouchMode = isInTouchMode;
 }
 

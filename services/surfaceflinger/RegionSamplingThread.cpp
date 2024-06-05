@@ -42,6 +42,7 @@
 #include "DisplayRenderArea.h"
 #include "FrontEnd/LayerCreationArgs.h"
 #include "Layer.h"
+#include "RenderAreaBuilder.h"
 #include "Scheduler/VsyncController.h"
 #include "SurfaceFlinger.h"
 
@@ -276,14 +277,7 @@ void RegionSamplingThread::captureSample() {
     }
 
     const Rect sampledBounds = sampleRegion.bounds();
-    constexpr bool kUseIdentityTransform = false;
     constexpr bool kHintForSeamlessTransition = false;
-
-    SurfaceFlinger::RenderAreaFuture renderAreaFuture = ftl::defer([=] {
-        return DisplayRenderArea::create(displayWeak, sampledBounds, sampledBounds.getSize(),
-                                         ui::Dataspace::V0_SRGB, kUseIdentityTransform,
-                                         kHintForSeamlessTransition);
-    });
 
     std::unordered_set<sp<IRegionSamplingListener>, SpHash<IRegionSamplingListener>> listeners;
 
@@ -321,39 +315,15 @@ void RegionSamplingThread::captureSample() {
         return true;
     };
 
-    std::function<std::vector<std::pair<Layer*, sp<LayerFE>>>()> getLayerSnapshots;
-    if (mFlinger.mLayerLifecycleManagerEnabled) {
-        auto filterFn = [&](const frontend::LayerSnapshot& snapshot,
-                            bool& outStopTraversal) -> bool {
-            const Rect bounds =
-                    frontend::RequestedLayerState::reduce(Rect(snapshot.geomLayerBounds),
-                                                          snapshot.transparentRegionHint);
-            const ui::Transform transform = snapshot.geomLayerTransform;
-            return layerFilterFn(snapshot.name.c_str(), snapshot.path.id, bounds, transform,
-                                 outStopTraversal);
-        };
-        getLayerSnapshots =
-                mFlinger.getLayerSnapshotsForScreenshots(layerStack, CaptureArgs::UNSET_UID,
-                                                         filterFn);
-    } else {
-        auto traverseLayers = [&](const LayerVector::Visitor& visitor) {
-            bool stopLayerFound = false;
-            auto filterVisitor = [&](Layer* layer) {
-                // We don't want to capture any layers beyond the stop layer
-                if (stopLayerFound) return;
-
-                if (!layerFilterFn(layer->getDebugName(), layer->getSequence(),
-                                   Rect(layer->getBounds()), layer->getTransform(),
-                                   stopLayerFound)) {
-                    return;
-                }
-                visitor(layer);
-            };
-            mFlinger.traverseLayersInLayerStack(layerStack, CaptureArgs::UNSET_UID, {},
-                                                filterVisitor);
-        };
-        getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
-    }
+    auto filterFn = [&](const frontend::LayerSnapshot& snapshot, bool& outStopTraversal) -> bool {
+        const Rect bounds = frontend::RequestedLayerState::reduce(Rect(snapshot.geomLayerBounds),
+                                                                  snapshot.transparentRegionHint);
+        const ui::Transform transform = snapshot.geomLayerTransform;
+        return layerFilterFn(snapshot.name.c_str(), snapshot.path.id, bounds, transform,
+                             outStopTraversal);
+    };
+    auto getLayerSnapshotsFn =
+            mFlinger.getLayerSnapshotsForScreenshots(layerStack, CaptureArgs::UNSET_UID, filterFn);
 
     std::shared_ptr<renderengine::ExternalTexture> buffer = nullptr;
     if (mCachedBuffer && mCachedBuffer->getBuffer()->getWidth() == sampledBounds.getWidth() &&
@@ -376,10 +346,17 @@ void RegionSamplingThread::captureSample() {
 
     constexpr bool kRegionSampling = true;
     constexpr bool kGrayscale = false;
+    constexpr bool kIsProtected = false;
 
     if (const auto fenceResult =
-                mFlinger.captureScreenCommon(std::move(renderAreaFuture), getLayerSnapshots, buffer,
-                                             kRegionSampling, kGrayscale, nullptr)
+                mFlinger.captureScreenshot(SurfaceFlinger::RenderAreaBuilderVariant(
+                                                   std::in_place_type<DisplayRenderAreaBuilder>,
+                                                   sampledBounds, sampledBounds.getSize(),
+                                                   ui::Dataspace::V0_SRGB,
+                                                   kHintForSeamlessTransition,
+                                                   true /* captureSecureLayers */, displayWeak),
+                                           getLayerSnapshotsFn, buffer, kRegionSampling, kGrayscale,
+                                           kIsProtected, nullptr)
                         .get();
         fenceResult.ok()) {
         fenceResult.value()->waitForever(LOG_TAG);

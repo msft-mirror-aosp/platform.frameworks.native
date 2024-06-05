@@ -4,6 +4,8 @@
 #include <ui/Transform.h>
 
 #include <functional>
+
+#include "FrontEnd/LayerSnapshot.h"
 #include "Layer.h"
 
 namespace android {
@@ -18,20 +20,16 @@ class DisplayDevice;
 // physical render area.
 class RenderArea {
 public:
-    using RotationFlags = ui::Transform::RotationFlags;
-
     enum class CaptureFill {CLEAR, OPAQUE};
 
     static float getCaptureFillValue(CaptureFill captureFill);
 
     RenderArea(ui::Size reqSize, CaptureFill captureFill, ui::Dataspace reqDataSpace,
-               bool hintForSeamlessTransition, bool allowSecureLayers = false,
-               RotationFlags rotation = ui::Transform::ROT_0)
+               bool hintForSeamlessTransition, bool allowSecureLayers = false)
           : mAllowSecureLayers(allowSecureLayers),
             mReqSize(reqSize),
             mReqDataSpace(reqDataSpace),
             mCaptureFill(captureFill),
-            mRotationFlags(rotation),
             mHintForSeamlessTransition(hintForSeamlessTransition) {}
 
     static std::function<std::vector<std::pair<Layer*, sp<LayerFE>>>()> fromTraverseLayersLambda(
@@ -51,9 +49,6 @@ public:
 
     virtual ~RenderArea() = default;
 
-    // Invoke drawLayers to render layers into the render area.
-    virtual void render(std::function<void()> drawLayers) { drawLayers(); }
-
     // Returns true if the render area is secure.  A secure layer should be
     // blacked out / skipped when rendered to an insecure render area.
     virtual bool isSecure() const = 0;
@@ -72,9 +67,6 @@ public:
     // on the display).
     virtual Rect getSourceCrop() const = 0;
 
-    // Returns the rotation of the source crop and the layers.
-    RotationFlags getRotationFlags() const { return mRotationFlags; }
-
     // Returns the size of the physical render area.
     int getReqWidth() const { return mReqSize.width; }
     int getReqHeight() const { return mReqSize.height; }
@@ -92,6 +84,10 @@ public:
     // capture operation.
     virtual sp<Layer> getParentLayer() const { return nullptr; }
 
+    // If this is a LayerRenderArea, return the layer snapshot
+    // of the root layer of the capture operation
+    virtual const frontend::LayerSnapshot* getLayerSnapshot() const { return nullptr; }
+
     // Returns whether the render result may be used for system animations that
     // must preserve the exact colors of the display.
     bool getHintForSeamlessTransition() const { return mHintForSeamlessTransition; }
@@ -103,7 +99,6 @@ private:
     const ui::Size mReqSize;
     const ui::Dataspace mReqDataSpace;
     const CaptureFill mCaptureFill;
-    const RotationFlags mRotationFlags;
     const bool mHintForSeamlessTransition;
 };
 
