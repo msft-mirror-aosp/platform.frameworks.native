@@ -7846,13 +7846,12 @@ status_t SurfaceFlinger::setSchedAttr(bool enabled) {
 
 namespace {
 
-ui::Dataspace pickBestDataspace(ui::Dataspace requestedDataspace, const DisplayDevice* display,
+ui::Dataspace pickBestDataspace(ui::Dataspace requestedDataspace,
+                                const compositionengine::impl::OutputCompositionState& state,
                                 bool capturingHdrLayers, bool hintForSeamlessTransition) {
-    if (requestedDataspace != ui::Dataspace::UNKNOWN || display == nullptr) {
+    if (requestedDataspace != ui::Dataspace::UNKNOWN) {
         return requestedDataspace;
     }
-
-    const auto& state = display->getCompositionDisplay()->getState();
 
     const auto dataspaceForColorMode = ui::pickDataspaceFor(state.colorMode);
 
@@ -7933,23 +7932,14 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
         }
     }
 
-    GetLayerSnapshotsFunction getLayerSnapshots;
-    if (mLayerLifecycleManagerEnabled) {
-        getLayerSnapshots =
-                getLayerSnapshotsForScreenshots(layerStack, args.uid, std::move(excludeLayerIds));
-    } else {
-        auto traverseLayers = [this, args, excludeLayerIds,
-                               layerStack](const LayerVector::Visitor& visitor) {
-            traverseLayersInLayerStack(layerStack, args.uid, std::move(excludeLayerIds), visitor);
-        };
-        getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
-    }
+    GetLayerSnapshotsFunction getLayerSnapshotsFn =
+            getLayerSnapshotsForScreenshots(layerStack, args.uid, std::move(excludeLayerIds));
 
     captureScreenCommon(RenderAreaBuilderVariant(std::in_place_type<DisplayRenderAreaBuilder>,
                                                  args.sourceCrop, reqSize, args.dataspace,
                                                  args.hintForSeamlessTransition,
                                                  args.captureSecureLayers, displayWeak),
-                        getLayerSnapshots, reqSize, args.pixelFormat, args.allowProtected,
+                        getLayerSnapshotsFn, reqSize, args.pixelFormat, args.allowProtected,
                         args.grayscale, captureListener);
 }
 
@@ -7986,16 +7976,9 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
         return;
     }
 
-    GetLayerSnapshotsFunction getLayerSnapshots;
-    if (mLayerLifecycleManagerEnabled) {
-        getLayerSnapshots = getLayerSnapshotsForScreenshots(layerStack, CaptureArgs::UNSET_UID,
-                                                            /*snapshotFilterFn=*/nullptr);
-    } else {
-        auto traverseLayers = [this, layerStack](const LayerVector::Visitor& visitor) {
-            traverseLayersInLayerStack(layerStack, CaptureArgs::UNSET_UID, {}, visitor);
-        };
-        getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
-    }
+    GetLayerSnapshotsFunction getLayerSnapshotsFn =
+            getLayerSnapshotsForScreenshots(layerStack, CaptureArgs::UNSET_UID,
+                                            /*snapshotFilterFn=*/nullptr);
 
     if (captureListener == nullptr) {
         ALOGE("capture screen must provide a capture listener callback");
@@ -8010,7 +7993,7 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
                                                  Rect(), size, args.dataspace,
                                                  args.hintForSeamlessTransition,
                                                  false /* captureSecureLayers */, displayWeak),
-                        getLayerSnapshots, size, args.pixelFormat, kAllowProtected, kGrayscale,
+                        getLayerSnapshotsFn, size, args.pixelFormat, kAllowProtected, kGrayscale,
                         captureListener);
 }
 
@@ -8092,41 +8075,15 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
         return;
     }
 
-    GetLayerSnapshotsFunction getLayerSnapshots;
-    if (mLayerLifecycleManagerEnabled) {
-        std::optional<FloatRect> parentCrop = std::nullopt;
-        if (args.childrenOnly) {
-            parentCrop = crop.isEmpty() ? FloatRect(0, 0, reqSize.width, reqSize.height)
-                                        : crop.toFloatRect();
-        }
-
-        getLayerSnapshots = getLayerSnapshotsForScreenshots(parent->sequence, args.uid,
-                                                            std::move(excludeLayerIds),
-                                                            args.childrenOnly, parentCrop);
-    } else {
-        auto traverseLayers = [parent, args, excludeLayerIds](const LayerVector::Visitor& visitor) {
-            parent->traverseChildrenInZOrder(LayerVector::StateSet::Drawing, [&](Layer* layer) {
-                if (!layer->isVisible()) {
-                    return;
-                } else if (args.childrenOnly && layer == parent.get()) {
-                    return;
-                } else if (args.uid != CaptureArgs::UNSET_UID && args.uid != layer->getOwnerUid()) {
-                    return;
-                }
-
-                auto p = sp<Layer>::fromExisting(layer);
-                while (p != nullptr) {
-                    if (excludeLayerIds.count(p->sequence) != 0) {
-                        return;
-                    }
-                    p = p->getParent();
-                }
-
-                visitor(layer);
-            });
-        };
-        getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
+    std::optional<FloatRect> parentCrop = std::nullopt;
+    if (args.childrenOnly) {
+        parentCrop = crop.isEmpty() ? FloatRect(0, 0, reqSize.width, reqSize.height)
+                                    : crop.toFloatRect();
     }
+
+    GetLayerSnapshotsFunction getLayerSnapshotsFn =
+            getLayerSnapshotsForScreenshots(parent->sequence, args.uid, std::move(excludeLayerIds),
+                                            args.childrenOnly, parentCrop);
 
     if (captureListener == nullptr) {
         ALOGD("capture screen must provide a capture listener callback");
@@ -8138,7 +8095,7 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
                                                  reqSize, dataspace, args.captureSecureLayers,
                                                  args.hintForSeamlessTransition, parent,
                                                  args.childrenOnly),
-                        getLayerSnapshots, reqSize, args.pixelFormat, args.allowProtected,
+                        getLayerSnapshotsFn, reqSize, args.pixelFormat, args.allowProtected,
                         args.grayscale, captureListener);
 }
 
@@ -8167,7 +8124,7 @@ bool SurfaceFlinger::layersHasProtectedLayer(
 }
 
 void SurfaceFlinger::captureScreenCommon(RenderAreaBuilderVariant renderAreaBuilder,
-                                         GetLayerSnapshotsFunction getLayerSnapshots,
+                                         GetLayerSnapshotsFunction getLayerSnapshotsFn,
                                          ui::Size bufferSize, ui::PixelFormat reqPixelFormat,
                                          bool allowProtected, bool grayscale,
                                          const sp<IScreenCaptureListener>& captureListener) {
@@ -8188,7 +8145,7 @@ void SurfaceFlinger::captureScreenCommon(RenderAreaBuilderVariant renderAreaBuil
     const bool supportsProtected = getRenderEngine().supportsProtectedContent();
     bool hasProtectedLayer = false;
     if (allowProtected && supportsProtected) {
-        auto layers = mScheduler->schedule([=]() { return getLayerSnapshots(); }).get();
+        auto layers = mScheduler->schedule([=]() { return getLayerSnapshotsFn(); }).get();
         hasProtectedLayer = layersHasProtectedLayer(layers);
     }
     const bool isProtected = hasProtectedLayer && allowProtected && supportsProtected;
@@ -8215,40 +8172,70 @@ void SurfaceFlinger::captureScreenCommon(RenderAreaBuilderVariant renderAreaBuil
                                                  renderengine::impl::ExternalTexture::Usage::
                                                          WRITEABLE);
     auto futureFence =
-            captureScreenshot(renderAreaBuilder, getLayerSnapshots, texture,
+            captureScreenshot(renderAreaBuilder, getLayerSnapshotsFn, texture,
                               false /* regionSampling */, grayscale, isProtected, captureListener);
     futureFence.get();
 }
 
-ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
-        RenderAreaBuilderVariant renderAreaBuilder, GetLayerSnapshotsFunction getLayerSnapshots,
-        const std::shared_ptr<renderengine::ExternalTexture>& buffer, bool regionSampling,
-        bool grayscale, bool isProtected, const sp<IScreenCaptureListener>& captureListener) {
-    ATRACE_CALL();
-
-    auto takeScreenshotFn = [=, this, renderAreaBuilder = std::move(renderAreaBuilder)]() REQUIRES(
-                                    kMainThreadContext) mutable -> ftl::SharedFuture<FenceResult> {
-        // LayerSnapshots must be obtained from the main thread.
-        auto layers = getLayerSnapshots();
-
+const sp<const DisplayDevice> SurfaceFlinger::getRenderAreaDisplay(
+        RenderAreaBuilderVariant& renderAreaBuilder, OutputCompositionState& state) {
+    sp<const DisplayDevice> display = nullptr;
+    {
+        Mutex::Autolock lock(mStateLock);
         if (auto* layerRenderAreaBuilder =
                     std::get_if<LayerRenderAreaBuilder>(&renderAreaBuilder)) {
             // LayerSnapshotBuilder should only be accessed from the main thread.
-            frontend::LayerSnapshot* snapshot =
+            const frontend::LayerSnapshot* snapshot =
                     mLayerSnapshotBuilder.getSnapshot(layerRenderAreaBuilder->layer->getSequence());
             if (!snapshot) {
                 ALOGW("Couldn't find layer snapshot for %d",
                       layerRenderAreaBuilder->layer->getSequence());
             } else {
                 layerRenderAreaBuilder->setLayerSnapshot(*snapshot);
+                display = findDisplay(
+                        [layerStack = snapshot->outputFilter.layerStack](const auto& display) {
+                            return display.getLayerStack() == layerStack;
+                        });
             }
+        } else if (auto* displayRenderAreaBuilder =
+                           std::get_if<DisplayRenderAreaBuilder>(&renderAreaBuilder)) {
+            display = displayRenderAreaBuilder->displayWeak.promote();
         }
 
-        if (FlagManager::getInstance().ce_fence_promise()) {
-            for (auto& [layer, layerFE] : layers) {
-                attachReleaseFenceFutureToLayer(layer, layerFE.get(), ui::INVALID_LAYER_STACK);
-            }
+        if (display == nullptr) {
+            display = getDefaultDisplayDeviceLocked();
         }
+
+        if (display != nullptr) {
+            state = display->getCompositionDisplay()->getState();
+        }
+    }
+    return display;
+}
+
+std::vector<std::pair<Layer*, sp<android::LayerFE>>>
+SurfaceFlinger::getLayerSnapshotsFromMainThread(GetLayerSnapshotsFunction getLayerSnapshotsFn) {
+    auto layers = getLayerSnapshotsFn();
+    if (FlagManager::getInstance().ce_fence_promise()) {
+        for (auto& [layer, layerFE] : layers) {
+            attachReleaseFenceFutureToLayer(layer, layerFE.get(), ui::INVALID_LAYER_STACK);
+        }
+    }
+    return layers;
+}
+
+ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
+        RenderAreaBuilderVariant renderAreaBuilder, GetLayerSnapshotsFunction getLayerSnapshotsFn,
+        const std::shared_ptr<renderengine::ExternalTexture>& buffer, bool regionSampling,
+        bool grayscale, bool isProtected, const sp<IScreenCaptureListener>& captureListener) {
+    ATRACE_CALL();
+
+    auto takeScreenshotFn = [=, this, renderAreaBuilder = std::move(renderAreaBuilder)]() REQUIRES(
+                                    kMainThreadContext) mutable -> ftl::SharedFuture<FenceResult> {
+        auto layers = getLayerSnapshotsFromMainThread(getLayerSnapshotsFn);
+
+        OutputCompositionState state;
+        const auto display = getRenderAreaDisplay(renderAreaBuilder, state);
 
         ScreenCaptureResults captureResults;
         std::unique_ptr<const RenderArea> renderArea =
@@ -8266,7 +8253,7 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
 
         ftl::SharedFuture<FenceResult> renderFuture =
                 renderScreenImpl(std::move(renderArea), buffer, regionSampling, grayscale,
-                                 isProtected, captureResults, layers);
+                                 isProtected, captureResults, display, state, layers);
 
         if (captureListener) {
             // Defer blocking on renderFuture back to the Binder thread.
@@ -8296,18 +8283,10 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
 }
 
 ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
-        std::unique_ptr<const RenderArea> renderArea, GetLayerSnapshotsFunction getLayerSnapshots,
-        const std::shared_ptr<renderengine::ExternalTexture>& buffer, bool regionSampling,
-        bool grayscale, bool isProtected, ScreenCaptureResults& captureResults) {
-    auto layers = getLayerSnapshots();
-    return renderScreenImpl(std::move(renderArea), buffer, regionSampling, grayscale, isProtected,
-                            captureResults, layers);
-}
-
-ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
         std::unique_ptr<const RenderArea> renderArea,
         const std::shared_ptr<renderengine::ExternalTexture>& buffer, bool regionSampling,
         bool grayscale, bool isProtected, ScreenCaptureResults& captureResults,
+        const sp<const DisplayDevice> display, const OutputCompositionState& state,
         std::vector<std::pair<Layer*, sp<android::LayerFE>>>& layers) {
     ATRACE_CALL();
 
@@ -8334,60 +8313,35 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
     const bool enableLocalTonemapping = FlagManager::getInstance().local_tonemap_screenshots() &&
             !renderArea->getHintForSeamlessTransition();
 
-    {
-        Mutex::Autolock lock(mStateLock);
-        const DisplayDevice* display = nullptr;
-        if (parent) {
-            const frontend::LayerSnapshot* snapshot =
-                    mLayerSnapshotBuilder.getSnapshot(parent->sequence);
-            if (snapshot) {
-                display = findDisplay([layerStack = snapshot->outputFilter.layerStack](
-                                              const auto& display) {
-                              return display.getLayerStack() == layerStack;
-                          }).get();
-            }
-        }
+    if (display != nullptr) {
+        captureResults.capturedDataspace =
+                pickBestDataspace(requestedDataspace, state, captureResults.capturedHdrLayers,
+                                  renderArea->getHintForSeamlessTransition());
+        sdrWhitePointNits = state.sdrWhitePointNits;
 
-        if (display == nullptr) {
-            display = renderArea->getDisplayDevice().get();
-        }
-
-        if (display == nullptr) {
-            display = getDefaultDisplayDeviceLocked().get();
-        }
-
-        if (display != nullptr) {
-            const auto& state = display->getCompositionDisplay()->getState();
-            captureResults.capturedDataspace =
-                    pickBestDataspace(requestedDataspace, display, captureResults.capturedHdrLayers,
-                                      renderArea->getHintForSeamlessTransition());
-            sdrWhitePointNits = state.sdrWhitePointNits;
-
-            if (!captureResults.capturedHdrLayers) {
-                displayBrightnessNits = sdrWhitePointNits;
-            } else {
-                displayBrightnessNits = state.displayBrightnessNits;
-
-                if (!enableLocalTonemapping) {
-                    // Only clamp the display brightness if this is not a seamless transition.
-                    // Otherwise for seamless transitions it's important to match the current
-                    // display state as the buffer will be shown under these same conditions, and we
-                    // want to avoid any flickers
-                    if (sdrWhitePointNits > 1.0f && !renderArea->getHintForSeamlessTransition()) {
-                        // Restrict the amount of HDR "headroom" in the screenshot to avoid
-                        // over-dimming the SDR portion. 2.0 chosen by experimentation
-                        constexpr float kMaxScreenshotHeadroom = 2.0f;
-                        displayBrightnessNits = std::min(sdrWhitePointNits * kMaxScreenshotHeadroom,
-                                                         displayBrightnessNits);
-                    }
+        if (!captureResults.capturedHdrLayers) {
+            displayBrightnessNits = sdrWhitePointNits;
+        } else {
+            displayBrightnessNits = state.displayBrightnessNits;
+            if (!enableLocalTonemapping) {
+                // Only clamp the display brightness if this is not a seamless transition.
+                // Otherwise for seamless transitions it's important to match the current
+                // display state as the buffer will be shown under these same conditions, and we
+                // want to avoid any flickers
+                if (sdrWhitePointNits > 1.0f && !renderArea->getHintForSeamlessTransition()) {
+                    // Restrict the amount of HDR "headroom" in the screenshot to avoid
+                    // over-dimming the SDR portion. 2.0 chosen by experimentation
+                    constexpr float kMaxScreenshotHeadroom = 2.0f;
+                    displayBrightnessNits = std::min(sdrWhitePointNits * kMaxScreenshotHeadroom,
+                                                     displayBrightnessNits);
                 }
             }
+        }
 
-            // Screenshots leaving the device should be colorimetric
-            if (requestedDataspace == ui::Dataspace::UNKNOWN &&
-                renderArea->getHintForSeamlessTransition()) {
-                renderIntent = state.renderIntent;
-            }
+        // Screenshots leaving the device should be colorimetric
+        if (requestedDataspace == ui::Dataspace::UNKNOWN &&
+            renderArea->getHintForSeamlessTransition()) {
+            renderIntent = state.renderIntent;
         }
     }
 
