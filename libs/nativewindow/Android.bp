@@ -48,6 +48,11 @@ cc_library_headers {
     native_bridge_supported: true,
     min_sdk_version: "29",
     host_supported: true,
+    target: {
+        windows: {
+            enabled: true,
+        },
+    },
 }
 
 ndk_library {
