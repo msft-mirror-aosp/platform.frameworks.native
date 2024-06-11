@@ -444,10 +444,10 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const IdGenerator& idGenerato
             newCoords.copyFrom(motionEntry.pointerCoords[i]);
             // First, apply the current pointer's transform to update the coordinates into
             // window space.
-            newCoords.transform(currTransform);
+            newCoords.transform(currTransform, motionEntry.flags);
             // Next, apply the inverse transform of the normalized coordinates so the
             // current coordinates are transformed into the normalized coordinate space.
-            newCoords.transform(inverseTransform);
+            newCoords.transform(inverseTransform, motionEntry.flags);
         }
     }
 
@@ -4885,10 +4885,11 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
 
             mLock.lock();
 
-            if (policyFlags & POLICY_FLAG_FILTERED) {
-                // The events from InputFilter impersonate real hardware devices. Check these
-                // events for consistency and print an error. An inconsistent event sent from
-                // InputFilter could cause a crash in the later stages of dispatching pipeline.
+            {
+                // Verify all injected streams, whether the injection is coming from apps or from
+                // input filter. Print an error if the stream becomes inconsistent with this event.
+                // An inconsistent injected event sent could cause a crash in the later stages of
+                // dispatching pipeline.
                 auto [it, _] =
                         mInputFilterVerifiersByDisplay.try_emplace(displayId,
                                                                    std::string("Injection on ") +
@@ -5132,8 +5133,8 @@ void InputDispatcher::transformMotionEntryForInjectionLocked(
     }
     for (uint32_t i = 0; i < entry.getPointerCount(); i++) {
         entry.pointerCoords[i] =
-                MotionEvent::calculateTransformedCoords(entry.source, transformToDisplay,
-                                                        entry.pointerCoords[i]);
+                MotionEvent::calculateTransformedCoords(entry.source, entry.flags,
+                                                        transformToDisplay, entry.pointerCoords[i]);
     }
 }
 
@@ -5527,6 +5528,10 @@ void InputDispatcher::setFocusedDisplay(ui::LogicalDisplayId displayId) {
                 synthesizeCancelationEventsForWindowLocked(windowHandle, options);
             }
             mFocusedDisplayId = displayId;
+
+            // Only a window on the focused display can have Pointer Capture, so disable the active
+            // Pointer Capture session if there is one, since the focused display changed.
+            disablePointerCaptureForcedLocked();
 
             // Find new focused window and validate
             sp<IBinder> newFocusedWindowToken = mFocusResolver.getFocusedWindowToken(displayId);
@@ -6388,9 +6393,8 @@ void InputDispatcher::doDispatchCycleFinishedCommand(nsecs_t finishTime,
         }
 
         if (dispatchEntry.eventEntry->type == EventEntry::Type::KEY) {
-            const KeyEntry& keyEntry = static_cast<const KeyEntry&>(*(dispatchEntry.eventEntry));
             fallbackKeyEntry =
-                    afterKeyEventLockedInterruptable(connection, dispatchEntry, keyEntry, handled);
+                    afterKeyEventLockedInterruptable(connection, &dispatchEntry, handled);
         }
     } // End critical section: The -LockedInterruptable methods may have released the lock.
 
@@ -6614,8 +6618,17 @@ void InputDispatcher::processConnectionResponsiveLocked(const Connection& connec
 }
 
 std::unique_ptr<const KeyEntry> InputDispatcher::afterKeyEventLockedInterruptable(
-        const std::shared_ptr<Connection>& connection, DispatchEntry& dispatchEntry,
-        const KeyEntry& keyEntry, bool handled) {
+        const std::shared_ptr<Connection>& connection, DispatchEntry* dispatchEntry, bool handled) {
+    // The dispatchEntry is currently valid, but it might point to a deleted object after we release
+    // the lock. For simplicity, make copies of the data of interest here and assume that
+    // 'dispatchEntry' is not valid after this section.
+    // Hold a strong reference to the EventEntry to ensure it's valid for the duration of this
+    // function, even if the DispatchEntry gets destroyed and releases its share of the ownership.
+    std::shared_ptr<const EventEntry> eventEntry = dispatchEntry->eventEntry;
+    const bool hasForegroundTarget = dispatchEntry->hasForegroundTarget();
+    const KeyEntry& keyEntry = static_cast<const KeyEntry&>(*(eventEntry));
+    // To prevent misuse, ensure dispatchEntry is no longer valid.
+    dispatchEntry = nullptr;
     if (keyEntry.flags & AKEY_EVENT_FLAG_FALLBACK) {
         if (!handled) {
             // Report the key as unhandled, since the fallback was not handled.
@@ -6632,7 +6645,7 @@ std::unique_ptr<const KeyEntry> InputDispatcher::afterKeyEventLockedInterruptabl
         connection->inputState.removeFallbackKey(originalKeyCode);
     }
 
-    if (handled || !dispatchEntry.hasForegroundTarget()) {
+    if (handled || !hasForegroundTarget) {
         // If the application handles the original key for which we previously
         // generated a fallback or if the window is not a foreground window,
         // then cancel the associated fallback key, if any.
@@ -6920,17 +6933,17 @@ void InputDispatcher::onFocusChangedLocked(
         enqueueFocusEventLocked(changes.newFocus, /*hasFocus=*/true, changes.reason);
     }
 
-    // If a window has pointer capture, then it must have focus. We need to ensure that this
-    // contract is upheld when pointer capture is being disabled due to a loss of window focus.
-    // If the window loses focus before it loses pointer capture, then the window can be in a state
-    // where it has pointer capture but not focus, violating the contract. Therefore we must
-    // dispatch the pointer capture event before the focus event. Since focus events are added to
-    // the front of the queue (above), we add the pointer capture event to the front of the queue
-    // after the focus events are added. This ensures the pointer capture event ends up at the
-    // front.
-    disablePointerCaptureForcedLocked();
-
     if (mFocusedDisplayId == changes.displayId) {
+        // If a window has pointer capture, then it must have focus and must be on the top-focused
+        // display. We need to ensure that this contract is upheld when pointer capture is being
+        // disabled due to a loss of window focus. If the window loses focus before it loses pointer
+        // capture, then the window can be in a state where it has pointer capture but not focus,
+        // violating the contract. Therefore we must dispatch the pointer capture event before the
+        // focus event. Since focus events are added to the front of the queue (above), we add the
+        // pointer capture event to the front of the queue after the focus events are added. This
+        // ensures the pointer capture event ends up at the front.
+        disablePointerCaptureForcedLocked();
+
         sendFocusChangedCommandLocked(changes.oldFocus, changes.newFocus);
     }
 }
