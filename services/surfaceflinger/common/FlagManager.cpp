@@ -27,6 +27,7 @@
 #include <cinttypes>
 
 #include <android_os.h>
+#include <com_android_graphics_libgui_flags.h>
 #include <com_android_graphics_surfaceflinger_flags.h>
 #include <com_android_server_display_feature_flags.h>
 
@@ -148,6 +149,10 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(commit_not_composited);
     DUMP_READ_ONLY_FLAG(local_tonemap_screenshots);
     DUMP_READ_ONLY_FLAG(override_trusted_overlay);
+    DUMP_READ_ONLY_FLAG(flush_buffer_slots_to_uncache);
+    DUMP_READ_ONLY_FLAG(force_compile_graphite_renderengine);
+    DUMP_READ_ONLY_FLAG(single_hop_screenshot);
+    DUMP_READ_ONLY_FLAG(trace_frame_rate_override);
 
 #undef DUMP_READ_ONLY_FLAG
 #undef DUMP_SERVER_FLAG
@@ -246,6 +251,9 @@ FLAG_MANAGER_READ_ONLY_FLAG(detached_mirror, "");
 FLAG_MANAGER_READ_ONLY_FLAG(commit_not_composited, "");
 FLAG_MANAGER_READ_ONLY_FLAG(local_tonemap_screenshots, "debug.sf.local_tonemap_screenshots");
 FLAG_MANAGER_READ_ONLY_FLAG(override_trusted_overlay, "");
+FLAG_MANAGER_READ_ONLY_FLAG(flush_buffer_slots_to_uncache, "");
+FLAG_MANAGER_READ_ONLY_FLAG(force_compile_graphite_renderengine, "");
+FLAG_MANAGER_READ_ONLY_FLAG(single_hop_screenshot, "");
 
 /// Trunk stable server flags ///
 FLAG_MANAGER_SERVER_FLAG(refresh_rate_overlay_on_external_display, "")
@@ -258,5 +266,7 @@ FLAG_MANAGER_SERVER_FLAG_IMPORTED(adpf_use_fmq_channel, "", android::os)
 FLAG_MANAGER_READ_ONLY_FLAG_IMPORTED(idle_screen_refresh_rate_timeout, "",
                                      com::android::server::display::feature::flags)
 FLAG_MANAGER_READ_ONLY_FLAG_IMPORTED(adpf_use_fmq_channel_fixed, "", android::os)
+FLAG_MANAGER_READ_ONLY_FLAG_IMPORTED(trace_frame_rate_override, "",
+                                     com::android::graphics::libgui::flags);
 
 } // namespace android

@@ -256,6 +256,9 @@ auto getBlendMode(const LayerSnapshot& snapshot, const RequestedLayerState& requ
 }
 
 void updateVisibility(LayerSnapshot& snapshot, bool visible) {
+    if (snapshot.isVisible != visible) {
+        snapshot.changes |= RequestedLayerState::Changes::Visibility;
+    }
     snapshot.isVisible = visible;
 
     // TODO(b/238781169) we are ignoring this compat for now, since we will have
@@ -311,6 +314,21 @@ void updateMetadata(LayerSnapshot& snapshot, const RequestedLayerState& requeste
         snapshot.metadata.emplace(key,
                                   compositionengine::GenericLayerMetadataEntry{mandatory,
                                                                                it->second});
+    }
+}
+
+void updateMetadataAndGameMode(LayerSnapshot& snapshot, const RequestedLayerState& requested,
+                               const LayerSnapshotBuilder::Args& args,
+                               const LayerSnapshot& parentSnapshot) {
+    if (snapshot.changes.test(RequestedLayerState::Changes::GameMode)) {
+        snapshot.gameMode = requested.metadata.has(gui::METADATA_GAME_MODE)
+                ? requested.gameMode
+                : parentSnapshot.gameMode;
+    }
+    updateMetadata(snapshot, requested, args);
+    if (args.includeMetadata) {
+        snapshot.layerMetadata = parentSnapshot.layerMetadata;
+        snapshot.layerMetadata.merge(requested.metadata);
     }
 }
 
@@ -759,6 +777,11 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
                                  RequestedLayerState::Changes::Input)) {
             updateInput(snapshot, requested, parentSnapshot, path, args);
         }
+        if (forceUpdate ||
+            (args.includeMetadata &&
+             snapshot.changes.test(RequestedLayerState::Changes::Metadata))) {
+            updateMetadataAndGameMode(snapshot, requested, args, parentSnapshot);
+        }
         return;
     }
 
@@ -798,15 +821,8 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
         }
     }
 
-    if (forceUpdate || snapshot.changes.test(RequestedLayerState::Changes::GameMode)) {
-        snapshot.gameMode = requested.metadata.has(gui::METADATA_GAME_MODE)
-                ? requested.gameMode
-                : parentSnapshot.gameMode;
-        updateMetadata(snapshot, requested, args);
-        if (args.includeMetadata) {
-            snapshot.layerMetadata = parentSnapshot.layerMetadata;
-            snapshot.layerMetadata.merge(requested.metadata);
-        }
+    if (forceUpdate || snapshot.changes.test(RequestedLayerState::Changes::Metadata)) {
+        updateMetadataAndGameMode(snapshot, requested, args, parentSnapshot);
     }
 
     if (forceUpdate || snapshot.clientChanges & layer_state_t::eFixedTransformHintChanged ||
@@ -1171,6 +1187,15 @@ void LayerSnapshotBuilder::forEachVisibleSnapshot(const Visitor& visitor) {
     for (int i = 0; i < mNumInterestingSnapshots; i++) {
         std::unique_ptr<LayerSnapshot>& snapshot = mSnapshots.at((size_t)i);
         if (!snapshot->isVisible) continue;
+        visitor(snapshot);
+    }
+}
+
+void LayerSnapshotBuilder::forEachSnapshot(const Visitor& visitor,
+                                           const ConstPredicate& predicate) {
+    for (int i = 0; i < mNumInterestingSnapshots; i++) {
+        std::unique_ptr<LayerSnapshot>& snapshot = mSnapshots.at((size_t)i);
+        if (!predicate(*snapshot)) continue;
         visitor(snapshot);
     }
 }

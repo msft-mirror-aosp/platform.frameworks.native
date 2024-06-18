@@ -106,6 +106,24 @@ private:
         void shiftVsyncSequence(Duration phase);
         void setRenderRate(std::optional<Fps> renderRateOpt) { mRenderRateOpt = renderRateOpt; }
 
+        enum class VsyncOnTimeline {
+            Unique,  // Within timeline, not shared with next timeline.
+            Shared,  // Within timeline, shared with next timeline.
+            Outside, // Outside of the timeline.
+        };
+        VsyncOnTimeline isWithin(TimePoint vsync) {
+            const auto threshold = mIdealPeriod.ns() / 2;
+            if (!mValidUntil || vsync.ns() < mValidUntil->ns() - threshold) {
+                // if mValidUntil is absent then timeline is not frozen and
+                // vsync should be unique to that timeline.
+                return VsyncOnTimeline::Unique;
+            }
+            if (vsync.ns() > mValidUntil->ns() + threshold) {
+                return VsyncOnTimeline::Outside;
+            }
+            return VsyncOnTimeline::Shared;
+        }
+
     private:
         nsecs_t snapToVsyncAlignedWithRenderRate(Model model, nsecs_t vsync);
         VsyncSequence getVsyncSequenceLocked(Model, nsecs_t vsync);
