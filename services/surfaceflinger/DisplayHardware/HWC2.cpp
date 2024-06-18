@@ -27,6 +27,7 @@
 #include "HWC2.h"
 
 #include <android/configuration.h>
+#include <common/FlagManager.h>
 #include <ui/Fence.h>
 #include <ui/FloatRect.h>
 #include <ui/GraphicBuffer.h>
@@ -78,6 +79,9 @@ Display::Display(android::Hwc2::Composer& composer,
                  DisplayType type)
       : mComposer(composer), mCapabilities(capabilities), mId(id), mType(type) {
     ALOGV("Created display %" PRIu64, id);
+    if (mType == hal::DisplayType::VIRTUAL) {
+        loadDisplayCapabilities();
+    }
 }
 
 Display::~Display() {
@@ -281,19 +285,28 @@ Error Display::getRequests(HWC2::DisplayRequest* outDisplayRequests,
     return Error::NONE;
 }
 
-Error Display::getConnectionType(ui::DisplayConnectionType* outType) const {
-    if (mType != DisplayType::PHYSICAL) return Error::BAD_DISPLAY;
+ftl::Expected<ui::DisplayConnectionType, hal::Error> Display::getConnectionType() const {
+    if (!mConnectionType) {
+        mConnectionType = [this]() -> decltype(mConnectionType) {
+            if (mType != DisplayType::PHYSICAL) {
+                return ftl::Unexpected(Error::BAD_DISPLAY);
+            }
 
-    using ConnectionType = Hwc2::IComposerClient::DisplayConnectionType;
-    ConnectionType connectionType;
-    const auto error = static_cast<Error>(mComposer.getDisplayConnectionType(mId, &connectionType));
-    if (error != Error::NONE) {
-        return error;
+            using ConnectionType = Hwc2::IComposerClient::DisplayConnectionType;
+            ConnectionType connectionType;
+
+            if (const auto error = static_cast<Error>(
+                        mComposer.getDisplayConnectionType(mId, &connectionType));
+                error != Error::NONE) {
+                return ftl::Unexpected(error);
+            }
+
+            return connectionType == ConnectionType::INTERNAL ? ui::DisplayConnectionType::Internal
+                                                              : ui::DisplayConnectionType::External;
+        }();
     }
 
-    *outType = connectionType == ConnectionType::INTERNAL ? ui::DisplayConnectionType::Internal
-                                                          : ui::DisplayConnectionType::External;
-    return Error::NONE;
+    return *mConnectionType;
 }
 
 bool Display::hasCapability(DisplayCapability capability) const {
@@ -416,7 +429,14 @@ Error Display::setActiveConfigWithConstraints(hal::HWConfigId configId,
                                               VsyncPeriodChangeTimeline* outTimeline) {
     ALOGV("[%" PRIu64 "] setActiveConfigWithConstraints", mId);
 
-    if (isVsyncPeriodSwitchSupported()) {
+    // FIXME (b/319505580): At least the first config set on an external display must be
+    // `setActiveConfig`, so skip over the block that calls `setActiveConfigWithConstraints`
+    // for simplicity.
+    const bool connected_display = FlagManager::getInstance().connected_display();
+
+    if (isVsyncPeriodSwitchSupported() &&
+        (!connected_display ||
+         getConnectionType().value_opt() != ui::DisplayConnectionType::External)) {
         Hwc2::IComposerClient::VsyncPeriodChangeConstraints hwc2Constraints;
         hwc2Constraints.desiredTimeNanos = constraints.desiredTimeNanos;
         hwc2Constraints.seamlessRequired = constraints.seamlessRequired;
@@ -482,29 +502,7 @@ Error Display::setPowerMode(PowerMode mode)
     auto intError = mComposer.setPowerMode(mId, intMode);
 
     if (mode == PowerMode::ON) {
-        std::call_once(mDisplayCapabilityQueryFlag, [this]() {
-            std::vector<DisplayCapability> tmpCapabilities;
-            auto error =
-                    static_cast<Error>(mComposer.getDisplayCapabilities(mId, &tmpCapabilities));
-            if (error == Error::NONE) {
-                std::scoped_lock lock(mDisplayCapabilitiesMutex);
-                mDisplayCapabilities.emplace();
-                for (auto capability : tmpCapabilities) {
-                    mDisplayCapabilities->emplace(capability);
-                }
-            } else if (error == Error::UNSUPPORTED) {
-                std::scoped_lock lock(mDisplayCapabilitiesMutex);
-                mDisplayCapabilities.emplace();
-                if (mCapabilities.count(AidlCapability::SKIP_CLIENT_COLOR_TRANSFORM)) {
-                    mDisplayCapabilities->emplace(DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
-                }
-                bool dozeSupport = false;
-                error = static_cast<Error>(mComposer.getDozeSupport(mId, &dozeSupport));
-                if (error == Error::NONE && dozeSupport) {
-                    mDisplayCapabilities->emplace(DisplayCapability::DOZE);
-                }
-            }
-        });
+        loadDisplayCapabilities();
     }
 
     return static_cast<Error>(intError);
@@ -635,6 +633,32 @@ void Display::setConnected(bool connected) {
 std::shared_ptr<HWC2::Layer> Display::getLayerById(HWLayerId id) const {
     auto it = mLayers.find(id);
     return it != mLayers.end() ? it->second.lock() : nullptr;
+}
+
+void Display::loadDisplayCapabilities() {
+    std::call_once(mDisplayCapabilityQueryFlag, [this]() {
+        std::vector<DisplayCapability> tmpCapabilities;
+        auto error =
+                static_cast<Error>(mComposer.getDisplayCapabilities(mId, &tmpCapabilities));
+        if (error == Error::NONE) {
+            std::scoped_lock lock(mDisplayCapabilitiesMutex);
+            mDisplayCapabilities.emplace();
+            for (auto capability : tmpCapabilities) {
+                mDisplayCapabilities->emplace(capability);
+            }
+        } else if (error == Error::UNSUPPORTED) {
+            std::scoped_lock lock(mDisplayCapabilitiesMutex);
+            mDisplayCapabilities.emplace();
+            if (mCapabilities.count(AidlCapability::SKIP_CLIENT_COLOR_TRANSFORM)) {
+                mDisplayCapabilities->emplace(DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
+            }
+            bool dozeSupport = false;
+            error = static_cast<Error>(mComposer.getDozeSupport(mId, &dozeSupport));
+            if (error == Error::NONE && dozeSupport) {
+                mDisplayCapabilities->emplace(DisplayCapability::DOZE);
+            }
+        }
+    });
 }
 } // namespace impl
 
