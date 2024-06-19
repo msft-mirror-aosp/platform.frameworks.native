@@ -26,10 +26,13 @@
 #if defined(__ANDROID_VENDOR__)
 #include <android/llndk-versioning.h>
 #else  // __ANDROID_VENDOR__
-#if !defined(API_LEVEL_AT_LEAST)
-#define API_LEVEL_AT_LEAST(sdk_api_level, vendor_api_level) \
-    (__builtin_available(android sdk_api_level, *))
+#if defined(API_LEVEL_AT_LEAST)
+// Redefine API_LEVEL_AT_LEAST here to replace the version to __ANDROID_API_FUTURE__ as a workaround
+#undef API_LEVEL_AT_LEAST
 #endif
+// TODO(b/322384429) switch this __ANDROID_API_FUTURE__ to sdk_api_level when V is finalized
+#define API_LEVEL_AT_LEAST(sdk_api_level, vendor_api_level) \
+    (__builtin_available(android __ANDROID_API_FUTURE__, *))
 #endif  // __ANDROID_VENDOR__
 
 namespace aidl::android::os {

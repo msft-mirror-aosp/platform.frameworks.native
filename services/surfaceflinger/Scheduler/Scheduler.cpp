@@ -123,22 +123,19 @@ void Scheduler::setPacesetterDisplay(std::optional<PhysicalDisplayId> pacesetter
     promotePacesetterDisplay(pacesetterIdOpt);
 }
 
-void Scheduler::registerDisplay(PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr,
-                                PhysicalDisplayId activeDisplayId) {
+void Scheduler::registerDisplay(PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr) {
     auto schedulePtr =
             std::make_shared<VsyncSchedule>(selectorPtr->getActiveMode().modePtr, mFeatures,
                                             [this](PhysicalDisplayId id, bool enable) {
                                                 onHardwareVsyncRequest(id, enable);
                                             });
 
-    registerDisplayInternal(displayId, std::move(selectorPtr), std::move(schedulePtr),
-                            activeDisplayId);
+    registerDisplayInternal(displayId, std::move(selectorPtr), std::move(schedulePtr));
 }
 
 void Scheduler::registerDisplayInternal(PhysicalDisplayId displayId,
                                         RefreshRateSelectorPtr selectorPtr,
-                                        VsyncSchedulePtr schedulePtr,
-                                        PhysicalDisplayId activeDisplayId) {
+                                        VsyncSchedulePtr schedulePtr) {
     demotePacesetterDisplay();
 
     auto [pacesetterVsyncSchedule, isNew] = [&]() FTL_FAKE_GUARD(kMainThreadContext) {
@@ -148,7 +145,7 @@ void Scheduler::registerDisplayInternal(PhysicalDisplayId displayId,
                                                        std::move(schedulePtr), mFeatures)
                                    .second;
 
-        return std::make_pair(promotePacesetterDisplayLocked(activeDisplayId), isNew);
+        return std::make_pair(promotePacesetterDisplayLocked(), isNew);
     }();
 
     applyNewVsyncSchedule(std::move(pacesetterVsyncSchedule));
@@ -161,9 +158,7 @@ void Scheduler::registerDisplayInternal(PhysicalDisplayId displayId,
     dispatchHotplug(displayId, Hotplug::Connected);
 }
 
-void Scheduler::unregisterDisplay(PhysicalDisplayId displayId, PhysicalDisplayId activeDisplayId) {
-    LOG_ALWAYS_FATAL_IF(displayId == activeDisplayId, "Cannot unregister the active display!");
-
+void Scheduler::unregisterDisplay(PhysicalDisplayId displayId) {
     dispatchHotplug(displayId, Hotplug::Disconnected);
 
     demotePacesetterDisplay();
@@ -178,7 +173,7 @@ void Scheduler::unregisterDisplay(PhysicalDisplayId displayId, PhysicalDisplayId
         // headless virtual display.)
         LOG_ALWAYS_FATAL_IF(mDisplays.empty(), "Cannot unregister all displays!");
 
-        pacesetterVsyncSchedule = promotePacesetterDisplayLocked(activeDisplayId);
+        pacesetterVsyncSchedule = promotePacesetterDisplayLocked();
     }
     applyNewVsyncSchedule(std::move(pacesetterVsyncSchedule));
 }
