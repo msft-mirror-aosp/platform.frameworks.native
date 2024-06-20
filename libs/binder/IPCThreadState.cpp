@@ -621,9 +621,8 @@ void IPCThreadState::blockUntilThreadAvailable()
         if (cur < max) {
             return true;
         }
-        ALOGW("Waiting for thread to be free. mExecutingThreadsCount=%" PRId64
-              " mMaxThreads=%" PRId64 "\n",
-              cur, max);
+        ALOGW("Waiting for thread to be free. mExecutingThreadsCount=%zu mMaxThreads=%zu\n", cur,
+              max);
         return false;
     });
     mProcess->mOnThreadAvailableWaiting--;
