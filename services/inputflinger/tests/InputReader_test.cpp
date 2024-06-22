@@ -6245,7 +6245,7 @@ TEST_F(SingleTouchInputMapperTest, WhenDeviceTypeIsSetToTouchNavigation_setsCorr
     SingleTouchInputMapper& mapper = constructAndAddMapper<SingleTouchInputMapper>();
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyDeviceResetWasCalled());
 
-    ASSERT_EQ(AINPUT_SOURCE_TOUCH_NAVIGATION, mapper.getSources());
+    ASSERT_EQ(AINPUT_SOURCE_TOUCH_NAVIGATION | AINPUT_SOURCE_TOUCHPAD, mapper.getSources());
 }
 
 TEST_F(SingleTouchInputMapperTest, WhenDeviceTypeIsChangedToTouchNavigation_updatesDeviceType) {
@@ -6268,7 +6268,7 @@ TEST_F(SingleTouchInputMapperTest, WhenDeviceTypeIsChangedToTouchNavigation_upda
                                InputReaderConfiguration::Change::DEVICE_TYPE /*changes*/);
 
     // Check whether device type update was successful.
-    ASSERT_EQ(AINPUT_SOURCE_TOUCH_NAVIGATION, mDevice->getSources());
+    ASSERT_EQ(AINPUT_SOURCE_TOUCH_NAVIGATION | AINPUT_SOURCE_TOUCHPAD, mDevice->getSources());
 }
 
 TEST_F(SingleTouchInputMapperTest, HoverEventsOutsidePhysicalFrameAreIgnored) {

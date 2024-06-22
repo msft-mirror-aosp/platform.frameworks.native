@@ -20,6 +20,10 @@
 #include <android/os/IClientCallback.h>
 #include <android/os/IServiceCallback.h>
 
+#if !defined(VENDORSERVICEMANAGER) && !defined(__ANDROID_RECOVERY__)
+#include "perfetto/public/te_category_macros.h"
+#endif // !defined(VENDORSERVICEMANAGER) && !defined(__ANDROID_RECOVERY__)
+
 #include "Access.h"
 
 namespace android {
@@ -28,6 +32,11 @@ using os::ConnectionInfo;
 using os::IClientCallback;
 using os::IServiceCallback;
 using os::ServiceDebugInfo;
+
+#if !defined(VENDORSERVICEMANAGER) && !defined(__ANDROID_RECOVERY__)
+#define PERFETTO_SM_CATEGORIES(C) C(servicemanager, "servicemanager", "Service Manager category")
+PERFETTO_TE_CATEGORIES_DECLARE(PERFETTO_SM_CATEGORIES);
+#endif // !defined(VENDORSERVICEMANAGER) && !defined(__ANDROID_RECOVERY__)
 
 class ServiceManager : public os::BnServiceManager, public IBinder::DeathRecipient {
 public:

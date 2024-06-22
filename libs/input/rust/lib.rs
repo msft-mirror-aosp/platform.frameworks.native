@@ -18,6 +18,7 @@
 
 mod input;
 mod input_verifier;
+mod keyboard_classification_config;
 mod keyboard_classifier;
 
 pub use input::{
