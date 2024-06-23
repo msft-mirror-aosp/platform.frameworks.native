@@ -29,7 +29,6 @@
 #include <GrDirectContext.h>
 #include <include/gpu/ganesh/vk/GrVkBackendSemaphore.h>
 #include <include/gpu/ganesh/vk/GrVkDirectContext.h>
-#include <vk/GrVkExtensions.h>
 #include <vk/GrVkTypes.h>
 
 #include <android-base/stringprintf.h>

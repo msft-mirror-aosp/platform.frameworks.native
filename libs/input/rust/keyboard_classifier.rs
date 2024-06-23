@@ -35,6 +35,7 @@
 //! TODO(b/263559234): Data store implementation to store information about past classification
 
 use crate::input::{DeviceId, InputDevice, KeyboardType};
+use crate::keyboard_classification_config::CLASSIFIED_DEVICES;
 use crate::{DeviceClass, ModifierState};
 use std::collections::HashMap;
 
@@ -126,6 +127,14 @@ impl KeyboardClassifier {
                 (KeyboardType::NonAlphabetic, true)
             };
         }
+
+        // Check in known device list for classification
+        for data in CLASSIFIED_DEVICES.iter() {
+            if device.identifier.vendor == data.0 && device.identifier.product == data.1 {
+                return (data.2, data.3);
+            }
+        }
+
         // Any composite device with multiple device classes should be categorized as non-alphabetic
         // keyboard initially
         if device.classes.contains(DeviceClass::Touch)
@@ -169,6 +178,7 @@ impl KeyboardClassifier {
 #[cfg(test)]
 mod tests {
     use crate::input::{DeviceId, InputDevice, KeyboardType};
+    use crate::keyboard_classification_config::CLASSIFIED_DEVICES;
     use crate::keyboard_classifier::KeyboardClassifier;
     use crate::{DeviceClass, ModifierState, RustInputDeviceIdentifier};
 
@@ -326,6 +336,17 @@ mod tests {
         assert!(!classifier.is_finalized(DEVICE_ID));
     }
 
+    #[test]
+    fn classify_known_devices() {
+        let mut classifier = KeyboardClassifier::new();
+        for device in CLASSIFIED_DEVICES.iter() {
+            classifier
+                .notify_keyboard_changed(create_device_with_vendor_product_ids(device.0, device.1));
+            assert_eq!(classifier.get_keyboard_type(DEVICE_ID), device.2);
+            assert_eq!(classifier.is_finalized(DEVICE_ID), device.3);
+        }
+    }
+
     fn create_device(classes: DeviceClass) -> InputDevice {
         InputDevice {
             device_id: DEVICE_ID,
@@ -340,6 +361,23 @@ mod tests {
                 descriptor: "descriptor".to_string(),
             },
             classes,
+        }
+    }
+
+    fn create_device_with_vendor_product_ids(vendor: u16, product: u16) -> InputDevice {
+        InputDevice {
+            device_id: DEVICE_ID,
+            identifier: RustInputDeviceIdentifier {
+                name: "test_device".to_string(),
+                location: "location".to_string(),
+                unique_id: "unique_id".to_string(),
+                bus: 123,
+                vendor,
+                product,
+                version: 567,
+                descriptor: "descriptor".to_string(),
+            },
+            classes: DeviceClass::Keyboard | DeviceClass::AlphabeticKey | DeviceClass::External,
         }
     }
 }
