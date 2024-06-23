@@ -26,16 +26,20 @@
 #if defined(__ANDROID_VENDOR__)
 #include <android/llndk-versioning.h>
 #else  // __ANDROID_VENDOR__
-#if defined(API_LEVEL_AT_LEAST)
-// Redefine API_LEVEL_AT_LEAST here to replace the version to __ANDROID_API_FUTURE__ as a workaround
-#undef API_LEVEL_AT_LEAST
-#endif
-// TODO(b/322384429) switch this __ANDROID_API_FUTURE__ to sdk_api_level when V is finalized
+#if !defined(API_LEVEL_AT_LEAST)
 #define API_LEVEL_AT_LEAST(sdk_api_level, vendor_api_level) \
-    (__builtin_available(android __ANDROID_API_FUTURE__, *))
+    (__builtin_available(android sdk_api_level, *))
+#endif
 #endif  // __ANDROID_VENDOR__
 
 namespace aidl::android::os {
+
+#if defined(__ANDROID_VENDOR__)
+#define AT_LEAST_V_OR_202404 constexpr(__ANDROID_VENDOR_API__ >= 202404)
+#else
+// TODO(b/322384429) switch this to __ANDROID_API_V__ when V is finalized
+#define AT_LEAST_V_OR_202404 (__builtin_available(android __ANDROID_API_FUTURE__, *))
+#endif
 
 /**
  * Wrapper class that enables interop with AIDL NDK generation
