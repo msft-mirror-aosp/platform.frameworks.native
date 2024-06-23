@@ -931,7 +931,7 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
             mSource |= AINPUT_SOURCE_STYLUS;
         }
     } else if (mParameters.deviceType == Parameters::DeviceType::TOUCH_NAVIGATION) {
-        mSource = AINPUT_SOURCE_TOUCH_NAVIGATION;
+        mSource = AINPUT_SOURCE_TOUCH_NAVIGATION | AINPUT_SOURCE_TOUCHPAD;
         mDeviceMode = DeviceMode::NAVIGATION;
     } else {
         ALOGW("Touch device '%s' has invalid parameters or configuration.  The device will be "

@@ -673,6 +673,36 @@ TEST_F(VSyncPredictorTest, setRenderRateIsIgnoredIfNotDivisor) {
     EXPECT_THAT(tracker.nextAnticipatedVSyncTimeFrom(mNow + 5100), Eq(mNow + 6 * mPeriod));
 }
 
+TEST_F(VSyncPredictorTest, setRenderRateWhenRenderRateGoesDown) {
+    SET_FLAG_FOR_TEST(flags::vrr_config, true);
+    SET_FLAG_FOR_TEST(flags::vrr_bugfix_24q4, true);
+
+    const int32_t kGroup = 0;
+    const auto kResolution = ui::Size(1920, 1080);
+    const auto vsyncRate = Fps::fromPeriodNsecs(500);
+    const auto minFrameRate = Fps::fromPeriodNsecs(1000);
+    hal::VrrConfig vrrConfig;
+    vrrConfig.minFrameIntervalNs = minFrameRate.getPeriodNsecs();
+    const ftl::NonNull<DisplayModePtr> kMode =
+            ftl::as_non_null(createDisplayModeBuilder(DisplayModeId(0), vsyncRate, kGroup,
+                                                      kResolution, DEFAULT_DISPLAY_ID)
+                                     .setVrrConfig(std::move(vrrConfig))
+                                     .build());
+
+    VSyncPredictor vrrTracker{std::make_unique<ClockWrapper>(mClock), kMode, kHistorySize,
+                              kMinimumSamplesForPrediction, kOutlierTolerancePercent};
+
+    Fps frameRate = Fps::fromPeriodNsecs(1000);
+    vrrTracker.setRenderRate(frameRate, /*applyImmediately*/ false);
+    vrrTracker.addVsyncTimestamp(0);
+    EXPECT_EQ(1000, vrrTracker.nextAnticipatedVSyncTimeFrom(700));
+    EXPECT_EQ(2000, vrrTracker.nextAnticipatedVSyncTimeFrom(1000, 1000));
+
+    frameRate = Fps::fromPeriodNsecs(3000);
+    vrrTracker.setRenderRate(frameRate, /*applyImmediately*/ false);
+    EXPECT_TRUE(vrrTracker.isVSyncInPhase(2000, frameRate));
+}
+
 TEST_F(VSyncPredictorTest, setRenderRateHighIsAppliedImmediately) {
     SET_FLAG_FOR_TEST(flags::vrr_config, true);
 

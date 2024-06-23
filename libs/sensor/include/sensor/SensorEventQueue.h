@@ -42,6 +42,7 @@ namespace android {
 // ----------------------------------------------------------------------------
 
 class ISensorEventConnection;
+class SensorManager;
 class Sensor;
 class Looper;
 
@@ -65,7 +66,8 @@ public:
     // Default sensor sample period
     static constexpr int32_t SENSOR_DELAY_NORMAL = 200000;
 
-    explicit SensorEventQueue(const sp<ISensorEventConnection>& connection);
+    explicit SensorEventQueue(const sp<ISensorEventConnection>& connection,
+                              SensorManager& sensorManager);
     virtual ~SensorEventQueue();
     virtual void onFirstRef();
 
@@ -107,6 +109,7 @@ private:
     mutable Mutex mLock;
     mutable sp<Looper> mLooper;
     ASensorEvent* mRecBuffer;
+    SensorManager& mSensorManager;
     size_t mAvailable;
     size_t mConsumed;
     uint32_t mNumAcksToSend;
