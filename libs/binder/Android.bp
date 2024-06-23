@@ -19,6 +19,7 @@ package {
     // to get the below license kinds:
     //   SPDX-license-identifier-Apache-2.0
     default_applicable_licenses: ["frameworks_native_license"],
+    default_team: "trendy_team_virtualization",
 }
 
 cc_library_headers {
@@ -90,7 +91,11 @@ cc_cmake_snapshot {
         "libbinder_sdk",
         "libbinder_sdk_single_threaded",
         "libbinder_ndk_sdk",
+        "googletest_cmake",
+
         "binderRpcTestNoKernel",
+        "binderRpcTestSingleThreadedNoKernel",
+        "binderRpcWireProtocolTest",
     ],
     prebuilts: [
         // to enable arm64 host support, build with musl - e.g. on aosp_cf_arm64_phone
@@ -133,12 +138,16 @@ cc_cmake_snapshot {
         {
             android_name: "libgtest",
             mapped_name: "GTest::gtest",
-            package_system: "GTest",
+            package_pregenerated: "external/googletest",
         },
         {
             android_name: "libgtest_main",
-            mapped_name: "GTest::gtest",
-            package_system: "GTest",
+            mapped_name: "GTest::gtest_main",
+            package_pregenerated: "external/googletest",
+        },
+        {
+            android_name: "googletest_cmake",
+            package_pregenerated: "external/googletest",
         },
 
         // use libbinder_sdk and friends instead of full Android's libbinder
@@ -888,8 +897,5 @@ cc_binary {
         "liblog",
         "libutils",
         "android.debug_aidl-cpp",
-    ],
-    static_libs: [
-        "libc++fs",
     ],
 }
