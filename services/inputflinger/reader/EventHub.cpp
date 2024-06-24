@@ -998,26 +998,23 @@ std::optional<PropertyMap> EventHub::getConfiguration(int32_t deviceId) const {
     return *device->configuration;
 }
 
-status_t EventHub::getAbsoluteAxisInfo(int32_t deviceId, int axis,
-                                       RawAbsoluteAxisInfo* outAxisInfo) const {
-    outAxisInfo->clear();
+std::optional<RawAbsoluteAxisInfo> EventHub::getAbsoluteAxisInfo(int32_t deviceId, int axis) const {
     if (axis < 0 || axis > ABS_MAX) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
     std::scoped_lock _l(mLock);
     const Device* device = getDeviceLocked(deviceId);
     if (device == nullptr) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
     // We can read the RawAbsoluteAxisInfo even if the device is disabled and doesn't have a valid
     // fd, because the info is populated once when the device is first opened, and it doesn't change
     // throughout the device lifecycle.
     auto it = device->absState.find(axis);
     if (it == device->absState.end()) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
-    *outAxisInfo = it->second.info;
-    return OK;
+    return it->second.info;
 }
 
 bool EventHub::hasRelativeAxis(int32_t deviceId, int axis) const {
@@ -1130,22 +1127,20 @@ int32_t EventHub::getSwitchState(int32_t deviceId, int32_t sw) const {
     return device->swState.test(sw) ? AKEY_STATE_DOWN : AKEY_STATE_UP;
 }
 
-status_t EventHub::getAbsoluteAxisValue(int32_t deviceId, int32_t axis, int32_t* outValue) const {
-    *outValue = 0;
+std::optional<int32_t> EventHub::getAbsoluteAxisValue(int32_t deviceId, int32_t axis) const {
     if (axis < 0 || axis > ABS_MAX) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
     std::scoped_lock _l(mLock);
     const Device* device = getDeviceLocked(deviceId);
     if (device == nullptr || !device->hasValidFd()) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
     const auto it = device->absState.find(axis);
     if (it == device->absState.end()) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
-    *outValue = it->second.value;
-    return OK;
+    return it->second.value;
 }
 
 base::Result<std::vector<int32_t>> EventHub::getMtSlotValues(int32_t deviceId, int32_t axis,
