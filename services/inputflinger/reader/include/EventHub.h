@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <unordered_map>
@@ -278,8 +279,8 @@ public:
      */
     virtual std::optional<PropertyMap> getConfiguration(int32_t deviceId) const = 0;
 
-    virtual status_t getAbsoluteAxisInfo(int32_t deviceId, int axis,
-                                         RawAbsoluteAxisInfo* outAxisInfo) const = 0;
+    virtual std::optional<RawAbsoluteAxisInfo> getAbsoluteAxisInfo(int32_t deviceId,
+                                                                   int axis) const = 0;
 
     virtual bool hasRelativeAxis(int32_t deviceId, int axis) const = 0;
 
@@ -339,8 +340,7 @@ public:
     virtual int32_t getScanCodeState(int32_t deviceId, int32_t scanCode) const = 0;
     virtual int32_t getKeyCodeState(int32_t deviceId, int32_t keyCode) const = 0;
     virtual int32_t getSwitchState(int32_t deviceId, int32_t sw) const = 0;
-    virtual status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
-                                          int32_t* outValue) const = 0;
+    virtual std::optional<int32_t> getAbsoluteAxisValue(int32_t deviceId, int32_t axis) const = 0;
     /* Query Multi-Touch slot values for an axis. Returns error or an 1 indexed array of size
      * (slotCount + 1). The value at the 0 index is set to queried axis. */
     virtual base::Result<std::vector<int32_t>> getMtSlotValues(int32_t deviceId, int32_t axis,
@@ -511,8 +511,8 @@ public:
 
     std::optional<PropertyMap> getConfiguration(int32_t deviceId) const override final;
 
-    status_t getAbsoluteAxisInfo(int32_t deviceId, int axis,
-                                 RawAbsoluteAxisInfo* outAxisInfo) const override final;
+    std::optional<RawAbsoluteAxisInfo> getAbsoluteAxisInfo(int32_t deviceId,
+                                                           int axis) const override final;
 
     bool hasRelativeAxis(int32_t deviceId, int axis) const override final;
 
@@ -559,8 +559,8 @@ public:
     int32_t getSwitchState(int32_t deviceId, int32_t sw) const override final;
     int32_t getKeyCodeForKeyLocation(int32_t deviceId,
                                      int32_t locationKeyCode) const override final;
-    status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
-                                  int32_t* outValue) const override final;
+    std::optional<int32_t> getAbsoluteAxisValue(int32_t deviceId,
+                                                int32_t axis) const override final;
     base::Result<std::vector<int32_t>> getMtSlotValues(int32_t deviceId, int32_t axis,
                                                        size_t slotCount) const override final;
 

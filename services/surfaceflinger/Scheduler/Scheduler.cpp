@@ -1118,8 +1118,10 @@ auto Scheduler::applyPolicy(S Policy::*statePtr, T&& newState) -> GlobalSignals 
                                                 .emitEvent = !choice.consideredSignals.idle});
         }
 
-        frameRateOverridesChanged = updateFrameRateOverridesLocked(consideredSignals, modeOpt->fps);
-
+        if (!FlagManager::getInstance().vrr_bugfix_dropped_frame()) {
+            frameRateOverridesChanged =
+                    updateFrameRateOverridesLocked(consideredSignals, modeOpt->fps);
+        }
         if (mPolicy.modeOpt != modeOpt) {
             mPolicy.modeOpt = modeOpt;
             refreshRateChanged = true;
@@ -1133,6 +1135,12 @@ auto Scheduler::applyPolicy(S Policy::*statePtr, T&& newState) -> GlobalSignals 
     }
     if (refreshRateChanged) {
         mSchedulerCallback.requestDisplayModes(std::move(modeRequests));
+    }
+
+    if (FlagManager::getInstance().vrr_bugfix_dropped_frame()) {
+        std::scoped_lock lock(mPolicyLock);
+        frameRateOverridesChanged =
+                updateFrameRateOverridesLocked(consideredSignals, mPolicy.modeOpt->fps);
     }
     if (frameRateOverridesChanged) {
         mSchedulerCallback.triggerOnFrameRateOverridesChanged();
