@@ -514,7 +514,7 @@ sk_sp<SkShader> SkiaRenderEngine::createRuntimeEffectShader(
     auto shader = parameters.shader;
     if (stretchEffect.hasEffect()) {
         const auto graphicBuffer = targetBuffer ? targetBuffer->getBuffer() : nullptr;
-        if (graphicBuffer && parameters.shader) {
+        if (graphicBuffer && shader) {
             shader = mStretchShaderFactory.createSkShader(shader, stretchEffect);
         }
     }
@@ -525,21 +525,25 @@ sk_sp<SkShader> SkiaRenderEngine::createRuntimeEffectShader(
                           static_cast<ui::PixelFormat>(targetBuffer->getPixelFormat()))
                 : std::nullopt;
 
-        if (parameters.display.tonemapStrategy == DisplaySettings::TonemapStrategy::Local) {
-            // TODO: Handle color matrix transforms in linear space.
-            SkImage* image = parameters.shader->isAImage((SkMatrix*)nullptr, (SkTileMode*)nullptr);
-            if (image) {
-                static MouriMap kMapper;
-                const float ratio = getHdrRenderType(parameters.layer.sourceDataspace, format) ==
-                                HdrRenderType::GENERIC_HDR
-                        ? 1.0f
-                        : parameters.layerDimmingRatio;
-                return kMapper.mouriMap(getActiveContext(), parameters.shader, ratio);
-            }
+        const auto hdrType = getHdrRenderType(parameters.layer.sourceDataspace, format);
+
+        const auto usingLocalTonemap =
+                parameters.display.tonemapStrategy == DisplaySettings::TonemapStrategy::Local &&
+                hdrType != HdrRenderType::SDR &&
+                shader->isAImage((SkMatrix*)nullptr, (SkTileMode*)nullptr);
+
+        if (usingLocalTonemap) {
+            static MouriMap kMapper;
+            const float ratio =
+                    hdrType == HdrRenderType::GENERIC_HDR ? 1.0f : parameters.layerDimmingRatio;
+            shader = kMapper.mouriMap(getActiveContext(), shader, ratio);
         }
 
+        // disable tonemapping if we already locally tonemapped
+        auto inputDataspace =
+                usingLocalTonemap ? parameters.outputDataSpace : parameters.layer.sourceDataspace;
         auto effect =
-                shaders::LinearEffect{.inputDataspace = parameters.layer.sourceDataspace,
+                shaders::LinearEffect{.inputDataspace = inputDataspace,
                                       .outputDataspace = parameters.outputDataSpace,
                                       .undoPremultipliedAlpha = parameters.undoPremultipliedAlpha,
                                       .fakeOutputDataspace = parameters.fakeOutputDataspace};
@@ -555,20 +559,22 @@ sk_sp<SkShader> SkiaRenderEngine::createRuntimeEffectShader(
 
         mat4 colorTransform = parameters.layer.colorTransform;
 
-        colorTransform *=
-                mat4::scale(vec4(parameters.layerDimmingRatio, parameters.layerDimmingRatio,
-                                 parameters.layerDimmingRatio, 1.f));
+        if (!usingLocalTonemap) {
+            colorTransform *=
+                    mat4::scale(vec4(parameters.layerDimmingRatio, parameters.layerDimmingRatio,
+                                     parameters.layerDimmingRatio, 1.f));
+        }
 
         const auto targetBuffer = parameters.layer.source.buffer.buffer;
         const auto graphicBuffer = targetBuffer ? targetBuffer->getBuffer() : nullptr;
         const auto hardwareBuffer = graphicBuffer ? graphicBuffer->toAHardwareBuffer() : nullptr;
-        return createLinearEffectShader(parameters.shader, effect, runtimeEffect,
-                                        std::move(colorTransform), parameters.display.maxLuminance,
+        return createLinearEffectShader(shader, effect, runtimeEffect, std::move(colorTransform),
+                                        parameters.display.maxLuminance,
                                         parameters.display.currentLuminanceNits,
                                         parameters.layer.source.buffer.maxLuminanceNits,
                                         hardwareBuffer, parameters.display.renderIntent);
     }
-    return parameters.shader;
+    return shader;
 }
 
 void SkiaRenderEngine::initCanvas(SkCanvas* canvas, const DisplaySettings& display) {
