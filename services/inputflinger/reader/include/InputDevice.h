@@ -308,6 +308,7 @@ public:
     inline status_t getAbsoluteAxisInfo(int32_t code, RawAbsoluteAxisInfo* axisInfo) const {
         std::optional<RawAbsoluteAxisInfo> info = mEventHub->getAbsoluteAxisInfo(mId, code);
         if (!info.has_value()) {
+            axisInfo->clear();
             return NAME_NOT_FOUND;
         }
         *axisInfo = *info;
