@@ -33,6 +33,8 @@
 #include <sys/sysmacros.h>
 #include <unistd.h>
 
+#include <android_companion_virtualdevice_flags.h>
+
 #define LOG_TAG "EventHub"
 
 // #define LOG_NDEBUG 0
@@ -67,6 +69,8 @@
 using android::base::StringPrintf;
 
 namespace android {
+
+namespace vd_flags = android::companion::virtualdevice::flags;
 
 using namespace ftl::flag_operators;
 
@@ -2496,6 +2500,12 @@ void EventHub::openDeviceLocked(const std::string& devicePath) {
                         [&](int32_t keycode) { return device->hasKeycodeLocked(keycode); })) {
             device->classes |= InputDeviceClass::EXTERNAL_STYLUS;
         }
+    }
+
+    // See if the device is a rotary encoder with a single scroll axis and nothing else.
+    if (vd_flags::virtual_rotary() && device->classes == ftl::Flags<InputDeviceClass>(0) &&
+        device->relBitmask.test(REL_WHEEL) && !device->relBitmask.test(REL_HWHEEL)) {
+        device->classes |= InputDeviceClass::ROTARY_ENCODER;
     }
 
     // If the device isn't recognized as something we handle, don't monitor it.

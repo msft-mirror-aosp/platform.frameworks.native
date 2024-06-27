@@ -525,7 +525,8 @@ sk_sp<SkShader> SkiaRenderEngine::createRuntimeEffectShader(
                           static_cast<ui::PixelFormat>(targetBuffer->getPixelFormat()))
                 : std::nullopt;
 
-        const auto hdrType = getHdrRenderType(parameters.layer.sourceDataspace, format);
+        const auto hdrType = getHdrRenderType(parameters.layer.sourceDataspace, format,
+                                              parameters.layerDimmingRatio);
 
         const auto usingLocalTonemap =
                 parameters.display.tonemapStrategy == DisplaySettings::TonemapStrategy::Local &&
