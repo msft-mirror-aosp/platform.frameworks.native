@@ -268,21 +268,6 @@ cc_defaults {
         "-DANDROID_BASE_UNIQUE_FD_DISABLE_IMPLICIT_CONVERSION",
         "-DANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION",
     ],
-
-    target: {
-        bionic: {
-            // Hide symbols by default and set the BUILDING_LIBBINDER macro so that
-            // the code knows to export them.
-            //
-            // Only enabled on bionic builds, where RTTI is disabled, because
-            // it is failing to export required typeinfo symbols.
-            // TODO: b/341341056 - Find a solution for non-bionic builds.
-            cflags: [
-                "-fvisibility=hidden",
-                "-DBUILDING_LIBBINDER",
-            ],
-        },
-    },
 }
 
 cc_defaults {
