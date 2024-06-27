@@ -38,6 +38,7 @@
 #include <input/InputDevice.h>
 #include <input/KeyCharacterMap.h>
 #include <input/KeyLayoutMap.h>
+#include <input/KeyboardClassifier.h>
 #include <input/PropertyMap.h>
 #include <input/TouchVideoFrame.h>
 #include <input/VirtualKeyMap.h>
@@ -77,8 +78,11 @@ public:
     MOCK_METHOD(void, setLastKeyDownTimestamp, (nsecs_t when));
     MOCK_METHOD(nsecs_t, getLastKeyDownTimestamp, ());
 
+    KeyboardClassifier& getKeyboardClassifier() override { return *mClassifier; };
+
 private:
     int32_t mGeneration = 0;
+    std::unique_ptr<KeyboardClassifier> mClassifier = std::make_unique<KeyboardClassifier>();
 };
 
 class MockEventHubInterface : public EventHubInterface {
@@ -87,8 +91,8 @@ public:
     MOCK_METHOD(InputDeviceIdentifier, getDeviceIdentifier, (int32_t deviceId), (const));
     MOCK_METHOD(int32_t, getDeviceControllerNumber, (int32_t deviceId), (const));
     MOCK_METHOD(std::optional<PropertyMap>, getConfiguration, (int32_t deviceId), (const));
-    MOCK_METHOD(status_t, getAbsoluteAxisInfo,
-                (int32_t deviceId, int axis, RawAbsoluteAxisInfo* outAxisInfo), (const));
+    MOCK_METHOD(std::optional<RawAbsoluteAxisInfo>, getAbsoluteAxisInfo,
+                (int32_t deviceId, int axis), (const));
     MOCK_METHOD(bool, hasRelativeAxis, (int32_t deviceId, int axis), (const));
     MOCK_METHOD(bool, hasInputProperty, (int32_t deviceId, int property), (const));
     MOCK_METHOD(bool, hasMscEvent, (int32_t deviceId, int mscEvent), (const));
@@ -127,7 +131,7 @@ public:
     MOCK_METHOD(int32_t, getKeyCodeState, (int32_t deviceId, int32_t keyCode), (const, override));
     MOCK_METHOD(int32_t, getSwitchState, (int32_t deviceId, int32_t sw), (const, override));
 
-    MOCK_METHOD(status_t, getAbsoluteAxisValue, (int32_t deviceId, int32_t axis, int32_t* outValue),
+    MOCK_METHOD(std::optional<int32_t>, getAbsoluteAxisValue, (int32_t deviceId, int32_t axis),
                 (const, override));
     MOCK_METHOD(base::Result<std::vector<int32_t>>, getMtSlotValues,
                 (int32_t deviceId, int32_t axis, size_t slotCount), (const, override));
@@ -182,6 +186,7 @@ public:
                 (PointerControllerInterface::ControllerType), (override));
     MOCK_METHOD(void, notifyPointerDisplayIdChanged,
                 (ui::LogicalDisplayId displayId, const FloatPoint& position), (override));
+    MOCK_METHOD(bool, isInputMethodConnectionActive, (), (override));
 };
 
 } // namespace android
