@@ -559,7 +559,7 @@ private:
     sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId displayId) const;
     status_t setTransactionState(
             const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& state,
-            const Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
+            Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
             InputWindowCommands inputWindowCommands, int64_t desiredPresentTime,
             bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffers,
             bool hasListenerCallbacks, const std::vector<ListenerCallbacks>& listenerCallbacks,
@@ -737,12 +737,12 @@ private:
     status_t setActiveModeFromBackdoor(const sp<display::DisplayToken>&, DisplayModeId, Fps minFps,
                                        Fps maxFps);
 
-    void initiateDisplayModeChanges() REQUIRES(mStateLock, kMainThreadContext);
-    void finalizeDisplayModeChange(DisplayDevice&) REQUIRES(mStateLock, kMainThreadContext);
+    void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) EXCLUDES(mStateLock);
+    void finalizeDisplayModeChange(PhysicalDisplayId) REQUIRES(kMainThreadContext)
+            EXCLUDES(mStateLock);
 
-    // TODO(b/241285191): Replace DisplayDevice with DisplayModeRequest, and move to Scheduler.
-    void dropModeRequest(const sp<DisplayDevice>&) REQUIRES(mStateLock);
-    void applyActiveMode(const sp<DisplayDevice>&) REQUIRES(mStateLock);
+    void dropModeRequest(PhysicalDisplayId) REQUIRES(kMainThreadContext);
+    void applyActiveMode(PhysicalDisplayId) REQUIRES(kMainThreadContext);
 
     // Called on the main thread in response to setPowerMode()
     void setPowerModeInternal(const sp<DisplayDevice>& display, hal::PowerMode mode)
@@ -892,22 +892,35 @@ private:
     void attachReleaseFenceFutureToLayer(Layer* layer, LayerFE* layerFE, ui::LayerStack layerStack);
 
     // Checks if a protected layer exists in a list of layers.
-    bool layersHasProtectedLayer(const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) const;
+    bool layersHasProtectedLayer(const std::vector<sp<LayerFE>>& layers) const;
+
+    using OutputCompositionState = compositionengine::impl::OutputCompositionState;
+
+    std::optional<OutputCompositionState> getDisplayAndLayerSnapshotsFromMainThread(
+            RenderAreaBuilderVariant& renderAreaBuilder,
+            GetLayerSnapshotsFunction getLayerSnapshotsFn, std::vector<sp<LayerFE>>& layerFEs);
 
     void captureScreenCommon(RenderAreaBuilderVariant, GetLayerSnapshotsFunction,
                              ui::Size bufferSize, ui::PixelFormat, bool allowProtected,
                              bool grayscale, const sp<IScreenCaptureListener>&);
 
-    using OutputCompositionState = compositionengine::impl::OutputCompositionState;
+    std::optional<OutputCompositionState> getDisplayStateFromRenderAreaBuilder(
+            RenderAreaBuilderVariant& renderAreaBuilder) REQUIRES(kMainThreadContext);
 
-    const sp<const DisplayDevice> getRenderAreaDisplay(RenderAreaBuilderVariant& renderAreaBuilder,
-                                                       OutputCompositionState& state)
-            REQUIRES(kMainThreadContext);
-
-    std::vector<std::pair<Layer*, sp<android::LayerFE>>> getLayerSnapshotsFromMainThread(
-            GetLayerSnapshotsFunction getLayerSnapshotsFn) REQUIRES(kMainThreadContext);
+    // Legacy layer raw pointer is not safe to access outside the main thread.
+    // Creates a new vector consisting only of LayerFEs, which can be safely
+    // accessed outside the main thread.
+    std::vector<sp<LayerFE>> extractLayerFEs(
+            const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) const;
 
     ftl::SharedFuture<FenceResult> captureScreenshot(
+            const RenderAreaBuilderVariant& renderAreaBuilder,
+            const std::shared_ptr<renderengine::ExternalTexture>& buffer, bool regionSampling,
+            bool grayscale, bool isProtected, const sp<IScreenCaptureListener>& captureListener,
+            std::optional<OutputCompositionState>& displayState,
+            std::vector<sp<LayerFE>>& layerFEs);
+
+    ftl::SharedFuture<FenceResult> captureScreenshotLegacy(
             RenderAreaBuilderVariant, GetLayerSnapshotsFunction,
             const std::shared_ptr<renderengine::ExternalTexture>&, bool regionSampling,
             bool grayscale, bool isProtected, const sp<IScreenCaptureListener>&);
@@ -916,9 +929,9 @@ private:
             std::unique_ptr<const RenderArea>,
             const std::shared_ptr<renderengine::ExternalTexture>&, bool regionSampling,
             bool grayscale, bool isProtected, ScreenCaptureResults&,
-            const sp<const DisplayDevice> display, const OutputCompositionState& state,
-            std::vector<std::pair<Layer*, sp<android::LayerFE>>>& layers)
-            REQUIRES(kMainThreadContext);
+            std::optional<OutputCompositionState>& displayState,
+            std::vector<std::pair<Layer*, sp<LayerFE>>>& layers,
+            std::vector<sp<LayerFE>>& layerFEs);
 
     // If the uid provided is not UNSET_UID, the traverse will skip any layers that don't have a
     // matching ownerUid
@@ -1085,8 +1098,7 @@ private:
                                const DisplayDeviceState& drawingState)
             REQUIRES(mStateLock, kMainThreadContext);
 
-    void dispatchDisplayModeChangeEvent(PhysicalDisplayId, const scheduler::FrameRateMode&)
-            REQUIRES(mStateLock);
+    void dispatchDisplayModeChangeEvent(PhysicalDisplayId, const scheduler::FrameRateMode&);
 
     /*
      * VSYNC
@@ -1326,9 +1338,7 @@ private:
     display::PhysicalDisplays mPhysicalDisplays GUARDED_BY(mStateLock);
 
     // The inner or outer display for foldables, assuming they have mutually exclusive power states.
-    // Atomic because writes from onActiveDisplayChangedLocked are not always under mStateLock, but
-    // reads from ISchedulerCallback::requestDisplayModes may happen concurrently.
-    std::atomic<PhysicalDisplayId> mActiveDisplayId GUARDED_BY(mStateLock);
+    std::atomic<PhysicalDisplayId> mActiveDisplayId;
 
     display::DisplayModeController mDisplayModeController;
 

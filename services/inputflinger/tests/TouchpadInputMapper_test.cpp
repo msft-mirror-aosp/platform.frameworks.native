@@ -103,11 +103,8 @@ protected:
         setupAxis(ABS_MT_DISTANCE, /*valid=*/false, /*min=*/0, /*max=*/0, /*resolution=*/0);
         setupAxis(ABS_MT_TOOL_TYPE, /*valid=*/false, /*min=*/0, /*max=*/0, /*resolution=*/0);
 
-        EXPECT_CALL(mMockEventHub, getAbsoluteAxisValue(EVENTHUB_ID, ABS_MT_SLOT, testing::_))
-                .WillRepeatedly([](int32_t eventHubId, int32_t, int32_t* outValue) {
-                    *outValue = 0;
-                    return OK;
-                });
+        EXPECT_CALL(mMockEventHub, getAbsoluteAxisValue(EVENTHUB_ID, ABS_MT_SLOT))
+                .WillRepeatedly(Return(0));
         EXPECT_CALL(mMockEventHub, getMtSlotValues(EVENTHUB_ID, testing::_, testing::_))
                 .WillRepeatedly([]() -> base::Result<std::vector<int32_t>> {
                     return base::ResultError("Axis not supported", NAME_NOT_FOUND);

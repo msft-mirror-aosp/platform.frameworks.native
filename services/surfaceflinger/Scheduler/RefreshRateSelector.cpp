@@ -1066,6 +1066,11 @@ auto RefreshRateSelector::getFrameRateOverrides(const std::vector<LayerRequireme
         ALOGV("%s: overriding to %s for uid=%d", __func__, to_string(overrideFps).c_str(), uid);
         ATRACE_FORMAT_INSTANT("%s: overriding to %s for uid=%d", __func__,
                               to_string(overrideFps).c_str(), uid);
+        if (ATRACE_ENABLED() && FlagManager::getInstance().trace_frame_rate_override()) {
+            std::stringstream ss;
+            ss << "FrameRateOverride " << uid;
+            ATRACE_INT(ss.str().c_str(), overrideFps.getIntValue());
+        }
         frameRateOverrides.emplace(uid, overrideFps);
     }
 
@@ -1636,7 +1641,7 @@ FpsRange RefreshRateSelector::getFrameRateCategoryRange(FrameRateCategory catego
         case FrameRateCategory::Normal:
             return FpsRange{60_Hz, 120_Hz};
         case FrameRateCategory::Low:
-            return FpsRange{30_Hz, 120_Hz};
+            return FpsRange{48_Hz, 120_Hz};
         case FrameRateCategory::HighHint:
         case FrameRateCategory::NoPreference:
         case FrameRateCategory::Default:

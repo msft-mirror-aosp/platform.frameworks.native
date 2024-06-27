@@ -277,7 +277,6 @@ void RegionSamplingThread::captureSample() {
     }
 
     const Rect sampledBounds = sampleRegion.bounds();
-    constexpr bool kHintForSeamlessTransition = false;
 
     std::unordered_set<sp<IRegionSamplingListener>, SpHash<IRegionSamplingListener>> listeners;
 
@@ -348,17 +347,29 @@ void RegionSamplingThread::captureSample() {
     constexpr bool kGrayscale = false;
     constexpr bool kIsProtected = false;
 
-    if (const auto fenceResult =
-                mFlinger.captureScreenshot(SurfaceFlinger::RenderAreaBuilderVariant(
-                                                   std::in_place_type<DisplayRenderAreaBuilder>,
-                                                   sampledBounds, sampledBounds.getSize(),
-                                                   ui::Dataspace::V0_SRGB,
-                                                   kHintForSeamlessTransition,
-                                                   true /* captureSecureLayers */, displayWeak),
-                                           getLayerSnapshotsFn, buffer, kRegionSampling, kGrayscale,
-                                           kIsProtected, nullptr)
+    SurfaceFlinger::RenderAreaBuilderVariant
+            renderAreaBuilder(std::in_place_type<DisplayRenderAreaBuilder>, sampledBounds,
+                              sampledBounds.getSize(), ui::Dataspace::V0_SRGB, displayWeak,
+                              RenderArea::Options::CAPTURE_SECURE_LAYERS);
+
+    FenceResult fenceResult;
+    if (FlagManager::getInstance().single_hop_screenshot() &&
+        FlagManager::getInstance().ce_fence_promise()) {
+        std::vector<sp<LayerFE>> layerFEs;
+        auto displayState =
+                mFlinger.getDisplayAndLayerSnapshotsFromMainThread(renderAreaBuilder,
+                                                                   getLayerSnapshotsFn, layerFEs);
+        fenceResult =
+                mFlinger.captureScreenshot(renderAreaBuilder, buffer, kRegionSampling, kGrayscale,
+                                           kIsProtected, nullptr, displayState, layerFEs)
                         .get();
-        fenceResult.ok()) {
+    } else {
+        fenceResult =
+                mFlinger.captureScreenshotLegacy(renderAreaBuilder, getLayerSnapshotsFn, buffer,
+                                                 kRegionSampling, kGrayscale, kIsProtected, nullptr)
+                        .get();
+    }
+    if (fenceResult.ok()) {
         fenceResult.value()->waitForever(LOG_TAG);
     }
 

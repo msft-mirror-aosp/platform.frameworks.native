@@ -122,4 +122,11 @@ private:
     bool handleStylusUp(uint16_t tool, std::chrono::nanoseconds eventTime);
 };
 
+class VirtualRotaryEncoder : public VirtualInputDevice {
+public:
+    VirtualRotaryEncoder(android::base::unique_fd fd);
+    virtual ~VirtualRotaryEncoder() override;
+    bool writeScrollEvent(float scrollAmount, std::chrono::nanoseconds eventTime);
+};
+
 } // namespace android
