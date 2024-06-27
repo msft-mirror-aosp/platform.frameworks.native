@@ -89,6 +89,8 @@ def gen_cpp():
     f.write(gencom.copyright_and_warning(2015))
 
     f.write("""\
+#include <android/hardware_buffer.h>
+
 #include <algorithm>
 
 #include "null_driver_gen.h"
