@@ -1059,7 +1059,8 @@ void SurfaceComposerClient::doUncacheBufferTransaction(uint64_t cacheId) {
     uncacheBuffer.token = BufferCache::getInstance().getToken();
     uncacheBuffer.id = cacheId;
     Vector<ComposerState> composerStates;
-    status_t status = sf->setTransactionState(FrameTimelineInfo{}, composerStates, {},
+    Vector<DisplayState> displayStates;
+    status_t status = sf->setTransactionState(FrameTimelineInfo{}, composerStates, displayStates,
                                               ISurfaceComposer::eOneWay,
                                               Transaction::getDefaultApplyToken(), {}, systemTime(),
                                               true, {uncacheBuffer}, false, {}, generateId(), {});
@@ -1702,7 +1703,7 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBuffe
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBuffer(
         const sp<SurfaceControl>& sc, const sp<GraphicBuffer>& buffer,
         const std::optional<sp<Fence>>& fence, const std::optional<uint64_t>& optFrameNumber,
-        uint32_t producerId, ReleaseBufferCallback callback) {
+        uint32_t producerId, ReleaseBufferCallback callback, nsecs_t dequeueTime) {
     layer_state_t* s = getLayerState(sc);
     if (!s) {
         mStatus = BAD_INDEX;
@@ -1718,6 +1719,7 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBuffe
         bufferData->frameNumber = frameNumber;
         bufferData->producerId = producerId;
         bufferData->flags |= BufferData::BufferDataChange::frameNumberChanged;
+        bufferData->dequeueTime = dequeueTime;
         if (fence) {
             bufferData->acquireFence = *fence;
             bufferData->flags |= BufferData::BufferDataChange::fenceChanged;

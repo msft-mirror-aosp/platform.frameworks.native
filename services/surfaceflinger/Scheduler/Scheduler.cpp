@@ -123,19 +123,22 @@ void Scheduler::setPacesetterDisplay(std::optional<PhysicalDisplayId> pacesetter
     promotePacesetterDisplay(pacesetterIdOpt);
 }
 
-void Scheduler::registerDisplay(PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr) {
+void Scheduler::registerDisplay(PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr,
+                                PhysicalDisplayId activeDisplayId) {
     auto schedulePtr =
             std::make_shared<VsyncSchedule>(selectorPtr->getActiveMode().modePtr, mFeatures,
                                             [this](PhysicalDisplayId id, bool enable) {
                                                 onHardwareVsyncRequest(id, enable);
                                             });
 
-    registerDisplayInternal(displayId, std::move(selectorPtr), std::move(schedulePtr));
+    registerDisplayInternal(displayId, std::move(selectorPtr), std::move(schedulePtr),
+                            activeDisplayId);
 }
 
 void Scheduler::registerDisplayInternal(PhysicalDisplayId displayId,
                                         RefreshRateSelectorPtr selectorPtr,
-                                        VsyncSchedulePtr schedulePtr) {
+                                        VsyncSchedulePtr schedulePtr,
+                                        PhysicalDisplayId activeDisplayId) {
     demotePacesetterDisplay();
 
     auto [pacesetterVsyncSchedule, isNew] = [&]() FTL_FAKE_GUARD(kMainThreadContext) {
@@ -145,7 +148,7 @@ void Scheduler::registerDisplayInternal(PhysicalDisplayId displayId,
                                                        std::move(schedulePtr), mFeatures)
                                    .second;
 
-        return std::make_pair(promotePacesetterDisplayLocked(), isNew);
+        return std::make_pair(promotePacesetterDisplayLocked(activeDisplayId), isNew);
     }();
 
     applyNewVsyncSchedule(std::move(pacesetterVsyncSchedule));
@@ -158,7 +161,9 @@ void Scheduler::registerDisplayInternal(PhysicalDisplayId displayId,
     dispatchHotplug(displayId, Hotplug::Connected);
 }
 
-void Scheduler::unregisterDisplay(PhysicalDisplayId displayId) {
+void Scheduler::unregisterDisplay(PhysicalDisplayId displayId, PhysicalDisplayId activeDisplayId) {
+    LOG_ALWAYS_FATAL_IF(displayId == activeDisplayId, "Cannot unregister the active display!");
+
     dispatchHotplug(displayId, Hotplug::Disconnected);
 
     demotePacesetterDisplay();
@@ -173,7 +178,7 @@ void Scheduler::unregisterDisplay(PhysicalDisplayId displayId) {
         // headless virtual display.)
         LOG_ALWAYS_FATAL_IF(mDisplays.empty(), "Cannot unregister all displays!");
 
-        pacesetterVsyncSchedule = promotePacesetterDisplayLocked();
+        pacesetterVsyncSchedule = promotePacesetterDisplayLocked(activeDisplayId);
     }
     applyNewVsyncSchedule(std::move(pacesetterVsyncSchedule));
 }
@@ -1113,8 +1118,10 @@ auto Scheduler::applyPolicy(S Policy::*statePtr, T&& newState) -> GlobalSignals 
                                                 .emitEvent = !choice.consideredSignals.idle});
         }
 
-        frameRateOverridesChanged = updateFrameRateOverridesLocked(consideredSignals, modeOpt->fps);
-
+        if (!FlagManager::getInstance().vrr_bugfix_dropped_frame()) {
+            frameRateOverridesChanged =
+                    updateFrameRateOverridesLocked(consideredSignals, modeOpt->fps);
+        }
         if (mPolicy.modeOpt != modeOpt) {
             mPolicy.modeOpt = modeOpt;
             refreshRateChanged = true;
@@ -1128,6 +1135,12 @@ auto Scheduler::applyPolicy(S Policy::*statePtr, T&& newState) -> GlobalSignals 
     }
     if (refreshRateChanged) {
         mSchedulerCallback.requestDisplayModes(std::move(modeRequests));
+    }
+
+    if (FlagManager::getInstance().vrr_bugfix_dropped_frame()) {
+        std::scoped_lock lock(mPolicyLock);
+        frameRateOverridesChanged =
+                updateFrameRateOverridesLocked(consideredSignals, mPolicy.modeOpt->fps);
     }
     if (frameRateOverridesChanged) {
         mSchedulerCallback.triggerOnFrameRateOverridesChanged();
