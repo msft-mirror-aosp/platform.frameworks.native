@@ -5169,7 +5169,7 @@ bool SurfaceFlinger::shouldLatchUnsignaled(const layer_state_t& state, size_t nu
 
 status_t SurfaceFlinger::setTransactionState(
         const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& states,
-        const Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
+        Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
         InputWindowCommands inputWindowCommands, int64_t desiredPresentTime, bool isAutoTimestamp,
         const std::vector<client_cache_t>& uncacheBuffers, bool hasListenerCallbacks,
         const std::vector<ListenerCallbacks>& listenerCallbacks, uint64_t transactionId,
@@ -5184,7 +5184,7 @@ status_t SurfaceFlinger::setTransactionState(
         composerState.state.sanitize(permissions);
     }
 
-    for (DisplayState display : displays) {
+    for (DisplayState& display : displays) {
         display.sanitize(permissions);
     }
 
@@ -6391,15 +6391,23 @@ status_t SurfaceFlinger::doDump(int fd, const DumpArgs& args, bool asProto) {
         return NO_ERROR;
     }
 
-    // Traversal of drawing state must happen on the main thread.
-    // Otherwise, SortedVector may have shared ownership during concurrent
-    // traversals, which can result in use-after-frees.
+    // Collect debug data from main thread
     std::string compositionLayers;
     mScheduler
             ->schedule([&]() FTL_FAKE_GUARD(mStateLock) FTL_FAKE_GUARD(kMainThreadContext) {
                 dumpVisibleFrontEnd(compositionLayers);
             })
             .get();
+    // get window info listener data without the state lock
+    auto windowInfosDebug = mWindowInfosListenerInvoker->getDebugInfo();
+    compositionLayers.append("Window Infos:\n");
+    StringAppendF(&compositionLayers, "  max send vsync id: %" PRId64 "\n",
+                  ftl::to_underlying(windowInfosDebug.maxSendDelayVsyncId));
+    StringAppendF(&compositionLayers, "  max send delay (ns): %" PRId64 " ns\n",
+                  windowInfosDebug.maxSendDelayDuration);
+    StringAppendF(&compositionLayers, "  unsent messages: %zu\n",
+                  windowInfosDebug.pendingMessageCount);
+    compositionLayers.append("\n");
     dumpAll(args, compositionLayers, result);
     write(fd, result.c_str(), result.size());
     return NO_ERROR;
@@ -6981,15 +6989,6 @@ void SurfaceFlinger::dumpAll(const DumpArgs& args, const std::string& compositio
     FlagManager::getInstance().dump(result);
 
     result.append(mTimeStats->miniDump());
-    result.append("\n");
-
-    result.append("Window Infos:\n");
-    auto windowInfosDebug = mWindowInfosListenerInvoker->getDebugInfo();
-    StringAppendF(&result, "  max send vsync id: %" PRId64 "\n",
-                  ftl::to_underlying(windowInfosDebug.maxSendDelayVsyncId));
-    StringAppendF(&result, "  max send delay (ns): %" PRId64 " ns\n",
-                  windowInfosDebug.maxSendDelayDuration);
-    StringAppendF(&result, "  unsent messages: %zu\n", windowInfosDebug.pendingMessageCount);
     result.append("\n");
 }
 
@@ -7959,10 +7958,13 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
     GetLayerSnapshotsFunction getLayerSnapshotsFn =
             getLayerSnapshotsForScreenshots(layerStack, args.uid, std::move(excludeLayerIds));
 
+    ftl::Flags<RenderArea::Options> options;
+    if (args.captureSecureLayers) options |= RenderArea::Options::CAPTURE_SECURE_LAYERS;
+    if (args.hintForSeamlessTransition)
+        options |= RenderArea::Options::HINT_FOR_SEAMLESS_TRANSITION;
     captureScreenCommon(RenderAreaBuilderVariant(std::in_place_type<DisplayRenderAreaBuilder>,
                                                  args.sourceCrop, reqSize, args.dataspace,
-                                                 args.hintForSeamlessTransition,
-                                                 args.captureSecureLayers, displayWeak),
+                                                 displayWeak, options),
                         getLayerSnapshotsFn, reqSize, args.pixelFormat, args.allowProtected,
                         args.grayscale, captureListener);
 }
@@ -8013,10 +8015,12 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
     constexpr bool kAllowProtected = false;
     constexpr bool kGrayscale = false;
 
+    ftl::Flags<RenderArea::Options> options;
+    if (args.hintForSeamlessTransition)
+        options |= RenderArea::Options::HINT_FOR_SEAMLESS_TRANSITION;
     captureScreenCommon(RenderAreaBuilderVariant(std::in_place_type<DisplayRenderAreaBuilder>,
-                                                 Rect(), size, args.dataspace,
-                                                 args.hintForSeamlessTransition,
-                                                 false /* captureSecureLayers */, displayWeak),
+                                                 Rect(), size, args.dataspace, displayWeak,
+                                                 options),
                         getLayerSnapshotsFn, size, args.pixelFormat, kAllowProtected, kGrayscale,
                         captureListener);
 }
@@ -8115,10 +8119,13 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
         return;
     }
 
+    ftl::Flags<RenderArea::Options> options;
+    if (args.captureSecureLayers) options |= RenderArea::Options::CAPTURE_SECURE_LAYERS;
+    if (args.hintForSeamlessTransition)
+        options |= RenderArea::Options::HINT_FOR_SEAMLESS_TRANSITION;
     captureScreenCommon(RenderAreaBuilderVariant(std::in_place_type<LayerRenderAreaBuilder>, crop,
-                                                 reqSize, dataspace, args.captureSecureLayers,
-                                                 args.hintForSeamlessTransition, parent,
-                                                 args.childrenOnly),
+                                                 reqSize, dataspace, parent, args.childrenOnly,
+                                                 options),
                         getLayerSnapshotsFn, reqSize, args.pixelFormat, args.allowProtected,
                         args.grayscale, captureListener);
 }
