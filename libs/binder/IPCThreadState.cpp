@@ -25,7 +25,6 @@
 #include <cutils/sched_policy.h>
 #include <utils/CallStack.h>
 #include <utils/Log.h>
-#include <utils/SystemClock.h>
 
 #include <atomic>
 #include <errno.h>
@@ -38,6 +37,7 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include "Utils.h"
 #include "binder_module.h"
 
 #if LOG_NDEBUG
@@ -64,6 +64,8 @@
 // ---------------------------------------------------------------------------
 
 namespace android {
+
+using namespace std::chrono_literals;
 
 // Static const and functions will be optimized out if not used,
 // when LOG_NDEBUG and references in IF_LOG_COMMANDS() are optimized out.
@@ -647,8 +649,9 @@ status_t IPCThreadState::getAndExecuteCommand()
 
         size_t newThreadsCount = mProcess->mExecutingThreadsCount.fetch_add(1) + 1;
         if (newThreadsCount >= mProcess->mMaxThreads) {
-            int64_t expected = 0;
-            mProcess->mStarvationStartTimeMs.compare_exchange_strong(expected, uptimeMillis());
+            auto expected = ProcessState::never();
+            mProcess->mStarvationStartTime
+                    .compare_exchange_strong(expected, std::chrono::steady_clock::now());
         }
 
         result = executeCommand(cmd);
@@ -656,12 +659,13 @@ status_t IPCThreadState::getAndExecuteCommand()
         size_t maxThreads = mProcess->mMaxThreads;
         newThreadsCount = mProcess->mExecutingThreadsCount.fetch_sub(1) - 1;
         if (newThreadsCount < maxThreads) {
-            size_t starvationStartTimeMs = mProcess->mStarvationStartTimeMs.exchange(0);
-            if (starvationStartTimeMs != 0) {
-                int64_t starvationTimeMs = uptimeMillis() - starvationStartTimeMs;
-                if (starvationTimeMs > 100) {
+            auto starvationStartTime =
+                    mProcess->mStarvationStartTime.exchange(ProcessState::never());
+            if (starvationStartTime != ProcessState::never()) {
+                auto starvationTime = std::chrono::steady_clock::now() - starvationStartTime;
+                if (starvationTime > 100ms) {
                     ALOGE("binder thread pool (%zu threads) starved for %" PRId64 " ms", maxThreads,
-                          starvationTimeMs);
+                          to_ms(starvationTime));
                 }
             }
         }

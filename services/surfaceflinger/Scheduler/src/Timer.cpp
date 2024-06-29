@@ -24,10 +24,10 @@
 #include <sys/timerfd.h>
 #include <sys/unistd.h>
 
+#include <common/trace.h>
 #include <ftl/concat.h>
 #include <ftl/enum.h>
 #include <log/log.h>
-#include <utils/Trace.h>
 
 #include <scheduler/Timer.h>
 
@@ -190,7 +190,7 @@ bool Timer::dispatch() {
         setDebugState(DebugState::Running);
         if (ATRACE_ENABLED()) {
             ftl::Concat trace("TimerIteration #", iteration++);
-            ATRACE_NAME(trace.c_str());
+            SFTRACE_NAME(trace.c_str());
         }
 
         if (nfds == -1) {

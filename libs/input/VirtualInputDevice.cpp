@@ -509,4 +509,15 @@ bool VirtualStylus::handleStylusUp(uint16_t tool, std::chrono::nanoseconds event
     return true;
 }
 
+// --- VirtualRotaryEncoder ---
+VirtualRotaryEncoder::VirtualRotaryEncoder(unique_fd fd) : VirtualInputDevice(std::move(fd)) {}
+
+VirtualRotaryEncoder::~VirtualRotaryEncoder() {}
+
+bool VirtualRotaryEncoder::writeScrollEvent(float scrollAmount,
+                                            std::chrono::nanoseconds eventTime) {
+    return writeInputEvent(EV_REL, REL_WHEEL, static_cast<int32_t>(scrollAmount), eventTime) &&
+            writeInputEvent(EV_SYN, SYN_REPORT, 0, eventTime);
+}
+
 } // namespace android

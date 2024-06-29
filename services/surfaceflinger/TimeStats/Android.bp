@@ -24,6 +24,7 @@ cc_defaults {
 
     static_libs: [
         "libtimestats_proto",
+        "libsurfaceflinger_common",
     ],
 
     export_static_lib_headers: [

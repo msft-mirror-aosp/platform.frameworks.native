@@ -24,6 +24,7 @@
 #include <pthread.h>
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 
 // ---------------------------------------------------------------------------
@@ -177,7 +178,9 @@ private:
     // Current number of pooled threads inside the thread pool.
     std::atomic_size_t mKernelStartedThreads;
     // Time when thread pool was emptied
-    std::atomic_int64_t mStarvationStartTimeMs;
+    std::atomic<std::chrono::steady_clock::time_point> mStarvationStartTime;
+
+    static constexpr auto never = &std::chrono::steady_clock::time_point::min;
 
     mutable std::mutex mLock; // protects everything below.
 
