@@ -130,7 +130,6 @@ public:
         }
         if (mFdp->ConsumeBool()) {
             return std::optional<RawAbsoluteAxisInfo>({
-                    .valid = mFdp->ConsumeBool(),
                     .minValue = mFdp->ConsumeIntegral<int32_t>(),
                     .maxValue = mFdp->ConsumeIntegral<int32_t>(),
                     .flat = mFdp->ConsumeIntegral<int32_t>(),
