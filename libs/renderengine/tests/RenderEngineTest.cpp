@@ -3147,6 +3147,214 @@ TEST_P(RenderEngineTest, r8_respects_color_transform_when_device_handles) {
     expectBufferColor(Rect(0, 0, 1, 1), 0,  70, 0, 255);
 }
 
+TEST_P(RenderEngineTest, localTonemap_preservesFullscreenSdr) {
+    if (!GetParam()->apiSupported()) {
+        GTEST_SKIP();
+    }
+
+    initializeRenderEngine();
+
+    mBuffer = std::make_shared<
+            renderengine::impl::
+                    ExternalTexture>(sp<GraphicBuffer>::make(1, 1, HAL_PIXEL_FORMAT_RGBA_8888, 1,
+                                                             GRALLOC_USAGE_SW_READ_OFTEN |
+                                                                     GRALLOC_USAGE_SW_WRITE_OFTEN |
+                                                                     GRALLOC_USAGE_HW_RENDER |
+                                                                     GRALLOC_USAGE_HW_TEXTURE,
+                                                             "output"),
+                                     *mRE,
+                                     renderengine::impl::ExternalTexture::Usage::READABLE |
+                                             renderengine::impl::ExternalTexture::Usage::WRITEABLE);
+    ASSERT_EQ(0, mBuffer->getBuffer()->initCheck());
+
+    const auto whiteBuffer = allocateAndFillSourceBuffer(1, 1, ubyte4(51, 51, 51, 255));
+
+    const auto rect = Rect(0, 0, 1, 1);
+    const renderengine::DisplaySettings display{
+            .physicalDisplay = rect,
+            .clip = rect,
+            .outputDataspace = ui::Dataspace::SRGB,
+            .targetLuminanceNits = 40,
+            .tonemapStrategy = renderengine::DisplaySettings::TonemapStrategy::Local,
+    };
+
+    const renderengine::LayerSettings whiteLayer{
+            .geometry.boundaries = rect.toFloatRect(),
+            .source =
+                    renderengine::PixelSource{
+                            .buffer =
+                                    renderengine::Buffer{
+                                            .buffer = whiteBuffer,
+                                    },
+                    },
+            .alpha = 1.0f,
+            .sourceDataspace = ui::Dataspace::V0_SCRGB_LINEAR,
+            .whitePointNits = 200,
+    };
+
+    std::vector<renderengine::LayerSettings> layers{whiteLayer};
+    invokeDraw(display, layers);
+
+    expectBufferColor(Rect(0, 0, 1, 1), 255, 255, 255, 255);
+}
+
+TEST_P(RenderEngineTest, localTonemap_preservesFarawaySdrRegions) {
+    if (!GetParam()->apiSupported()) {
+        GTEST_SKIP();
+    }
+
+    initializeRenderEngine();
+
+    const auto blockWidth = 256;
+    const auto width = blockWidth * 4;
+
+    const auto buffer = allocateSourceBuffer(width, 1);
+
+    mBuffer = std::make_shared<
+            renderengine::impl::
+                    ExternalTexture>(sp<GraphicBuffer>::make(width, 1, HAL_PIXEL_FORMAT_RGBA_8888,
+                                                             1,
+                                                             GRALLOC_USAGE_SW_READ_OFTEN |
+                                                                     GRALLOC_USAGE_SW_WRITE_OFTEN |
+                                                                     GRALLOC_USAGE_HW_RENDER |
+                                                                     GRALLOC_USAGE_HW_TEXTURE,
+                                                             "output"),
+                                     *mRE,
+                                     renderengine::impl::ExternalTexture::Usage::READABLE |
+                                             renderengine::impl::ExternalTexture::Usage::WRITEABLE);
+
+    {
+        uint8_t* pixels;
+        buffer->getBuffer()->lock(GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN,
+                                  reinterpret_cast<void**>(&pixels));
+        uint8_t* dst = pixels;
+        for (uint32_t i = 0; i < width; i++) {
+            uint8_t value = 0;
+            if (i < blockWidth) {
+                value = 51;
+            } else if (i >= blockWidth * 3) {
+                value = 255;
+            }
+            dst[0] = value;
+            dst[1] = value;
+            dst[2] = value;
+            dst[3] = 255;
+            dst += 4;
+        }
+        buffer->getBuffer()->unlock();
+    }
+
+    const auto rect = Rect(0, 0, width, 1);
+    const renderengine::DisplaySettings display{
+            .physicalDisplay = rect,
+            .clip = rect,
+            .outputDataspace = ui::Dataspace::V0_SRGB_LINEAR,
+            .targetLuminanceNits = 40,
+            .tonemapStrategy = renderengine::DisplaySettings::TonemapStrategy::Local,
+    };
+
+    const renderengine::LayerSettings whiteLayer{
+            .geometry.boundaries = rect.toFloatRect(),
+            .source =
+                    renderengine::PixelSource{
+                            .buffer =
+                                    renderengine::Buffer{
+                                            .buffer = buffer,
+                                    },
+                    },
+            .alpha = 1.0f,
+            .sourceDataspace = ui::Dataspace::V0_SCRGB_LINEAR,
+            .whitePointNits = 200,
+    };
+
+    std::vector<renderengine::LayerSettings> layers{whiteLayer};
+    invokeDraw(display, layers);
+
+    // SDR regions are boosted to preserve SDR detail.
+    expectBufferColor(Rect(0, 0, blockWidth, 1), 255, 255, 255, 255);
+    expectBufferColor(Rect(blockWidth, 0, blockWidth * 2, 1), 0, 0, 0, 255);
+    expectBufferColor(Rect(blockWidth * 2, 0, blockWidth * 3, 1), 0, 0, 0, 255);
+    expectBufferColor(Rect(blockWidth * 3, 0, blockWidth * 4, 1), 255, 255, 255, 255);
+}
+
+TEST_P(RenderEngineTest, localTonemap_tonemapsNearbySdrRegions) {
+    if (!GetParam()->apiSupported()) {
+        GTEST_SKIP();
+    }
+
+    initializeRenderEngine();
+
+    const auto blockWidth = 2;
+    const auto width = blockWidth * 2;
+
+    mBuffer = std::make_shared<
+            renderengine::impl::
+                    ExternalTexture>(sp<GraphicBuffer>::make(width, 1, HAL_PIXEL_FORMAT_RGBA_8888,
+                                                             1,
+                                                             GRALLOC_USAGE_SW_READ_OFTEN |
+                                                                     GRALLOC_USAGE_SW_WRITE_OFTEN |
+                                                                     GRALLOC_USAGE_HW_RENDER |
+                                                                     GRALLOC_USAGE_HW_TEXTURE,
+                                                             "output"),
+                                     *mRE,
+                                     renderengine::impl::ExternalTexture::Usage::READABLE |
+                                             renderengine::impl::ExternalTexture::Usage::WRITEABLE);
+
+    const auto buffer = allocateSourceBuffer(width, 1);
+
+    {
+        uint8_t* pixels;
+        buffer->getBuffer()->lock(GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN,
+                                  reinterpret_cast<void**>(&pixels));
+        uint8_t* dst = pixels;
+        for (uint32_t i = 0; i < width; i++) {
+            uint8_t value = 0;
+            if (i < blockWidth) {
+                value = 51;
+            } else if (i >= blockWidth) {
+                value = 255;
+            }
+            dst[0] = value;
+            dst[1] = value;
+            dst[2] = value;
+            dst[3] = 255;
+            dst += 4;
+        }
+        buffer->getBuffer()->unlock();
+    }
+
+    const auto rect = Rect(0, 0, width, 1);
+    const renderengine::DisplaySettings display{
+            .physicalDisplay = rect,
+            .clip = rect,
+            .outputDataspace = ui::Dataspace::V0_SRGB_LINEAR,
+            .targetLuminanceNits = 40,
+            .tonemapStrategy = renderengine::DisplaySettings::TonemapStrategy::Local,
+    };
+
+    const renderengine::LayerSettings whiteLayer{
+            .geometry.boundaries = rect.toFloatRect(),
+            .source =
+                    renderengine::PixelSource{
+                            .buffer =
+                                    renderengine::Buffer{
+                                            .buffer = buffer,
+                                    },
+                    },
+            .alpha = 1.0f,
+            .sourceDataspace = ui::Dataspace::V0_SCRGB_LINEAR,
+            .whitePointNits = 200,
+    };
+
+    std::vector<renderengine::LayerSettings> layers{whiteLayer};
+    invokeDraw(display, layers);
+
+    // SDR regions remain "dimmed", but preserve detail with a roll-off curve.
+    expectBufferColor(Rect(0, 0, blockWidth, 1), 132, 132, 132, 255, 2);
+    // HDR regions are not dimmed.
+    expectBufferColor(Rect(blockWidth, 0, blockWidth * 2, 1), 255, 255, 255, 255);
+}
+
 TEST_P(RenderEngineTest, primeShaderCache) {
     // TODO: b/331447071 - Fix in Graphite and re-enable.
     if (GetParam()->skiaBackend() == renderengine::RenderEngine::SkiaBackend::GRAPHITE) {

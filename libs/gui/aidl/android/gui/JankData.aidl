@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 The Android Open Source Project
+ * Copyright 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +14,22 @@
  * limitations under the License.
  */
 
-parcelable BinderRpcTestServerConfig {
-    int numThreads;
-    int[] serverSupportedFileDescriptorTransportModes;
-    int socketType;
-    int rpcSecurity;
-    int serverVersion;
-    int socketFd; // Inherited from the parent process.
-    @utf8InCpp String addr;
+ package android.gui;
+
+ /** @hide */
+parcelable JankData {
+  /**
+   * Identifier for the frame submitted with Transaction.setFrameTimelineVsyncId
+   */
+  long frameVsyncId;
+
+  /**
+   * Bitmask of jank types that occurred.
+   */
+  int jankType;
+
+  /**
+   * Expected duration in nanoseconds of this frame.
+   */
+  long frameIntervalNs;
 }
