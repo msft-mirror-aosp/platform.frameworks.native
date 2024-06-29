@@ -86,7 +86,8 @@ int64_t generateId() {
     return (((int64_t)getpid()) << 32) | ++idCounter;
 }
 
-void emptyCallback(nsecs_t, const sp<Fence>&, const std::vector<SurfaceControlStats>&) {}
+constexpr int64_t INVALID_VSYNC = -1;
+
 } // namespace
 
 const std::string SurfaceComposerClient::kEmpty{};
@@ -207,7 +208,166 @@ sp<SurfaceComposerClient> SurfaceComposerClient::getDefault() {
     return DefaultComposerClient::getComposerClient();
 }
 
+// ---------------------------------------------------------------------------
+
 JankDataListener::~JankDataListener() {
+}
+
+status_t JankDataListener::flushJankData() {
+    if (mLayerId == -1) {
+        return INVALID_OPERATION;
+    }
+
+    binder::Status status = ComposerServiceAIDL::getComposerService()->flushJankData(mLayerId);
+    return statusTFromBinderStatus(status);
+}
+
+std::mutex JankDataListenerFanOut::sFanoutInstanceMutex;
+std::unordered_map<int32_t, sp<JankDataListenerFanOut>> JankDataListenerFanOut::sFanoutInstances;
+
+binder::Status JankDataListenerFanOut::onJankData(const std::vector<gui::JankData>& jankData) {
+    // Find the highest VSync ID.
+    int64_t lastVsync = jankData.empty()
+            ? 0
+            : std::max_element(jankData.begin(), jankData.end(),
+                               [](const gui::JankData& jd1, const gui::JankData& jd2) {
+                                   return jd1.frameVsyncId < jd2.frameVsyncId;
+                               })
+                      ->frameVsyncId;
+
+    // Fan out the jank data callback.
+    std::vector<wp<JankDataListener>> listenersToRemove;
+    for (auto listener : getActiveListeners()) {
+        if (!listener->onJankDataAvailable(jankData) ||
+            (listener->mRemoveAfter >= 0 && listener->mRemoveAfter <= lastVsync)) {
+            listenersToRemove.push_back(listener);
+        }
+    }
+
+    return removeListeners(listenersToRemove)
+            ? binder::Status::ok()
+            : binder::Status::fromExceptionCode(binder::Status::EX_NULL_POINTER);
+}
+
+status_t JankDataListenerFanOut::addListener(sp<SurfaceControl> sc, sp<JankDataListener> listener) {
+    sp<IBinder> layer = sc->getHandle();
+    if (layer == nullptr) {
+        return UNEXPECTED_NULL;
+    }
+    int32_t layerId = sc->getLayerId();
+
+    sFanoutInstanceMutex.lock();
+    auto it = sFanoutInstances.find(layerId);
+    bool registerNeeded = it == sFanoutInstances.end();
+    sp<JankDataListenerFanOut> fanout;
+    if (registerNeeded) {
+        fanout = sp<JankDataListenerFanOut>::make(layerId);
+        sFanoutInstances.insert({layerId, fanout});
+    } else {
+        fanout = it->second;
+    }
+
+    fanout->mMutex.lock();
+    fanout->mListeners.insert(listener);
+    fanout->mMutex.unlock();
+
+    sFanoutInstanceMutex.unlock();
+
+    if (registerNeeded) {
+        binder::Status status =
+                ComposerServiceAIDL::getComposerService()->addJankListener(layer, fanout);
+        return statusTFromBinderStatus(status);
+    }
+    return OK;
+}
+
+status_t JankDataListenerFanOut::removeListener(sp<JankDataListener> listener) {
+    int32_t layerId = listener->mLayerId;
+    if (layerId == -1) {
+        return INVALID_OPERATION;
+    }
+
+    int64_t removeAfter = INVALID_VSYNC;
+    sp<JankDataListenerFanOut> fanout;
+
+    sFanoutInstanceMutex.lock();
+    auto it = sFanoutInstances.find(layerId);
+    if (it != sFanoutInstances.end()) {
+        fanout = it->second;
+        removeAfter = fanout->updateAndGetRemovalVSync();
+    }
+
+    if (removeAfter != INVALID_VSYNC) {
+        // Remove this instance from the map, so that no new listeners are added
+        // while we're scheduled to be removed.
+        sFanoutInstances.erase(layerId);
+    }
+    sFanoutInstanceMutex.unlock();
+
+    if (removeAfter < 0) {
+        return OK;
+    }
+
+    binder::Status status =
+            ComposerServiceAIDL::getComposerService()->removeJankListener(layerId, fanout,
+                                                                          removeAfter);
+    return statusTFromBinderStatus(status);
+}
+
+std::vector<sp<JankDataListener>> JankDataListenerFanOut::getActiveListeners() {
+    std::scoped_lock<std::mutex> lock(mMutex);
+
+    std::vector<sp<JankDataListener>> listeners;
+    for (auto it = mListeners.begin(); it != mListeners.end();) {
+        auto listener = it->promote();
+        if (!listener) {
+            it = mListeners.erase(it);
+        } else {
+            listeners.push_back(std::move(listener));
+            it++;
+        }
+    }
+    return listeners;
+}
+
+bool JankDataListenerFanOut::removeListeners(const std::vector<wp<JankDataListener>>& listeners) {
+    std::scoped_lock<std::mutex> fanoutLock(sFanoutInstanceMutex);
+    std::scoped_lock<std::mutex> listenersLock(mMutex);
+
+    for (auto listener : listeners) {
+        mListeners.erase(listener);
+    }
+
+    if (mListeners.empty()) {
+        sFanoutInstances.erase(mLayerId);
+        return false;
+    }
+    return true;
+}
+
+int64_t JankDataListenerFanOut::updateAndGetRemovalVSync() {
+    std::scoped_lock<std::mutex> lock(mMutex);
+    if (mRemoveAfter >= 0) {
+        // We've already been scheduled to be removed. Don't schedule again.
+        return INVALID_VSYNC;
+    }
+
+    int64_t removeAfter = 0;
+    for (auto it = mListeners.begin(); it != mListeners.end();) {
+        auto listener = it->promote();
+        if (!listener) {
+            it = mListeners.erase(it);
+        } else if (listener->mRemoveAfter < 0) {
+            // We have at least one listener that's still interested. Don't remove.
+            return INVALID_VSYNC;
+        } else {
+            removeAfter = std::max(removeAfter, listener->mRemoveAfter);
+            it++;
+        }
+    }
+
+    mRemoveAfter = removeAfter;
+    return removeAfter;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,14 +416,6 @@ CallbackId TransactionCompletedListener::addCallbackFunction(
                 surfaceControls,
         CallbackId::Type callbackType) {
     std::lock_guard<std::mutex> lock(mMutex);
-    return addCallbackFunctionLocked(callbackFunction, surfaceControls, callbackType);
-}
-
-CallbackId TransactionCompletedListener::addCallbackFunctionLocked(
-        const TransactionCompletedCallback& callbackFunction,
-        const std::unordered_set<sp<SurfaceControl>, SurfaceComposerClient::SCHash>&
-                surfaceControls,
-        CallbackId::Type callbackType) {
     startListeningLocked();
 
     CallbackId callbackId(getNextIdLocked(), callbackType);
@@ -272,31 +424,9 @@ CallbackId TransactionCompletedListener::addCallbackFunctionLocked(
 
     for (const auto& surfaceControl : surfaceControls) {
         callbackSurfaceControls[surfaceControl->getHandle()] = surfaceControl;
-
-        if (callbackType == CallbackId::Type::ON_COMPLETE &&
-            mJankListeners.count(surfaceControl->getLayerId()) != 0) {
-            callbackId.includeJankData = true;
-        }
     }
 
     return callbackId;
-}
-
-void TransactionCompletedListener::addJankListener(const sp<JankDataListener>& listener,
-                                                   sp<SurfaceControl> surfaceControl) {
-    std::lock_guard<std::mutex> lock(mMutex);
-    mJankListeners.insert({surfaceControl->getLayerId(), listener});
-}
-
-void TransactionCompletedListener::removeJankListener(const sp<JankDataListener>& listener) {
-    std::lock_guard<std::mutex> lock(mMutex);
-    for (auto it = mJankListeners.begin(); it != mJankListeners.end();) {
-        if (it->second == listener) {
-            it = mJankListeners.erase(it);
-        } else {
-            it++;
-        }
-    }
 }
 
 void TransactionCompletedListener::setReleaseBufferCallback(const ReleaseCallbackId& callbackId,
@@ -325,32 +455,20 @@ void TransactionCompletedListener::removeSurfaceStatsListener(void* context, voi
 }
 
 void TransactionCompletedListener::addSurfaceControlToCallbacks(
-        SurfaceComposerClient::CallbackInfo& callbackInfo,
-        const sp<SurfaceControl>& surfaceControl) {
+        const sp<SurfaceControl>& surfaceControl,
+        const std::unordered_set<CallbackId, CallbackIdHash>& callbackIds) {
     std::lock_guard<std::mutex> lock(mMutex);
 
-    bool includingJankData = false;
-    for (auto callbackId : callbackInfo.callbackIds) {
+    for (auto callbackId : callbackIds) {
         mCallbacks[callbackId].surfaceControls.emplace(std::piecewise_construct,
                                                        std::forward_as_tuple(
                                                                surfaceControl->getHandle()),
                                                        std::forward_as_tuple(surfaceControl));
-        includingJankData = includingJankData || callbackId.includeJankData;
-    }
-
-    // If no registered callback is requesting jank data, but there is a jank listener registered
-    // on the new surface control, add a synthetic callback that requests the jank data.
-    if (!includingJankData && mJankListeners.count(surfaceControl->getLayerId()) != 0) {
-        CallbackId callbackId =
-                addCallbackFunctionLocked(&emptyCallback, callbackInfo.surfaceControls,
-                                          CallbackId::Type::ON_COMPLETE);
-        callbackInfo.callbackIds.emplace(callbackId);
     }
 }
 
 void TransactionCompletedListener::onTransactionCompleted(ListenerStats listenerStats) {
     std::unordered_map<CallbackId, CallbackTranslation, CallbackIdHash> callbacksMap;
-    std::multimap<int32_t, sp<JankDataListener>> jankListenersMap;
     {
         std::lock_guard<std::mutex> lock(mMutex);
 
@@ -366,7 +484,6 @@ void TransactionCompletedListener::onTransactionCompleted(ListenerStats listener
          * sp<SurfaceControl> that could possibly exist for the callbacks.
          */
         callbacksMap = mCallbacks;
-        jankListenersMap = mJankListeners;
         for (const auto& transactionStats : listenerStats.transactionStats) {
             for (auto& callbackId : transactionStats.callbackIds) {
                 mCallbacks.erase(callbackId);
@@ -485,12 +602,6 @@ void TransactionCompletedListener::onTransactionCompleted(ListenerStats listener
                     entry.callback(entry.context, transactionStats.latchTime,
                         transactionStats.presentFence, surfaceStats);
                 }
-            }
-
-            if (surfaceStats.jankData.empty()) continue;
-            auto jankRange = jankListenersMap.equal_range(layerId);
-            for (auto it = jankRange.first; it != jankRange.second; it++) {
-                it->second->onJankDataAvailable(surfaceStats.jankData);
             }
         }
     }
@@ -1004,8 +1115,9 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::merge(Tr
 
         // register all surface controls for all callbackIds for this listener that is merging
         for (const auto& surfaceControl : currentProcessCallbackInfo.surfaceControls) {
-            mTransactionCompletedListener->addSurfaceControlToCallbacks(currentProcessCallbackInfo,
-                                                                        surfaceControl);
+            mTransactionCompletedListener
+                    ->addSurfaceControlToCallbacks(surfaceControl,
+                                                   currentProcessCallbackInfo.callbackIds);
         }
     }
 
@@ -1362,7 +1474,7 @@ void SurfaceComposerClient::Transaction::registerSurfaceControlForCallback(
     auto& callbackInfo = mListenerCallbacks[TransactionCompletedListener::getIInstance()];
     callbackInfo.surfaceControls.insert(sc);
 
-    mTransactionCompletedListener->addSurfaceControlToCallbacks(callbackInfo, sc);
+    mTransactionCompletedListener->addSurfaceControlToCallbacks(sc, callbackInfo.callbackIds);
 }
 
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setPosition(
