@@ -555,7 +555,7 @@ ProcessState::ProcessState(const char* driver)
         mMaxThreads(DEFAULT_MAX_BINDER_THREADS),
         mCurrentThreads(0),
         mKernelStartedThreads(0),
-        mStarvationStartTimeMs(0),
+        mStarvationStartTime(never()),
         mForked(false),
         mThreadPoolStarted(false),
         mThreadPoolSeq(1),

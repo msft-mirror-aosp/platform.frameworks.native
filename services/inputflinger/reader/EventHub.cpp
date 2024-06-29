@@ -33,6 +33,8 @@
 #include <sys/sysmacros.h>
 #include <unistd.h>
 
+#include <android_companion_virtualdevice_flags.h>
+
 #define LOG_TAG "EventHub"
 
 // #define LOG_NDEBUG 0
@@ -67,6 +69,8 @@
 using android::base::StringPrintf;
 
 namespace android {
+
+namespace vd_flags = android::companion::virtualdevice::flags;
 
 using namespace ftl::flag_operators;
 
@@ -513,10 +517,10 @@ ftl::Flags<InputDeviceClass> getAbsAxisUsage(int32_t axis,
 
 // --- RawAbsoluteAxisInfo ---
 
-std::ostream& operator<<(std::ostream& out, const RawAbsoluteAxisInfo& info) {
-    if (info.valid) {
-        out << "min=" << info.minValue << ", max=" << info.maxValue << ", flat=" << info.flat
-            << ", fuzz=" << info.fuzz << ", resolution=" << info.resolution;
+std::ostream& operator<<(std::ostream& out, const std::optional<RawAbsoluteAxisInfo>& info) {
+    if (info) {
+        out << "min=" << info->minValue << ", max=" << info->maxValue << ", flat=" << info->flat
+            << ", fuzz=" << info->fuzz << ", resolution=" << info->resolution;
     } else {
         out << "unknown range";
     }
@@ -645,7 +649,6 @@ void EventHub::Device::populateAbsoluteAxisStates() {
             continue;
         }
         auto& [axisInfo, value] = absState[axis];
-        axisInfo.valid = true;
         axisInfo.minValue = info.minimum;
         axisInfo.maxValue = info.maximum;
         axisInfo.flat = info.flat;
@@ -998,26 +1001,23 @@ std::optional<PropertyMap> EventHub::getConfiguration(int32_t deviceId) const {
     return *device->configuration;
 }
 
-status_t EventHub::getAbsoluteAxisInfo(int32_t deviceId, int axis,
-                                       RawAbsoluteAxisInfo* outAxisInfo) const {
-    outAxisInfo->clear();
+std::optional<RawAbsoluteAxisInfo> EventHub::getAbsoluteAxisInfo(int32_t deviceId, int axis) const {
     if (axis < 0 || axis > ABS_MAX) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
     std::scoped_lock _l(mLock);
     const Device* device = getDeviceLocked(deviceId);
     if (device == nullptr) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
     // We can read the RawAbsoluteAxisInfo even if the device is disabled and doesn't have a valid
     // fd, because the info is populated once when the device is first opened, and it doesn't change
     // throughout the device lifecycle.
     auto it = device->absState.find(axis);
     if (it == device->absState.end()) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
-    *outAxisInfo = it->second.info;
-    return OK;
+    return it->second.info;
 }
 
 bool EventHub::hasRelativeAxis(int32_t deviceId, int axis) const {
@@ -1130,22 +1130,20 @@ int32_t EventHub::getSwitchState(int32_t deviceId, int32_t sw) const {
     return device->swState.test(sw) ? AKEY_STATE_DOWN : AKEY_STATE_UP;
 }
 
-status_t EventHub::getAbsoluteAxisValue(int32_t deviceId, int32_t axis, int32_t* outValue) const {
-    *outValue = 0;
+std::optional<int32_t> EventHub::getAbsoluteAxisValue(int32_t deviceId, int32_t axis) const {
     if (axis < 0 || axis > ABS_MAX) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
     std::scoped_lock _l(mLock);
     const Device* device = getDeviceLocked(deviceId);
     if (device == nullptr || !device->hasValidFd()) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
     const auto it = device->absState.find(axis);
     if (it == device->absState.end()) {
-        return NAME_NOT_FOUND;
+        return std::nullopt;
     }
-    *outValue = it->second.value;
-    return OK;
+    return it->second.value;
 }
 
 base::Result<std::vector<int32_t>> EventHub::getMtSlotValues(int32_t deviceId, int32_t axis,
@@ -2501,6 +2499,12 @@ void EventHub::openDeviceLocked(const std::string& devicePath) {
                         [&](int32_t keycode) { return device->hasKeycodeLocked(keycode); })) {
             device->classes |= InputDeviceClass::EXTERNAL_STYLUS;
         }
+    }
+
+    // See if the device is a rotary encoder with a single scroll axis and nothing else.
+    if (vd_flags::virtual_rotary() && device->classes == ftl::Flags<InputDeviceClass>(0) &&
+        device->relBitmask.test(REL_WHEEL) && !device->relBitmask.test(REL_HWHEEL)) {
+        device->classes |= InputDeviceClass::ROTARY_ENCODER;
     }
 
     // If the device isn't recognized as something we handle, don't monitor it.
