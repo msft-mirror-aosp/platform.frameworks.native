@@ -84,13 +84,13 @@ const SkString kTonemap(R"(
         float3 linear = toLinearSrgb(rgba.rgb) * hdrSdrRatio;
 
         if (localMax <= 1.0) {
-            return float4(fromLinearSrgb(linear), 1.0);
+            return float4(fromLinearSrgb(linear), rgba.a);
         }
 
         float maxRGB = max(linear.r, max(linear.g, linear.b));
         localMax = max(localMax, maxRGB);
         float gain = (1 + maxRGB / (localMax * localMax)) / (1 + maxRGB);
-        return float4(fromLinearSrgb(linear * gain), 1.0);
+        return float4(fromLinearSrgb(linear * gain), rgba.a);
     }
 )");
 
