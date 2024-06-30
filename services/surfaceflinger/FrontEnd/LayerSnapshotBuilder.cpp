@@ -23,8 +23,8 @@
 #include <optional>
 
 #include <common/FlagManager.h>
+#include <common/trace.h>
 #include <ftl/small_map.h>
-#include <gui/TraceUtils.h>
 #include <ui/DisplayMap.h>
 #include <ui/FloatRect.h>
 
@@ -402,7 +402,7 @@ bool LayerSnapshotBuilder::tryFastUpdate(const Args& args) {
 
     // There are only content changes which do not require any child layer snapshots to be updated.
     ALOGV("%s", __func__);
-    ATRACE_NAME("FastPath");
+    SFTRACE_NAME("FastPath");
 
     uint32_t primaryDisplayRotationFlags = getPrimaryDisplayRotationFlags(args.displays);
     if (forceUpdate || args.displayChanges) {
@@ -436,7 +436,7 @@ bool LayerSnapshotBuilder::tryFastUpdate(const Args& args) {
 }
 
 void LayerSnapshotBuilder::updateSnapshots(const Args& args) {
-    ATRACE_NAME("UpdateSnapshots");
+    SFTRACE_NAME("UpdateSnapshots");
     LayerSnapshot rootSnapshot = args.rootSnapshot;
     if (args.parentCrop) {
         rootSnapshot.geomLayerBounds = *args.parentCrop;

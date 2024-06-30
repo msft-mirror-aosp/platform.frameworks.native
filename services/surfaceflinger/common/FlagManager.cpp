@@ -136,6 +136,7 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(vulkan_renderengine);
     DUMP_READ_ONLY_FLAG(renderable_buffer_usage);
     DUMP_READ_ONLY_FLAG(vrr_bugfix_24q4);
+    DUMP_READ_ONLY_FLAG(vrr_bugfix_dropped_frame);
     DUMP_READ_ONLY_FLAG(restore_blur_step);
     DUMP_READ_ONLY_FLAG(dont_skip_on_early_ro);
     DUMP_READ_ONLY_FLAG(protected_if_client);
@@ -242,6 +243,7 @@ FLAG_MANAGER_READ_ONLY_FLAG(restore_blur_step, "debug.renderengine.restore_blur_
 FLAG_MANAGER_READ_ONLY_FLAG(dont_skip_on_early_ro, "")
 FLAG_MANAGER_READ_ONLY_FLAG(protected_if_client, "")
 FLAG_MANAGER_READ_ONLY_FLAG(vrr_bugfix_24q4, "");
+FLAG_MANAGER_READ_ONLY_FLAG(vrr_bugfix_dropped_frame, "")
 FLAG_MANAGER_READ_ONLY_FLAG(ce_fence_promise, "");
 FLAG_MANAGER_READ_ONLY_FLAG(graphite_renderengine, "debug.renderengine.graphite")
 FLAG_MANAGER_READ_ONLY_FLAG(latch_unsignaled_with_auto_refresh_changed, "");
