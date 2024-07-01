@@ -79,6 +79,8 @@ public:
 
     inline bool isIgnored() { return !getMapperCount() && !mController; }
 
+    inline KeyboardType getKeyboardType() const { return mKeyboardType; }
+
     bool isEnabled();
 
     void dump(std::string& dump, const std::string& eventHubDevStr);
@@ -123,6 +125,8 @@ public:
     void updateMetaState(int32_t keyCode);
 
     void addKeyRemapping(int32_t fromKeyCode, int32_t toKeyCode);
+
+    void setKeyboardType(KeyboardType keyboardType);
 
     void bumpGeneration();
 
@@ -196,6 +200,7 @@ private:
     uint32_t mSources;
     bool mIsWaking;
     bool mIsExternal;
+    KeyboardType mKeyboardType = KeyboardType::NONE;
     std::optional<uint8_t> mAssociatedDisplayPort;
     std::optional<std::string> mAssociatedDisplayUniqueIdByPort;
     std::optional<std::string> mAssociatedDisplayUniqueIdByDescriptor;
@@ -300,19 +305,17 @@ public:
     inline int32_t getDeviceControllerNumber() const {
         return mEventHub->getDeviceControllerNumber(mId);
     }
-    inline status_t getAbsoluteAxisInfo(int32_t code, RawAbsoluteAxisInfo* axisInfo) const {
-        if (const auto status = mEventHub->getAbsoluteAxisInfo(mId, code, axisInfo); status != OK) {
-            return status;
-        }
+    inline std::optional<RawAbsoluteAxisInfo> getAbsoluteAxisInfo(int32_t code) const {
+        std::optional<RawAbsoluteAxisInfo> info = mEventHub->getAbsoluteAxisInfo(mId, code);
 
         // Validate axis info for InputDevice.
-        if (axisInfo->valid && axisInfo->minValue == axisInfo->maxValue) {
+        if (info && info->minValue == info->maxValue) {
             // Historically, we deem axes with the same min and max values as invalid to avoid
             // dividing by zero when scaling by max - min.
             // TODO(b/291772515): Perform axis info validation on a per-axis basis when it is used.
-            axisInfo->valid = false;
+            return std::nullopt;
         }
-        return OK;
+        return info;
     }
     inline bool hasRelativeAxis(int32_t code) const {
         return mEventHub->hasRelativeAxis(mId, code);
@@ -374,8 +377,8 @@ public:
         return mEventHub->getKeyCodeForKeyLocation(mId, locationKeyCode);
     }
     inline int32_t getSwitchState(int32_t sw) const { return mEventHub->getSwitchState(mId, sw); }
-    inline status_t getAbsoluteAxisValue(int32_t code, int32_t* outValue) const {
-        return mEventHub->getAbsoluteAxisValue(mId, code, outValue);
+    inline std::optional<int32_t> getAbsoluteAxisValue(int32_t code) const {
+        return mEventHub->getAbsoluteAxisValue(mId, code);
     }
     inline base::Result<std::vector<int32_t>> getMtSlotValues(int32_t axis,
                                                               size_t slotCount) const {
@@ -427,20 +430,13 @@ public:
     }
 
     inline bool hasAbsoluteAxis(int32_t code) const {
-        RawAbsoluteAxisInfo info;
-        mEventHub->getAbsoluteAxisInfo(mId, code, &info);
-        return info.valid;
+        return mEventHub->getAbsoluteAxisInfo(mId, code).has_value();
     }
     inline bool isKeyPressed(int32_t scanCode) const {
         return mEventHub->getScanCodeState(mId, scanCode) == AKEY_STATE_DOWN;
     }
     inline bool isKeyCodePressed(int32_t keyCode) const {
         return mEventHub->getKeyCodeState(mId, keyCode) == AKEY_STATE_DOWN;
-    }
-    inline int32_t getAbsoluteAxisValue(int32_t code) const {
-        int32_t value;
-        mEventHub->getAbsoluteAxisValue(mId, code, &value);
-        return value;
     }
     inline bool isDeviceEnabled() { return mEventHub->isDeviceEnabled(mId); }
     inline status_t enableDevice() { return mEventHub->enableDevice(mId); }
@@ -470,6 +466,10 @@ public:
     }
     inline void bumpGeneration() { mDevice.bumpGeneration(); }
     inline const PropertyMap& getConfiguration() const { return mDevice.getConfiguration(); }
+    inline KeyboardType getKeyboardType() const { return mDevice.getKeyboardType(); }
+    inline void setKeyboardType(KeyboardType keyboardType) {
+        return mDevice.setKeyboardType(keyboardType);
+    }
 
 private:
     InputDevice& mDevice;

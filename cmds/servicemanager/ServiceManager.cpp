@@ -18,6 +18,7 @@
 
 #include <android-base/logging.h>
 #include <android-base/properties.h>
+#include <android-base/scopeguard.h>
 #include <android-base/strings.h>
 #include <binder/BpBinder.h>
 #include <binder/IPCThreadState.h>
@@ -26,6 +27,11 @@
 #include <cutils/android_filesystem_config.h>
 #include <cutils/multiuser.h>
 #include <thread>
+
+#if !defined(VENDORSERVICEMANAGER) && !defined(__ANDROID_RECOVERY__)
+#include "perfetto/public/te_category_macros.h"
+#include "perfetto/public/te_macros.h"
+#endif // !defined(VENDORSERVICEMANAGER) && !defined(__ANDROID_RECOVERY__)
 
 #ifndef VENDORSERVICEMANAGER
 #include <vintf/VintfObject.h>
@@ -41,6 +47,17 @@ using ::android::binder::Status;
 using ::android::internal::Stability;
 
 namespace android {
+
+#if defined(VENDORSERVICEMANAGER) || defined(__ANDROID_RECOVERY__)
+#define SM_PERFETTO_TRACE_FUNC(...)
+#else
+
+PERFETTO_TE_CATEGORIES_DEFINE(PERFETTO_SM_CATEGORIES);
+
+#define SM_PERFETTO_TRACE_FUNC(...) \
+    PERFETTO_TE_SCOPED(servicemanager, PERFETTO_TE_SLICE_BEGIN(__func__) __VA_OPT__(, ) __VA_ARGS__)
+
+#endif // !(defined(VENDORSERVICEMANAGER) || defined(__ANDROID_RECOVERY__))
 
 bool is_multiuser_uid_isolated(uid_t uid) {
     uid_t appid = multiuser_get_app_id(uid);
@@ -348,18 +365,24 @@ ServiceManager::~ServiceManager() {
 }
 
 Status ServiceManager::getService(const std::string& name, sp<IBinder>* outBinder) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     *outBinder = tryGetService(name, true);
     // returns ok regardless of result for legacy reasons
     return Status::ok();
 }
 
 Status ServiceManager::checkService(const std::string& name, sp<IBinder>* outBinder) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     *outBinder = tryGetService(name, false);
     // returns ok regardless of result for legacy reasons
     return Status::ok();
 }
 
 sp<IBinder> ServiceManager::tryGetService(const std::string& name, bool startIfNotFound) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     auto ctx = mAccess->getCallingContext();
 
     sp<IBinder> out;
@@ -398,6 +421,8 @@ sp<IBinder> ServiceManager::tryGetService(const std::string& name, bool startIfN
 }
 
 bool isValidServiceName(const std::string& name) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     if (name.size() == 0) return false;
     if (name.size() > 127) return false;
 
@@ -413,6 +438,8 @@ bool isValidServiceName(const std::string& name) {
 }
 
 Status ServiceManager::addService(const std::string& name, const sp<IBinder>& binder, bool allowIsolated, int32_t dumpPriority) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     auto ctx = mAccess->getCallingContext();
 
     if (multiuser_get_app_id(ctx.uid) >= AID_APP) {
@@ -505,6 +532,8 @@ Status ServiceManager::addService(const std::string& name, const sp<IBinder>& bi
 }
 
 Status ServiceManager::listServices(int32_t dumpPriority, std::vector<std::string>* outList) {
+    SM_PERFETTO_TRACE_FUNC();
+
     if (!mAccess->canList(mAccess->getCallingContext())) {
         return Status::fromExceptionCode(Status::EX_SECURITY, "SELinux denied.");
     }
@@ -532,6 +561,8 @@ Status ServiceManager::listServices(int32_t dumpPriority, std::vector<std::strin
 
 Status ServiceManager::registerForNotifications(
         const std::string& name, const sp<IServiceCallback>& callback) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     auto ctx = mAccess->getCallingContext();
 
     if (!mAccess->canFind(ctx, name)) {
@@ -578,6 +609,8 @@ Status ServiceManager::registerForNotifications(
 }
 Status ServiceManager::unregisterForNotifications(
         const std::string& name, const sp<IServiceCallback>& callback) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     auto ctx = mAccess->getCallingContext();
 
     if (!mAccess->canFind(ctx, name)) {
@@ -601,6 +634,8 @@ Status ServiceManager::unregisterForNotifications(
 }
 
 Status ServiceManager::isDeclared(const std::string& name, bool* outReturn) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     auto ctx = mAccess->getCallingContext();
 
     if (!mAccess->canFind(ctx, name)) {
@@ -616,6 +651,8 @@ Status ServiceManager::isDeclared(const std::string& name, bool* outReturn) {
 }
 
 binder::Status ServiceManager::getDeclaredInstances(const std::string& interface, std::vector<std::string>* outReturn) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("interface", interface.c_str()));
+
     auto ctx = mAccess->getCallingContext();
 
     std::vector<std::string> allInstances;
@@ -640,6 +677,8 @@ binder::Status ServiceManager::getDeclaredInstances(const std::string& interface
 
 Status ServiceManager::updatableViaApex(const std::string& name,
                                         std::optional<std::string>* outReturn) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     auto ctx = mAccess->getCallingContext();
 
     if (!mAccess->canFind(ctx, name)) {
@@ -656,6 +695,8 @@ Status ServiceManager::updatableViaApex(const std::string& name,
 
 Status ServiceManager::getUpdatableNames([[maybe_unused]] const std::string& apexName,
                                          std::vector<std::string>* outReturn) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("apexName", apexName.c_str()));
+
     auto ctx = mAccess->getCallingContext();
 
     std::vector<std::string> apexUpdatableNames;
@@ -674,12 +715,13 @@ Status ServiceManager::getUpdatableNames([[maybe_unused]] const std::string& ape
     if (outReturn->size() == 0 && apexUpdatableNames.size() != 0) {
         return Status::fromExceptionCode(Status::EX_SECURITY, "SELinux denied.");
     }
-
     return Status::ok();
 }
 
 Status ServiceManager::getConnectionInfo(const std::string& name,
                                          std::optional<ConnectionInfo>* outReturn) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     auto ctx = mAccess->getCallingContext();
 
     if (!mAccess->canFind(ctx, name)) {
@@ -697,6 +739,8 @@ Status ServiceManager::getConnectionInfo(const std::string& name,
 void ServiceManager::removeRegistrationCallback(const wp<IBinder>& who,
                                     ServiceCallbackMap::iterator* it,
                                     bool* found) {
+    SM_PERFETTO_TRACE_FUNC();
+
     std::vector<sp<IServiceCallback>>& listeners = (*it)->second;
 
     for (auto lit = listeners.begin(); lit != listeners.end();) {
@@ -716,6 +760,8 @@ void ServiceManager::removeRegistrationCallback(const wp<IBinder>& who,
 }
 
 void ServiceManager::binderDied(const wp<IBinder>& who) {
+    SM_PERFETTO_TRACE_FUNC();
+
     for (auto it = mNameToService.begin(); it != mNameToService.end();) {
         if (who == it->second.binder) {
             // TODO: currently, this entry contains the state also
@@ -758,6 +804,8 @@ void ServiceManager::tryStartService(const Access::CallingContext& ctx, const st
 
 Status ServiceManager::registerClientCallback(const std::string& name, const sp<IBinder>& service,
                                               const sp<IClientCallback>& cb) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     if (cb == nullptr) {
         return Status::fromExceptionCode(Status::EX_NULL_POINTER, "Callback null.");
     }
@@ -918,6 +966,8 @@ void ServiceManager::sendClientCallbackNotifications(const std::string& serviceN
 }
 
 Status ServiceManager::tryUnregisterService(const std::string& name, const sp<IBinder>& binder) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_ARG_STRING("name", name.c_str()));
+
     if (binder == nullptr) {
         return Status::fromExceptionCode(Status::EX_NULL_POINTER, "Null service.");
     }
@@ -983,6 +1033,7 @@ Status ServiceManager::tryUnregisterService(const std::string& name, const sp<IB
 }
 
 Status ServiceManager::getServiceDebugInfo(std::vector<ServiceDebugInfo>* outReturn) {
+    SM_PERFETTO_TRACE_FUNC();
     if (!mAccess->canList(mAccess->getCallingContext())) {
         return Status::fromExceptionCode(Status::EX_SECURITY, "SELinux denied.");
     }
