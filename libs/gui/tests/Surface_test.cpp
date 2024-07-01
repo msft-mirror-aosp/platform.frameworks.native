@@ -636,7 +636,7 @@ public:
 
     status_t setTransactionState(
             const FrameTimelineInfo& /*frameTimelineInfo*/, Vector<ComposerState>& /*state*/,
-            const Vector<DisplayState>& /*displays*/, uint32_t /*flags*/,
+            Vector<DisplayState>& /*displays*/, uint32_t /*flags*/,
             const sp<IBinder>& /*applyToken*/, InputWindowCommands /*inputWindowCommands*/,
             int64_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/,
             const std::vector<client_cache_t>& /*cachedBuffer*/, bool /*hasListenerCallbacks*/,
@@ -986,6 +986,19 @@ public:
     }
 
     binder::Status notifyShutdown() override { return binder::Status::ok(); }
+
+    binder::Status addJankListener(const sp<IBinder>& /*layer*/,
+                                   const sp<gui::IJankListener>& /*listener*/) override {
+        return binder::Status::ok();
+    }
+
+    binder::Status flushJankData(int32_t /*layerId*/) override { return binder::Status::ok(); }
+
+    binder::Status removeJankListener(int32_t /*layerId*/,
+                                      const sp<gui::IJankListener>& /*listener*/,
+                                      int64_t /*afterVsync*/) override {
+        return binder::Status::ok();
+    }
 
 protected:
     IBinder* onAsBinder() override { return nullptr; }

@@ -57,16 +57,15 @@ void InputMapperUnitTest::createDevice() {
 
 void InputMapperUnitTest::setupAxis(int axis, bool valid, int32_t min, int32_t max,
                                     int32_t resolution) {
-    EXPECT_CALL(mMockEventHub, getAbsoluteAxisInfo(EVENTHUB_ID, axis, _))
-            .WillRepeatedly([=](int32_t, int32_t, RawAbsoluteAxisInfo* outAxisInfo) {
-                outAxisInfo->valid = valid;
-                outAxisInfo->minValue = min;
-                outAxisInfo->maxValue = max;
-                outAxisInfo->flat = 0;
-                outAxisInfo->fuzz = 0;
-                outAxisInfo->resolution = resolution;
-                return valid ? OK : -1;
-            });
+    EXPECT_CALL(mMockEventHub, getAbsoluteAxisInfo(EVENTHUB_ID, axis))
+            .WillRepeatedly(Return(valid ? std::optional<RawAbsoluteAxisInfo>{{
+                                                   .minValue = min,
+                                                   .maxValue = max,
+                                                   .flat = 0,
+                                                   .fuzz = 0,
+                                                   .resolution = resolution,
+                                           }}
+                                         : std::nullopt));
 }
 
 void InputMapperUnitTest::expectScanCodes(bool present, std::set<int> scanCodes) {
@@ -104,7 +103,7 @@ std::list<NotifyArgs> InputMapperUnitTest::process(nsecs_t when, int32_t type, i
     event.type = type;
     event.code = code;
     event.value = value;
-    return mMapper->process(&event);
+    return mMapper->process(event);
 }
 
 const char* InputMapperTest::DEVICE_NAME = "device";
@@ -195,7 +194,7 @@ std::list<NotifyArgs> InputMapperTest::process(InputMapper& mapper, nsecs_t when
     event.type = type;
     event.code = code;
     event.value = value;
-    std::list<NotifyArgs> processArgList = mapper.process(&event);
+    std::list<NotifyArgs> processArgList = mapper.process(event);
     for (const NotifyArgs& args : processArgList) {
         mFakeListener->notify(args);
     }

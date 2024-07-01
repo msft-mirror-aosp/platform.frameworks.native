@@ -68,6 +68,7 @@ using std::string;
 const char* k_traceTagsProperty = "debug.atrace.tags.enableflags";
 const char* k_userInitiatedTraceProperty = "debug.atrace.user_initiated";
 
+const char* k_tracePreferSdkProperty = "debug.atrace.prefer_sdk";
 const char* k_traceAppsNumberProperty = "debug.atrace.app_number";
 const char* k_traceAppsPropertyTemplate = "debug.atrace.app_%d";
 const char* k_coreServiceCategory = "core_services";
@@ -600,6 +601,17 @@ static void clearAppProperties()
     }
 }
 
+// Set the property that's read by userspace to prefer the perfetto SDK.
+static bool setPreferSdkProperty(uint64_t tags)
+{
+    std::string value = android::base::StringPrintf("%#" PRIx64, tags);
+    if (!android::base::SetProperty(k_tracePreferSdkProperty, value)) {
+        fprintf(stderr, "error setting prefer_sdk system property\n");
+        return false;
+    }
+    return true;
+}
+
 // Set the system property that indicates which apps should perform
 // application-level tracing.
 static bool setAppCmdlineProperty(char* cmdline)
@@ -918,6 +930,17 @@ static void stopTrace()
     setTracingEnabled(false);
 }
 
+static bool preferSdkCategories() {
+    uint64_t tags = 0;
+    for (size_t i = 0; i < arraysize(k_categories); i++) {
+        if (g_categoryEnables[i]) {
+            const TracingCategory& c = k_categories[i];
+            tags |= c.tags;
+        }
+    }
+    return setPreferSdkProperty(tags);
+}
+
 // Read data from the tracing pipe and forward to stdout
 static void streamTrace()
 {
@@ -1108,6 +1131,9 @@ static void showHelp(const char *cmd)
                     "                    CPU performance, like pagecache usage.\n"
                     "  --list_categories\n"
                     "                  list the available tracing categories\n"
+                    "  --prefer_sdk\n"
+                    "                  prefer the perfetto sdk over legacy atrace for\n"
+                    "                    categories and exits immediately\n"
                     " -o filename      write the trace to the specified file instead\n"
                     "                    of stdout.\n"
             );
@@ -1252,6 +1278,7 @@ int main(int argc, char **argv)
     bool traceStop = true;
     bool traceDump = true;
     bool traceStream = false;
+    bool preferSdk = false;
     bool onlyUserspace = false;
 
     if (argc == 2 && 0 == strcmp(argv[1], "--help")) {
@@ -1276,6 +1303,7 @@ int main(int argc, char **argv)
             {"only_userspace",    no_argument, nullptr,  0 },
             {"list_categories",   no_argument, nullptr,  0 },
             {"stream",            no_argument, nullptr,  0 },
+            {"prefer_sdk",        no_argument, nullptr,  0 },
             {nullptr,                       0, nullptr,  0 }
         };
 
@@ -1348,6 +1376,8 @@ int main(int argc, char **argv)
                 } else if (!strcmp(long_options[option_index].name, "stream")) {
                     traceStream = true;
                     traceDump = false;
+                } else if (!strcmp(long_options[option_index].name, "prefer_sdk")) {
+                    preferSdk = true;
                 } else if (!strcmp(long_options[option_index].name, "list_categories")) {
                     listSupportedCategories();
                     exit(0);
@@ -1360,6 +1390,11 @@ int main(int argc, char **argv)
                 exit(-1);
             break;
         }
+    }
+
+    if (preferSdk) {
+        bool res = preferSdkCategories();
+        exit(res ? 0 : 1);
     }
 
     if (onlyUserspace) {

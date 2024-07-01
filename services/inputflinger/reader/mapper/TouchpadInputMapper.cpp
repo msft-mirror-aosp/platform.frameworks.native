@@ -240,14 +240,15 @@ TouchpadInputMapper::TouchpadInputMapper(InputDeviceContext& deviceContext,
         mGestureConverter(*getContext(), deviceContext, getDeviceId()),
         mCapturedEventConverter(*getContext(), deviceContext, mMotionAccumulator, getDeviceId()),
         mMetricsId(metricsIdFromInputDeviceIdentifier(deviceContext.getDeviceIdentifier())) {
-    RawAbsoluteAxisInfo slotAxisInfo;
-    deviceContext.getAbsoluteAxisInfo(ABS_MT_SLOT, &slotAxisInfo);
-    if (!slotAxisInfo.valid || slotAxisInfo.maxValue < 0) {
+    if (std::optional<RawAbsoluteAxisInfo> slotAxis =
+                deviceContext.getAbsoluteAxisInfo(ABS_MT_SLOT);
+        slotAxis && slotAxis->maxValue >= 0) {
+        mMotionAccumulator.configure(deviceContext, slotAxis->maxValue + 1, true);
+    } else {
         LOG(WARNING) << "Touchpad " << deviceContext.getName()
                      << " doesn't have a valid ABS_MT_SLOT axis, and probably won't work properly.";
-        slotAxisInfo.maxValue = 0;
+        mMotionAccumulator.configure(deviceContext, 1, true);
     }
-    mMotionAccumulator.configure(deviceContext, slotAxisInfo.maxValue + 1, true);
 
     mGestureInterpreter->Initialize(GESTURES_DEVCLASS_TOUCHPAD);
     mGestureInterpreter->SetHardwareProperties(createHardwareProperties(deviceContext));
@@ -417,17 +418,17 @@ void TouchpadInputMapper::resetGestureInterpreter(nsecs_t when) {
     mResettingInterpreter = false;
 }
 
-std::list<NotifyArgs> TouchpadInputMapper::process(const RawEvent* rawEvent) {
+std::list<NotifyArgs> TouchpadInputMapper::process(const RawEvent& rawEvent) {
     if (mPointerCaptured) {
-        return mCapturedEventConverter.process(*rawEvent);
+        return mCapturedEventConverter.process(rawEvent);
     }
     if (mMotionAccumulator.getActiveSlotsCount() == 0) {
-        mGestureStartTime = rawEvent->when;
+        mGestureStartTime = rawEvent.when;
     }
-    std::optional<SelfContainedHardwareState> state = mStateConverter.processRawEvent(*rawEvent);
+    std::optional<SelfContainedHardwareState> state = mStateConverter.processRawEvent(rawEvent);
     if (state) {
         updatePalmDetectionMetrics();
-        return sendHardwareState(rawEvent->when, rawEvent->readTime, *state);
+        return sendHardwareState(rawEvent.when, rawEvent.readTime, *state);
     } else {
         return {};
     }

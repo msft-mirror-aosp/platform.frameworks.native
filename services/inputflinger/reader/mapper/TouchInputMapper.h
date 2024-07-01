@@ -61,17 +61,17 @@ static constexpr nsecs_t TOUCH_DATA_TIMEOUT = ms2ns(20);
 struct RawPointerAxes {
     RawAbsoluteAxisInfo x{};
     RawAbsoluteAxisInfo y{};
-    RawAbsoluteAxisInfo pressure{};
-    RawAbsoluteAxisInfo touchMajor{};
-    RawAbsoluteAxisInfo touchMinor{};
-    RawAbsoluteAxisInfo toolMajor{};
-    RawAbsoluteAxisInfo toolMinor{};
-    RawAbsoluteAxisInfo orientation{};
-    RawAbsoluteAxisInfo distance{};
-    RawAbsoluteAxisInfo tiltX{};
-    RawAbsoluteAxisInfo tiltY{};
-    RawAbsoluteAxisInfo trackingId{};
-    RawAbsoluteAxisInfo slot{};
+    std::optional<RawAbsoluteAxisInfo> pressure{};
+    std::optional<RawAbsoluteAxisInfo> touchMajor{};
+    std::optional<RawAbsoluteAxisInfo> touchMinor{};
+    std::optional<RawAbsoluteAxisInfo> toolMajor{};
+    std::optional<RawAbsoluteAxisInfo> toolMinor{};
+    std::optional<RawAbsoluteAxisInfo> orientation{};
+    std::optional<RawAbsoluteAxisInfo> distance{};
+    std::optional<RawAbsoluteAxisInfo> tiltX{};
+    std::optional<RawAbsoluteAxisInfo> tiltY{};
+    std::optional<RawAbsoluteAxisInfo> trackingId{};
+    std::optional<RawAbsoluteAxisInfo> slot{};
 
     inline int32_t getRawWidth() const { return x.maxValue - x.minValue + 1; }
     inline int32_t getRawHeight() const { return y.maxValue - y.minValue + 1; }
@@ -174,7 +174,7 @@ public:
                                                     const InputReaderConfiguration& config,
                                                     ConfigurationChanges changes) override;
     [[nodiscard]] std::list<NotifyArgs> reset(nsecs_t when) override;
-    [[nodiscard]] std::list<NotifyArgs> process(const RawEvent* rawEvent) override;
+    [[nodiscard]] std::list<NotifyArgs> process(const RawEvent& rawEvent) override;
 
     int32_t getKeyCodeState(uint32_t sourceMask, int32_t keyCode) override;
     int32_t getScanCodeState(uint32_t sourceMask, int32_t scanCode) override;

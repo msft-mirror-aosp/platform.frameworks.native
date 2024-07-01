@@ -84,12 +84,18 @@ std::list<NotifyArgs> RotaryEncoderInputMapper::reconfigure(nsecs_t when,
         }
     }
     if (!changes.any() || changes.test(InputReaderConfiguration::Change::DISPLAY_INFO)) {
-        std::optional<DisplayViewport> internalViewport =
-                config.getDisplayViewportByType(ViewportType::INTERNAL);
-        if (internalViewport) {
-            mOrientation = internalViewport->orientation;
+        if (getDeviceContext().getAssociatedViewport()) {
+            mDisplayId = getDeviceContext().getAssociatedViewport()->displayId;
+            mOrientation = getDeviceContext().getAssociatedViewport()->orientation;
         } else {
-            mOrientation = ui::ROTATION_0;
+            mDisplayId = ui::LogicalDisplayId::INVALID;
+            std::optional<DisplayViewport> internalViewport =
+                    config.getDisplayViewportByType(ViewportType::INTERNAL);
+            if (internalViewport) {
+                mOrientation = internalViewport->orientation;
+            } else {
+                mOrientation = ui::ROTATION_0;
+            }
         }
     }
     return out;
@@ -101,12 +107,12 @@ std::list<NotifyArgs> RotaryEncoderInputMapper::reset(nsecs_t when) {
     return InputMapper::reset(when);
 }
 
-std::list<NotifyArgs> RotaryEncoderInputMapper::process(const RawEvent* rawEvent) {
+std::list<NotifyArgs> RotaryEncoderInputMapper::process(const RawEvent& rawEvent) {
     std::list<NotifyArgs> out;
-    mRotaryEncoderScrollAccumulator.process(*rawEvent);
+    mRotaryEncoderScrollAccumulator.process(rawEvent);
 
-    if (rawEvent->type == EV_SYN && rawEvent->code == SYN_REPORT) {
-        out += sync(rawEvent->when, rawEvent->readTime);
+    if (rawEvent.type == EV_SYN && rawEvent.code == SYN_REPORT) {
+        out += sync(rawEvent.when, rawEvent.readTime);
     }
     return out;
 }
@@ -124,8 +130,6 @@ std::list<NotifyArgs> RotaryEncoderInputMapper::sync(nsecs_t when, nsecs_t readT
     // Send motion event.
     if (scrolled) {
         int32_t metaState = getContext()->getGlobalMetaState();
-        // This is not a pointer, so it's not associated with a display.
-        ui::LogicalDisplayId displayId = ui::LogicalDisplayId::INVALID;
 
         if (mOrientation == ui::ROTATION_180) {
             scroll = -scroll;
@@ -147,7 +151,7 @@ std::list<NotifyArgs> RotaryEncoderInputMapper::sync(nsecs_t when, nsecs_t readT
 
         out.push_back(
                 NotifyMotionArgs(getContext()->getNextId(), when, readTime, getDeviceId(), mSource,
-                                 displayId, policyFlags, AMOTION_EVENT_ACTION_SCROLL, 0, 0,
+                                 mDisplayId, policyFlags, AMOTION_EVENT_ACTION_SCROLL, 0, 0,
                                  metaState, /*buttonState=*/0, MotionClassification::NONE,
                                  AMOTION_EVENT_EDGE_FLAG_NONE, 1, &pointerProperties,
                                  &pointerCoords, 0, 0, AMOTION_EVENT_INVALID_CURSOR_POSITION,
