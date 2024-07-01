@@ -312,7 +312,7 @@ public:
     bool setBuffer(std::shared_ptr<renderengine::ExternalTexture>& /* buffer */,
                    const BufferData& /* bufferData */, nsecs_t /* postTime */,
                    nsecs_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/,
-                   std::optional<nsecs_t> /* dequeueTime */, const FrameTimelineInfo& /*info*/);
+                   const FrameTimelineInfo& /*info*/);
     void setDesiredPresentTime(nsecs_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/);
     bool setDataspace(ui::Dataspace /*dataspace*/);
     bool setExtendedRangeBrightness(float currentBufferRatio, float desiredRatio);
@@ -980,7 +980,6 @@ protected:
     void preparePerFrameBufferCompositionState();
     void preparePerFrameEffectsCompositionState();
     void gatherBufferInfo();
-    void onSurfaceFrameCreated(const std::shared_ptr<frametimeline::SurfaceFrame>&);
 
     bool isClonedFromAlive() { return getClonedFrom() != nullptr; }
 
@@ -1195,11 +1194,6 @@ private:
 
     bool hasSomethingToDraw() const { return hasEffect() || hasBufferOrSidebandStream(); }
 
-    // Fills the provided vector with the currently available JankData and removes the processed
-    // JankData from the pending list.
-    void transferAvailableJankData(const std::deque<sp<CallbackHandle>>& handles,
-                                   std::vector<JankData>& jankData);
-
     bool shouldOverrideChildrenFrameRate() const {
         return getDrawingState().frameRateSelectionStrategy ==
                 FrameRateSelectionStrategy::OverrideChildren;
@@ -1267,10 +1261,6 @@ private:
     // Stores the last set acquire fence signal time used to populate the callback handle's acquire
     // time.
     std::variant<nsecs_t, sp<Fence>> mCallbackHandleAcquireTimeOrFence = -1;
-
-    std::deque<std::shared_ptr<android::frametimeline::SurfaceFrame>> mPendingJankClassifications;
-    // An upper bound on the number of SurfaceFrames in the pending classifications deque.
-    static constexpr int kPendingClassificationMaxSurfaceFrames = 50;
 
     const std::string mBlastTransactionName{"BufferTX - " + mName};
     // This integer is incremented everytime a buffer arrives at the server for this layer,

@@ -168,8 +168,8 @@ private:
     InputDeviceIdentifier getDeviceIdentifier(int32_t deviceId) const override;
     int32_t getDeviceControllerNumber(int32_t) const override;
     std::optional<PropertyMap> getConfiguration(int32_t deviceId) const override;
-    status_t getAbsoluteAxisInfo(int32_t deviceId, int axis,
-                                 RawAbsoluteAxisInfo* outAxisInfo) const override;
+    std::optional<RawAbsoluteAxisInfo> getAbsoluteAxisInfo(int32_t deviceId,
+                                                           int axis) const override;
     bool hasRelativeAxis(int32_t deviceId, int axis) const override;
     bool hasInputProperty(int32_t, int) const override;
     bool hasMscEvent(int32_t deviceId, int mscEvent) const override final;
@@ -187,7 +187,7 @@ private:
     std::optional<RawLayoutInfo> getRawLayoutInfo(int32_t deviceId) const override;
     int32_t getKeyCodeState(int32_t deviceId, int32_t keyCode) const override;
     int32_t getSwitchState(int32_t deviceId, int32_t sw) const override;
-    status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis, int32_t* outValue) const override;
+    std::optional<int32_t> getAbsoluteAxisValue(int32_t deviceId, int32_t axis) const override;
     int32_t getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const override;
 
     // Return true if the device has non-empty key layout.
