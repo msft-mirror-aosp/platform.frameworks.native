@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <android-base/properties.h>
 #include <android/os/BnServiceManager.h>
 #include <android/os/IServiceManager.h>
 #include <binder/IPCThreadState.h>
