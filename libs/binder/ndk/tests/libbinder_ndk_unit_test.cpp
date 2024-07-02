@@ -34,6 +34,7 @@
 #include <binder/IServiceManager.h>
 #include <binder/IShellCallback.h>
 #include <sys/prctl.h>
+#include <sys/socket.h>
 
 #include <chrono>
 #include <condition_variable>
@@ -826,22 +827,22 @@ TEST(NdkBinder, GetAndVerifyScopedAIBinder_Weak) {
 
 class MyResultReceiver : public BnResultReceiver {
    public:
-    Mutex mMutex;
-    Condition mCondition;
+    std::mutex mMutex;
+    std::condition_variable mCondition;
     bool mHaveResult = false;
     int32_t mResult = 0;
 
     virtual void send(int32_t resultCode) {
-        AutoMutex _l(mMutex);
+        std::unique_lock<std::mutex> _l(mMutex);
         mResult = resultCode;
         mHaveResult = true;
-        mCondition.signal();
+        mCondition.notify_one();
     }
 
     int32_t waitForResult() {
-        AutoMutex _l(mMutex);
+        std::unique_lock<std::mutex> _l(mMutex);
         while (!mHaveResult) {
-            mCondition.wait(mMutex);
+            mCondition.wait(_l);
         }
         return mResult;
     }

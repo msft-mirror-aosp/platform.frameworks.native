@@ -100,7 +100,6 @@ cc_cmake_snapshot {
     prebuilts: [
         // to enable arm64 host support, build with musl - e.g. on aosp_cf_arm64_phone
         "aidl",
-        "libc++",
     ],
     include_sources: true,
     cflags: [
@@ -267,20 +266,18 @@ cc_defaults {
         "-Wunused-const-variable",
         "-DANDROID_BASE_UNIQUE_FD_DISABLE_IMPLICIT_CONVERSION",
         "-DANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION",
+        // Hide symbols by default and set the BUILDING_LIBBINDER macro so that
+        // the code knows to export them.
+        "-fvisibility=hidden",
+        "-DBUILDING_LIBBINDER",
     ],
 
     target: {
-        bionic: {
-            // Hide symbols by default and set the BUILDING_LIBBINDER macro so that
-            // the code knows to export them.
-            //
-            // Only enabled on bionic builds, where RTTI is disabled, because
-            // it is failing to export required typeinfo symbols.
-            // TODO: b/341341056 - Find a solution for non-bionic builds.
-            cflags: [
-                "-fvisibility=hidden",
-                "-DBUILDING_LIBBINDER",
-            ],
+        vendor: {
+            // Trimming the exported symbols reveals a bug in vendor code, so
+            // disable it for the vendor variant for now. http://b/349657329
+            // TODO: Fix the issue and remove this override.
+            cflags: ["-fvisibility=default"],
         },
     },
 }
