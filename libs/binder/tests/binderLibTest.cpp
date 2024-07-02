@@ -29,7 +29,6 @@
 
 #include <android-base/properties.h>
 #include <android-base/result-gmock.h>
-#include <android-base/strings.h>
 #include <binder/Binder.h>
 #include <binder/BpBinder.h>
 #include <binder/Functional.h>
@@ -57,7 +56,6 @@ using namespace android::binder::impl;
 using namespace std::string_literals;
 using namespace std::chrono_literals;
 using android::base::testing::HasValue;
-using android::base::testing::Ok;
 using android::binder::Status;
 using android::binder::unique_fd;
 using testing::ExplainMatchResult;
