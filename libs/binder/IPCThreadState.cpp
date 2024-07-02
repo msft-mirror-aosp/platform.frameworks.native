@@ -22,9 +22,7 @@
 #include <binder/BpBinder.h>
 #include <binder/TextOutput.h>
 
-#include <cutils/sched_policy.h>
 #include <utils/CallStack.h>
-#include <utils/Log.h>
 
 #include <atomic>
 #include <errno.h>

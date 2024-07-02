@@ -35,7 +35,7 @@ const SkString kCrosstalkAndChunk16x16(R"(
         float maximum = 0.0;
         for (int y = 0; y < 16; y++) {
             for (int x = 0; x < 16; x++) {
-                float3 linear = toLinearSrgb(bitmap.eval(xy * 16 + vec2(x, y)).rgb) * hdrSdrRatio;
+                float3 linear = toLinearSrgb(bitmap.eval((xy - 0.5) * 16 + 0.5 + vec2(x, y)).rgb) * hdrSdrRatio;
                 float maxRGB = max(linear.r, max(linear.g, linear.b));
                 maximum = max(maximum, log2(max(maxRGB, 1.0)));
             }
@@ -49,7 +49,7 @@ const SkString kChunk8x8(R"(
         float maximum = 0.0;
         for (int y = 0; y < 8; y++) {
             for (int x = 0; x < 8; x++) {
-                maximum = max(maximum, bitmap.eval(xy * 8 + vec2(x, y)).r);
+                maximum = max(maximum, bitmap.eval((xy - 0.5) * 8 + 0.5 + vec2(x, y)).r);
             }
         }
         return float4(float3(maximum), 1.0);
