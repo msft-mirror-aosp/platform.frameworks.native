@@ -34,9 +34,12 @@
 #include <ui/ColorSpace.h>
 #include <ui/PixelFormat.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 
 #include "../skia/SkiaGLRenderEngine.h"
 #include "../skia/SkiaVkRenderEngine.h"
@@ -259,22 +262,51 @@ public:
 
     ~RenderEngineTest() {
         if (WRITE_BUFFER_TO_FILE_ON_FAILURE && ::testing::Test::HasFailure()) {
-            writeBufferToFile("/data/texture_out_");
+            writeBufferToFile("/data/local/tmp/RenderEngineTest/");
         }
         const ::testing::TestInfo* const test_info =
                 ::testing::UnitTest::GetInstance()->current_test_info();
         ALOGI("**** Tearing down after %s.%s\n", test_info->test_case_name(), test_info->name());
     }
 
-    void writeBufferToFile(const char* basename) {
-        std::string filename(basename);
-        filename.append(::testing::UnitTest::GetInstance()->current_test_info()->name());
-        filename.append(".ppm");
-        std::ofstream file(filename.c_str(), std::ios::binary);
+    // If called during e.g.
+    // `PerRenderEngineType/RenderEngineTest#drawLayers_fillBufferCheckersRotate90_colorSource/0`
+    // with a directory of `/data/local/tmp/RenderEngineTest`, then mBuffer will be dumped to
+    // `/data/local/tmp/RenderEngineTest/drawLayers_fillBufferCheckersRotate90_colorSource-0.ppm`
+    //
+    // Note: if `directory` does not exist, then its full path will be recursively created with 777
+    // permissions. If `directory` already exists but does not grant the executing user write
+    // permissions, then saving the buffer will fail.
+    //
+    // Since this is test-only code, no security considerations are made.
+    void writeBufferToFile(const filesystem::path& directory) {
+        const auto currentTestInfo = ::testing::UnitTest::GetInstance()->current_test_info();
+        LOG_ALWAYS_FATAL_IF(!currentTestInfo,
+                            "writeBufferToFile must be called during execution of a test");
+
+        std::string fileName(currentTestInfo->name());
+        // Test names may include the RenderEngine variant separated by '/', which would separate
+        // the file name into a subdirectory if not corrected.
+        std::replace(fileName.begin(), fileName.end(), '/', '-');
+        fileName.append(".ppm");
+
+        std::error_code err;
+        filesystem::create_directories(directory, err);
+        if (err.value()) {
+            ALOGE("Unable to create directory %s for writing %s (%d: %s)", directory.c_str(),
+                  fileName.c_str(), err.value(), err.message().c_str());
+            return;
+        }
+
+        // Append operator ("/") ensures exactly one "/" directly before the argument.
+        const filesystem::path filePath = directory / fileName;
+        std::ofstream file(filePath.c_str(), std::ios::binary);
         if (!file.is_open()) {
-            ALOGE("Unable to open file: %s", filename.c_str());
-            ALOGE("You may need to do: \"adb shell setenforce 0\" to enable "
-                  "surfaceflinger to write debug images");
+            ALOGE("Unable to open file: %s", filePath.c_str());
+            ALOGE("You may need to do: \"adb shell setenforce 0\" to enable surfaceflinger to "
+                  "write debug images, or the %s directory might not give the executing user write "
+                  "permission",
+                  directory.c_str());
             return;
         }
 
@@ -304,6 +336,7 @@ public:
             }
         }
         file.write(reinterpret_cast<char*>(outBuffer.data()), outBuffer.size());
+        ALOGI("Image of incorrect output written to %s", filePath.c_str());
         mBuffer->getBuffer()->unlock();
     }
 

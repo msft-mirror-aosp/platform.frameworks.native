@@ -100,7 +100,6 @@ cc_cmake_snapshot {
     prebuilts: [
         // to enable arm64 host support, build with musl - e.g. on aosp_cf_arm64_phone
         "aidl",
-        "libc++",
     ],
     include_sources: true,
     cflags: [
