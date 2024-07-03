@@ -19,11 +19,10 @@
 #define LOG_TAG "SurfaceFlinger"
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 
+#include <common/trace.h>
 #include <gui/GLConsumer.h>
-#include <gui/TraceUtils.h>
 #include <math/vec3.h>
 #include <system/window.h>
-#include <utils/Log.h>
 
 #include "LayerFE.h"
 #include "SurfaceFlinger.h"
@@ -122,7 +121,7 @@ std::optional<compositionengine::LayerFE::LayerSettings> LayerFE::prepareClientC
 
 std::optional<compositionengine::LayerFE::LayerSettings> LayerFE::prepareClientCompositionInternal(
         compositionengine::LayerFE::ClientCompositionTargetSettings& targetSettings) const {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     compositionengine::LayerFE::LayerSettings layerSettings;
     layerSettings.geometry.boundaries =
             reduce(mSnapshot->geomLayerBounds, mSnapshot->transparentRegionHint);
@@ -214,7 +213,7 @@ void LayerFE::prepareEffectsClientComposition(
 void LayerFE::prepareBufferStateClientComposition(
         compositionengine::LayerFE::LayerSettings& layerSettings,
         compositionengine::LayerFE::ClientCompositionTargetSettings& targetSettings) const {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     if (CC_UNLIKELY(!mSnapshot->externalTexture)) {
         // If there is no buffer for the layer or we have sidebandstream where there is no
         // activeBuffer, then we need to return LayerSettings.

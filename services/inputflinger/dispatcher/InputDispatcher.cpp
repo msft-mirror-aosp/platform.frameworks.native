@@ -444,10 +444,12 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const IdGenerator& idGenerato
             newCoords.copyFrom(motionEntry.pointerCoords[i]);
             // First, apply the current pointer's transform to update the coordinates into
             // window space.
-            newCoords.transform(currTransform, motionEntry.flags);
+            MotionEvent::calculateTransformedCoordsInPlace(newCoords, motionEntry.source,
+                                                           motionEntry.flags, currTransform);
             // Next, apply the inverse transform of the normalized coordinates so the
             // current coordinates are transformed into the normalized coordinate space.
-            newCoords.transform(inverseTransform, motionEntry.flags);
+            MotionEvent::calculateTransformedCoordsInPlace(newCoords, motionEntry.source,
+                                                           motionEntry.flags, inverseTransform);
         }
     }
 
@@ -877,7 +879,7 @@ std::pair<bool /*cancelPointers*/, bool /*cancelNonPointers*/> expandCancellatio
 class ScopedSyntheticEventTracer {
 public:
     ScopedSyntheticEventTracer(std::unique_ptr<trace::InputTracerInterface>& tracer)
-          : mTracer(tracer) {
+          : mTracer(tracer), mProcessingTimestamp(now()) {
         if (mTracer) {
             mEventTracker = mTracer->createTrackerForSyntheticEvent();
         }
@@ -885,7 +887,7 @@ public:
 
     ~ScopedSyntheticEventTracer() {
         if (mTracer) {
-            mTracer->eventProcessingComplete(*mEventTracker);
+            mTracer->eventProcessingComplete(*mEventTracker, mProcessingTimestamp);
         }
     }
 
@@ -894,8 +896,9 @@ public:
     }
 
 private:
-    std::unique_ptr<trace::InputTracerInterface>& mTracer;
+    const std::unique_ptr<trace::InputTracerInterface>& mTracer;
     std::unique_ptr<trace::EventTrackerInterface> mEventTracker;
+    const nsecs_t mProcessingTimestamp;
 };
 
 } // namespace
@@ -1261,7 +1264,7 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t& nextWakeupTime) {
 
         if (mTracer) {
             if (auto& traceTracker = getTraceTracker(*mPendingEvent); traceTracker != nullptr) {
-                mTracer->eventProcessingComplete(*traceTracker);
+                mTracer->eventProcessingComplete(*traceTracker, currentTime);
             }
         }
 
@@ -2494,9 +2497,8 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
         }
 
         if (newTouchedWindows.empty()) {
-            ALOGI("Dropping event because there is no touchable window at (%.1f, %.1f) on display "
-                  "%s.",
-                  x, y, displayId.toString().c_str());
+            LOG(INFO) << "Dropping event because there is no touchable window at (" << x << ", "
+                      << y << ") on display " << displayId << ": " << entry;
             outInjectionResult = InputEventInjectionResult::FAILED;
             return {};
         }
@@ -5524,6 +5526,13 @@ void InputDispatcher::setFocusedDisplay(ui::LogicalDisplayId displayId) {
                 synthesizeCancelationEventsForWindowLocked(windowHandle, options);
             }
             mFocusedDisplayId = displayId;
+            // Enqueue a command to run outside the lock to tell the policy that the focused display
+            // changed.
+            auto command = [this]() REQUIRES(mLock) {
+                scoped_unlock unlock(mLock);
+                mPolicy.notifyFocusedDisplayChanged(mFocusedDisplayId);
+            };
+            postCommandLocked(std::move(command));
 
             // Only a window on the focused display can have Pointer Capture, so disable the active
             // Pointer Capture session if there is one, since the focused display changed.
