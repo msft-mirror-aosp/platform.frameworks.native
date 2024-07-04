@@ -87,7 +87,7 @@ cc_library_headers {
 
 cc_cmake_snapshot {
     name: "binder_sdk",
-    modules: [
+    modules_host: [
         "libbinder_sdk",
         "libbinder_sdk_single_threaded",
         "libbinder_ndk_sdk",
