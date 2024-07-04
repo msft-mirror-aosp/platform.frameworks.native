@@ -2497,9 +2497,8 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
         }
 
         if (newTouchedWindows.empty()) {
-            ALOGI("Dropping event because there is no touchable window at (%.1f, %.1f) on display "
-                  "%s.",
-                  x, y, displayId.toString().c_str());
+            LOG(INFO) << "Dropping event because there is no touchable window at (" << x << ", "
+                      << y << ") on display " << displayId << ": " << entry;
             outInjectionResult = InputEventInjectionResult::FAILED;
             return {};
         }
