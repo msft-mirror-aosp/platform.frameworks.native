@@ -22,6 +22,7 @@
 
 #include <android/gui/BnWindowInfosReportedListener.h>
 #include <android/gui/DisplayState.h>
+#include <android/gui/EdgeExtensionParameters.h>
 #include <android/gui/ISurfaceComposerClient.h>
 #include <android/gui/IWindowInfosListener.h>
 #include <android/gui/TrustedPresentationThresholds.h>
@@ -2327,6 +2328,19 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setStret
 
     s->what |= layer_state_t::eStretchChanged;
     s->stretchEffect = stretchEffect;
+    return *this;
+}
+
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setEdgeExtensionEffect(
+        const sp<SurfaceControl>& sc, const gui::EdgeExtensionParameters& effect) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+
+    s->what |= layer_state_t::eEdgeExtensionChanged;
+    s->edgeExtensionParameters = effect;
     return *this;
 }
 
