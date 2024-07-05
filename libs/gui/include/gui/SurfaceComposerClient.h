@@ -35,6 +35,7 @@
 #include <ui/BlurRegion.h>
 #include <ui/ConfigStoreTypes.h>
 #include <ui/DisplayedFrameStats.h>
+#include <ui/EdgeExtensionEffect.h>
 #include <ui/FrameStats.h>
 #include <ui/GraphicTypes.h>
 #include <ui/PixelFormat.h>
@@ -743,6 +744,17 @@ public:
          */
         Transaction& setStretchEffect(const sp<SurfaceControl>& sc,
                                       const StretchEffect& stretchEffect);
+
+        /**
+         * Provides the edge extension effect configured on a container that the
+         * surface is rendered within.
+         * @param sc target surface the edge extension should be applied to
+         * @param effect the corresponding EdgeExtensionParameters to be applied
+         *    to the surface.
+         * @return The transaction being constructed
+         */
+        Transaction& setEdgeExtensionEffect(const sp<SurfaceControl>& sc,
+                                            const gui::EdgeExtensionParameters& effect);
 
         Transaction& setBufferCrop(const sp<SurfaceControl>& sc, const Rect& bufferCrop);
         Transaction& setDestinationFrame(const sp<SurfaceControl>& sc,
