@@ -507,15 +507,23 @@ sk_sp<SkShader> SkiaRenderEngine::createRuntimeEffectShader(
         const RuntimeEffectShaderParameters& parameters) {
     // The given surface will be stretched by HWUI via matrix transformation
     // which gets similar results for most surfaces
-    // Determine later on if we need to leverage the stertch shader within
+    // Determine later on if we need to leverage the stretch shader within
     // surface flinger
     const auto& stretchEffect = parameters.layer.stretchEffect;
     const auto& targetBuffer = parameters.layer.source.buffer.buffer;
+    const auto graphicBuffer = targetBuffer ? targetBuffer->getBuffer() : nullptr;
+
     auto shader = parameters.shader;
-    if (stretchEffect.hasEffect()) {
-        const auto graphicBuffer = targetBuffer ? targetBuffer->getBuffer() : nullptr;
-        if (graphicBuffer && shader) {
+    if (graphicBuffer && parameters.shader) {
+        if (stretchEffect.hasEffect()) {
             shader = mStretchShaderFactory.createSkShader(shader, stretchEffect);
+        }
+        // The given surface requires to be filled outside of its buffer bounds if the edge
+        // extension is required
+        const auto& edgeExtensionEffect = parameters.layer.edgeExtensionEffect;
+        if (edgeExtensionEffect.hasEffect()) {
+            shader = mEdgeExtensionShaderFactory.createSkShader(shader, parameters.layer,
+                                                                parameters.imageBounds);
         }
     }
 
@@ -566,8 +574,6 @@ sk_sp<SkShader> SkiaRenderEngine::createRuntimeEffectShader(
                                      parameters.layerDimmingRatio, 1.f));
         }
 
-        const auto targetBuffer = parameters.layer.source.buffer.buffer;
-        const auto graphicBuffer = targetBuffer ? targetBuffer->getBuffer() : nullptr;
         const auto hardwareBuffer = graphicBuffer ? graphicBuffer->toAHardwareBuffer() : nullptr;
         return createLinearEffectShader(shader, effect, runtimeEffect, std::move(colorTransform),
                                         parameters.display.maxLuminance,
@@ -1039,18 +1045,20 @@ void SkiaRenderEngine::drawLayersInternal(
                                                            toSkColorSpace(layerDataspace)));
             }
 
-            paint.setShader(createRuntimeEffectShader(
-                    RuntimeEffectShaderParameters{.shader = shader,
-                                                  .layer = layer,
-                                                  .display = display,
-                                                  .undoPremultipliedAlpha = !item.isOpaque &&
-                                                          item.usePremultipliedAlpha,
-                                                  .requiresLinearEffect = requiresLinearEffect,
-                                                  .layerDimmingRatio = dimInLinearSpace
-                                                          ? layerDimmingRatio
-                                                          : 1.f,
-                                                  .outputDataSpace = display.outputDataspace,
-                                                  .fakeOutputDataspace = fakeDataspace}));
+            SkRect imageBounds;
+            matrix.mapRect(&imageBounds, SkRect::Make(image->bounds()));
+
+            paint.setShader(createRuntimeEffectShader(RuntimeEffectShaderParameters{
+                    .shader = shader,
+                    .layer = layer,
+                    .display = display,
+                    .undoPremultipliedAlpha = !item.isOpaque && item.usePremultipliedAlpha,
+                    .requiresLinearEffect = requiresLinearEffect,
+                    .layerDimmingRatio = dimInLinearSpace ? layerDimmingRatio : 1.f,
+                    .outputDataSpace = display.outputDataspace,
+                    .fakeOutputDataspace = fakeDataspace,
+                    .imageBounds = imageBounds,
+            }));
 
             // Turn on dithering when dimming beyond this (arbitrary) threshold...
             static constexpr float kDimmingThreshold = 0.9f;
@@ -1118,7 +1126,8 @@ void SkiaRenderEngine::drawLayersInternal(
                                                   .requiresLinearEffect = requiresLinearEffect,
                                                   .layerDimmingRatio = layerDimmingRatio,
                                                   .outputDataSpace = display.outputDataspace,
-                                                  .fakeOutputDataspace = fakeDataspace}));
+                                                  .fakeOutputDataspace = fakeDataspace,
+                                                  .imageBounds = SkRect::MakeEmpty()}));
         }
 
         if (layer.disableBlending) {

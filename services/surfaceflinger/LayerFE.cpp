@@ -173,6 +173,7 @@ std::optional<compositionengine::LayerFE::LayerSettings> LayerFE::prepareClientC
             break;
     }
     layerSettings.stretchEffect = mSnapshot->stretchEffect;
+    layerSettings.edgeExtensionEffect = mSnapshot->edgeExtensionEffect;
     // Record the name of the layer for debugging further down the stack.
     layerSettings.name = mSnapshot->name;
 
