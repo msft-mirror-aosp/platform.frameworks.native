@@ -65,11 +65,7 @@ TEST_F(InputChannelTest, OpenInputChannelPair_ReturnsAPairOfConnectedChannels) {
 
     ASSERT_EQ(OK, result) << "should have successfully opened a channel pair";
 
-    // Name
-    EXPECT_STREQ("channel name (server)", serverChannel->getName().c_str())
-            << "server channel should have suffixed name";
-    EXPECT_STREQ("channel name (client)", clientChannel->getName().c_str())
-            << "client channel should have suffixed name";
+    EXPECT_EQ(serverChannel->getName(), clientChannel->getName());
 
     // Server->Client communication
     InputMessage serverMsg = {};
