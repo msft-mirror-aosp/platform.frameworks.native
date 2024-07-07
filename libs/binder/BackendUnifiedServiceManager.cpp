@@ -15,6 +15,10 @@
  */
 #include "BackendUnifiedServiceManager.h"
 
+#if defined(__BIONIC__) && !defined(__ANDROID_VNDK__)
+#include <android-base/properties.h>
+#endif
+
 namespace android {
 
 using AidlServiceManager = android::os::IServiceManager;
