@@ -84,6 +84,7 @@ cc_test {
         "FrameTimelineTest.cpp",
         "GameModeTest.cpp",
         "HWComposerTest.cpp",
+        "JankTrackerTest.cpp",
         "OneShotTimerTest.cpp",
         "LayerHistoryTest.cpp",
         "LayerHistoryIntegrationTest.cpp",

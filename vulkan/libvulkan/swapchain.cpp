@@ -1473,23 +1473,14 @@ static VkResult getProducerUsage(const VkDevice& device,
         image_format_properties.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
         image_format_properties.pNext = &ahb_usage;
 
-        if (instance_dispatch.GetPhysicalDeviceImageFormatProperties2) {
-            VkResult result = instance_dispatch.GetPhysicalDeviceImageFormatProperties2(
-                pdev, &image_format_info, &image_format_properties);
-            if (result != VK_SUCCESS) {
-                ALOGE("VkGetPhysicalDeviceImageFormatProperties2 for AHB usage failed: %d", result);
-                return VK_ERROR_SURFACE_LOST_KHR;
-            }
-        }
-        else {
-            VkResult result = instance_dispatch.GetPhysicalDeviceImageFormatProperties2KHR(
-                pdev, &image_format_info,
-                &image_format_properties);
-            if (result != VK_SUCCESS) {
-                ALOGE("VkGetPhysicalDeviceImageFormatProperties2KHR for AHB usage failed: %d",
-                    result);
-                return VK_ERROR_SURFACE_LOST_KHR;
-            }
+        VkResult result = GetPhysicalDeviceImageFormatProperties2(
+            pdev, &image_format_info, &image_format_properties);
+        if (result != VK_SUCCESS) {
+            ALOGE(
+                "VkGetPhysicalDeviceImageFormatProperties2 for AHB usage "
+                "failed: %d",
+                result);
+            return VK_ERROR_SURFACE_LOST_KHR;
         }
 
         // Determine if USAGE_FRONT_BUFFER is needed.

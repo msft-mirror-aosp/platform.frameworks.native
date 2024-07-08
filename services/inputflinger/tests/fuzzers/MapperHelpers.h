@@ -17,6 +17,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 
 #include <EventHub.h>
 #include <InputDevice.h>
@@ -119,16 +120,25 @@ public:
     void setAbsoluteAxisInfo(int32_t deviceId, int axis, const RawAbsoluteAxisInfo& axisInfo) {
         mAxes[deviceId][axis] = axisInfo;
     }
-    status_t getAbsoluteAxisInfo(int32_t deviceId, int axis,
-                                 RawAbsoluteAxisInfo* outAxisInfo) const override {
+    std::optional<RawAbsoluteAxisInfo> getAbsoluteAxisInfo(int32_t deviceId,
+                                                           int axis) const override {
         if (auto deviceAxesIt = mAxes.find(deviceId); deviceAxesIt != mAxes.end()) {
             const std::map<int, RawAbsoluteAxisInfo>& deviceAxes = deviceAxesIt->second;
             if (auto axisInfoIt = deviceAxes.find(axis); axisInfoIt != deviceAxes.end()) {
-                *outAxisInfo = axisInfoIt->second;
-                return OK;
+                return axisInfoIt->second;
             }
         }
-        return mFdp->ConsumeIntegral<status_t>();
+        if (mFdp->ConsumeBool()) {
+            return std::optional<RawAbsoluteAxisInfo>({
+                    .minValue = mFdp->ConsumeIntegral<int32_t>(),
+                    .maxValue = mFdp->ConsumeIntegral<int32_t>(),
+                    .flat = mFdp->ConsumeIntegral<int32_t>(),
+                    .fuzz = mFdp->ConsumeIntegral<int32_t>(),
+                    .resolution = mFdp->ConsumeIntegral<int32_t>(),
+            });
+        } else {
+            return std::nullopt;
+        }
     }
     bool hasRelativeAxis(int32_t deviceId, int axis) const override { return mFdp->ConsumeBool(); }
     bool hasInputProperty(int32_t deviceId, int property) const override {
@@ -197,9 +207,12 @@ public:
     int32_t getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const override {
         return mFdp->ConsumeIntegral<int32_t>();
     }
-    status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
-                                  int32_t* outValue) const override {
-        return mFdp->ConsumeIntegral<status_t>();
+    std::optional<int32_t> getAbsoluteAxisValue(int32_t deviceId, int32_t axis) const override {
+        if (mFdp->ConsumeBool()) {
+            return mFdp->ConsumeIntegral<int32_t>();
+        } else {
+            return std::nullopt;
+        }
     }
     base::Result<std::vector<int32_t>> getMtSlotValues(int32_t deviceId, int32_t axis,
                                                        size_t slotCount) const override {
