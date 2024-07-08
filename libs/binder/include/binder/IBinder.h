@@ -198,9 +198,14 @@ public:
         virtual void binderDied(const wp<IBinder>& who) = 0;
     };
 
-    #if defined(__clang__)
-    #pragma clang diagnostic pop
-    #endif
+    class FrozenStateChangeCallback : public virtual RefBase {
+    public:
+        virtual void onStateChanged(const wp<IBinder>& who, bool isFrozen) = 0;
+    };
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
     /**
      * Register the @a recipient for a notification if this binder
@@ -248,6 +253,12 @@ public:
                                             void* cookie = nullptr,
                                             uint32_t flags = 0,
                                             wp<DeathRecipient>* outRecipient = nullptr) = 0;
+
+    // Placeholders. See Binder.h for details.
+    [[nodiscard]] virtual status_t addFrozenStateChangeCallback(
+            const wp<FrozenStateChangeCallback>& callback) = 0;
+    [[nodiscard]] virtual status_t removeFrozenStateChangeCallback(
+            const wp<FrozenStateChangeCallback>& callback) = 0;
 
     virtual bool            checkSubclass(const void* subclassID) const;
 
