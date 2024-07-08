@@ -122,6 +122,10 @@ protected:
                 .WillRepeatedly(Return(true));
         EXPECT_CALL(mMockEventHub, hasRelativeAxis(EVENTHUB_ID, REL_HWHEEL))
                 .WillRepeatedly(Return(false));
+        EXPECT_CALL(mMockEventHub, hasRelativeAxis(EVENTHUB_ID, REL_WHEEL_HI_RES))
+                .WillRepeatedly(Return(false));
+        EXPECT_CALL(mMockEventHub, hasRelativeAxis(EVENTHUB_ID, REL_HWHEEL_HI_RES))
+                .WillRepeatedly(Return(false));
     }
 };
 
