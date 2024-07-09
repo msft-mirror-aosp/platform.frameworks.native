@@ -24,7 +24,7 @@ namespace android {
 /**
  * An interface to receive batched input events. Even if you don't want batching, you still have to
  * use this interface, and some of the events will be batched if your implementation is slow to
- * handle the incoming input.
+ * handle the incoming input. The events received by these callbacks are never null.
  */
 class InputConsumerCallbacks {
 public:

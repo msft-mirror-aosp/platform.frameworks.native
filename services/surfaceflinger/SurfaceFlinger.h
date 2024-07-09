@@ -27,7 +27,9 @@
 #include <android/gui/BnSurfaceComposer.h>
 #include <android/gui/DisplayStatInfo.h>
 #include <android/gui/DisplayState.h>
+#include <android/gui/IJankListener.h>
 #include <android/gui/ISurfaceComposerClient.h>
+#include <common/trace.h>
 #include <cutils/atomic.h>
 #include <cutils/compiler.h>
 #include <ftl/algorithm.h>
@@ -52,7 +54,6 @@
 #include <utils/KeyedVector.h>
 #include <utils/RefBase.h>
 #include <utils/SortedVector.h>
-#include <utils/Trace.h>
 #include <utils/threads.h>
 
 #include <compositionengine/OutputColorSetting.h>
@@ -449,7 +450,7 @@ private:
             if (it != mCounterByLayerHandle.end()) {
                 auto [name, pendingBuffers] = it->second;
                 int32_t count = ++(*pendingBuffers);
-                ATRACE_INT(name.c_str(), count);
+                SFTRACE_INT(name.c_str(), count);
             } else {
                 ALOGW("Handle not found! %p", layerHandle);
             }
@@ -559,7 +560,7 @@ private:
     sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId displayId) const;
     status_t setTransactionState(
             const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& state,
-            const Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
+            Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
             InputWindowCommands inputWindowCommands, int64_t desiredPresentTime,
             bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffers,
             bool hasListenerCallbacks, const std::vector<ListenerCallbacks>& listenerCallbacks,
@@ -737,12 +738,12 @@ private:
     status_t setActiveModeFromBackdoor(const sp<display::DisplayToken>&, DisplayModeId, Fps minFps,
                                        Fps maxFps);
 
-    void initiateDisplayModeChanges() REQUIRES(mStateLock, kMainThreadContext);
-    void finalizeDisplayModeChange(DisplayDevice&) REQUIRES(mStateLock, kMainThreadContext);
+    void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) EXCLUDES(mStateLock);
+    void finalizeDisplayModeChange(PhysicalDisplayId) REQUIRES(kMainThreadContext)
+            EXCLUDES(mStateLock);
 
-    // TODO(b/241285191): Replace DisplayDevice with DisplayModeRequest, and move to Scheduler.
-    void dropModeRequest(const sp<DisplayDevice>&) REQUIRES(mStateLock);
-    void applyActiveMode(const sp<DisplayDevice>&) REQUIRES(mStateLock);
+    void dropModeRequest(PhysicalDisplayId) REQUIRES(kMainThreadContext);
+    void applyActiveMode(PhysicalDisplayId) REQUIRES(kMainThreadContext);
 
     // Called on the main thread in response to setPowerMode()
     void setPowerModeInternal(const sp<DisplayDevice>& display, hal::PowerMode mode)
@@ -896,7 +897,7 @@ private:
 
     using OutputCompositionState = compositionengine::impl::OutputCompositionState;
 
-    std::optional<OutputCompositionState> getDisplayAndLayerSnapshotsFromMainThread(
+    std::optional<OutputCompositionState> getSnapshotsFromMainThread(
             RenderAreaBuilderVariant& renderAreaBuilder,
             GetLayerSnapshotsFunction getLayerSnapshotsFn, std::vector<sp<LayerFE>>& layerFEs);
 
@@ -1098,8 +1099,7 @@ private:
                                const DisplayDeviceState& drawingState)
             REQUIRES(mStateLock, kMainThreadContext);
 
-    void dispatchDisplayModeChangeEvent(PhysicalDisplayId, const scheduler::FrameRateMode&)
-            REQUIRES(mStateLock);
+    void dispatchDisplayModeChangeEvent(PhysicalDisplayId, const scheduler::FrameRateMode&);
 
     /*
      * VSYNC
@@ -1339,9 +1339,7 @@ private:
     display::PhysicalDisplays mPhysicalDisplays GUARDED_BY(mStateLock);
 
     // The inner or outer display for foldables, assuming they have mutually exclusive power states.
-    // Atomic because writes from onActiveDisplayChangedLocked are not always under mStateLock, but
-    // reads from ISchedulerCallback::requestDisplayModes may happen concurrently.
-    std::atomic<PhysicalDisplayId> mActiveDisplayId GUARDED_BY(mStateLock);
+    std::atomic<PhysicalDisplayId> mActiveDisplayId;
 
     display::DisplayModeController mDisplayModeController;
 
@@ -1696,6 +1694,11 @@ public:
             int pid, std::optional<gui::StalledTransactionInfo>* outInfo) override;
     binder::Status getSchedulingPolicy(gui::SchedulingPolicy* outPolicy) override;
     binder::Status notifyShutdown() override;
+    binder::Status addJankListener(const sp<IBinder>& layer,
+                                   const sp<gui::IJankListener>& listener) override;
+    binder::Status flushJankData(int32_t layerId) override;
+    binder::Status removeJankListener(int32_t layerId, const sp<gui::IJankListener>& listener,
+                                      int64_t afterVsync) override;
 
 private:
     static const constexpr bool kUsePermissionCache = true;

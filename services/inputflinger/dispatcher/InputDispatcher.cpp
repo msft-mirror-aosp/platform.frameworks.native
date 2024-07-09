@@ -444,10 +444,12 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const IdGenerator& idGenerato
             newCoords.copyFrom(motionEntry.pointerCoords[i]);
             // First, apply the current pointer's transform to update the coordinates into
             // window space.
-            newCoords.transform(currTransform);
+            MotionEvent::calculateTransformedCoordsInPlace(newCoords, motionEntry.source,
+                                                           motionEntry.flags, currTransform);
             // Next, apply the inverse transform of the normalized coordinates so the
             // current coordinates are transformed into the normalized coordinate space.
-            newCoords.transform(inverseTransform);
+            MotionEvent::calculateTransformedCoordsInPlace(newCoords, motionEntry.source,
+                                                           motionEntry.flags, inverseTransform);
         }
     }
 
@@ -877,7 +879,7 @@ std::pair<bool /*cancelPointers*/, bool /*cancelNonPointers*/> expandCancellatio
 class ScopedSyntheticEventTracer {
 public:
     ScopedSyntheticEventTracer(std::unique_ptr<trace::InputTracerInterface>& tracer)
-          : mTracer(tracer) {
+          : mTracer(tracer), mProcessingTimestamp(now()) {
         if (mTracer) {
             mEventTracker = mTracer->createTrackerForSyntheticEvent();
         }
@@ -885,7 +887,7 @@ public:
 
     ~ScopedSyntheticEventTracer() {
         if (mTracer) {
-            mTracer->eventProcessingComplete(*mEventTracker);
+            mTracer->eventProcessingComplete(*mEventTracker, mProcessingTimestamp);
         }
     }
 
@@ -894,8 +896,9 @@ public:
     }
 
 private:
-    std::unique_ptr<trace::InputTracerInterface>& mTracer;
+    const std::unique_ptr<trace::InputTracerInterface>& mTracer;
     std::unique_ptr<trace::EventTrackerInterface> mEventTracker;
+    const nsecs_t mProcessingTimestamp;
 };
 
 } // namespace
@@ -1261,7 +1264,7 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t& nextWakeupTime) {
 
         if (mTracer) {
             if (auto& traceTracker = getTraceTracker(*mPendingEvent); traceTracker != nullptr) {
-                mTracer->eventProcessingComplete(*traceTracker);
+                mTracer->eventProcessingComplete(*traceTracker, currentTime);
             }
         }
 
@@ -1894,8 +1897,6 @@ bool InputDispatcher::dispatchKeyLocked(nsecs_t currentTime, std::shared_ptr<con
                 doInterceptKeyBeforeDispatchingCommand(focusedWindowToken, *entry);
             };
             postCommandLocked(std::move(command));
-            // Poke user activity for keys not passed to user
-            pokeUserActivityLocked(*entry);
             return false; // wait for the command to run
         } else {
             entry->interceptKeyResult = KeyEntry::InterceptKeyResult::CONTINUE;
@@ -1912,8 +1913,12 @@ bool InputDispatcher::dispatchKeyLocked(nsecs_t currentTime, std::shared_ptr<con
                            *dropReason == DropReason::POLICY ? InputEventInjectionResult::SUCCEEDED
                                                              : InputEventInjectionResult::FAILED);
         mReporter->reportDroppedKey(entry->id);
-        // Poke user activity for undispatched keys
-        pokeUserActivityLocked(*entry);
+        // Poke user activity for consumed keys, as it may have not been reported due to
+        // the focused window requesting user activity to be disabled
+        if (*dropReason == DropReason::POLICY &&
+            mPendingEvent->policyFlags & POLICY_FLAG_PASS_TO_USER) {
+            pokeUserActivityLocked(*entry);
+        }
         return true;
     }
 
@@ -2109,19 +2114,16 @@ void InputDispatcher::logOutboundMotionDetails(const char* prefix, const MotionE
     if (DEBUG_OUTBOUND_EVENT_DETAILS) {
         ALOGD("%seventTime=%" PRId64 ", deviceId=%d, source=%s, displayId=%s, policyFlags=0x%x, "
               "action=%s, actionButton=0x%x, flags=0x%x, "
-              "metaState=0x%x, buttonState=0x%x,"
-              "edgeFlags=0x%x, xPrecision=%f, yPrecision=%f, downTime=%" PRId64,
+              "metaState=0x%x, buttonState=0x%x, downTime=%" PRId64,
               prefix, entry.eventTime, entry.deviceId,
               inputEventSourceToString(entry.source).c_str(), entry.displayId.toString().c_str(),
               entry.policyFlags, MotionEvent::actionToString(entry.action).c_str(),
-              entry.actionButton, entry.flags, entry.metaState, entry.buttonState, entry.edgeFlags,
-              entry.xPrecision, entry.yPrecision, entry.downTime);
+              entry.actionButton, entry.flags, entry.metaState, entry.buttonState, entry.downTime);
 
         for (uint32_t i = 0; i < entry.getPointerCount(); i++) {
             ALOGD("  Pointer %d: id=%d, toolType=%s, "
                   "x=%f, y=%f, pressure=%f, size=%f, "
-                  "touchMajor=%f, touchMinor=%f, toolMajor=%f, toolMinor=%f, "
-                  "orientation=%f",
+                  "touchMajor=%f, touchMinor=%f, toolMajor=%f, toolMinor=%f, orientation=%f",
                   i, entry.pointerProperties[i].id,
                   ftl::enum_string(entry.pointerProperties[i].toolType).c_str(),
                   entry.pointerCoords[i].getAxisValue(AMOTION_EVENT_AXIS_X),
@@ -2492,9 +2494,8 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
         }
 
         if (newTouchedWindows.empty()) {
-            ALOGI("Dropping event because there is no touchable window at (%.1f, %.1f) on display "
-                  "%s.",
-                  x, y, displayId.toString().c_str());
+            LOG(INFO) << "Dropping event because there is no touchable window at (" << x << ", "
+                      << y << ") on display " << displayId << ": " << entry;
             outInjectionResult = InputEventInjectionResult::FAILED;
             return {};
         }
@@ -3313,22 +3314,16 @@ void InputDispatcher::pokeUserActivityLocked(const EventEntry& eventEntry) {
             if (keyEntry.flags & AKEY_EVENT_FLAG_CANCELED) {
                 return;
             }
-            // If the key code is unknown, we don't consider it user activity
-            if (keyEntry.keyCode == AKEYCODE_UNKNOWN) {
-                return;
-            }
             // Don't inhibit events that were intercepted or are not passed to
             // the apps, like system shortcuts
             if (windowDisablingUserActivityInfo != nullptr &&
-                keyEntry.interceptKeyResult != KeyEntry::InterceptKeyResult::SKIP &&
-                keyEntry.policyFlags & POLICY_FLAG_PASS_TO_USER) {
+                keyEntry.interceptKeyResult != KeyEntry::InterceptKeyResult::SKIP) {
                 if (DEBUG_DISPATCH_CYCLE) {
                     ALOGD("Not poking user activity: disabled by window '%s'.",
                           windowDisablingUserActivityInfo->name.c_str());
                 }
                 return;
             }
-
             break;
         }
         default: {
@@ -3832,6 +3827,10 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                 }
                 const MotionEntry& motionEntry = static_cast<const MotionEntry&>(eventEntry);
                 status = publishMotionEvent(*connection, *dispatchEntry);
+                if (status == BAD_VALUE) {
+                    logDispatchStateLocked();
+                    LOG(FATAL) << "Publisher failed for " << motionEntry;
+                }
                 if (mTracer) {
                     ensureEventTraced(motionEntry);
                     mTracer->traceEventDispatch(*dispatchEntry, *motionEntry.traceTracker);
@@ -4550,13 +4549,12 @@ void InputDispatcher::notifyMotion(const NotifyMotionArgs& args) {
         ALOGD("notifyMotion - id=%" PRIx32 " eventTime=%" PRId64 ", deviceId=%d, source=%s, "
               "displayId=%s, policyFlags=0x%x, "
               "action=%s, actionButton=0x%x, flags=0x%x, metaState=0x%x, buttonState=0x%x, "
-              "edgeFlags=0x%x, xPrecision=%f, yPrecision=%f, xCursorPosition=%f, "
-              "yCursorPosition=%f, downTime=%" PRId64,
+              "xCursorPosition=%f, yCursorPosition=%f, downTime=%" PRId64,
               args.id, args.eventTime, args.deviceId, inputEventSourceToString(args.source).c_str(),
               args.displayId.toString().c_str(), args.policyFlags,
               MotionEvent::actionToString(args.action).c_str(), args.actionButton, args.flags,
-              args.metaState, args.buttonState, args.edgeFlags, args.xPrecision, args.yPrecision,
-              args.xCursorPosition, args.yCursorPosition, args.downTime);
+              args.metaState, args.buttonState, args.xCursorPosition, args.yCursorPosition,
+              args.downTime);
         for (uint32_t i = 0; i < args.getPointerCount(); i++) {
             ALOGD("  Pointer %d: id=%d, toolType=%s, x=%f, y=%f, pressure=%f, size=%f, "
                   "touchMajor=%f, touchMinor=%f, toolMajor=%f, toolMinor=%f, orientation=%f",
@@ -5133,8 +5131,8 @@ void InputDispatcher::transformMotionEntryForInjectionLocked(
     }
     for (uint32_t i = 0; i < entry.getPointerCount(); i++) {
         entry.pointerCoords[i] =
-                MotionEvent::calculateTransformedCoords(entry.source, transformToDisplay,
-                                                        entry.pointerCoords[i]);
+                MotionEvent::calculateTransformedCoords(entry.source, entry.flags,
+                                                        transformToDisplay, entry.pointerCoords[i]);
     }
 }
 
@@ -5528,6 +5526,13 @@ void InputDispatcher::setFocusedDisplay(ui::LogicalDisplayId displayId) {
                 synthesizeCancelationEventsForWindowLocked(windowHandle, options);
             }
             mFocusedDisplayId = displayId;
+            // Enqueue a command to run outside the lock to tell the policy that the focused display
+            // changed.
+            auto command = [this]() REQUIRES(mLock) {
+                scoped_unlock unlock(mLock);
+                mPolicy.notifyFocusedDisplayChanged(mFocusedDisplayId);
+            };
+            postCommandLocked(std::move(command));
 
             // Only a window on the focused display can have Pointer Capture, so disable the active
             // Pointer Capture session if there is one, since the focused display changed.
@@ -6019,17 +6024,12 @@ void InputDispatcher::dumpDispatchStateLocked(std::string& dump) const {
                 dump += StringPrintf(INDENT3 "OutboundQueue: length=%zu\n",
                                      connection->outboundQueue.size());
                 dump += dumpQueue(connection->outboundQueue, currentTime);
-
-            } else {
-                dump += INDENT3 "OutboundQueue: <empty>\n";
             }
 
             if (!connection->waitQueue.empty()) {
                 dump += StringPrintf(INDENT3 "WaitQueue: length=%zu\n",
                                      connection->waitQueue.size());
                 dump += dumpQueue(connection->waitQueue, currentTime);
-            } else {
-                dump += INDENT3 "WaitQueue: <empty>\n";
             }
             std::string inputStateDump = streamableToString(connection->inputState);
             if (!inputStateDump.empty()) {

@@ -18,6 +18,7 @@
 #include <binder/IServiceManager.h>
 #include <binder/LazyServiceRegistrar.h>
 
+#include "../Utils.h"
 #include "ibinder_internal.h"
 #include "status_internal.h"
 
@@ -49,7 +50,25 @@ binder_exception_t AServiceManager_addServiceWithFlags(AIBinder* binder, const c
     sp<IServiceManager> sm = defaultServiceManager();
 
     bool allowIsolated = flags & AServiceManager_AddServiceFlag::ADD_SERVICE_ALLOW_ISOLATED;
-    status_t exception = sm->addService(String16(instance), binder->getBinder(), allowIsolated);
+    int dumpFlags = 0;
+    if (flags & AServiceManager_AddServiceFlag::ADD_SERVICE_DUMP_FLAG_PRIORITY_CRITICAL) {
+        dumpFlags |= IServiceManager::DUMP_FLAG_PRIORITY_CRITICAL;
+    }
+    if (flags & AServiceManager_AddServiceFlag::ADD_SERVICE_DUMP_FLAG_PRIORITY_HIGH) {
+        dumpFlags |= IServiceManager::DUMP_FLAG_PRIORITY_HIGH;
+    }
+    if (flags & AServiceManager_AddServiceFlag::ADD_SERVICE_DUMP_FLAG_PRIORITY_NORMAL) {
+        dumpFlags |= IServiceManager::DUMP_FLAG_PRIORITY_NORMAL;
+    }
+    if (flags & AServiceManager_AddServiceFlag::ADD_SERVICE_DUMP_FLAG_PRIORITY_DEFAULT) {
+        dumpFlags |= IServiceManager::DUMP_FLAG_PRIORITY_DEFAULT;
+    }
+    if (dumpFlags == 0) {
+        dumpFlags = IServiceManager::DUMP_FLAG_PRIORITY_DEFAULT;
+    }
+    status_t exception =
+            sm->addService(String16(instance), binder->getBinder(), allowIsolated, dumpFlags);
+
     return PruneException(exception);
 }
 
@@ -71,7 +90,9 @@ AIBinder* AServiceManager_getService(const char* instance) {
     }
 
     sp<IServiceManager> sm = defaultServiceManager();
+    LIBBINDER_IGNORE("-Wdeprecated-declarations")
     sp<IBinder> binder = sm->getService(String16(instance));
+    LIBBINDER_IGNORE_END()
 
     sp<AIBinder> ret = ABpBinder::lookupOrCreateFromBinder(binder);
     AIBinder_incStrong(ret.get());
