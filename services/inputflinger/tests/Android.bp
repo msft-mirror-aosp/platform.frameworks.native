@@ -109,6 +109,7 @@ cc_test {
         },
     },
     static_libs: [
+        "android.companion.virtualdevice.flags-aconfig-cc-test",
         "libflagtest",
         "libgmock",
     ],
