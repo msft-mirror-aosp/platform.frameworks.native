@@ -697,6 +697,15 @@ MATCHER_P(WithDistance, distance, "MotionEvent with specified distance") {
     return argDistance == distance;
 }
 
+MATCHER_P2(WithScroll, scrollX, scrollY, "InputEvent with specified scroll values") {
+    const auto argScrollX = arg.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_HSCROLL);
+    const auto argScrollY = arg.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_VSCROLL);
+    *result_listener << "expected scroll values " << scrollX << " scroll x " << scrollY
+                     << " scroll y, but got " << argScrollX << " scroll x " << argScrollY
+                     << " scroll y";
+    return argScrollX == scrollX && argScrollY == scrollY;
+}
+
 MATCHER_P2(WithTouchDimensions, maj, min, "InputEvent with specified touch dimensions") {
     const auto argMajor = arg.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_TOUCH_MAJOR);
     const auto argMinor = arg.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_TOUCH_MINOR);
