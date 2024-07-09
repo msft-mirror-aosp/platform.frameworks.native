@@ -77,6 +77,8 @@ public:
 
 private:
     static const std::map<int, int> BUTTON_CODE_MAPPING;
+    int32_t mAccumulatedHighResScrollX;
+    int32_t mAccumulatedHighResScrollY;
 };
 
 class VirtualTouchscreen : public VirtualInputDevice {
