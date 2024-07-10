@@ -3320,9 +3320,9 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
         });
     }
 
-    // Even though ATRACE_INT64 already checks if tracing is enabled, it doesn't prevent the
+    // Even though SFTRACE_INT64 already checks if tracing is enabled, it doesn't prevent the
     // side-effect of getTotalSize(), so we check that again here
-    if (ATRACE_ENABLED()) {
+    if (SFTRACE_ENABLED()) {
         // getTotalSize returns the total number of buffers that were allocated by SurfaceFlinger
         SFTRACE_INT64("Total Buffer Size", GraphicBufferAllocator::get().getTotalSize());
     }

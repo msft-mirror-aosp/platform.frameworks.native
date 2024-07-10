@@ -3060,6 +3060,8 @@ void Layer::releasePreviousBuffer() {
         callReleaseBufferCallback(mDrawingState.releaseBufferListener,
                                   mDrawingState.buffer->getBuffer(), mDrawingState.frameNumber,
                                   mDrawingState.acquireFence);
+        const int32_t layerId = getSequence();
+        mFlinger->mTimeStats->removeTimeRecord(layerId, mDrawingState.frameNumber);
         decrementPendingBufferCount();
         if (mDrawingState.bufferSurfaceFrameTX != nullptr &&
             mDrawingState.bufferSurfaceFrameTX->getPresentState() != PresentState::Presented) {
@@ -3238,7 +3240,7 @@ void Layer::recordLayerHistoryBufferUpdate(const scheduler::LayerProps& layerPro
         return static_cast<nsecs_t>(0);
     }();
 
-    if (ATRACE_ENABLED() && presentTime > 0) {
+    if (SFTRACE_ENABLED() && presentTime > 0) {
         const auto presentIn = TimePoint::fromNs(presentTime) - TimePoint::now();
         SFTRACE_FORMAT_INSTANT("presentIn %s", to_string(presentIn).c_str());
     }

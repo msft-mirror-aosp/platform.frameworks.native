@@ -20,6 +20,10 @@
 #include <cutils/trace.h>
 #include <stdint.h>
 
+#ifndef ATRACE_TAG
+#define ATRACE_TAG ATRACE_TAG_GRAPHICS
+#endif
+
 #define SFTRACE_ENABLED() ATRACE_ENABLED()
 #define SFTRACE_BEGIN(name) ATRACE_BEGIN(name)
 #define SFTRACE_END() ATRACE_END()
