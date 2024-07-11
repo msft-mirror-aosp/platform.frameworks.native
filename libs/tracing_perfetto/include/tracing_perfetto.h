@@ -19,35 +19,32 @@
 
 #include <stdint.h>
 
-#include "trace_result.h"
-
 namespace tracing_perfetto {
 
 void registerWithPerfetto(bool test = false);
 
-Result traceBegin(uint64_t category, const char* name);
+void traceBegin(uint64_t category, const char* name);
 
-Result traceEnd(uint64_t category);
+void traceEnd(uint64_t category);
 
-Result traceAsyncBegin(uint64_t category, const char* name, int32_t cookie);
+void traceAsyncBegin(uint64_t category, const char* name, int32_t cookie);
 
-Result traceAsyncEnd(uint64_t category, const char* name, int32_t cookie);
+void traceAsyncEnd(uint64_t category, const char* name, int32_t cookie);
 
-Result traceAsyncBeginForTrack(uint64_t category, const char* name,
+void traceAsyncBeginForTrack(uint64_t category, const char* name,
                                const char* trackName, int32_t cookie);
 
-Result traceAsyncEndForTrack(uint64_t category, const char* trackName,
+void traceAsyncEndForTrack(uint64_t category, const char* trackName,
                              int32_t cookie);
 
-Result traceInstant(uint64_t category, const char* name);
+void traceInstant(uint64_t category, const char* name);
 
-Result traceInstantForTrack(uint64_t category, const char* trackName,
+void traceInstantForTrack(uint64_t category, const char* trackName,
                             const char* name);
 
-Result traceCounter(uint64_t category, const char* name, int64_t value);
+void traceCounter(uint64_t category, const char* name, int64_t value);
 
 bool isTagEnabled(uint64_t category);
-
 }  // namespace tracing_perfetto
 
 #endif  // TRACING_PERFETTO_H

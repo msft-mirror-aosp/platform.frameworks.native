@@ -196,11 +196,11 @@ static constexpr size_t MAX_POINTERS = 16;
 #define MAX_POINTER_ID 31
 
 /*
- * Number of high resolution mouse scroll units for one detent (mouse wheel click), as defined in
+ * Number of high resolution scroll units for one detent (scroll wheel click), as defined in
  * evdev. This is relevant when an input device is emitting REL_WHEEL_HI_RES or REL_HWHEEL_HI_RES
  * events.
  */
-constexpr int32_t kEvdevMouseHighResScrollUnitsPerDetent = 120;
+constexpr int32_t kEvdevHighResScrollUnitsPerDetent = 120;
 
 /*
  * Declare a concrete type for the NDK's input event forward declaration.

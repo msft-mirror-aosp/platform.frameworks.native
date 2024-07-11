@@ -258,11 +258,9 @@ TouchpadInputMapper::TouchpadInputMapper(InputDeviceContext& deviceContext,
     // 2) TouchpadInputMapper is stored as a unique_ptr and not moved.
     mGestureInterpreter->SetPropProvider(const_cast<GesturesPropProvider*>(&gesturePropProvider),
                                          &mPropertyProvider);
-    if (input_flags::enable_gestures_library_timer_provider()) {
-        mGestureInterpreter->SetTimerProvider(const_cast<GesturesTimerProvider*>(
-                                                      &kGestureTimerProvider),
-                                              &mTimerProvider);
-    }
+    mGestureInterpreter->SetTimerProvider(const_cast<GesturesTimerProvider*>(
+                                                  &kGestureTimerProvider),
+                                          &mTimerProvider);
     mGestureInterpreter->SetCallback(gestureInterpreterCallback, this);
 }
 
@@ -300,12 +298,8 @@ void TouchpadInputMapper::dump(std::string& dump) {
     dump += addLinePrefix(mGestureConverter.dump(), INDENT4);
     dump += INDENT3 "Gesture properties:\n";
     dump += addLinePrefix(mPropertyProvider.dump(), INDENT4);
-    if (input_flags::enable_gestures_library_timer_provider()) {
-        dump += INDENT3 "Timer provider:\n";
-        dump += addLinePrefix(mTimerProvider.dump(), INDENT4);
-    } else {
-        dump += INDENT3 "Timer provider: disabled by flag\n";
-    }
+    dump += INDENT3 "Timer provider:\n";
+    dump += addLinePrefix(mTimerProvider.dump(), INDENT4);
     dump += INDENT3 "Captured event converter:\n";
     dump += addLinePrefix(mCapturedEventConverter.dump(), INDENT4);
     dump += StringPrintf(INDENT3 "DisplayId: %s\n",
@@ -468,9 +462,6 @@ std::list<NotifyArgs> TouchpadInputMapper::sendHardwareState(nsecs_t when, nsecs
 }
 
 std::list<NotifyArgs> TouchpadInputMapper::timeoutExpired(nsecs_t when) {
-    if (!input_flags::enable_gestures_library_timer_provider()) {
-        return {};
-    }
     mTimerProvider.triggerCallbacks(when);
     return processGestures(when, when);
 }

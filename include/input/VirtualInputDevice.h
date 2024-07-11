@@ -129,6 +129,9 @@ public:
     VirtualRotaryEncoder(android::base::unique_fd fd);
     virtual ~VirtualRotaryEncoder() override;
     bool writeScrollEvent(float scrollAmount, std::chrono::nanoseconds eventTime);
+
+private:
+    int32_t mAccumulatedHighResScrollAmount;
 };
 
 } // namespace android
