@@ -55,14 +55,14 @@ void CursorScrollAccumulator::process(const RawEvent& rawEvent) {
         switch (rawEvent.code) {
             case REL_WHEEL_HI_RES:
                 if (mHaveRelWheelHighRes) {
-                    mRelWheel = rawEvent.value /
-                            static_cast<float>(kEvdevMouseHighResScrollUnitsPerDetent);
+                    mRelWheel =
+                            rawEvent.value / static_cast<float>(kEvdevHighResScrollUnitsPerDetent);
                 }
                 break;
             case REL_HWHEEL_HI_RES:
                 if (mHaveRelHWheelHighRes) {
-                    mRelHWheel = rawEvent.value /
-                            static_cast<float>(kEvdevMouseHighResScrollUnitsPerDetent);
+                    mRelHWheel =
+                            rawEvent.value / static_cast<float>(kEvdevHighResScrollUnitsPerDetent);
                 }
                 break;
             case REL_WHEEL:
