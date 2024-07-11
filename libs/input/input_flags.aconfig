@@ -15,13 +15,6 @@ flag {
   bug: "271455682"
 }
 
-flag {
-  name: "enable_gestures_library_timer_provider"
-  namespace: "input"
-  description: "Set to true to enable timer support for the touchpad Gestures library"
-  bug: "297192727"
- }
-
  flag {
   name: "enable_input_event_tracing"
   namespace: "input"

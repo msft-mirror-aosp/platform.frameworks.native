@@ -3320,9 +3320,9 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
         });
     }
 
-    // Even though ATRACE_INT64 already checks if tracing is enabled, it doesn't prevent the
+    // Even though SFTRACE_INT64 already checks if tracing is enabled, it doesn't prevent the
     // side-effect of getTotalSize(), so we check that again here
-    if (ATRACE_ENABLED()) {
+    if (SFTRACE_ENABLED()) {
         // getTotalSize returns the total number of buffers that were allocated by SurfaceFlinger
         SFTRACE_INT64("Total Buffer Size", GraphicBufferAllocator::get().getTotalSize());
     }
@@ -4259,6 +4259,11 @@ void SurfaceFlinger::requestHardwareVsync(PhysicalDisplayId displayId, bool enab
     getHwComposer().setVsyncEnabled(displayId, enable ? hal::Vsync::ENABLE : hal::Vsync::DISABLE);
 }
 
+// This callback originates from Scheduler::applyPolicy, whose thread context may be the main thread
+// (via Scheduler::chooseRefreshRateForContent) or a OneShotTimer thread. The latter case imposes a
+// deadlock prevention rule: If the main thread is processing hotplug, then mStateLock is locked as
+// the main thread stops the OneShotTimer and joins with its thread. Hence, the OneShotTimer thread
+// must not lock mStateLock in this callback, which would deadlock with the join.
 void SurfaceFlinger::requestDisplayModes(std::vector<display::DisplayModeRequest> modeRequests) {
     if (mBootStage != BootStage::FINISHED) {
         ALOGV("Currently in the boot stage, skipping display mode changes");
@@ -4267,21 +4272,14 @@ void SurfaceFlinger::requestDisplayModes(std::vector<display::DisplayModeRequest
 
     SFTRACE_CALL();
 
-    // If this is called from the main thread mStateLock must be locked before
-    // Currently the only way to call this function from the main thread is from
-    // Scheduler::chooseRefreshRateForContent
-
-    ConditionalLock lock(mStateLock, std::this_thread::get_id() != mMainThreadId);
-
     for (auto& request : modeRequests) {
         const auto& modePtr = request.mode.modePtr;
-
         const auto displayId = modePtr->getPhysicalDisplayId();
-        const auto display = getDisplayDeviceLocked(displayId);
 
-        if (!display) continue;
+        const auto selectorPtr = mDisplayModeController.selectorPtrFor(displayId);
+        if (!selectorPtr) continue;
 
-        if (display->refreshRateSelector().isModeAllowed(request.mode)) {
+        if (selectorPtr->isModeAllowed(request.mode)) {
             setDesiredMode(std::move(request));
         } else {
             ALOGV("%s: Mode %d is disallowed for display %s", __func__,
