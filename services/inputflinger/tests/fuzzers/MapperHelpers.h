@@ -346,8 +346,8 @@ public:
     int32_t getLedMetaState() override { return mFdp->ConsumeIntegral<int32_t>(); };
     void notifyStylusGestureStarted(int32_t, nsecs_t) {}
 
-    void setPreventingTouchpadTaps(bool prevent) {}
-    bool isPreventingTouchpadTaps() { return mFdp->ConsumeBool(); };
+    void setPreventingTouchpadTaps(bool prevent) override {}
+    bool isPreventingTouchpadTaps() override { return mFdp->ConsumeBool(); };
 
     void setLastKeyDownTimestamp(nsecs_t when) { mLastKeyDownTimestamp = when; };
     nsecs_t getLastKeyDownTimestamp() { return mLastKeyDownTimestamp; };
