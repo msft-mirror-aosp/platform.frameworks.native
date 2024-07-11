@@ -45,7 +45,7 @@ ScheduleResult getExpectedCallbackTime(nsecs_t nextVsyncTime,
 }
 
 void traceEntry(const VSyncDispatchTimerQueueEntry& entry, nsecs_t now) {
-    if (!ATRACE_ENABLED() || !entry.wakeupTime().has_value() || !entry.targetVsync().has_value()) {
+    if (!SFTRACE_ENABLED() || !entry.wakeupTime().has_value() || !entry.targetVsync().has_value()) {
         return;
     }
 
