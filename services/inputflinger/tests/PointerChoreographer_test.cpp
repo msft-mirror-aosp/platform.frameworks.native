@@ -2294,7 +2294,13 @@ TEST_F(PointerChoreographerTest, MouseAndDrawingTabletReportMouseEvents) {
     assertPointerControllerRemoved(pc);
 }
 
-class PointerVisibilityOnKeyPressTest : public PointerChoreographerTest {
+using PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixtureParam =
+        std::tuple<std::string_view /*name*/, uint32_t /*source*/>;
+
+class PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixture
+      : public PointerChoreographerTest,
+        public testing::WithParamInterface<
+                PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixtureParam> {
 protected:
     const std::unordered_map<int32_t, int32_t>
             mMetaKeyStates{{AKEYCODE_ALT_LEFT, AMETA_ALT_LEFT_ON},
@@ -2358,14 +2364,27 @@ protected:
     }
 };
 
-TEST_F(PointerVisibilityOnKeyPressTest, KeystrokesWithoutImeConnectionDoesNotHidePointer) {
+INSTANTIATE_TEST_SUITE_P(
+        PointerChoreographerTest, PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixture,
+        testing::Values(std::make_tuple("Mouse", AINPUT_SOURCE_MOUSE),
+                        std::make_tuple("Touchpad", AINPUT_SOURCE_MOUSE | AINPUT_SOURCE_TOUCHPAD)),
+        [](const testing::TestParamInfo<
+                PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixtureParam>& p) {
+            return std::string{std::get<0>(p.param)};
+        });
+
+TEST_P(PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixture,
+       KeystrokesWithoutImeConnectionDoesNotHidePointerOrDisablesTouchpadTap) {
+    const auto& [_, source] = GetParam();
     mChoreographer.setDisplayViewports(createViewports({DISPLAY_ID}));
 
     // Mouse connected
     mChoreographer.notifyInputDevicesChanged(
-            {/*id=*/0, {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE, DISPLAY_ID)}});
+            {/*id=*/0, {generateTestDeviceInfo(DEVICE_ID, source, DISPLAY_ID)}});
     auto pc = assertPointerControllerCreated(ControllerType::MOUSE);
     ASSERT_TRUE(pc->isPointerShown());
+
+    EXPECT_CALL(mMockPolicy, notifyMouseCursorFadedOnTyping).Times(0);
 
     notifyKey(ui::LogicalDisplayId::INVALID, AKEYCODE_0);
     notifyKey(ui::LogicalDisplayId::INVALID, AKEYCODE_A);
@@ -2374,16 +2393,19 @@ TEST_F(PointerVisibilityOnKeyPressTest, KeystrokesWithoutImeConnectionDoesNotHid
     ASSERT_TRUE(pc->isPointerShown());
 }
 
-TEST_F(PointerVisibilityOnKeyPressTest, AlphanumericKeystrokesWithImeConnectionHidePointer) {
+TEST_P(PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixture,
+       AlphanumericKeystrokesWithImeConnectionHidePointerAndDisablesTouchpadTap) {
+    const auto& [_, source] = GetParam();
     mChoreographer.setDisplayViewports(createViewports({DISPLAY_ID}));
 
     // Mouse connected
     mChoreographer.notifyInputDevicesChanged(
-            {/*id=*/0, {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE, DISPLAY_ID)}});
+            {/*id=*/0, {generateTestDeviceInfo(DEVICE_ID, source, DISPLAY_ID)}});
     auto pc = assertPointerControllerCreated(ControllerType::MOUSE);
     ASSERT_TRUE(pc->isPointerShown());
 
     EXPECT_CALL(mMockPolicy, isInputMethodConnectionActive).WillRepeatedly(testing::Return(true));
+    EXPECT_CALL(mMockPolicy, notifyMouseCursorFadedOnTyping).Times(2);
 
     notifyKey(DISPLAY_ID, AKEYCODE_0);
     ASSERT_FALSE(pc->isPointerShown());
@@ -2394,17 +2416,19 @@ TEST_F(PointerVisibilityOnKeyPressTest, AlphanumericKeystrokesWithImeConnectionH
     ASSERT_FALSE(pc->isPointerShown());
 }
 
-TEST_F(PointerVisibilityOnKeyPressTest, MetaKeystrokesDoNotHidePointer) {
+TEST_P(PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixture,
+       MetaKeystrokesDoNotHidePointerOrDisablesTouchpadTap) {
+    const auto& [_, source] = GetParam();
     mChoreographer.setDisplayViewports(createViewports({DISPLAY_ID}));
 
     // Mouse connected
     mChoreographer.notifyInputDevicesChanged(
-            {/*id=*/0,
-             {generateTestDeviceInfo(SECOND_DEVICE_ID, AINPUT_SOURCE_MOUSE, DISPLAY_ID)}});
+            {/*id=*/0, {generateTestDeviceInfo(SECOND_DEVICE_ID, source, DISPLAY_ID)}});
     auto pc = assertPointerControllerCreated(ControllerType::MOUSE);
     ASSERT_TRUE(pc->isPointerShown());
 
     EXPECT_CALL(mMockPolicy, isInputMethodConnectionActive).WillRepeatedly(testing::Return(true));
+    EXPECT_CALL(mMockPolicy, notifyMouseCursorFadedOnTyping).Times(0);
 
     const std::vector<int32_t> metaKeyCodes{AKEYCODE_ALT_LEFT,   AKEYCODE_ALT_RIGHT,
                                             AKEYCODE_SHIFT_LEFT, AKEYCODE_SHIFT_RIGHT,
@@ -2420,14 +2444,16 @@ TEST_F(PointerVisibilityOnKeyPressTest, MetaKeystrokesDoNotHidePointer) {
     ASSERT_TRUE(pc->isPointerShown());
 }
 
-TEST_F(PointerVisibilityOnKeyPressTest, KeystrokesWithoutTargetHidePointerOnlyOnFocusedDisplay) {
+TEST_P(PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixture,
+       KeystrokesWithoutTargetHidePointerOnlyOnFocusedDisplayAndDisablesTouchpadTap) {
+    const auto& [_, source] = GetParam();
     mChoreographer.setDisplayViewports(createViewports({DISPLAY_ID, ANOTHER_DISPLAY_ID}));
     mChoreographer.setFocusedDisplay(DISPLAY_ID);
 
     // Mouse connected
     mChoreographer.notifyInputDevicesChanged(
             {/*id=*/0,
-             {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE, DISPLAY_ID),
+             {generateTestDeviceInfo(DEVICE_ID, source, DISPLAY_ID),
               generateTestDeviceInfo(SECOND_DEVICE_ID, AINPUT_SOURCE_MOUSE, ANOTHER_DISPLAY_ID)}});
     auto pc1 = assertPointerControllerCreated(ControllerType::MOUSE);
     auto pc2 = assertPointerControllerCreated(ControllerType::MOUSE);
@@ -2435,6 +2461,7 @@ TEST_F(PointerVisibilityOnKeyPressTest, KeystrokesWithoutTargetHidePointerOnlyOn
     ASSERT_TRUE(pc2->isPointerShown());
 
     EXPECT_CALL(mMockPolicy, isInputMethodConnectionActive).WillRepeatedly(testing::Return(true));
+    EXPECT_CALL(mMockPolicy, notifyMouseCursorFadedOnTyping).Times(2);
 
     notifyKey(ui::LogicalDisplayId::INVALID, AKEYCODE_0);
     ASSERT_FALSE(pc1->isPointerShown());
@@ -2446,16 +2473,19 @@ TEST_F(PointerVisibilityOnKeyPressTest, KeystrokesWithoutTargetHidePointerOnlyOn
     ASSERT_TRUE(pc2->isPointerShown());
 }
 
-TEST_F(PointerVisibilityOnKeyPressTest, TestMetaKeyCombinations) {
+TEST_P(PointerVisibilityAndTouchpadTapStateOnKeyPressTestFixture, TestMetaKeyCombinations) {
+    const auto& [_, source] = GetParam();
     mChoreographer.setDisplayViewports(createViewports({DISPLAY_ID}));
 
     // Mouse connected
     mChoreographer.notifyInputDevicesChanged(
-            {/*id=*/0, {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE, DISPLAY_ID)}});
+            {/*id=*/0, {generateTestDeviceInfo(DEVICE_ID, source, DISPLAY_ID)}});
     auto pc = assertPointerControllerCreated(ControllerType::MOUSE);
+
     EXPECT_CALL(mMockPolicy, isInputMethodConnectionActive).WillRepeatedly(testing::Return(true));
 
-    // meta key combinations that should hide pointer
+    // meta key combinations that should hide pointer and disable touchpad taps
+    EXPECT_CALL(mMockPolicy, notifyMouseCursorFadedOnTyping).Times(5);
     metaKeyCombinationHidesPointer(*pc, AKEYCODE_A, AKEYCODE_SHIFT_LEFT);
     metaKeyCombinationHidesPointer(*pc, AKEYCODE_A, AKEYCODE_SHIFT_RIGHT);
     metaKeyCombinationHidesPointer(*pc, AKEYCODE_A, AKEYCODE_CAPS_LOCK);
@@ -2463,6 +2493,7 @@ TEST_F(PointerVisibilityOnKeyPressTest, TestMetaKeyCombinations) {
     metaKeyCombinationHidesPointer(*pc, AKEYCODE_A, AKEYCODE_SCROLL_LOCK);
 
     // meta key combinations that should not hide pointer
+    EXPECT_CALL(mMockPolicy, notifyMouseCursorFadedOnTyping).Times(0);
     metaKeyCombinationDoesNotHidePointer(*pc, AKEYCODE_A, AKEYCODE_ALT_LEFT);
     metaKeyCombinationDoesNotHidePointer(*pc, AKEYCODE_A, AKEYCODE_ALT_RIGHT);
     metaKeyCombinationDoesNotHidePointer(*pc, AKEYCODE_A, AKEYCODE_CTRL_LEFT);
