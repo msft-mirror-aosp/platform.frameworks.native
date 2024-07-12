@@ -634,11 +634,12 @@ auto RefreshRateSelector::getRankedFrameRatesLocked(const std::vector<LayerRequi
     // If all layers are category NoPreference, use the current config.
     if (noPreferenceLayers + noVoteLayers == layers.size()) {
         ALOGV("All layers NoPreference");
-        const auto ascendingWithPreferred =
-                rankFrameRates(anchorGroup, RefreshRateOrder::Ascending, activeMode.getId());
+        constexpr float kScore = std::numeric_limits<float>::max();
+        FrameRateRanking currentMode;
+        currentMode.emplace_back(ScoredFrameRate{getActiveModeLocked(), kScore});
         SFTRACE_FORMAT_INSTANT("%s (All layers NoPreference)",
-                               to_string(ascendingWithPreferred.front().frameRateMode.fps).c_str());
-        return {ascendingWithPreferred, kNoSignals};
+                              to_string(currentMode.front().frameRateMode.fps).c_str());
+        return {currentMode, kNoSignals};
     }
 
     const bool smoothSwitchOnly = categorySmoothSwitchOnlyLayers > 0;

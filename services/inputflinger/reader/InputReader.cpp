@@ -907,6 +907,12 @@ DeviceId InputReader::getLastUsedInputDeviceId() {
     return mLastUsedDeviceId;
 }
 
+void InputReader::notifyMouseCursorFadedOnTyping() {
+    std::scoped_lock _l(mLock);
+    // disable touchpad taps when cursor has faded due to typing
+    mPreventingTouchpadTaps = true;
+}
+
 void InputReader::dump(std::string& dump) {
     std::scoped_lock _l(mLock);
 
