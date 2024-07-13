@@ -400,8 +400,9 @@ void VSyncPredictor::setRenderRate(Fps renderRate, bool applyImmediately) {
 
     } else {
         if (FlagManager::getInstance().vrr_bugfix_24q4()) {
-            // We need to freeze the timeline at the committed vsync so that we don't
-            // overshoot the deadline.
+            // We need to freeze the timeline at the committed vsync, and
+            // then use with threshold adjustments when required to avoid
+            // marginal errors when checking the vsync on the timeline.
             mTimelines.back().freeze(mLastCommittedVsync);
         } else {
             mTimelines.back().freeze(
@@ -777,6 +778,20 @@ void VSyncPredictor::VsyncTimeline::shiftVsyncSequence(Duration phase) {
         SFTRACE_FORMAT_INSTANT("adjusting vsync by %.2f", static_cast<float>(phase.ns()) / 1e6f);
         mLastVsyncSequence->vsyncTime += phase.ns();
     }
+}
+
+VSyncPredictor::VsyncTimeline::VsyncOnTimeline VSyncPredictor::VsyncTimeline::isWithin(
+        TimePoint vsync) {
+    const auto threshold = mIdealPeriod.ns() / 2;
+    if (!mValidUntil || vsync.ns() < mValidUntil->ns() - threshold) {
+        // if mValidUntil is absent then timeline is not frozen and
+        // vsync should be unique to that timeline.
+        return VsyncOnTimeline::Unique;
+    }
+    if (vsync.ns() > mValidUntil->ns() + threshold) {
+        return VsyncOnTimeline::Outside;
+    }
+    return VsyncOnTimeline::Shared;
 }
 
 } // namespace android::scheduler

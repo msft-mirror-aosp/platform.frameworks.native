@@ -339,8 +339,8 @@ protected:
         int32_t buttonState{};
 
         // Scroll state.
-        int32_t rawVScroll{};
-        int32_t rawHScroll{};
+        float rawVScroll{};
+        float rawHScroll{};
 
         inline void clear() { *this = RawState(); }
     };

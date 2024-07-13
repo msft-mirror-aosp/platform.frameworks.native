@@ -56,6 +56,7 @@ namespace android {
 
 using namespace ftl::flag_operators;
 using testing::AllOf;
+using testing::VariantWith;
 using std::chrono_literals::operator""ms;
 using std::chrono_literals::operator""s;
 
@@ -966,6 +967,7 @@ TEST_F(InputReaderTest, LoopOnce_WhenDeviceScanFinished_SendsConfigurationChange
     NotifyConfigurationChangedArgs args;
 
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyConfigurationChangedWasCalled(&args));
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     ASSERT_EQ(ARBITRARY_TIME, args.eventTime);
 }
 
@@ -1476,9 +1478,10 @@ protected:
         // Since this test is run on a real device, all the input devices connected
         // to the test device will show up in mReader. We wait for those input devices to
         // show up before beginning the tests.
-        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
         ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyInputDevicesChangedWasCalled());
         ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
+        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
+        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     }
 };
 
@@ -1498,12 +1501,12 @@ TEST_F(InputReaderIntegrationTest, TestInvalidDevice) {
     // consider it as a valid device.
     std::unique_ptr<UinputDevice> invalidDevice = createUinputDevice<InvalidUinputDevice>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesNotChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasNotCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationNotChanged());
     ASSERT_EQ(numDevices, mFakePolicy->getInputDevices().size());
 
     invalidDevice.reset();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesNotChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasNotCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationNotChanged());
     ASSERT_EQ(numDevices, mFakePolicy->getInputDevices().size());
 }
 
@@ -1512,7 +1515,7 @@ TEST_F(InputReaderIntegrationTest, AddNewDevice) {
 
     std::unique_ptr<UinputHomeKey> keyboard = createUinputDevice<UinputHomeKey>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     ASSERT_EQ(initialNumDevices + 1, mFakePolicy->getInputDevices().size());
 
     const auto device = waitForDevice(keyboard->getName());
@@ -1523,7 +1526,7 @@ TEST_F(InputReaderIntegrationTest, AddNewDevice) {
 
     keyboard.reset();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     ASSERT_EQ(initialNumDevices, mFakePolicy->getInputDevices().size());
 }
 
@@ -1668,6 +1671,7 @@ protected:
 
         mDevice = createUinputDevice<UinputTouchScreen>(Rect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT));
         ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
+        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
         ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
         const auto info = waitForDevice(mDevice->getName());
         ASSERT_TRUE(info);
@@ -1737,6 +1741,7 @@ protected:
                                      UNIQUE_ID, isInputPortAssociation ? DISPLAY_PORT : NO_PORT,
                                      ViewportType::INTERNAL);
         ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
+        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
         ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
         const auto info = waitForDevice(mDevice->getName());
         ASSERT_TRUE(info);
@@ -2070,7 +2075,7 @@ TEST_P(TouchIntegrationTest, ExternalStylusConnectedDuringTouchGesture) {
     // Connecting an external stylus mid-gesture should not interrupt the ongoing gesture stream.
     auto externalStylus = createUinputDevice<UinputExternalStylus>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(externalStylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -2083,7 +2088,7 @@ TEST_P(TouchIntegrationTest, ExternalStylusConnectedDuringTouchGesture) {
     // Disconnecting an external stylus mid-gesture should not interrupt the ongoing gesture stream.
     externalStylus.reset();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyMotionWasNotCalled());
 
     // Up
@@ -2141,6 +2146,7 @@ private:
         mStylusDeviceLifecycleTracker = createUinputDevice<T>();
         mStylus = mStylusDeviceLifecycleTracker.get();
         ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
+        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
         ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
         const auto info = waitForDevice(mStylus->getName());
         ASSERT_TRUE(info);
@@ -2411,7 +2417,7 @@ TEST_F(ExternalStylusIntegrationTest, ExternalStylusConnectionChangesTouchscreen
     std::unique_ptr<UinputExternalStylusWithPressure> stylus =
             createUinputDevice<UinputExternalStylusWithPressure>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(stylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -2429,7 +2435,7 @@ TEST_F(ExternalStylusIntegrationTest, FusedExternalStylusPressureReported) {
     std::unique_ptr<UinputExternalStylusWithPressure> stylus =
             createUinputDevice<UinputExternalStylusWithPressure>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(stylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -2475,7 +2481,7 @@ TEST_F(ExternalStylusIntegrationTest, FusedExternalStylusPressureNotReported) {
     std::unique_ptr<UinputExternalStylusWithPressure> stylus =
             createUinputDevice<UinputExternalStylusWithPressure>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(stylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -2555,7 +2561,7 @@ TEST_F(ExternalStylusIntegrationTest, UnfusedExternalStylus) {
     // touch pointers.
     std::unique_ptr<UinputExternalStylus> stylus = createUinputDevice<UinputExternalStylus>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
+    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(stylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -4487,15 +4493,15 @@ protected:
     void prepareButtons();
     void prepareAxes(int axes);
 
-    void processDown(SingleTouchInputMapper& mapper, int32_t x, int32_t y);
-    void processMove(SingleTouchInputMapper& mapper, int32_t x, int32_t y);
-    void processUp(SingleTouchInputMapper& mappery);
-    void processPressure(SingleTouchInputMapper& mapper, int32_t pressure);
-    void processToolMajor(SingleTouchInputMapper& mapper, int32_t toolMajor);
-    void processDistance(SingleTouchInputMapper& mapper, int32_t distance);
-    void processTilt(SingleTouchInputMapper& mapper, int32_t tiltX, int32_t tiltY);
-    void processKey(SingleTouchInputMapper& mapper, int32_t code, int32_t value);
-    void processSync(SingleTouchInputMapper& mapper);
+    std::list<NotifyArgs> processDown(SingleTouchInputMapper& mapper, int32_t x, int32_t y);
+    std::list<NotifyArgs> processMove(SingleTouchInputMapper& mapper, int32_t x, int32_t y);
+    std::list<NotifyArgs> processUp(SingleTouchInputMapper& mappery);
+    std::list<NotifyArgs> processPressure(SingleTouchInputMapper& mapper, int32_t pressure);
+    std::list<NotifyArgs> processToolMajor(SingleTouchInputMapper& mapper, int32_t toolMajor);
+    std::list<NotifyArgs> processDistance(SingleTouchInputMapper& mapper, int32_t distance);
+    std::list<NotifyArgs> processTilt(SingleTouchInputMapper& mapper, int32_t tiltX, int32_t tiltY);
+    std::list<NotifyArgs> processKey(SingleTouchInputMapper& mapper, int32_t code, int32_t value);
+    std::list<NotifyArgs> processSync(SingleTouchInputMapper& mapper);
 };
 
 void SingleTouchInputMapperTest::prepareButtons() {
@@ -4525,47 +4531,57 @@ void SingleTouchInputMapperTest::prepareAxes(int axes) {
     }
 }
 
-void SingleTouchInputMapperTest::processDown(SingleTouchInputMapper& mapper, int32_t x, int32_t y) {
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, BTN_TOUCH, 1);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_X, x);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_Y, y);
+std::list<NotifyArgs> SingleTouchInputMapperTest::processDown(SingleTouchInputMapper& mapper,
+                                                              int32_t x, int32_t y) {
+    std::list<NotifyArgs> args;
+    args += process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, BTN_TOUCH, 1);
+    args += process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_X, x);
+    args += process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_Y, y);
+    return args;
 }
 
-void SingleTouchInputMapperTest::processMove(SingleTouchInputMapper& mapper, int32_t x, int32_t y) {
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_X, x);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_Y, y);
+std::list<NotifyArgs> SingleTouchInputMapperTest::processMove(SingleTouchInputMapper& mapper,
+                                                              int32_t x, int32_t y) {
+    std::list<NotifyArgs> args;
+    args += process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_X, x);
+    args += process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_Y, y);
+    return args;
 }
 
-void SingleTouchInputMapperTest::processUp(SingleTouchInputMapper& mapper) {
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, BTN_TOUCH, 0);
+std::list<NotifyArgs> SingleTouchInputMapperTest::processUp(SingleTouchInputMapper& mapper) {
+    return process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, BTN_TOUCH, 0);
 }
 
-void SingleTouchInputMapperTest::processPressure(SingleTouchInputMapper& mapper, int32_t pressure) {
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_PRESSURE, pressure);
+std::list<NotifyArgs> SingleTouchInputMapperTest::processPressure(SingleTouchInputMapper& mapper,
+                                                                  int32_t pressure) {
+    return process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_PRESSURE, pressure);
 }
 
-void SingleTouchInputMapperTest::processToolMajor(SingleTouchInputMapper& mapper,
-                                                  int32_t toolMajor) {
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_TOOL_WIDTH, toolMajor);
+std::list<NotifyArgs> SingleTouchInputMapperTest::processToolMajor(SingleTouchInputMapper& mapper,
+                                                                   int32_t toolMajor) {
+    return process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_TOOL_WIDTH, toolMajor);
 }
 
-void SingleTouchInputMapperTest::processDistance(SingleTouchInputMapper& mapper, int32_t distance) {
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_DISTANCE, distance);
+std::list<NotifyArgs> SingleTouchInputMapperTest::processDistance(SingleTouchInputMapper& mapper,
+                                                                  int32_t distance) {
+    return process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_DISTANCE, distance);
 }
 
-void SingleTouchInputMapperTest::processTilt(SingleTouchInputMapper& mapper, int32_t tiltX,
-                                             int32_t tiltY) {
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_TILT_X, tiltX);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_TILT_Y, tiltY);
+std::list<NotifyArgs> SingleTouchInputMapperTest::processTilt(SingleTouchInputMapper& mapper,
+                                                              int32_t tiltX, int32_t tiltY) {
+    std::list<NotifyArgs> args;
+    args += process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_TILT_X, tiltX);
+    args += process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_TILT_Y, tiltY);
+    return args;
 }
 
-void SingleTouchInputMapperTest::processKey(SingleTouchInputMapper& mapper, int32_t code,
-                                            int32_t value) {
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, code, value);
+std::list<NotifyArgs> SingleTouchInputMapperTest::processKey(SingleTouchInputMapper& mapper,
+                                                             int32_t code, int32_t value) {
+    return process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, code, value);
 }
 
-void SingleTouchInputMapperTest::processSync(SingleTouchInputMapper& mapper) {
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_SYN, SYN_REPORT, 0);
+std::list<NotifyArgs> SingleTouchInputMapperTest::processSync(SingleTouchInputMapper& mapper) {
+    return process(mapper, ARBITRARY_TIME, READ_TIME, EV_SYN, SYN_REPORT, 0);
 }
 
 TEST_F(SingleTouchInputMapperTest, GetSources_WhenDeviceTypeIsNotSpecifiedAndNotACursor_ReturnsPointer) {
@@ -4654,6 +4670,42 @@ TEST_F(SingleTouchInputMapperTest, MarkSupportedKeyCodes) {
             mapper.markSupportedKeyCodes(AINPUT_SOURCE_ANY, {AKEYCODE_HOME, AKEYCODE_A}, flags));
     ASSERT_TRUE(flags[0]);
     ASSERT_FALSE(flags[1]);
+}
+
+TEST_F(SingleTouchInputMapperTest, DeviceTypeChange_RecalculatesRawToDisplayTransform) {
+    prepareDisplay(ui::ROTATION_0);
+    prepareAxes(POSITION);
+    addConfigurationProperty("touch.deviceType", "touchScreen");
+    SingleTouchInputMapper& mapper = constructAndAddMapper<SingleTouchInputMapper>();
+
+    const int32_t x = 900;
+    const int32_t y = 75;
+    std::list<NotifyArgs> args;
+    args += processDown(mapper, x, y);
+    args += processSync(mapper);
+
+    // Assert that motion event is received in display coordinate space for deviceType touchScreen.
+    ASSERT_THAT(args,
+                ElementsAre(VariantWith<NotifyMotionArgs>(
+                        AllOf(WithMotionAction(AMOTION_EVENT_ACTION_DOWN),
+                              WithCoords(toDisplayX(x), toDisplayY(y))))));
+
+    // Add device type association after the device was created.
+    mFakePolicy->addDeviceTypeAssociation(DEVICE_LOCATION, "touchNavigation");
+    // Send update to the mapper.
+    std::list<NotifyArgs> unused =
+            mDevice->configure(ARBITRARY_TIME, mFakePolicy->getReaderConfiguration(),
+                               InputReaderConfiguration::Change::DEVICE_TYPE /*changes*/);
+
+    args.clear();
+    args += processDown(mapper, x, y);
+    args += processSync(mapper);
+
+    // Assert that motion event is received in raw coordinate space for deviceType touchNavigation.
+    ASSERT_THAT(args,
+                ElementsAre(VariantWith<NotifyMotionArgs>(
+                        AllOf(WithMotionAction(AMOTION_EVENT_ACTION_DOWN),
+                              WithCoords(x - RAW_X_MIN, y - RAW_Y_MIN)))));
 }
 
 TEST_F(SingleTouchInputMapperTest, Process_WhenVirtualKeyIsPressedAndReleasedNormally_SendsKeyDownAndKeyUp) {
