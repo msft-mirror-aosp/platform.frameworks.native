@@ -212,6 +212,15 @@ void InputReader::loopOnce() {
         mPolicy->notifyInputDevicesChanged(inputDevices);
     }
 
+    // Notify the policy of configuration change. This must be after policy is notified about input
+    // device changes so that policy can fetch newly added input devices on configuration change.
+    for (const auto& args : notifyArgs) {
+        const auto* configArgs = std::get_if<NotifyConfigurationChangedArgs>(&args);
+        if (configArgs != nullptr) {
+            mPolicy->notifyConfigurationChanged(configArgs->eventTime);
+        }
+    }
+
     // Notify the policy of the start of every new stylus gesture.
     for (const auto& args : notifyArgs) {
         const auto* motionArgs = std::get_if<NotifyMotionArgs>(&args);

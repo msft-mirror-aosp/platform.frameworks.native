@@ -1168,7 +1168,8 @@ bool testSupportVsockLoopback() {
     socklen_t len = sizeof(serverAddr);
     ret = getsockname(serverFd.get(), reinterpret_cast<sockaddr*>(&serverAddr), &len);
     LOG_ALWAYS_FATAL_IF(0 != ret, "Failed to getsockname: %s", strerror(errno));
-    LOG_ALWAYS_FATAL_IF(len < sizeof(serverAddr), "getsockname didn't read the full addr struct");
+    LOG_ALWAYS_FATAL_IF(len < static_cast<socklen_t>(sizeof(serverAddr)),
+                        "getsockname didn't read the full addr struct");
 
     ret = TEMP_FAILURE_RETRY(listen(serverFd.get(), 1 /*backlog*/));
     LOG_ALWAYS_FATAL_IF(0 != ret, "Could not listen socket on port %u: %s", serverAddr.svm_port,
