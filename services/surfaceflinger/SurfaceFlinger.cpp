@@ -729,6 +729,7 @@ void SurfaceFlinger::bootFinished() {
     mBootFinished = true;
     FlagManager::getMutableInstance().markBootCompleted();
 
+    ::tracing_perfetto::registerWithPerfetto();
     mInitBootPropsFuture.wait();
     mRenderEnginePrimeCacheFuture.wait();
 
