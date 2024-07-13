@@ -296,6 +296,7 @@ public:
     }
     void setTouchAffineTransformation(const TouchAffineTransformation t) { mTransform = t; }
     void notifyStylusGestureStarted(int32_t, nsecs_t) {}
+    void notifyConfigurationChanged(nsecs_t) {}
     bool isInputMethodConnectionActive() override { return mFdp->ConsumeBool(); }
     std::optional<DisplayViewport> getPointerViewportForAssociatedDisplay(
             ui::LogicalDisplayId associatedDisplayId) override {
@@ -345,6 +346,7 @@ public:
     void updateLedMetaState(int32_t metaState) override{};
     int32_t getLedMetaState() override { return mFdp->ConsumeIntegral<int32_t>(); };
     void notifyStylusGestureStarted(int32_t, nsecs_t) {}
+    void notifyConfigurationChanged(nsecs_t) {}
 
     void setPreventingTouchpadTaps(bool prevent) override {}
     bool isPreventingTouchpadTaps() override { return mFdp->ConsumeBool(); };
