@@ -188,7 +188,7 @@ bool Timer::dispatch() {
         int nfds = epoll_wait(mEpollFd, events, DispatchType::MAX_DISPATCH_TYPE, -1);
 
         setDebugState(DebugState::Running);
-        if (ATRACE_ENABLED()) {
+        if (SFTRACE_ENABLED()) {
             ftl::Concat trace("TimerIteration #", iteration++);
             SFTRACE_NAME(trace.c_str());
         }

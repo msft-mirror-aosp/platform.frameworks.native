@@ -77,6 +77,8 @@ public:
 
 private:
     static const std::map<int, int> BUTTON_CODE_MAPPING;
+    int32_t mAccumulatedHighResScrollX;
+    int32_t mAccumulatedHighResScrollY;
 };
 
 class VirtualTouchscreen : public VirtualInputDevice {
@@ -127,6 +129,9 @@ public:
     VirtualRotaryEncoder(android::base::unique_fd fd);
     virtual ~VirtualRotaryEncoder() override;
     bool writeScrollEvent(float scrollAmount, std::chrono::nanoseconds eventTime);
+
+private:
+    int32_t mAccumulatedHighResScrollAmount;
 };
 
 } // namespace android
