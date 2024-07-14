@@ -65,6 +65,23 @@ void FakeInputReaderPolicy::assertStylusGestureNotNotified() {
     ASSERT_FALSE(mDeviceIdOfNotifiedStylusGesture);
 }
 
+void FakeInputReaderPolicy::assertConfigurationChanged() {
+    std::unique_lock lock(mLock);
+    base::ScopedLockAssertion assumeLocked(mLock);
+
+    const bool configurationChanged =
+            mConfigurationChangedCondition.wait_for(lock, WAIT_TIMEOUT, [this]() REQUIRES(mLock) {
+                return mConfigurationChanged;
+            });
+    ASSERT_TRUE(configurationChanged) << "Timed out waiting for configuration change";
+    mConfigurationChanged = false;
+}
+
+void FakeInputReaderPolicy::assertConfigurationNotChanged() {
+    std::scoped_lock lock(mLock);
+    ASSERT_FALSE(mConfigurationChanged);
+}
+
 void FakeInputReaderPolicy::clearViewports() {
     mViewports.clear();
     mConfig.setDisplayViewports(mViewports);
@@ -232,6 +249,12 @@ void FakeInputReaderPolicy::notifyInputDevicesChanged(
     mInputDevices = inputDevices;
     mInputDevicesChanged = true;
     mDevicesChangedCondition.notify_all();
+}
+
+void FakeInputReaderPolicy::notifyConfigurationChanged(nsecs_t when) {
+    std::scoped_lock lock(mLock);
+    mConfigurationChanged = true;
+    mConfigurationChangedCondition.notify_all();
 }
 
 std::shared_ptr<KeyCharacterMap> FakeInputReaderPolicy::getKeyboardLayoutOverlay(
