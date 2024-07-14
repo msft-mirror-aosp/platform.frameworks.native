@@ -66,12 +66,6 @@ public:
                                                       void* cookie = nullptr, uint32_t flags = 0,
                                                       wp<DeathRecipient>* outRecipient = nullptr);
 
-    [[nodiscard]] virtual status_t addFrozenStateChangeCallback(
-            const wp<FrozenStateChangeCallback>& recipient);
-
-    [[nodiscard]] virtual status_t removeFrozenStateChangeCallback(
-            const wp<FrozenStateChangeCallback>& recipient);
-
     LIBBINDER_EXPORTED virtual void* attachObject(const void* objectID, void* object,
                                                   void* cleanupCookie,
                                                   object_cleanup_func func) final;

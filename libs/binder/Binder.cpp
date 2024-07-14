@@ -441,14 +441,6 @@ status_t BBinder::unlinkToDeath(
     return INVALID_OPERATION;
 }
 
-status_t BBinder::addFrozenStateChangeCallback(const wp<FrozenStateChangeCallback>&) {
-    return INVALID_OPERATION;
-}
-
-status_t BBinder::removeFrozenStateChangeCallback(const wp<FrozenStateChangeCallback>&) {
-    return INVALID_OPERATION;
-}
-
 status_t BBinder::dump(int /*fd*/, const Vector<String16>& /*args*/)
 {
     return NO_ERROR;

@@ -557,14 +557,6 @@ void BpBinder::sendObituary()
     }
 }
 
-status_t BpBinder::addFrozenStateChangeCallback(const wp<FrozenStateChangeCallback>&) {
-    return INVALID_OPERATION;
-}
-
-status_t BpBinder::removeFrozenStateChangeCallback(const wp<FrozenStateChangeCallback>&) {
-    return INVALID_OPERATION;
-}
-
 void BpBinder::reportOneDeath(const Obituary& obit)
 {
     sp<DeathRecipient> recipient = obit.recipient.promote();

@@ -50,13 +50,6 @@ public:
                                                       void* cookie = nullptr, uint32_t flags = 0,
                                                       wp<DeathRecipient>* outRecipient = nullptr);
 
-    // Placeholders to test if adding virtual functions here breaks things.
-    // Will be replaced by an actual API once things are verified to work.
-    LIBBINDER_EXPORTED virtual status_t addFrozenStateChangeCallback(
-            const wp<FrozenStateChangeCallback>& callback);
-    LIBBINDER_EXPORTED virtual status_t removeFrozenStateChangeCallback(
-            const wp<FrozenStateChangeCallback>& callback);
-
     LIBBINDER_EXPORTED virtual void* attachObject(const void* objectID, void* object,
                                                   void* cleanupCookie,
                                                   object_cleanup_func func) final;

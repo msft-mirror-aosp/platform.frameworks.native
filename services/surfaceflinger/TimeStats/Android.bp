@@ -20,6 +20,7 @@ cc_defaults {
         "libtimestats_atoms_proto",
         "libui",
         "libutils",
+        "libtracing_perfetto",
     ],
 
     static_libs: [

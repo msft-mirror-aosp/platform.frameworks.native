@@ -397,6 +397,9 @@ public:
      * Returns ReservedInputDeviceId::INVALID_INPUT_DEVICE_ID if no device has been used since boot.
      */
     virtual DeviceId getLastUsedInputDeviceId() = 0;
+
+    /* Notifies that mouse cursor faded due to typing. */
+    virtual void notifyMouseCursorFadedOnTyping() = 0;
 };
 
 // --- TouchAffineTransformation ---
@@ -450,6 +453,9 @@ public:
      * and provides information about all current input devices.
      */
     virtual void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>& inputDevices) = 0;
+
+    /* Notifies the system that a configuration change has occurred. */
+    virtual void notifyConfigurationChanged(nsecs_t when) = 0;
 
     /* Gets the keyboard layout for a particular input device. */
     virtual std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(
