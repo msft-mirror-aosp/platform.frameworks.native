@@ -15,7 +15,14 @@ flag {
   bug: "271455682"
 }
 
- flag {
+flag {
+  name: "remove_input_channel_from_windowstate"
+  namespace: "input"
+  description: "Do not store a copy of input channel inside WindowState."
+  bug: "323450804"
+}
+
+flag {
   name: "enable_input_event_tracing"
   namespace: "input"
   description: "Set to true to enable input event tracing, including always-on tracing on non-user builds"
@@ -142,4 +149,11 @@ flag {
   namespace: "input"
   description: "Keyboard classifier that classifies all keyboards into alphabetic or non-alphabetic"
   bug: "263559234"
+}
+
+flag {
+  name: "show_pointers_for_partial_screenshare"
+  namespace: "input"
+  description: "Show touch and pointer indicators when mirroring a single task"
+  bug: "310179437"
 }
