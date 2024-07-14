@@ -1265,7 +1265,7 @@ private:
     const std::string mBlastTransactionName{"BufferTX - " + mName};
     // This integer is incremented everytime a buffer arrives at the server for this layer,
     // and decremented when a buffer is dropped or latched. When changed the integer is exported
-    // to systrace with ATRACE_INT and mBlastTransactionName. This way when debugging perf it is
+    // to systrace with SFTRACE_INT and mBlastTransactionName. This way when debugging perf it is
     // possible to see when a buffer arrived at the server, and in which frame it latched.
     //
     // You can understand the trace this way:

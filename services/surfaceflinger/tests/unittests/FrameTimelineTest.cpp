@@ -479,6 +479,16 @@ TEST_F(FrameTimelineTest, surfaceFrameEndTimeAcquireFenceAfterQueue) {
     EXPECT_EQ(surfaceFrame->getActuals().endTime, 456);
 }
 
+TEST_F(FrameTimelineTest, surfaceFrameEndTimeAcquireFenceUnsignaled) {
+    auto surfaceFrame = mFrameTimeline->createSurfaceFrameForToken({}, sPidOne, 0, sLayerIdOne,
+                                                                   "acquireFenceAfterQueue",
+                                                                   "acquireFenceAfterQueue",
+                                                                   /*isBuffer*/ true, sGameMode);
+    surfaceFrame->setActualQueueTime(123);
+    surfaceFrame->setAcquireFenceTime(Fence::SIGNAL_TIME_PENDING);
+    EXPECT_EQ(surfaceFrame->getActuals().endTime, 123);
+}
+
 TEST_F(FrameTimelineTest, surfaceFrameEndTimeAcquireFenceBeforeQueue) {
     auto surfaceFrame = mFrameTimeline->createSurfaceFrameForToken({}, sPidOne, 0, sLayerIdOne,
                                                                    "acquireFenceAfterQueue",
