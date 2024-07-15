@@ -202,6 +202,7 @@ void PointerChoreographer::fadeMouseCursorOnKeyPress(const android::NotifyKeyArg
     }
     auto it = mMousePointersByDisplay.find(targetDisplay);
     if (it != mMousePointersByDisplay.end()) {
+        mPolicy.notifyMouseCursorFadedOnTyping();
         it->second->fade(PointerControllerInterface::Transition::GRADUAL);
     }
 }
