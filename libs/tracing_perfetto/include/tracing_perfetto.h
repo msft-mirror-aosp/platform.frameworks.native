@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef TRACING_PERFETTO_H
-#define TRACING_PERFETTO_H
+#pragma once
 
 #include <stdint.h>
 
@@ -29,6 +28,8 @@ void traceEnd(uint64_t category);
 
 void traceAsyncBegin(uint64_t category, const char* name, int32_t cookie);
 
+void traceFormatBegin(uint64_t category, const char* fmt, ...);
+
 void traceAsyncEnd(uint64_t category, const char* name, int32_t cookie);
 
 void traceAsyncBeginForTrack(uint64_t category, const char* name,
@@ -39,12 +40,14 @@ void traceAsyncEndForTrack(uint64_t category, const char* trackName,
 
 void traceInstant(uint64_t category, const char* name);
 
+void traceFormatInstant(uint64_t category, const char* fmt, ...);
+
 void traceInstantForTrack(uint64_t category, const char* trackName,
                             const char* name);
 
 void traceCounter(uint64_t category, const char* name, int64_t value);
 
+void traceCounter32(uint64_t category, const char* name, int32_t value);
+
 bool isTagEnabled(uint64_t category);
 }  // namespace tracing_perfetto
-
-#endif  // TRACING_PERFETTO_H

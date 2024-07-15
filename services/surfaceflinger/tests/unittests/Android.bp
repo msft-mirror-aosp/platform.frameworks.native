@@ -209,6 +209,7 @@ cc_defaults {
         "libsync",
         "libui",
         "libutils",
+        "libtracing_perfetto",
     ],
     header_libs: [
         "android.hardware.graphics.composer3-command-buffer",
