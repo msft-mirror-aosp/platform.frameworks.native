@@ -89,6 +89,13 @@ void InputMapperUnitTest::setKeyCodeState(KeyState state, std::set<int> keyCodes
     }
 }
 
+void InputMapperUnitTest::setSwitchState(int32_t state, std::set<int32_t> switchCodes) {
+    for (const auto& switchCode : switchCodes) {
+        EXPECT_CALL(mMockEventHub, getSwitchState(EVENTHUB_ID, switchCode))
+                .WillRepeatedly(testing::Return(static_cast<int>(state)));
+    }
+}
+
 std::list<NotifyArgs> InputMapperUnitTest::process(int32_t type, int32_t code, int32_t value) {
     nsecs_t when = systemTime(SYSTEM_TIME_MONOTONIC);
     return process(when, type, code, value);
