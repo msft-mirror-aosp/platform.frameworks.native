@@ -85,7 +85,7 @@ cc_defaults {
         "libui",
         "libutils",
         "libSurfaceFlingerProp",
-        "libaconfig_storage_read_api_cc"
+        "libaconfig_storage_read_api_cc",
     ],
     static_libs: [
         "iinputflinger_aidl_lib_static",
@@ -187,6 +187,7 @@ filegroup {
         "FrameTracker.cpp",
         "HdrLayerInfoReporter.cpp",
         "HdrSdrRatioOverlay.cpp",
+        "Jank/JankTracker.cpp",
         "WindowInfosListenerInvoker.cpp",
         "Layer.cpp",
         "LayerFE.cpp",
