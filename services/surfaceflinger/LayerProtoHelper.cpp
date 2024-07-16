@@ -331,6 +331,7 @@ void LayerProtoFromSnapshotGenerator::writeHierarchyToProto(
         TransactionTraceWriter::getInstance().invoke("DuplicateLayer", /* overwrite= */ false);
         return;
     }
+    mVisitedLayers.insert(snapshot->uniqueSequence);
     LayerProtoHelper::writeSnapshotToProto(layerProto, layer, *snapshot, mTraceFlags);
 
     for (const auto& [child, variant] : root.mChildren) {
