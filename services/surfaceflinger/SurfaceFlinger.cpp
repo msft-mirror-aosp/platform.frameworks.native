@@ -3768,7 +3768,7 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     if (const auto& physical = state.physical) {
         const auto& mode = *physical->activeMode;
         mDisplayModeController.setActiveMode(physical->id, mode.getId(), mode.getVsyncRate(),
-                                             mode.getVsyncRate());
+                                             mode.getPeakFps());
     }
 
     display->setLayerFilter(makeLayerFilterForDisplay(display->getId(), state.layerStack));
