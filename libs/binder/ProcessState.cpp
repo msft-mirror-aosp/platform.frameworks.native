@@ -26,7 +26,6 @@
 #include <binder/Stability.h>
 #include <cutils/atomic.h>
 #include <utils/AndroidThreads.h>
-#include <utils/Log.h>
 #include <utils/String8.h>
 #include <utils/Thread.h>
 
@@ -407,9 +406,7 @@ void ProcessState::spawnPooledThread(bool isMain)
         ALOGV("Spawning new pooled thread, name=%s\n", name.c_str());
         sp<Thread> t = sp<PoolThread>::make(isMain);
         t->run(name.c_str());
-        pthread_mutex_lock(&mThreadCountLock);
         mKernelStartedThreads++;
-        pthread_mutex_unlock(&mThreadCountLock);
     }
     // TODO: if startThreadPool is called on another thread after the process
     // starts up, the kernel might think that it already requested those
@@ -432,19 +429,19 @@ status_t ProcessState::setThreadPoolMaxThreadCount(size_t maxThreads) {
 }
 
 size_t ProcessState::getThreadPoolMaxTotalThreadCount() const {
-    pthread_mutex_lock(&mThreadCountLock);
-    auto detachGuard = make_scope_guard([&]() { pthread_mutex_unlock(&mThreadCountLock); });
-
     if (mThreadPoolStarted) {
-        LOG_ALWAYS_FATAL_IF(mKernelStartedThreads > mMaxThreads + 1,
-                            "too many kernel-started threads: %zu > %zu + 1", mKernelStartedThreads,
-                            mMaxThreads);
+        size_t kernelStarted = mKernelStartedThreads;
+        size_t max = mMaxThreads;
+        size_t current = mCurrentThreads;
+
+        LOG_ALWAYS_FATAL_IF(kernelStarted > max + 1,
+                            "too many kernel-started threads: %zu > %zu + 1", kernelStarted, max);
 
         // calling startThreadPool starts a thread
         size_t threads = 1;
 
         // the kernel is configured to start up to mMaxThreads more threads
-        threads += mMaxThreads;
+        threads += max;
 
         // Users may call IPCThreadState::joinThreadPool directly. We don't
         // currently have a way to count this directly (it could be added by
@@ -454,8 +451,8 @@ size_t ProcessState::getThreadPoolMaxTotalThreadCount() const {
         // in IPCThreadState, temporarily forget about the extra join threads.
         // This is okay, because most callers of this method only care about
         // having 0, 1, or more threads.
-        if (mCurrentThreads > mKernelStartedThreads) {
-            threads += mCurrentThreads - mKernelStartedThreads;
+        if (current > kernelStarted) {
+            threads += current - kernelStarted;
         }
 
         return threads;
@@ -463,10 +460,9 @@ size_t ProcessState::getThreadPoolMaxTotalThreadCount() const {
 
     // must not be initialized or maybe has poll thread setup, we
     // currently don't track this in libbinder
-    LOG_ALWAYS_FATAL_IF(mKernelStartedThreads != 0,
-                        "Expecting 0 kernel started threads but have"
-                        " %zu",
-                        mKernelStartedThreads);
+    size_t kernelStarted = mKernelStartedThreads;
+    LOG_ALWAYS_FATAL_IF(kernelStarted != 0, "Expecting 0 kernel started threads but have %zu",
+                        kernelStarted);
     return mCurrentThreads;
 }
 
@@ -554,14 +550,11 @@ ProcessState::ProcessState(const char* driver)
       : mDriverName(String8(driver)),
         mDriverFD(-1),
         mVMStart(MAP_FAILED),
-        mThreadCountLock(PTHREAD_MUTEX_INITIALIZER),
-        mThreadCountDecrement(PTHREAD_COND_INITIALIZER),
         mExecutingThreadsCount(0),
-        mWaitingForThreads(0),
         mMaxThreads(DEFAULT_MAX_BINDER_THREADS),
         mCurrentThreads(0),
         mKernelStartedThreads(0),
-        mStarvationStartTimeMs(0),
+        mStarvationStartTime(never()),
         mForked(false),
         mThreadPoolStarted(false),
         mThreadPoolSeq(1),

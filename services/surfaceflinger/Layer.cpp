@@ -27,6 +27,7 @@
 #include <android-base/properties.h>
 #include <android-base/stringprintf.h>
 #include <binder/IPCThreadState.h>
+#include <common/trace.h>
 #include <compositionengine/CompositionEngine.h>
 #include <compositionengine/Display.h>
 #include <compositionengine/LayerFECompositionState.h>
@@ -39,7 +40,6 @@
 #include <ftl/fake_guard.h>
 #include <gui/BufferItem.h>
 #include <gui/Surface.h>
-#include <gui/TraceUtils.h>
 #include <math.h>
 #include <private/android_filesystem_config.h>
 #include <renderengine/RenderEngine.h>
@@ -58,7 +58,6 @@
 #include <utils/Log.h>
 #include <utils/NativeHandle.h>
 #include <utils/StopWatch.h>
-#include <utils/Trace.h>
 
 #include <algorithm>
 #include <mutex>
@@ -767,47 +766,12 @@ bool Layer::isSecure() const {
     return (p != nullptr) ? p->isSecure() : false;
 }
 
-void Layer::transferAvailableJankData(const std::deque<sp<CallbackHandle>>& handles,
-                                      std::vector<JankData>& jankData) {
-    if (mPendingJankClassifications.empty() ||
-        !mPendingJankClassifications.front()->getJankType()) {
-        return;
-    }
-
-    bool includeJankData = false;
-    for (const auto& handle : handles) {
-        for (const auto& cb : handle->callbackIds) {
-            if (cb.includeJankData) {
-                includeJankData = true;
-                break;
-            }
-        }
-
-        if (includeJankData) {
-            jankData.reserve(mPendingJankClassifications.size());
-            break;
-        }
-    }
-
-    while (!mPendingJankClassifications.empty() &&
-           mPendingJankClassifications.front()->getJankType()) {
-        if (includeJankData) {
-            std::shared_ptr<frametimeline::SurfaceFrame> surfaceFrame =
-                    mPendingJankClassifications.front();
-            jankData.emplace_back(JankData(surfaceFrame->getToken(),
-                                           surfaceFrame->getJankType().value(),
-                                           surfaceFrame->getRenderRate().getPeriodNsecs()));
-        }
-        mPendingJankClassifications.pop_front();
-    }
-}
-
 // ----------------------------------------------------------------------------
 // transaction
 // ----------------------------------------------------------------------------
 
 uint32_t Layer::doTransaction(uint32_t flags) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
 
     // TODO: This is unfortunate.
     mDrawingStateModified = mDrawingState.modified;
@@ -1436,7 +1400,6 @@ std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForTransac
     if (fps) {
         surfaceFrame->setRenderRate(*fps);
     }
-    onSurfaceFrameCreated(surfaceFrame);
     return surfaceFrame;
 }
 
@@ -1453,7 +1416,6 @@ std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForBuffer(
     if (fps) {
         surfaceFrame->setRenderRate(*fps);
     }
-    onSurfaceFrameCreated(surfaceFrame);
     return surfaceFrame;
 }
 
@@ -1479,7 +1441,6 @@ void Layer::setFrameTimelineVsyncForSkippedFrames(const FrameTimelineInfo& info,
     if (fps) {
         surfaceFrame->setRenderRate(*fps);
     }
-    onSurfaceFrameCreated(surfaceFrame);
     addSurfaceFrameDroppedForBuffer(surfaceFrame, postTime);
 }
 
@@ -2821,7 +2782,7 @@ void Layer::callReleaseBufferCallback(const sp<ITransactionCompletedListener>& l
     if (!listener) {
         return;
     }
-    ATRACE_FORMAT_INSTANT("callReleaseBufferCallback %s - %" PRIu64, getDebugName(), framenumber);
+    SFTRACE_FORMAT_INSTANT("callReleaseBufferCallback %s - %" PRIu64, getDebugName(), framenumber);
     uint32_t currentMaxAcquiredBufferCount =
             mFlinger->getMaxAcquiredBufferCountForCurrentRefreshRate(mOwnerUid);
     listener->onReleaseBuffer({buffer->getId(), framenumber},
@@ -2942,33 +2903,14 @@ void Layer::onLayerDisplayed(ftl::SharedFuture<FenceResult> futureFenceResult,
     }
 }
 
-void Layer::onSurfaceFrameCreated(
-        const std::shared_ptr<frametimeline::SurfaceFrame>& surfaceFrame) {
-    while (mPendingJankClassifications.size() >= kPendingClassificationMaxSurfaceFrames) {
-        // Too many SurfaceFrames pending classification. The front of the deque is probably not
-        // tracked by FrameTimeline and will never be presented. This will only result in a memory
-        // leak.
-        if (hasBufferOrSidebandStreamInDrawing()) {
-            // Only log for layers with a buffer, since we expect the jank data to be drained for
-            // these, while there may be no jank listeners for bufferless layers.
-            ALOGW("Removing the front of pending jank deque from layer - %s to prevent memory leak",
-                  mName.c_str());
-            std::string miniDump = mPendingJankClassifications.front()->miniDump();
-            ALOGD("Head SurfaceFrame mini dump\n%s", miniDump.c_str());
-        }
-        mPendingJankClassifications.pop_front();
-    }
-    mPendingJankClassifications.emplace_back(surfaceFrame);
-}
-
 void Layer::releasePendingBuffer(nsecs_t dequeueReadyTime) {
     for (const auto& handle : mDrawingState.callbackHandles) {
         handle->transformHint = mTransformHint;
         handle->dequeueReadyTime = dequeueReadyTime;
         handle->currentMaxAcquiredBufferCount =
                 mFlinger->getMaxAcquiredBufferCountForCurrentRefreshRate(mOwnerUid);
-        ATRACE_FORMAT_INSTANT("releasePendingBuffer %s - %" PRIu64, getDebugName(),
-                              handle->previousReleaseCallbackId.framenumber);
+        SFTRACE_FORMAT_INSTANT("releasePendingBuffer %s - %" PRIu64, getDebugName(),
+                               handle->previousReleaseCallbackId.framenumber);
     }
 
     for (auto& handle : mDrawingState.callbackHandles) {
@@ -2978,10 +2920,7 @@ void Layer::releasePendingBuffer(nsecs_t dequeueReadyTime) {
         }
     }
 
-    std::vector<JankData> jankData;
-    transferAvailableJankData(mDrawingState.callbackHandles, jankData);
-    mFlinger->getTransactionCallbackInvoker().addCallbackHandles(mDrawingState.callbackHandles,
-                                                                 jankData);
+    mFlinger->getTransactionCallbackInvoker().addCallbackHandles(mDrawingState.callbackHandles);
     mDrawingState.callbackHandles = {};
 }
 
@@ -3121,6 +3060,8 @@ void Layer::releasePreviousBuffer() {
         callReleaseBufferCallback(mDrawingState.releaseBufferListener,
                                   mDrawingState.buffer->getBuffer(), mDrawingState.frameNumber,
                                   mDrawingState.acquireFence);
+        const int32_t layerId = getSequence();
+        mFlinger->mTimeStats->removeTimeRecord(layerId, mDrawingState.frameNumber);
         decrementPendingBufferCount();
         if (mDrawingState.bufferSurfaceFrameTX != nullptr &&
             mDrawingState.bufferSurfaceFrameTX->getPresentState() != PresentState::Presented) {
@@ -3149,15 +3090,14 @@ void Layer::resetDrawingStateBufferInfo() {
 
 bool Layer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>& buffer,
                       const BufferData& bufferData, nsecs_t postTime, nsecs_t desiredPresentTime,
-                      bool isAutoTimestamp, std::optional<nsecs_t> dequeueTime,
-                      const FrameTimelineInfo& info) {
-    ATRACE_FORMAT("setBuffer %s - hasBuffer=%s", getDebugName(), (buffer ? "true" : "false"));
+                      bool isAutoTimestamp, const FrameTimelineInfo& info) {
+    SFTRACE_FORMAT("setBuffer %s - hasBuffer=%s", getDebugName(), (buffer ? "true" : "false"));
 
     const bool frameNumberChanged =
             bufferData.flags.test(BufferData::BufferDataChange::frameNumberChanged);
     const uint64_t frameNumber =
             frameNumberChanged ? bufferData.frameNumber : mDrawingState.frameNumber + 1;
-    ATRACE_FORMAT_INSTANT("setBuffer %s - %" PRIu64, getDebugName(), frameNumber);
+    SFTRACE_FORMAT_INSTANT("setBuffer %s - %" PRIu64, getDebugName(), frameNumber);
 
     if (mDrawingState.buffer) {
         releasePreviousBuffer();
@@ -3224,10 +3164,11 @@ bool Layer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>& buffer,
 
     setFrameTimelineVsyncForBufferTransaction(info, postTime);
 
-    if (dequeueTime && *dequeueTime != 0) {
+    if (bufferData.dequeueTime > 0) {
         const uint64_t bufferId = mDrawingState.buffer->getId();
         mFlinger->mFrameTracer->traceNewLayer(layerId, getName().c_str());
-        mFlinger->mFrameTracer->traceTimestamp(layerId, bufferId, frameNumber, *dequeueTime,
+        mFlinger->mFrameTracer->traceTimestamp(layerId, bufferId, frameNumber,
+                                               bufferData.dequeueTime,
                                                FrameTracer::FrameEvent::DEQUEUE);
         mFlinger->mFrameTracer->traceTimestamp(layerId, bufferId, frameNumber, postTime,
                                                FrameTracer::FrameEvent::QUEUE);
@@ -3251,10 +3192,10 @@ void Layer::setDesiredPresentTime(nsecs_t desiredPresentTime, bool isAutoTimesta
 }
 
 void Layer::recordLayerHistoryBufferUpdate(const scheduler::LayerProps& layerProps, nsecs_t now) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     const nsecs_t presentTime = [&] {
         if (!mDrawingState.isAutoTimestamp) {
-            ATRACE_FORMAT_INSTANT("desiredPresentTime");
+            SFTRACE_FORMAT_INSTANT("desiredPresentTime");
             return mDrawingState.desiredPresentTime;
         }
 
@@ -3263,7 +3204,7 @@ void Layer::recordLayerHistoryBufferUpdate(const scheduler::LayerProps& layerPro
                     mFlinger->mFrameTimeline->getTokenManager()->getPredictionsForToken(
                             mDrawingState.latchedVsyncId);
             if (prediction.has_value()) {
-                ATRACE_FORMAT_INSTANT("predictedPresentTime");
+                SFTRACE_FORMAT_INSTANT("predictedPresentTime");
                 mMaxTimeForUseVsyncId = prediction->presentTime +
                         scheduler::LayerHistory::kMaxPeriodForHistory.count();
                 return prediction->presentTime;
@@ -3299,9 +3240,9 @@ void Layer::recordLayerHistoryBufferUpdate(const scheduler::LayerProps& layerPro
         return static_cast<nsecs_t>(0);
     }();
 
-    if (ATRACE_ENABLED() && presentTime > 0) {
+    if (SFTRACE_ENABLED() && presentTime > 0) {
         const auto presentIn = TimePoint::fromNs(presentTime) - TimePoint::now();
-        ATRACE_FORMAT_INSTANT("presentIn %s", to_string(presentIn).c_str());
+        SFTRACE_FORMAT_INSTANT("presentIn %s", to_string(presentIn).c_str());
     }
 
     mFlinger->mScheduler->recordLayerHistory(sequence, layerProps, presentTime, now,
@@ -3449,9 +3390,7 @@ bool Layer::setTransactionCompletedListeners(const std::vector<sp<CallbackHandle
     if (!remainingHandles.empty()) {
         // Notify the transaction completed threads these handles are done. These are only the
         // handles that were not added to the mDrawingState, which will be notified later.
-        std::vector<JankData> jankData;
-        transferAvailableJankData(remainingHandles, jankData);
-        mFlinger->getTransactionCallbackInvoker().addCallbackHandles(remainingHandles, jankData);
+        mFlinger->getTransactionCallbackInvoker().addCallbackHandles(remainingHandles);
     }
 
     mReleasePreviousBuffer = false;
@@ -3627,12 +3566,12 @@ void Layer::gatherBufferInfo() {
         ui::Dataspace dataspace = ui::Dataspace::UNKNOWN;
         status_t err = OK;
         {
-            ATRACE_NAME("getDataspace");
+            SFTRACE_NAME("getDataspace");
             err = mapper.getDataspace(mBufferInfo.mBuffer->getBuffer()->handle, &dataspace);
         }
         if (err != OK || dataspace != mBufferInfo.mDataspace) {
             {
-                ATRACE_NAME("setDataspace");
+                SFTRACE_NAME("setDataspace");
                 err = mapper.setDataspace(mBufferInfo.mBuffer->getBuffer()->handle,
                                           static_cast<ui::Dataspace>(mBufferInfo.mDataspace));
             }
@@ -3696,7 +3635,7 @@ void Layer::decrementPendingBufferCount() {
 }
 
 void Layer::tracePendingBufferCount(int32_t pendingBuffers) {
-    ATRACE_INT(mBlastTransactionName.c_str(), pendingBuffers);
+    SFTRACE_INT(mBlastTransactionName.c_str(), pendingBuffers);
 }
 
 /*
@@ -3774,41 +3713,41 @@ bool Layer::isSimpleBufferUpdate(const layer_state_t& s) const {
                      : layer_state_t::eAutoRefreshChanged);
 
     if ((s.what & requiredFlags) != requiredFlags) {
-        ATRACE_FORMAT_INSTANT("%s: false [missing required flags 0x%" PRIx64 "]", __func__,
-                              (s.what | requiredFlags) & ~s.what);
+        SFTRACE_FORMAT_INSTANT("%s: false [missing required flags 0x%" PRIx64 "]", __func__,
+                               (s.what | requiredFlags) & ~s.what);
         return false;
     }
 
     if (s.what & deniedFlags) {
-        ATRACE_FORMAT_INSTANT("%s: false [has denied flags 0x%" PRIx64 "]", __func__,
-                              s.what & deniedFlags);
+        SFTRACE_FORMAT_INSTANT("%s: false [has denied flags 0x%" PRIx64 "]", __func__,
+                               s.what & deniedFlags);
         return false;
     }
 
     if (s.what & layer_state_t::ePositionChanged) {
         if (mRequestedTransform.tx() != s.x || mRequestedTransform.ty() != s.y) {
-            ATRACE_FORMAT_INSTANT("%s: false [ePositionChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [ePositionChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eAlphaChanged) {
         if (mDrawingState.color.a != s.color.a) {
-            ATRACE_FORMAT_INSTANT("%s: false [eAlphaChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eAlphaChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eColorTransformChanged) {
         if (mDrawingState.colorTransform != s.colorTransform) {
-            ATRACE_FORMAT_INSTANT("%s: false [eColorTransformChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eColorTransformChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eBackgroundColorChanged) {
         if (mDrawingState.bgColorLayer || s.bgColor.a != 0) {
-            ATRACE_FORMAT_INSTANT("%s: false [eBackgroundColorChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eBackgroundColorChanged changed]", __func__);
             return false;
         }
     }
@@ -3818,92 +3757,92 @@ bool Layer::isSimpleBufferUpdate(const layer_state_t& s) const {
             mRequestedTransform.dtdy() != s.matrix.dtdy ||
             mRequestedTransform.dtdx() != s.matrix.dtdx ||
             mRequestedTransform.dsdy() != s.matrix.dsdy) {
-            ATRACE_FORMAT_INSTANT("%s: false [eMatrixChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eMatrixChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eCornerRadiusChanged) {
         if (mDrawingState.cornerRadius != s.cornerRadius) {
-            ATRACE_FORMAT_INSTANT("%s: false [eCornerRadiusChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eCornerRadiusChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eBackgroundBlurRadiusChanged) {
         if (mDrawingState.backgroundBlurRadius != static_cast<int>(s.backgroundBlurRadius)) {
-            ATRACE_FORMAT_INSTANT("%s: false [eBackgroundBlurRadiusChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eBackgroundBlurRadiusChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eBufferTransformChanged) {
         if (mDrawingState.bufferTransform != s.bufferTransform) {
-            ATRACE_FORMAT_INSTANT("%s: false [eBufferTransformChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eBufferTransformChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eTransformToDisplayInverseChanged) {
         if (mDrawingState.transformToDisplayInverse != s.transformToDisplayInverse) {
-            ATRACE_FORMAT_INSTANT("%s: false [eTransformToDisplayInverseChanged changed]",
-                                  __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eTransformToDisplayInverseChanged changed]",
+                                   __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eCropChanged) {
         if (mDrawingState.crop != s.crop) {
-            ATRACE_FORMAT_INSTANT("%s: false [eCropChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eCropChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eDataspaceChanged) {
         if (mDrawingState.dataspace != s.dataspace) {
-            ATRACE_FORMAT_INSTANT("%s: false [eDataspaceChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eDataspaceChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eHdrMetadataChanged) {
         if (mDrawingState.hdrMetadata != s.hdrMetadata) {
-            ATRACE_FORMAT_INSTANT("%s: false [eHdrMetadataChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eHdrMetadataChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eSidebandStreamChanged) {
         if (mDrawingState.sidebandStream != s.sidebandStream) {
-            ATRACE_FORMAT_INSTANT("%s: false [eSidebandStreamChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eSidebandStreamChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eColorSpaceAgnosticChanged) {
         if (mDrawingState.colorSpaceAgnostic != s.colorSpaceAgnostic) {
-            ATRACE_FORMAT_INSTANT("%s: false [eColorSpaceAgnosticChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eColorSpaceAgnosticChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eShadowRadiusChanged) {
         if (mDrawingState.shadowRadius != s.shadowRadius) {
-            ATRACE_FORMAT_INSTANT("%s: false [eShadowRadiusChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eShadowRadiusChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eFixedTransformHintChanged) {
         if (mDrawingState.fixedTransformHint != s.fixedTransformHint) {
-            ATRACE_FORMAT_INSTANT("%s: false [eFixedTransformHintChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eFixedTransformHintChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eTrustedOverlayChanged) {
         if (mDrawingState.isTrustedOverlay != (s.trustedOverlay == gui::TrustedOverlay::ENABLED)) {
-            ATRACE_FORMAT_INSTANT("%s: false [eTrustedOverlayChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eTrustedOverlayChanged changed]", __func__);
             return false;
         }
     }
@@ -3912,28 +3851,28 @@ bool Layer::isSimpleBufferUpdate(const layer_state_t& s) const {
         StretchEffect temp = s.stretchEffect;
         temp.sanitize();
         if (mDrawingState.stretchEffect != temp) {
-            ATRACE_FORMAT_INSTANT("%s: false [eStretchChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eStretchChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eBufferCropChanged) {
         if (mDrawingState.bufferCrop != s.bufferCrop) {
-            ATRACE_FORMAT_INSTANT("%s: false [eBufferCropChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eBufferCropChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eDestinationFrameChanged) {
         if (mDrawingState.destinationFrame != s.destinationFrame) {
-            ATRACE_FORMAT_INSTANT("%s: false [eDestinationFrameChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eDestinationFrameChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eDimmingEnabledChanged) {
         if (mDrawingState.dimmingEnabled != s.dimmingEnabled) {
-            ATRACE_FORMAT_INSTANT("%s: false [eDimmingEnabledChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eDimmingEnabledChanged changed]", __func__);
             return false;
         }
     }
@@ -3941,14 +3880,14 @@ bool Layer::isSimpleBufferUpdate(const layer_state_t& s) const {
     if (s.what & layer_state_t::eExtendedRangeBrightnessChanged) {
         if (mDrawingState.currentHdrSdrRatio != s.currentHdrSdrRatio ||
             mDrawingState.desiredHdrSdrRatio != s.desiredHdrSdrRatio) {
-            ATRACE_FORMAT_INSTANT("%s: false [eExtendedRangeBrightnessChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eExtendedRangeBrightnessChanged changed]", __func__);
             return false;
         }
     }
 
     if (s.what & layer_state_t::eDesiredHdrHeadroomChanged) {
         if (mDrawingState.desiredHdrSdrRatio != s.desiredHdrSdrRatio) {
-            ATRACE_FORMAT_INSTANT("%s: false [eDesiredHdrHeadroomChanged changed]", __func__);
+            SFTRACE_FORMAT_INSTANT("%s: false [eDesiredHdrHeadroomChanged changed]", __func__);
             return false;
         }
     }
@@ -4140,8 +4079,8 @@ bool Layer::latchBuffer(bool& recomputeVisibleRegions, nsecs_t latchTime) {
 }
 
 bool Layer::latchBufferImpl(bool& recomputeVisibleRegions, nsecs_t latchTime, bool bgColorOnly) {
-    ATRACE_FORMAT_INSTANT("latchBuffer %s - %" PRIu64, getDebugName(),
-                          getDrawingState().frameNumber);
+    SFTRACE_FORMAT_INSTANT("latchBuffer %s - %" PRIu64, getDebugName(),
+                           getDrawingState().frameNumber);
 
     bool refreshRequired = latchSidebandStream(recomputeVisibleRegions);
 
@@ -4152,7 +4091,7 @@ bool Layer::latchBufferImpl(bool& recomputeVisibleRegions, nsecs_t latchTime, bo
     // If the head buffer's acquire fence hasn't signaled yet, return and
     // try again later
     if (!fenceHasSignaled()) {
-        ATRACE_NAME("!fenceHasSignaled()");
+        SFTRACE_NAME("!fenceHasSignaled()");
         mFlinger->onLayerUpdate();
         return false;
     }

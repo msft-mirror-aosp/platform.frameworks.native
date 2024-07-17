@@ -29,6 +29,7 @@
 #include <math/mat4.h>
 
 #include <android/gui/DropInputMode.h>
+#include <android/gui/EdgeExtensionParameters.h>
 #include <android/gui/FocusRequest.h>
 #include <android/gui/TrustedOverlay.h>
 
@@ -128,6 +129,8 @@ public:
 
     client_cache_t cachedBuffer;
 
+    nsecs_t dequeueTime;
+
     // Generates the release callback id based on the buffer id and frame number.
     // This is used as an identifier when release callbacks are invoked.
     ReleaseCallbackId generateReleaseCallbackId() const;
@@ -216,6 +219,7 @@ struct layer_state_t {
         eTrustedOverlayChanged = 0x4000'00000000,
         eDropInputModeChanged = 0x8000'00000000,
         eExtendedRangeBrightnessChanged = 0x10000'00000000,
+        eEdgeExtensionChanged = 0x20000'00000000,
     };
 
     layer_state_t();
@@ -239,7 +243,7 @@ struct layer_state_t {
             layer_state_t::eCropChanged | layer_state_t::eDestinationFrameChanged |
             layer_state_t::eMatrixChanged | layer_state_t::ePositionChanged |
             layer_state_t::eTransformToDisplayInverseChanged |
-            layer_state_t::eTransparentRegionChanged;
+            layer_state_t::eTransparentRegionChanged | layer_state_t::eEdgeExtensionChanged;
 
     // Buffer and related updates.
     static constexpr uint64_t BUFFER_CHANGES = layer_state_t::eApiChanged |
@@ -276,9 +280,9 @@ struct layer_state_t {
             layer_state_t::eFrameRateSelectionPriority | layer_state_t::eFixedTransformHintChanged;
 
     // Changes affecting data sent to input.
-    static constexpr uint64_t INPUT_CHANGES = layer_state_t::eInputInfoChanged |
-            layer_state_t::eDropInputModeChanged | layer_state_t::eTrustedOverlayChanged |
-            layer_state_t::eLayerStackChanged;
+    static constexpr uint64_t INPUT_CHANGES = layer_state_t::eAlphaChanged |
+            layer_state_t::eInputInfoChanged | layer_state_t::eDropInputModeChanged |
+            layer_state_t::eTrustedOverlayChanged | layer_state_t::eLayerStackChanged;
 
     // Changes that affect the visible region on a display.
     static constexpr uint64_t VISIBLE_REGION_CHANGES = layer_state_t::GEOMETRY_CHANGES |
@@ -390,6 +394,9 @@ struct layer_state_t {
 
     // Stretch effect to be applied to this layer
     StretchEffect stretchEffect;
+
+    // Edge extension effect to be applied to this layer
+    gui::EdgeExtensionParameters edgeExtensionParameters;
 
     Rect bufferCrop;
     Rect destinationFrame;

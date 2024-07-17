@@ -106,6 +106,13 @@ private:
         void shiftVsyncSequence(Duration phase);
         void setRenderRate(std::optional<Fps> renderRateOpt) { mRenderRateOpt = renderRateOpt; }
 
+        enum class VsyncOnTimeline {
+            Unique,  // Within timeline, not shared with next timeline.
+            Shared,  // Within timeline, shared with next timeline.
+            Outside, // Outside of the timeline.
+        };
+        VsyncOnTimeline isWithin(TimePoint vsync);
+
     private:
         nsecs_t snapToVsyncAlignedWithRenderRate(Model model, nsecs_t vsync);
         VsyncSequence getVsyncSequenceLocked(Model, nsecs_t vsync);

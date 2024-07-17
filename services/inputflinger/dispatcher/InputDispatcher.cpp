@@ -444,10 +444,12 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const IdGenerator& idGenerato
             newCoords.copyFrom(motionEntry.pointerCoords[i]);
             // First, apply the current pointer's transform to update the coordinates into
             // window space.
-            newCoords.transform(currTransform, motionEntry.flags);
+            MotionEvent::calculateTransformedCoordsInPlace(newCoords, motionEntry.source,
+                                                           motionEntry.flags, currTransform);
             // Next, apply the inverse transform of the normalized coordinates so the
             // current coordinates are transformed into the normalized coordinate space.
-            newCoords.transform(inverseTransform, motionEntry.flags);
+            MotionEvent::calculateTransformedCoordsInPlace(newCoords, motionEntry.source,
+                                                           motionEntry.flags, inverseTransform);
         }
     }
 
@@ -877,7 +879,7 @@ std::pair<bool /*cancelPointers*/, bool /*cancelNonPointers*/> expandCancellatio
 class ScopedSyntheticEventTracer {
 public:
     ScopedSyntheticEventTracer(std::unique_ptr<trace::InputTracerInterface>& tracer)
-          : mTracer(tracer) {
+          : mTracer(tracer), mProcessingTimestamp(now()) {
         if (mTracer) {
             mEventTracker = mTracer->createTrackerForSyntheticEvent();
         }
@@ -885,7 +887,7 @@ public:
 
     ~ScopedSyntheticEventTracer() {
         if (mTracer) {
-            mTracer->eventProcessingComplete(*mEventTracker);
+            mTracer->eventProcessingComplete(*mEventTracker, mProcessingTimestamp);
         }
     }
 
@@ -894,9 +896,28 @@ public:
     }
 
 private:
-    std::unique_ptr<trace::InputTracerInterface>& mTracer;
+    const std::unique_ptr<trace::InputTracerInterface>& mTracer;
     std::unique_ptr<trace::EventTrackerInterface> mEventTracker;
+    const nsecs_t mProcessingTimestamp;
 };
+
+/**
+ * This is needed to help use "InputEventInjectionResult" with base::Result.
+ */
+template <typename T>
+struct EnumErrorWrapper {
+    T mVal;
+    EnumErrorWrapper(T&& e) : mVal(std::forward<T>(e)) {}
+    operator const T&() const { return mVal; }
+    T value() const { return mVal; }
+    std::string print() const { return ftl::enum_string(mVal); }
+};
+
+Error<EnumErrorWrapper<InputEventInjectionResult>> injectionError(InputEventInjectionResult&& e) {
+    LOG_ALWAYS_FATAL_IF(e == InputEventInjectionResult::SUCCEEDED);
+    return Error<EnumErrorWrapper<InputEventInjectionResult>>(
+            std::forward<InputEventInjectionResult>(e));
+}
 
 } // namespace
 
@@ -1261,7 +1282,7 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t& nextWakeupTime) {
 
         if (mTracer) {
             if (auto& traceTracker = getTraceTracker(*mPendingEvent); traceTracker != nullptr) {
-                mTracer->eventProcessingComplete(*traceTracker);
+                mTracer->eventProcessingComplete(*traceTracker, currentTime);
             }
         }
 
@@ -1305,7 +1326,7 @@ bool InputDispatcher::shouldPruneInboundQueueLocked(const MotionEntry& motionEnt
 
         // Alternatively, maybe there's a spy window that could handle this event.
         const std::vector<sp<WindowInfoHandle>> touchedSpies =
-                findTouchedSpyWindowsAtLocked(displayId, x, y, isStylus);
+                findTouchedSpyWindowsAtLocked(displayId, x, y, isStylus, motionEntry.deviceId);
         for (const auto& windowHandle : touchedSpies) {
             const std::shared_ptr<Connection> connection =
                     getConnectionLocked(windowHandle->getToken());
@@ -1460,15 +1481,27 @@ std::vector<InputTarget> InputDispatcher::findOutsideTargetsLocked(
 }
 
 std::vector<sp<WindowInfoHandle>> InputDispatcher::findTouchedSpyWindowsAtLocked(
-        ui::LogicalDisplayId displayId, float x, float y, bool isStylus) const {
+        ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId) const {
     // Traverse windows from front to back and gather the touched spy windows.
     std::vector<sp<WindowInfoHandle>> spyWindows;
     const auto& windowHandles = getWindowHandlesLocked(displayId);
     for (const sp<WindowInfoHandle>& windowHandle : windowHandles) {
         const WindowInfo& info = *windowHandle->getInfo();
-
         if (!windowAcceptsTouchAt(info, displayId, x, y, isStylus, getTransformLocked(displayId))) {
-            continue;
+            // Generally, we would skip any pointer that's outside of the window. However, if the
+            // spy prevents splitting, and already has some of the pointers from this device, then
+            // it should get more pointers from the same device, even if they are outside of that
+            // window
+            if (info.supportsSplitTouch()) {
+                continue;
+            }
+
+            // We know that split touch is not supported. Skip this window only if it doesn't have
+            // any touching pointers for this device already.
+            if (!windowHasTouchingPointersLocked(windowHandle, deviceId)) {
+                continue;
+            }
+            // If it already has pointers down for this device, then give it this pointer, too.
         }
         if (!info.isSpy()) {
             // The first touched non-spy window was found, so return the spy windows touched so far.
@@ -1649,12 +1682,6 @@ bool InputDispatcher::dispatchConfigurationChangedLocked(nsecs_t currentTime,
     // Reset key repeating in case a keyboard device was added or removed or something.
     resetKeyRepeatLocked();
 
-    // Enqueue a command to run outside the lock to tell the policy that the configuration changed.
-    auto command = [this, eventTime = entry.eventTime]() REQUIRES(mLock) {
-        scoped_unlock unlock(mLock);
-        mPolicy.notifyConfigurationChanged(eventTime);
-    };
-    postCommandLocked(std::move(command));
     return true;
 }
 
@@ -1920,19 +1947,20 @@ bool InputDispatcher::dispatchKeyLocked(nsecs_t currentTime, std::shared_ptr<con
     }
 
     // Identify targets.
-    InputEventInjectionResult injectionResult;
-    sp<WindowInfoHandle> focusedWindow =
-            findFocusedWindowTargetLocked(currentTime, *entry, nextWakeupTime,
-                                          /*byref*/ injectionResult);
-    if (injectionResult == InputEventInjectionResult::PENDING) {
-        return false;
-    }
+    Result<sp<WindowInfoHandle>, InputEventInjectionResult> result =
+            findFocusedWindowTargetLocked(currentTime, *entry, nextWakeupTime);
 
-    setInjectionResult(*entry, injectionResult);
-    if (injectionResult != InputEventInjectionResult::SUCCEEDED) {
+    if (!result.ok()) {
+        if (result.error().code() == InputEventInjectionResult::PENDING) {
+            return false;
+        }
+        setInjectionResult(*entry, result.error().code());
         return true;
     }
+    sp<WindowInfoHandle>& focusedWindow = *result;
     LOG_ALWAYS_FATAL_IF(focusedWindow == nullptr);
+
+    setInjectionResult(*entry, InputEventInjectionResult::SUCCEEDED);
 
     std::vector<InputTarget> inputTargets;
     addWindowTargetLocked(focusedWindow, InputTarget::DispatchMode::AS_IS,
@@ -2038,19 +2066,28 @@ bool InputDispatcher::dispatchMotionLocked(nsecs_t currentTime,
             pilferPointersLocked(mDragState->dragWindow->getToken());
         }
 
-        inputTargets =
-                findTouchedWindowTargetsLocked(currentTime, *entry, /*byref*/ injectionResult);
-        LOG_ALWAYS_FATAL_IF(injectionResult != InputEventInjectionResult::SUCCEEDED &&
-                            !inputTargets.empty());
+        Result<std::vector<InputTarget>, InputEventInjectionResult> result =
+                findTouchedWindowTargetsLocked(currentTime, *entry);
+
+        if (result.ok()) {
+            inputTargets = std::move(*result);
+            injectionResult = InputEventInjectionResult::SUCCEEDED;
+        } else {
+            injectionResult = result.error().code();
+        }
     } else {
         // Non touch event.  (eg. trackball)
-        sp<WindowInfoHandle> focusedWindow =
-                findFocusedWindowTargetLocked(currentTime, *entry, nextWakeupTime, injectionResult);
-        if (injectionResult == InputEventInjectionResult::SUCCEEDED) {
+        Result<sp<WindowInfoHandle>, InputEventInjectionResult> result =
+                findFocusedWindowTargetLocked(currentTime, *entry, nextWakeupTime);
+        if (result.ok()) {
+            sp<WindowInfoHandle>& focusedWindow = *result;
             LOG_ALWAYS_FATAL_IF(focusedWindow == nullptr);
             addWindowTargetLocked(focusedWindow, InputTarget::DispatchMode::AS_IS,
                                   InputTarget::Flags::FOREGROUND, getDownTime(*entry),
                                   inputTargets);
+            injectionResult = InputEventInjectionResult::SUCCEEDED;
+        } else {
+            injectionResult = result.error().code();
         }
     }
     if (injectionResult == InputEventInjectionResult::PENDING) {
@@ -2111,19 +2148,16 @@ void InputDispatcher::logOutboundMotionDetails(const char* prefix, const MotionE
     if (DEBUG_OUTBOUND_EVENT_DETAILS) {
         ALOGD("%seventTime=%" PRId64 ", deviceId=%d, source=%s, displayId=%s, policyFlags=0x%x, "
               "action=%s, actionButton=0x%x, flags=0x%x, "
-              "metaState=0x%x, buttonState=0x%x,"
-              "edgeFlags=0x%x, xPrecision=%f, yPrecision=%f, downTime=%" PRId64,
+              "metaState=0x%x, buttonState=0x%x, downTime=%" PRId64,
               prefix, entry.eventTime, entry.deviceId,
               inputEventSourceToString(entry.source).c_str(), entry.displayId.toString().c_str(),
               entry.policyFlags, MotionEvent::actionToString(entry.action).c_str(),
-              entry.actionButton, entry.flags, entry.metaState, entry.buttonState, entry.edgeFlags,
-              entry.xPrecision, entry.yPrecision, entry.downTime);
+              entry.actionButton, entry.flags, entry.metaState, entry.buttonState, entry.downTime);
 
         for (uint32_t i = 0; i < entry.getPointerCount(); i++) {
             ALOGD("  Pointer %d: id=%d, toolType=%s, "
                   "x=%f, y=%f, pressure=%f, size=%f, "
-                  "touchMajor=%f, touchMinor=%f, toolMajor=%f, toolMinor=%f, "
-                  "orientation=%f",
+                  "touchMajor=%f, touchMinor=%f, toolMajor=%f, toolMinor=%f, orientation=%f",
                   i, entry.pointerProperties[i].id,
                   ftl::enum_string(entry.pointerProperties[i].toolType).c_str(),
                   entry.pointerCoords[i].getAxisValue(AMOTION_EVENT_AXIS_X),
@@ -2260,11 +2294,9 @@ bool InputDispatcher::shouldWaitToSendKeyLocked(nsecs_t currentTime,
     return false;
 }
 
-sp<WindowInfoHandle> InputDispatcher::findFocusedWindowTargetLocked(
-        nsecs_t currentTime, const EventEntry& entry, nsecs_t& nextWakeupTime,
-        InputEventInjectionResult& outInjectionResult) {
-    outInjectionResult = InputEventInjectionResult::FAILED; // Default result
-
+Result<sp<WindowInfoHandle>, InputEventInjectionResult>
+InputDispatcher::findFocusedWindowTargetLocked(nsecs_t currentTime, const EventEntry& entry,
+                                               nsecs_t& nextWakeupTime) {
     ui::LogicalDisplayId displayId = getTargetDisplayId(entry);
     sp<WindowInfoHandle> focusedWindowHandle = getFocusedWindowHandleLocked(displayId);
     std::shared_ptr<InputApplicationHandle> focusedApplicationHandle =
@@ -2276,12 +2308,12 @@ sp<WindowInfoHandle> InputDispatcher::findFocusedWindowTargetLocked(
         ALOGI("Dropping %s event because there is no focused window or focused application in "
               "display %s.",
               ftl::enum_string(entry.type).c_str(), displayId.toString().c_str());
-        return nullptr;
+        return injectionError(InputEventInjectionResult::FAILED);
     }
 
     // Drop key events if requested by input feature
     if (focusedWindowHandle != nullptr && shouldDropInput(entry, focusedWindowHandle)) {
-        return nullptr;
+        return injectionError(InputEventInjectionResult::FAILED);
     }
 
     // Compatibility behavior: raise ANR if there is a focused application, but no focused window.
@@ -2301,17 +2333,15 @@ sp<WindowInfoHandle> InputDispatcher::findFocusedWindowTargetLocked(
                   "window when it finishes starting up. Will wait for %" PRId64 "ms",
                   mAwaitedFocusedApplication->getName().c_str(), millis(timeout));
             nextWakeupTime = std::min(nextWakeupTime, *mNoFocusedWindowTimeoutTime);
-            outInjectionResult = InputEventInjectionResult::PENDING;
-            return nullptr;
+            return injectionError(InputEventInjectionResult::PENDING);
         } else if (currentTime > *mNoFocusedWindowTimeoutTime) {
             // Already raised ANR. Drop the event
             ALOGE("Dropping %s event because there is no focused window",
                   ftl::enum_string(entry.type).c_str());
-            return nullptr;
+            return injectionError(InputEventInjectionResult::FAILED);
         } else {
             // Still waiting for the focused window
-            outInjectionResult = InputEventInjectionResult::PENDING;
-            return nullptr;
+            return injectionError(InputEventInjectionResult::PENDING);
         }
     }
 
@@ -2321,15 +2351,13 @@ sp<WindowInfoHandle> InputDispatcher::findFocusedWindowTargetLocked(
     // Verify targeted injection.
     if (const auto err = verifyTargetedInjection(focusedWindowHandle, entry); err) {
         ALOGW("Dropping injected event: %s", (*err).c_str());
-        outInjectionResult = InputEventInjectionResult::TARGET_MISMATCH;
-        return nullptr;
+        return injectionError(InputEventInjectionResult::TARGET_MISMATCH);
     }
 
     if (focusedWindowHandle->getInfo()->inputConfig.test(
                 WindowInfo::InputConfig::PAUSE_DISPATCHING)) {
         ALOGI("Waiting because %s is paused", focusedWindowHandle->getName().c_str());
-        outInjectionResult = InputEventInjectionResult::PENDING;
-        return nullptr;
+        return injectionError(InputEventInjectionResult::PENDING);
     }
 
     // If the event is a key event, then we must wait for all previous events to
@@ -2346,12 +2374,10 @@ sp<WindowInfoHandle> InputDispatcher::findFocusedWindowTargetLocked(
     if (entry.type == EventEntry::Type::KEY) {
         if (shouldWaitToSendKeyLocked(currentTime, focusedWindowHandle->getName().c_str())) {
             nextWakeupTime = std::min(nextWakeupTime, *mKeyIsWaitingForEventsTimeout);
-            outInjectionResult = InputEventInjectionResult::PENDING;
-            return nullptr;
+            return injectionError(InputEventInjectionResult::PENDING);
         }
     }
-
-    outInjectionResult = InputEventInjectionResult::SUCCEEDED;
+    // Success!
     return focusedWindowHandle;
 }
 
@@ -2375,9 +2401,8 @@ std::vector<Monitor> InputDispatcher::selectResponsiveMonitorsLocked(
     return responsiveMonitors;
 }
 
-std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
-        nsecs_t currentTime, const MotionEntry& entry,
-        InputEventInjectionResult& outInjectionResult) {
+base::Result<std::vector<InputTarget>, android::os::InputEventInjectionResult>
+InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const MotionEntry& entry) {
     ATRACE_CALL();
 
     std::vector<InputTarget> targets;
@@ -2386,9 +2411,6 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
     const ui::LogicalDisplayId displayId = entry.displayId;
     const int32_t action = entry.action;
     const int32_t maskedAction = MotionEvent::getActionMasked(action);
-
-    // Update the touch state as needed based on the properties of the touch event.
-    outInjectionResult = InputEventInjectionResult::PENDING;
 
     // Copy current touch state into tempTouchState.
     // This state will be used to update mTouchStatesByDisplay at the end of this function.
@@ -2429,8 +2451,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
             // Started hovering, but the device is already down: reject the hover event
             LOG(ERROR) << "Got hover event " << entry.getDescription()
                        << " but the device is already down " << oldState->dump();
-            outInjectionResult = InputEventInjectionResult::FAILED;
-            return {};
+            return injectionError(InputEventInjectionResult::FAILED);
         }
         // For hover actions, we will treat 'tempTouchState' as a new state, so let's erase
         // all of the existing hovering pointers and recompute.
@@ -2462,9 +2483,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
         // Verify targeted injection.
         if (const auto err = verifyTargetedInjection(newTouchedWindowHandle, entry); err) {
             ALOGW("Dropping injected touch event: %s", (*err).c_str());
-            outInjectionResult = os::InputEventInjectionResult::TARGET_MISMATCH;
-            newTouchedWindowHandle = nullptr;
-            return {};
+            return injectionError(InputEventInjectionResult::TARGET_MISMATCH);
         }
 
         // Figure out whether splitting will be allowed for this window.
@@ -2487,18 +2506,16 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
         }
 
         std::vector<sp<WindowInfoHandle>> newTouchedWindows =
-                findTouchedSpyWindowsAtLocked(displayId, x, y, isStylus);
+                findTouchedSpyWindowsAtLocked(displayId, x, y, isStylus, entry.deviceId);
         if (newTouchedWindowHandle != nullptr) {
             // Process the foreground window first so that it is the first to receive the event.
             newTouchedWindows.insert(newTouchedWindows.begin(), newTouchedWindowHandle);
         }
 
         if (newTouchedWindows.empty()) {
-            ALOGI("Dropping event because there is no touchable window at (%.1f, %.1f) on display "
-                  "%s.",
-                  x, y, displayId.toString().c_str());
-            outInjectionResult = InputEventInjectionResult::FAILED;
-            return {};
+            LOG(INFO) << "Dropping event because there is no touchable window at (" << x << ", "
+                      << y << ") on display " << displayId << ": " << entry;
+            return injectionError(InputEventInjectionResult::FAILED);
         }
 
         for (const sp<WindowInfoHandle>& windowHandle : newTouchedWindows) {
@@ -2598,8 +2615,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
                           << " is not down or we previously dropped the pointer down event in "
                           << "display " << displayId << ": " << entry.getDescription();
             }
-            outInjectionResult = InputEventInjectionResult::FAILED;
-            return {};
+            return injectionError(InputEventInjectionResult::FAILED);
         }
 
         // If the pointer is not currently hovering, then ignore the event.
@@ -2610,8 +2626,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
                 LOG(INFO) << "Dropping event because the hovering pointer is not in any windows in "
                              "display "
                           << displayId << ": " << entry.getDescription();
-                outInjectionResult = InputEventInjectionResult::FAILED;
-                return {};
+                return injectionError(InputEventInjectionResult::FAILED);
             }
             tempTouchState.removeHoveringPointer(entry.deviceId, pointerId);
         }
@@ -2632,8 +2647,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
             // Verify targeted injection.
             if (const auto err = verifyTargetedInjection(newTouchedWindowHandle, entry); err) {
                 ALOGW("Dropping injected event: %s", (*err).c_str());
-                outInjectionResult = os::InputEventInjectionResult::TARGET_MISMATCH;
-                return {};
+                return injectionError(InputEventInjectionResult::TARGET_MISMATCH);
             }
 
             // Do not slide events to the window which can not receive motion event
@@ -2702,6 +2716,9 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
                 if (mDragState && mDragState->dragWindow == touchedWindow.windowHandle) {
                     continue;
                 }
+                if (!touchedWindow.hasTouchingPointers(entry.deviceId)) {
+                    continue;
+                }
                 touchedWindow.addTouchingPointers(entry.deviceId, touchingPointers);
             }
         }
@@ -2733,8 +2750,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
             ALOGW("Dropping targeted injection: At least one touched window is not owned by uid "
                   "%s:%s",
                   entry.injectionState->targetUid->toString().c_str(), errs.c_str());
-            outInjectionResult = InputEventInjectionResult::TARGET_MISMATCH;
-            return {};
+            return injectionError(InputEventInjectionResult::TARGET_MISMATCH);
         }
     }
 
@@ -2791,8 +2807,7 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
 
     if (targets.empty()) {
         LOG(INFO) << "Dropping event because no targets were found: " << entry.getDescription();
-        outInjectionResult = InputEventInjectionResult::FAILED;
-        return {};
+        return injectionError(InputEventInjectionResult::FAILED);
     }
 
     // If we only have windows getting ACTION_OUTSIDE, then drop the event, because there is no
@@ -2802,11 +2817,8 @@ std::vector<InputTarget> InputDispatcher::findTouchedWindowTargetsLocked(
         })) {
         LOG(INFO) << "Dropping event because all windows would just receive ACTION_OUTSIDE: "
                   << entry.getDescription();
-        outInjectionResult = InputEventInjectionResult::FAILED;
-        return {};
+        return injectionError(InputEventInjectionResult::FAILED);
     }
-
-    outInjectionResult = InputEventInjectionResult::SUCCEEDED;
 
     // Now that we have generated all of the input targets for this event, reset the dispatch
     // mode for all touched window to AS_IS.
@@ -3828,6 +3840,10 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                 }
                 const MotionEntry& motionEntry = static_cast<const MotionEntry&>(eventEntry);
                 status = publishMotionEvent(*connection, *dispatchEntry);
+                if (status == BAD_VALUE) {
+                    logDispatchStateLocked();
+                    LOG(FATAL) << "Publisher failed for " << motionEntry;
+                }
                 if (mTracer) {
                     ensureEventTraced(motionEntry);
                     mTracer->traceEventDispatch(*dispatchEntry, *motionEntry.traceTracker);
@@ -4546,13 +4562,12 @@ void InputDispatcher::notifyMotion(const NotifyMotionArgs& args) {
         ALOGD("notifyMotion - id=%" PRIx32 " eventTime=%" PRId64 ", deviceId=%d, source=%s, "
               "displayId=%s, policyFlags=0x%x, "
               "action=%s, actionButton=0x%x, flags=0x%x, metaState=0x%x, buttonState=0x%x, "
-              "edgeFlags=0x%x, xPrecision=%f, yPrecision=%f, xCursorPosition=%f, "
-              "yCursorPosition=%f, downTime=%" PRId64,
+              "xCursorPosition=%f, yCursorPosition=%f, downTime=%" PRId64,
               args.id, args.eventTime, args.deviceId, inputEventSourceToString(args.source).c_str(),
               args.displayId.toString().c_str(), args.policyFlags,
               MotionEvent::actionToString(args.action).c_str(), args.actionButton, args.flags,
-              args.metaState, args.buttonState, args.edgeFlags, args.xPrecision, args.yPrecision,
-              args.xCursorPosition, args.yCursorPosition, args.downTime);
+              args.metaState, args.buttonState, args.xCursorPosition, args.yCursorPosition,
+              args.downTime);
         for (uint32_t i = 0; i < args.getPointerCount(); i++) {
             ALOGD("  Pointer %d: id=%d, toolType=%s, x=%f, y=%f, pressure=%f, size=%f, "
                   "touchMajor=%f, touchMinor=%f, toolMajor=%f, toolMinor=%f, orientation=%f",
@@ -5524,6 +5539,13 @@ void InputDispatcher::setFocusedDisplay(ui::LogicalDisplayId displayId) {
                 synthesizeCancelationEventsForWindowLocked(windowHandle, options);
             }
             mFocusedDisplayId = displayId;
+            // Enqueue a command to run outside the lock to tell the policy that the focused display
+            // changed.
+            auto command = [this]() REQUIRES(mLock) {
+                scoped_unlock unlock(mLock);
+                mPolicy.notifyFocusedDisplayChanged(mFocusedDisplayId);
+            };
+            postCommandLocked(std::move(command));
 
             // Only a window on the focused display can have Pointer Capture, so disable the active
             // Pointer Capture session if there is one, since the focused display changed.
@@ -5667,7 +5689,7 @@ void InputDispatcher::setMaximumObscuringOpacityForTouch(float opacity) {
     mMaximumObscuringOpacityForTouch = opacity;
 }
 
-std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId /*displayId*/>
+std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
 InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) {
     for (auto& [displayId, state] : mTouchStatesByDisplay) {
         for (TouchedWindow& w : state.windows) {
@@ -5677,6 +5699,22 @@ InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) 
         }
     }
     return std::make_tuple(nullptr, nullptr, ui::LogicalDisplayId::DEFAULT);
+}
+
+std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
+InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) const {
+    return const_cast<InputDispatcher*>(this)->findTouchStateWindowAndDisplayLocked(token);
+}
+
+bool InputDispatcher::windowHasTouchingPointersLocked(const sp<WindowInfoHandle>& windowHandle,
+                                                      DeviceId deviceId) const {
+    const auto& [touchState, touchedWindow, _] =
+            findTouchStateWindowAndDisplayLocked(windowHandle->getToken());
+    if (touchState == nullptr) {
+        // No touching pointers at all
+        return false;
+    }
+    return touchState->hasTouchingPointers(deviceId);
 }
 
 bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
@@ -6015,17 +6053,12 @@ void InputDispatcher::dumpDispatchStateLocked(std::string& dump) const {
                 dump += StringPrintf(INDENT3 "OutboundQueue: length=%zu\n",
                                      connection->outboundQueue.size());
                 dump += dumpQueue(connection->outboundQueue, currentTime);
-
-            } else {
-                dump += INDENT3 "OutboundQueue: <empty>\n";
             }
 
             if (!connection->waitQueue.empty()) {
                 dump += StringPrintf(INDENT3 "WaitQueue: length=%zu\n",
                                      connection->waitQueue.size());
                 dump += dumpQueue(connection->waitQueue, currentTime);
-            } else {
-                dump += INDENT3 "WaitQueue: <empty>\n";
             }
             std::string inputStateDump = streamableToString(connection->inputState);
             if (!inputStateDump.empty()) {

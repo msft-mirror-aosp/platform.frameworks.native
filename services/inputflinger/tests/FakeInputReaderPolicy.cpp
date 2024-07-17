@@ -16,6 +16,7 @@
 
 #include "FakeInputReaderPolicy.h"
 
+#include <android-base/properties.h>
 #include <android-base/thread_annotations.h>
 #include <gtest/gtest.h>
 
@@ -23,6 +24,12 @@
 #include "ui/Rotation.h"
 
 namespace android {
+
+namespace {
+
+static const int HW_TIMEOUT_MULTIPLIER = base::GetIntProperty("ro.hw_timeout_multiplier", 1);
+
+} // namespace
 
 void FakeInputReaderPolicy::assertInputDevicesChanged() {
     waitForInputDevices([](bool devicesChanged) {
@@ -56,6 +63,23 @@ void FakeInputReaderPolicy::assertStylusGestureNotified(int32_t deviceId) {
 void FakeInputReaderPolicy::assertStylusGestureNotNotified() {
     std::scoped_lock lock(mLock);
     ASSERT_FALSE(mDeviceIdOfNotifiedStylusGesture);
+}
+
+void FakeInputReaderPolicy::assertConfigurationChanged() {
+    std::unique_lock lock(mLock);
+    base::ScopedLockAssertion assumeLocked(mLock);
+
+    const bool configurationChanged =
+            mConfigurationChangedCondition.wait_for(lock, WAIT_TIMEOUT, [this]() REQUIRES(mLock) {
+                return mConfigurationChanged;
+            });
+    ASSERT_TRUE(configurationChanged) << "Timed out waiting for configuration change";
+    mConfigurationChanged = false;
+}
+
+void FakeInputReaderPolicy::assertConfigurationNotChanged() {
+    std::scoped_lock lock(mLock);
+    ASSERT_FALSE(mConfigurationChanged);
 }
 
 void FakeInputReaderPolicy::clearViewports() {
@@ -227,6 +251,12 @@ void FakeInputReaderPolicy::notifyInputDevicesChanged(
     mDevicesChangedCondition.notify_all();
 }
 
+void FakeInputReaderPolicy::notifyConfigurationChanged(nsecs_t when) {
+    std::scoped_lock lock(mLock);
+    mConfigurationChanged = true;
+    mConfigurationChangedCondition.notify_all();
+}
+
 std::shared_ptr<KeyCharacterMap> FakeInputReaderPolicy::getKeyboardLayoutOverlay(
         const InputDeviceIdentifier&, const std::optional<KeyboardLayoutInfo>) {
     return nullptr;
@@ -241,9 +271,11 @@ void FakeInputReaderPolicy::waitForInputDevices(std::function<void(bool)> proces
     base::ScopedLockAssertion assumeLocked(mLock);
 
     const bool devicesChanged =
-            mDevicesChangedCondition.wait_for(lock, WAIT_TIMEOUT, [this]() REQUIRES(mLock) {
-                return mInputDevicesChanged;
-            });
+            mDevicesChangedCondition.wait_for(lock,
+                                              ADD_INPUT_DEVICE_TIMEOUT * HW_TIMEOUT_MULTIPLIER,
+                                              [this]() REQUIRES(mLock) {
+                                                  return mInputDevicesChanged;
+                                              });
     ASSERT_NO_FATAL_FAILURE(processDevicesChanged(devicesChanged));
     mInputDevicesChanged = false;
 }
