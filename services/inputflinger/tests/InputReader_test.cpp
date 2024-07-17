@@ -31,7 +31,6 @@
 #include <PeripheralController.h>
 #include <SensorInputMapper.h>
 #include <SingleTouchInputMapper.h>
-#include <SwitchInputMapper.h>
 #include <TestEventMatchers.h>
 #include <TestInputListener.h>
 #include <TouchInputMapper.h>
@@ -3061,48 +3060,6 @@ TEST_F(InputDeviceTest, KernelBufferOverflowResetsMappers) {
     event.value = 1;
     unused = mDevice->process(&event, /*count=*/1);
     mapper.assertProcessWasCalled();
-}
-
-// --- SwitchInputMapperTest ---
-
-class SwitchInputMapperTest : public InputMapperTest {
-protected:
-};
-
-TEST_F(SwitchInputMapperTest, GetSources) {
-    SwitchInputMapper& mapper = constructAndAddMapper<SwitchInputMapper>();
-
-    ASSERT_EQ(uint32_t(AINPUT_SOURCE_SWITCH), mapper.getSources());
-}
-
-TEST_F(SwitchInputMapperTest, GetSwitchState) {
-    SwitchInputMapper& mapper = constructAndAddMapper<SwitchInputMapper>();
-
-    mFakeEventHub->setSwitchState(EVENTHUB_ID, SW_LID, 1);
-    ASSERT_EQ(1, mapper.getSwitchState(AINPUT_SOURCE_ANY, SW_LID));
-
-    mFakeEventHub->setSwitchState(EVENTHUB_ID, SW_LID, 0);
-    ASSERT_EQ(0, mapper.getSwitchState(AINPUT_SOURCE_ANY, SW_LID));
-}
-
-TEST_F(SwitchInputMapperTest, Process) {
-    SwitchInputMapper& mapper = constructAndAddMapper<SwitchInputMapper>();
-    std::list<NotifyArgs> out;
-    out = process(mapper, ARBITRARY_TIME, READ_TIME, EV_SW, SW_LID, 1);
-    ASSERT_TRUE(out.empty());
-    out = process(mapper, ARBITRARY_TIME, READ_TIME, EV_SW, SW_JACK_PHYSICAL_INSERT, 1);
-    ASSERT_TRUE(out.empty());
-    out = process(mapper, ARBITRARY_TIME, READ_TIME, EV_SW, SW_HEADPHONE_INSERT, 0);
-    ASSERT_TRUE(out.empty());
-    out = process(mapper, ARBITRARY_TIME, READ_TIME, EV_SYN, SYN_REPORT, 0);
-
-    ASSERT_EQ(1u, out.size());
-    const NotifySwitchArgs& args = std::get<NotifySwitchArgs>(*out.begin());
-    ASSERT_EQ(ARBITRARY_TIME, args.eventTime);
-    ASSERT_EQ((1U << SW_LID) | (1U << SW_JACK_PHYSICAL_INSERT), args.switchValues);
-    ASSERT_EQ((1U << SW_LID) | (1U << SW_JACK_PHYSICAL_INSERT) | (1 << SW_HEADPHONE_INSERT),
-            args.switchMask);
-    ASSERT_EQ(uint32_t(0), args.policyFlags);
 }
 
 // --- VibratorInputMapperTest ---
