@@ -78,6 +78,7 @@ cc_test {
         "PropertyProvider_test.cpp",
         "RotaryEncoderInputMapper_test.cpp",
         "SlopController_test.cpp",
+        "SwitchInputMapper_test.cpp",
         "SyncQueue_test.cpp",
         "TimerProvider_test.cpp",
         "TestInputListener.cpp",
