@@ -221,8 +221,6 @@ private:
                                                                      size_t count) REQUIRES(mLock);
     [[nodiscard]] std::list<NotifyArgs> timeoutExpiredLocked(nsecs_t when) REQUIRES(mLock);
 
-    void handleConfigurationChangedLocked(nsecs_t when) REQUIRES(mLock);
-
     int32_t mGlobalMetaState GUARDED_BY(mLock);
     void updateGlobalMetaStateLocked() REQUIRES(mLock);
     int32_t getGlobalMetaStateLocked() REQUIRES(mLock);
