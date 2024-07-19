@@ -97,7 +97,6 @@ public:
     status_t stop() override;
 
     void notifyInputDevicesChanged(const NotifyInputDevicesChangedArgs& args) override;
-    void notifyConfigurationChanged(const NotifyConfigurationChangedArgs& args) override;
     void notifyKey(const NotifyKeyArgs& args) override;
     void notifyMotion(const NotifyMotionArgs& args) override;
     void notifySwitch(const NotifySwitchArgs& args) override;
@@ -447,8 +446,6 @@ private:
             REQUIRES(mLock);
 
     // Dispatch inbound events.
-    bool dispatchConfigurationChangedLocked(nsecs_t currentTime,
-                                            const ConfigurationChangedEntry& entry) REQUIRES(mLock);
     bool dispatchDeviceResetLocked(nsecs_t currentTime, const DeviceResetEntry& entry)
             REQUIRES(mLock);
     bool dispatchKeyLocked(nsecs_t currentTime, std::shared_ptr<const KeyEntry> entry,
