@@ -345,7 +345,7 @@ std::unique_ptr<MotionEvent> MotionPredictor::predict(nsecs_t timestamp) {
                                    event.getRawTransform(), event.getDownTime(), predictionTime,
                                    event.getPointerCount(), event.getPointerProperties(), &coords);
         } else {
-            prediction->addSample(predictionTime, &coords);
+            prediction->addSample(predictionTime, &coords, prediction->getId());
         }
 
         axisFrom = axisTo;

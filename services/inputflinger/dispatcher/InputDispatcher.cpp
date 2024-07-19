@@ -558,7 +558,6 @@ bool isConnectionResponsive(const Connection& connection) {
 // Returns true if the event type passed as argument represents a user activity.
 bool isUserActivityEvent(const EventEntry& eventEntry) {
     switch (eventEntry.type) {
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET:
         case EventEntry::Type::DRAG:
         case EventEntry::Type::FOCUS:
@@ -1171,14 +1170,6 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t& nextWakeupTime) {
     }
 
     switch (mPendingEvent->type) {
-        case EventEntry::Type::CONFIGURATION_CHANGED: {
-            const ConfigurationChangedEntry& typedEntry =
-                    static_cast<const ConfigurationChangedEntry&>(*mPendingEvent);
-            done = dispatchConfigurationChangedLocked(currentTime, typedEntry);
-            dropReason = DropReason::NOT_DROPPED; // configuration changes are never dropped
-            break;
-        }
-
         case EventEntry::Type::DEVICE_RESET: {
             const DeviceResetEntry& typedEntry =
                     static_cast<const DeviceResetEntry&>(*mPendingEvent);
@@ -1410,7 +1401,6 @@ bool InputDispatcher::enqueueInboundEventLocked(std::unique_ptr<EventEntry> newE
             break;
         }
         case EventEntry::Type::TOUCH_MODE_CHANGED:
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET:
         case EventEntry::Type::SENSOR:
         case EventEntry::Type::POINTER_CAPTURE_CHANGED:
@@ -1584,7 +1574,6 @@ void InputDispatcher::dropInboundEventLocked(const EventEntry& entry, DropReason
         }
         case EventEntry::Type::FOCUS:
         case EventEntry::Type::TOUCH_MODE_CHANGED:
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET: {
             LOG_ALWAYS_FATAL("Should not drop %s events", ftl::enum_string(entry.type).c_str());
             break;
@@ -1671,18 +1660,6 @@ std::shared_ptr<KeyEntry> InputDispatcher::synthesizeKeyRepeatLocked(nsecs_t cur
     mKeyRepeatState.lastKeyEntry = newEntry;
     mKeyRepeatState.nextRepeatTime = currentTime + mConfig.keyRepeatDelay;
     return newEntry;
-}
-
-bool InputDispatcher::dispatchConfigurationChangedLocked(nsecs_t currentTime,
-                                                         const ConfigurationChangedEntry& entry) {
-    if (DEBUG_OUTBOUND_EVENT_DETAILS) {
-        ALOGD("dispatchConfigurationChanged - eventTime=%" PRId64, entry.eventTime);
-    }
-
-    // Reset key repeating in case a keyboard device was added or removed or something.
-    resetKeyRepeatLocked();
-
-    return true;
 }
 
 bool InputDispatcher::dispatchDeviceResetLocked(nsecs_t currentTime,
@@ -2252,7 +2229,6 @@ ui::LogicalDisplayId InputDispatcher::getTargetDisplayId(const EventEntry& entry
         case EventEntry::Type::TOUCH_MODE_CHANGED:
         case EventEntry::Type::POINTER_CAPTURE_CHANGED:
         case EventEntry::Type::FOCUS:
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET:
         case EventEntry::Type::SENSOR:
         case EventEntry::Type::DRAG: {
@@ -3627,7 +3603,6 @@ void InputDispatcher::enqueueDispatchEntryLocked(const std::shared_ptr<Connectio
             LOG_ALWAYS_FATAL("SENSOR events should not go to apps via input channel");
             break;
         }
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET: {
             LOG_ALWAYS_FATAL("%s events should not go to apps",
                              ftl::enum_string(eventEntry->type).c_str());
@@ -3888,7 +3863,6 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                 break;
             }
 
-            case EventEntry::Type::CONFIGURATION_CHANGED:
             case EventEntry::Type::DEVICE_RESET:
             case EventEntry::Type::SENSOR: {
                 LOG_ALWAYS_FATAL("Should never start dispatch cycles for %s events",
@@ -4284,7 +4258,6 @@ void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
                                  ftl::enum_string(cancelationEventEntry->type).c_str());
                 break;
             }
-            case EventEntry::Type::CONFIGURATION_CHANGED:
             case EventEntry::Type::DEVICE_RESET:
             case EventEntry::Type::SENSOR: {
                 LOG_ALWAYS_FATAL("%s event should not be found inside Connections's queue",
@@ -4367,7 +4340,6 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
             case EventEntry::Type::KEY:
             case EventEntry::Type::FOCUS:
             case EventEntry::Type::TOUCH_MODE_CHANGED:
-            case EventEntry::Type::CONFIGURATION_CHANGED:
             case EventEntry::Type::DEVICE_RESET:
             case EventEntry::Type::POINTER_CAPTURE_CHANGED:
             case EventEntry::Type::SENSOR:
@@ -4453,26 +4425,9 @@ std::unique_ptr<MotionEntry> InputDispatcher::splitMotionEvent(
 
 void InputDispatcher::notifyInputDevicesChanged(const NotifyInputDevicesChangedArgs& args) {
     std::scoped_lock _l(mLock);
+    // Reset key repeating in case a keyboard device was added or removed or something.
+    resetKeyRepeatLocked();
     mLatencyTracker.setInputDevices(args.inputDeviceInfos);
-}
-
-void InputDispatcher::notifyConfigurationChanged(const NotifyConfigurationChangedArgs& args) {
-    if (debugInboundEventDetails()) {
-        ALOGD("notifyConfigurationChanged - eventTime=%" PRId64, args.eventTime);
-    }
-
-    bool needWake = false;
-    { // acquire lock
-        std::scoped_lock _l(mLock);
-
-        std::unique_ptr<ConfigurationChangedEntry> newEntry =
-                std::make_unique<ConfigurationChangedEntry>(args.id, args.eventTime);
-        needWake = enqueueInboundEventLocked(std::move(newEntry));
-    } // release lock
-
-    if (needWake) {
-        mLooper->wake();
-    }
 }
 
 void InputDispatcher::notifyKey(const NotifyKeyArgs& args) {
