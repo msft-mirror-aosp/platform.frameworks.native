@@ -97,7 +97,6 @@ public:
     status_t stop() override;
 
     void notifyInputDevicesChanged(const NotifyInputDevicesChangedArgs& args) override;
-    void notifyConfigurationChanged(const NotifyConfigurationChangedArgs& args) override;
     void notifyKey(const NotifyKeyArgs& args) override;
     void notifyMotion(const NotifyMotionArgs& args) override;
     void notifySwitch(const NotifySwitchArgs& args) override;
@@ -447,8 +446,6 @@ private:
             REQUIRES(mLock);
 
     // Dispatch inbound events.
-    bool dispatchConfigurationChangedLocked(nsecs_t currentTime,
-                                            const ConfigurationChangedEntry& entry) REQUIRES(mLock);
     bool dispatchDeviceResetLocked(nsecs_t currentTime, const DeviceResetEntry& entry)
             REQUIRES(mLock);
     bool dispatchKeyLocked(nsecs_t currentTime, std::shared_ptr<const KeyEntry> entry,
@@ -537,12 +534,11 @@ private:
     void resetNoFocusedWindowTimeoutLocked() REQUIRES(mLock);
 
     ui::LogicalDisplayId getTargetDisplayId(const EventEntry& entry);
-    sp<android::gui::WindowInfoHandle> findFocusedWindowTargetLocked(
-            nsecs_t currentTime, const EventEntry& entry, nsecs_t& nextWakeupTime,
-            android::os::InputEventInjectionResult& outInjectionResult) REQUIRES(mLock);
-    std::vector<InputTarget> findTouchedWindowTargetsLocked(
-            nsecs_t currentTime, const MotionEntry& entry,
-            android::os::InputEventInjectionResult& outInjectionResult) REQUIRES(mLock);
+    base::Result<sp<android::gui::WindowInfoHandle>, android::os::InputEventInjectionResult>
+    findFocusedWindowTargetLocked(nsecs_t currentTime, const EventEntry& entry,
+                                  nsecs_t& nextWakeupTime) REQUIRES(mLock);
+    base::Result<std::vector<InputTarget>, android::os::InputEventInjectionResult>
+    findTouchedWindowTargetsLocked(nsecs_t currentTime, const MotionEntry& entry) REQUIRES(mLock);
     std::vector<Monitor> selectResponsiveMonitorsLocked(
             const std::vector<Monitor>& gestureMonitors) const REQUIRES(mLock);
 

@@ -411,8 +411,6 @@ TEST_F(InputDispatcherTest, InjectInputEvent_ValidatesMotionEvents) {
             << "Should reject motion events with duplicate pointer ids.";
 }
 
-/* Test InputDispatcher for notifyConfigurationChanged and notifySwitch events */
-
 TEST_F(InputDispatcherTest, NotifySwitch_CallsPolicy) {
     NotifySwitchArgs args(InputEvent::nextId(), /*eventTime=*/20, /*policyFlags=*/0,
                           /*switchValues=*/1,
@@ -5657,6 +5655,72 @@ TEST_F(InputDispatcherTest, SplittableAndNonSplittableWindows) {
                     .build());
     leftWindow->assertNoEvents();
     rightWindow->assertNoEvents();
+}
+
+/**
+ * Two windows: left and right. The left window has PREVENT_SPLITTING input config. Device A sends a
+ * down event to the right window. Device B sends a down event to the left window, and then a
+ * POINTER_DOWN event to the right window. However, since the left window prevents splitting, the
+ * POINTER_DOWN event should only go to the left window, and not to the right window.
+ * This test attempts to reproduce a crash.
+ */
+TEST_F(InputDispatcherTest, MultiDeviceTwoWindowsPreventSplitting) {
+    std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
+    sp<FakeWindowHandle> leftWindow =
+            sp<FakeWindowHandle>::make(application, mDispatcher, "Left window (prevent splitting)",
+                                       ui::LogicalDisplayId::DEFAULT);
+    leftWindow->setFrame(Rect(0, 0, 100, 100));
+    leftWindow->setPreventSplitting(true);
+
+    sp<FakeWindowHandle> rightWindow =
+            sp<FakeWindowHandle>::make(application, mDispatcher, "Right window",
+                                       ui::LogicalDisplayId::DEFAULT);
+    rightWindow->setFrame(Rect(100, 0, 200, 100));
+
+    mDispatcher->onWindowInfosChanged(
+            {{*leftWindow->getInfo(), *rightWindow->getInfo()}, {}, 0, 0});
+
+    const DeviceId deviceA = 9;
+    const DeviceId deviceB = 3;
+    // Touch the right window with device A
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_DOWN, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(150).y(50))
+                                      .deviceId(deviceA)
+                                      .build());
+    rightWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_DOWN), WithDeviceId(deviceA)));
+    // Touch the left window with device B
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_DOWN, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(50).y(50))
+                                      .deviceId(deviceB)
+                                      .build());
+    leftWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_DOWN), WithDeviceId(deviceB)));
+    // Send a second pointer from device B to the right window. It shouldn't go to the right window
+    // because the left window prevents splitting.
+    mDispatcher->notifyMotion(MotionArgsBuilder(POINTER_1_DOWN, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .deviceId(deviceB)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(50).y(50))
+                                      .pointer(PointerBuilder(1, ToolType::FINGER).x(120).y(120))
+                                      .build());
+    leftWindow->consumeMotionPointerDown(1, WithDeviceId(deviceB));
+
+    // Finish the gesture for both devices
+    mDispatcher->notifyMotion(MotionArgsBuilder(POINTER_1_UP, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .deviceId(deviceB)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(50).y(50))
+                                      .pointer(PointerBuilder(1, ToolType::FINGER).x(120).y(120))
+                                      .build());
+    leftWindow->consumeMotionPointerUp(1, WithDeviceId(deviceB));
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_UP, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(50).y(50))
+                                      .deviceId(deviceB)
+                                      .build());
+    leftWindow->consumeMotionEvent(
+            AllOf(WithMotionAction(ACTION_UP), WithDeviceId(deviceB), WithPointerId(0, 0)));
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_UP, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(150).y(50))
+                                      .deviceId(deviceA)
+                                      .build());
+    rightWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_UP), WithDeviceId(deviceA)));
 }
 
 TEST_F(InputDispatcherTest, TouchpadThreeFingerSwipeOnlySentToTrustedOverlays) {
