@@ -339,6 +339,8 @@ public:
     static std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>
     getDisplayDecorationSupport(const sp<IBinder>& displayToken);
 
+    static bool flagEdgeExtensionEffectUseShader();
+
     // ------------------------------------------------------------------------
     // surface creation / destruction
 
