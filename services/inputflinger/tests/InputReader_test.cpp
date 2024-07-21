@@ -35,7 +35,6 @@
 #include <TestInputListener.h>
 #include <TouchInputMapper.h>
 #include <UinputDevice.h>
-#include <VibratorInputMapper.h>
 #include <android-base/thread_annotations.h>
 #include <com_android_input_flags.h>
 #include <ftl/enum.h>
@@ -623,7 +622,6 @@ protected:
         if (configuration) {
             mFakeEventHub->addConfigurationMap(eventHubId, configuration);
         }
-        mFakeEventHub->finishDeviceScan();
         mReader->loopOnce();
         mReader->loopOnce();
         ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
@@ -757,8 +755,6 @@ TEST_F(InputReaderTest, WhenEnabledChanges_SendsDeviceResetNotification) {
     mReader->pushNextDevice(device);
     ASSERT_NO_FATAL_FAILURE(addDevice(eventHubId, "fake", deviceClass, nullptr));
 
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyConfigurationChangedWasCalled(nullptr));
-
     NotifyDeviceResetArgs resetArgs;
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyDeviceResetWasCalled(&resetArgs));
     ASSERT_EQ(deviceId, resetArgs.deviceId);
@@ -774,7 +770,6 @@ TEST_F(InputReaderTest, WhenEnabledChanges_SendsDeviceResetNotification) {
     disableDevice(deviceId);
     mReader->loopOnce();
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyDeviceResetWasNotCalled());
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyConfigurationChangedWasNotCalled());
     ASSERT_EQ(device->isEnabled(), false);
 
     enableDevice(deviceId);
@@ -959,17 +954,6 @@ TEST_F(InputReaderTest, MarkSupportedKeyCodes_ForwardsRequestsToMappers) {
     ASSERT_TRUE(flags[0] && flags[1] && !flags[2] && !flags[3]);
 }
 
-TEST_F(InputReaderTest, LoopOnce_WhenDeviceScanFinished_SendsConfigurationChanged) {
-    constexpr int32_t eventHubId = 1;
-    addDevice(eventHubId, "ignored", InputDeviceClass::KEYBOARD, nullptr);
-
-    NotifyConfigurationChangedArgs args;
-
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyConfigurationChangedWasCalled(&args));
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
-    ASSERT_EQ(ARBITRARY_TIME, args.eventTime);
-}
-
 TEST_F(InputReaderTest, LoopOnce_ForwardsRawEventsToMappers) {
     constexpr int32_t deviceId = END_RESERVED_ID + 1000;
     constexpr ftl::Flags<InputDeviceClass> deviceClass = InputDeviceClass::KEYBOARD;
@@ -1074,7 +1058,6 @@ TEST_F(InputReaderTest, Device_CanDispatchToDisplay) {
     // The device is added after the input port associations are processed since
     // we do not yet support dynamic device-to-display associations.
     ASSERT_NO_FATAL_FAILURE(addDevice(eventHubId, "fake", deviceClass, nullptr));
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyConfigurationChangedWasCalled());
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyDeviceResetWasCalled());
     ASSERT_NO_FATAL_FAILURE(mapper.assertConfigureWasCalled());
 
@@ -1103,8 +1086,6 @@ TEST_F(InputReaderTest, WhenEnabledChanges_AllSubdevicesAreUpdated) {
     mReader->pushNextDevice(device);
     ASSERT_NO_FATAL_FAILURE(addDevice(eventHubIds[0], "fake1", deviceClass, nullptr));
     ASSERT_NO_FATAL_FAILURE(addDevice(eventHubIds[1], "fake2", deviceClass, nullptr));
-
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyConfigurationChangedWasCalled(nullptr));
 
     NotifyDeviceResetArgs resetArgs;
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyDeviceResetWasCalled(&resetArgs));
@@ -1478,9 +1459,7 @@ protected:
         // to the test device will show up in mReader. We wait for those input devices to
         // show up before beginning the tests.
         ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyInputDevicesChangedWasCalled());
-        ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
         ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     }
 };
 
@@ -1500,12 +1479,10 @@ TEST_F(InputReaderIntegrationTest, TestInvalidDevice) {
     // consider it as a valid device.
     std::unique_ptr<UinputDevice> invalidDevice = createUinputDevice<InvalidUinputDevice>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesNotChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationNotChanged());
     ASSERT_EQ(numDevices, mFakePolicy->getInputDevices().size());
 
     invalidDevice.reset();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesNotChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationNotChanged());
     ASSERT_EQ(numDevices, mFakePolicy->getInputDevices().size());
 }
 
@@ -1514,7 +1491,6 @@ TEST_F(InputReaderIntegrationTest, AddNewDevice) {
 
     std::unique_ptr<UinputHomeKey> keyboard = createUinputDevice<UinputHomeKey>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     ASSERT_EQ(initialNumDevices + 1, mFakePolicy->getInputDevices().size());
 
     const auto device = waitForDevice(keyboard->getName());
@@ -1525,7 +1501,6 @@ TEST_F(InputReaderIntegrationTest, AddNewDevice) {
 
     keyboard.reset();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     ASSERT_EQ(initialNumDevices, mFakePolicy->getInputDevices().size());
 }
 
@@ -1533,21 +1508,14 @@ TEST_F(InputReaderIntegrationTest, SendsEventsToInputListener) {
     std::unique_ptr<UinputHomeKey> keyboard = createUinputDevice<UinputHomeKey>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
 
-    NotifyConfigurationChangedArgs configChangedArgs;
-    ASSERT_NO_FATAL_FAILURE(
-            mTestListener->assertNotifyConfigurationChangedWasCalled(&configChangedArgs));
-    int32_t prevId = configChangedArgs.id;
-    nsecs_t prevTimestamp = configChangedArgs.eventTime;
-
     NotifyKeyArgs keyArgs;
     keyboard->pressAndReleaseHomeKey();
     ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyKeyWasCalled(&keyArgs));
     ASSERT_EQ(AKEY_EVENT_ACTION_DOWN, keyArgs.action);
-    ASSERT_NE(prevId, keyArgs.id);
-    prevId = keyArgs.id;
-    ASSERT_LE(prevTimestamp, keyArgs.eventTime);
     ASSERT_LE(keyArgs.eventTime, keyArgs.readTime);
-    prevTimestamp = keyArgs.eventTime;
+
+    int32_t prevId = keyArgs.id;
+    nsecs_t prevTimestamp = keyArgs.eventTime;
 
     ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyKeyWasCalled(&keyArgs));
     ASSERT_EQ(AKEY_EVENT_ACTION_UP, keyArgs.action);
@@ -1670,8 +1638,6 @@ protected:
 
         mDevice = createUinputDevice<UinputTouchScreen>(Rect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT));
         ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
-        ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
         const auto info = waitForDevice(mDevice->getName());
         ASSERT_TRUE(info);
         mDeviceInfo = *info;
@@ -1740,8 +1706,6 @@ protected:
                                      UNIQUE_ID, isInputPortAssociation ? DISPLAY_PORT : NO_PORT,
                                      ViewportType::INTERNAL);
         ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
-        ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
         const auto info = waitForDevice(mDevice->getName());
         ASSERT_TRUE(info);
         mDeviceInfo = *info;
@@ -2074,7 +2038,6 @@ TEST_P(TouchIntegrationTest, ExternalStylusConnectedDuringTouchGesture) {
     // Connecting an external stylus mid-gesture should not interrupt the ongoing gesture stream.
     auto externalStylus = createUinputDevice<UinputExternalStylus>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(externalStylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -2087,7 +2050,6 @@ TEST_P(TouchIntegrationTest, ExternalStylusConnectedDuringTouchGesture) {
     // Disconnecting an external stylus mid-gesture should not interrupt the ongoing gesture stream.
     externalStylus.reset();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyMotionWasNotCalled());
 
     // Up
@@ -2145,8 +2107,6 @@ private:
         mStylusDeviceLifecycleTracker = createUinputDevice<T>();
         mStylus = mStylusDeviceLifecycleTracker.get();
         ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-        ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
-        ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyConfigurationChangedWasCalled());
         const auto info = waitForDevice(mStylus->getName());
         ASSERT_TRUE(info);
         mStylusInfo = *info;
@@ -2416,7 +2376,6 @@ TEST_F(ExternalStylusIntegrationTest, ExternalStylusConnectionChangesTouchscreen
     std::unique_ptr<UinputExternalStylusWithPressure> stylus =
             createUinputDevice<UinputExternalStylusWithPressure>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(stylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -2434,7 +2393,6 @@ TEST_F(ExternalStylusIntegrationTest, FusedExternalStylusPressureReported) {
     std::unique_ptr<UinputExternalStylusWithPressure> stylus =
             createUinputDevice<UinputExternalStylusWithPressure>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(stylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -2480,7 +2438,6 @@ TEST_F(ExternalStylusIntegrationTest, FusedExternalStylusPressureNotReported) {
     std::unique_ptr<UinputExternalStylusWithPressure> stylus =
             createUinputDevice<UinputExternalStylusWithPressure>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(stylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -2560,7 +2517,6 @@ TEST_F(ExternalStylusIntegrationTest, UnfusedExternalStylus) {
     // touch pointers.
     std::unique_ptr<UinputExternalStylus> stylus = createUinputDevice<UinputExternalStylus>();
     ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertInputDevicesChanged());
-    ASSERT_NO_FATAL_FAILURE(mFakePolicy->assertConfigurationChanged());
     const auto stylusInfo = waitForDevice(stylus->getName());
     ASSERT_TRUE(stylusInfo);
 
@@ -3060,64 +3016,6 @@ TEST_F(InputDeviceTest, KernelBufferOverflowResetsMappers) {
     event.value = 1;
     unused = mDevice->process(&event, /*count=*/1);
     mapper.assertProcessWasCalled();
-}
-
-// --- VibratorInputMapperTest ---
-class VibratorInputMapperTest : public InputMapperTest {
-protected:
-    void SetUp() override { InputMapperTest::SetUp(DEVICE_CLASSES | InputDeviceClass::VIBRATOR); }
-};
-
-TEST_F(VibratorInputMapperTest, GetSources) {
-    VibratorInputMapper& mapper = constructAndAddMapper<VibratorInputMapper>();
-
-    ASSERT_EQ(AINPUT_SOURCE_UNKNOWN, mapper.getSources());
-}
-
-TEST_F(VibratorInputMapperTest, GetVibratorIds) {
-    VibratorInputMapper& mapper = constructAndAddMapper<VibratorInputMapper>();
-
-    ASSERT_EQ(mapper.getVibratorIds().size(), 2U);
-}
-
-TEST_F(VibratorInputMapperTest, Vibrate) {
-    constexpr uint8_t DEFAULT_AMPLITUDE = 192;
-    constexpr int32_t VIBRATION_TOKEN = 100;
-    VibratorInputMapper& mapper = constructAndAddMapper<VibratorInputMapper>();
-
-    VibrationElement pattern(2);
-    VibrationSequence sequence(2);
-    pattern.duration = std::chrono::milliseconds(200);
-    pattern.channels = {{/*vibratorId=*/0, DEFAULT_AMPLITUDE / 2},
-                        {/*vibratorId=*/1, DEFAULT_AMPLITUDE}};
-    sequence.addElement(pattern);
-    pattern.duration = std::chrono::milliseconds(500);
-    pattern.channels = {{/*vibratorId=*/0, DEFAULT_AMPLITUDE / 4},
-                        {/*vibratorId=*/1, DEFAULT_AMPLITUDE}};
-    sequence.addElement(pattern);
-
-    std::vector<int64_t> timings = {0, 1};
-    std::vector<uint8_t> amplitudes = {DEFAULT_AMPLITUDE, DEFAULT_AMPLITUDE / 2};
-
-    ASSERT_FALSE(mapper.isVibrating());
-    // Start vibrating
-    std::list<NotifyArgs> out = mapper.vibrate(sequence, /*repeat=*/-1, VIBRATION_TOKEN);
-    ASSERT_TRUE(mapper.isVibrating());
-    // Verify vibrator state listener was notified.
-    mReader->loopOnce();
-    ASSERT_EQ(1u, out.size());
-    const NotifyVibratorStateArgs& vibrateArgs = std::get<NotifyVibratorStateArgs>(*out.begin());
-    ASSERT_EQ(DEVICE_ID, vibrateArgs.deviceId);
-    ASSERT_TRUE(vibrateArgs.isOn);
-    // Stop vibrating
-    out = mapper.cancelVibrate(VIBRATION_TOKEN);
-    ASSERT_FALSE(mapper.isVibrating());
-    // Verify vibrator state listener was notified.
-    mReader->loopOnce();
-    ASSERT_EQ(1u, out.size());
-    const NotifyVibratorStateArgs& cancelArgs = std::get<NotifyVibratorStateArgs>(*out.begin());
-    ASSERT_EQ(DEVICE_ID, cancelArgs.deviceId);
-    ASSERT_FALSE(cancelArgs.isOn);
 }
 
 // --- SensorInputMapperTest ---

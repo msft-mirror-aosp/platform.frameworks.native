@@ -454,9 +454,6 @@ public:
      */
     virtual void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>& inputDevices) = 0;
 
-    /* Notifies the system that a configuration change has occurred. */
-    virtual void notifyConfigurationChanged(nsecs_t when) = 0;
-
     /* Gets the keyboard layout for a particular input device. */
     virtual std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(
             const InputDeviceIdentifier& identifier,

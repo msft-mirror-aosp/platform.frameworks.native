@@ -900,9 +900,7 @@ public:
     void splitFrom(const MotionEvent& other, std::bitset<MAX_POINTER_ID + 1> splitPointerIds,
                    int32_t newEventId);
 
-    void addSample(
-            nsecs_t eventTime,
-            const PointerCoords* pointerCoords);
+    void addSample(nsecs_t eventTime, const PointerCoords* pointerCoords, int32_t eventId);
 
     void offsetLocation(float xOffset, float yOffset);
 

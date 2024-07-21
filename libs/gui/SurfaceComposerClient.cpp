@@ -20,6 +20,8 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include <com_android_graphics_libgui_flags.h>
+
 #include <android/gui/BnWindowInfosReportedListener.h>
 #include <android/gui/DisplayState.h>
 #include <android/gui/EdgeExtensionParameters.h>
@@ -1172,8 +1174,7 @@ void SurfaceComposerClient::doUncacheBufferTransaction(uint64_t cacheId) {
     uncacheBuffer.token = BufferCache::getInstance().getToken();
     uncacheBuffer.id = cacheId;
     Vector<ComposerState> composerStates;
-    Vector<DisplayState> displayStates;
-    status_t status = sf->setTransactionState(FrameTimelineInfo{}, composerStates, displayStates,
+    status_t status = sf->setTransactionState(FrameTimelineInfo{}, composerStates, {},
                                               ISurfaceComposer::eOneWay,
                                               Transaction::getDefaultApplyToken(), {}, systemTime(),
                                               true, {uncacheBuffer}, false, {}, generateId(), {});
@@ -2329,6 +2330,10 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setStret
     s->what |= layer_state_t::eStretchChanged;
     s->stretchEffect = stretchEffect;
     return *this;
+}
+
+bool SurfaceComposerClient::flagEdgeExtensionEffectUseShader() {
+    return com::android::graphics::libgui::flags::edge_extension_shader();
 }
 
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setEdgeExtensionEffect(

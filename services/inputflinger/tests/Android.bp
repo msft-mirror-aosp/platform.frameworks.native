@@ -83,6 +83,7 @@ cc_test {
         "TimerProvider_test.cpp",
         "TestInputListener.cpp",
         "TouchpadInputMapper_test.cpp",
+        "VibratorInputMapper_test.cpp",
         "MultiTouchInputMapper_test.cpp",
         "KeyboardInputMapper_test.cpp",
         "UinputDevice.cpp",
@@ -110,7 +111,6 @@ cc_test {
         },
     },
     static_libs: [
-        "android.companion.virtualdevice.flags-aconfig-cc-test",
         "libflagtest",
         "libgmock",
     ],
