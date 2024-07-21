@@ -1416,6 +1416,8 @@ status_t SurfaceFlinger::setActiveModeFromBackdoor(const sp<display::DisplayToke
     return future.get();
 }
 
+// TODO: b/241285876 - Restore thread safety analysis once mStateLock below is unconditional.
+[[clang::no_thread_safety_analysis]]
 void SurfaceFlinger::finalizeDisplayModeChange(PhysicalDisplayId displayId) {
     SFTRACE_NAME(ftl::Concat(__func__, ' ', displayId.value).c_str());
 
@@ -1431,7 +1433,7 @@ void SurfaceFlinger::finalizeDisplayModeChange(PhysicalDisplayId displayId) {
     if (const auto oldResolution =
                 mDisplayModeController.getActiveMode(displayId).modePtr->getResolution();
         oldResolution != activeMode.modePtr->getResolution()) {
-        Mutex::Autolock lock(mStateLock);
+        ConditionalLock lock(mStateLock, !FlagManager::getInstance().connected_display());
 
         auto& state = mCurrentState.displays.editValueFor(getPhysicalDisplayTokenLocked(displayId));
         // We need to generate new sequenceId in order to recreate the display (and this
@@ -1483,7 +1485,7 @@ void SurfaceFlinger::applyActiveMode(PhysicalDisplayId displayId) {
 void SurfaceFlinger::initiateDisplayModeChanges() {
     SFTRACE_CALL();
 
-    for (const auto& [displayId, physical] : FTL_FAKE_GUARD(mStateLock, mPhysicalDisplays)) {
+    for (const auto& [displayId, physical] : mPhysicalDisplays) {
         auto desiredModeOpt = mDisplayModeController.getDesiredMode(displayId);
         if (!desiredModeOpt) {
             continue;
@@ -2611,9 +2613,13 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
         return false;
     }
 
-    for (const auto [displayId, _] : frameTargets) {
-        if (mDisplayModeController.isModeSetPending(displayId)) {
-            finalizeDisplayModeChange(displayId);
+    {
+        ConditionalLock lock(mStateLock, FlagManager::getInstance().connected_display());
+
+        for (const auto [displayId, _] : frameTargets) {
+            if (mDisplayModeController.isModeSetPending(displayId)) {
+                finalizeDisplayModeChange(displayId);
+            }
         }
     }
 
@@ -2712,9 +2718,16 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
                                                         ? &mLayerHierarchyBuilder.getHierarchy()
                                                         : nullptr,
                                                 updateAttachedChoreographer);
+
+        if (FlagManager::getInstance().connected_display()) {
+            initiateDisplayModeChanges();
+        }
     }
 
-    initiateDisplayModeChanges();
+    if (!FlagManager::getInstance().connected_display()) {
+        ftl::FakeGuard guard(mStateLock);
+        initiateDisplayModeChanges();
+    }
 
     updateCursorAsync();
     if (!mustComposite) {
@@ -3768,7 +3781,7 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     if (const auto& physical = state.physical) {
         const auto& mode = *physical->activeMode;
         mDisplayModeController.setActiveMode(physical->id, mode.getId(), mode.getVsyncRate(),
-                                             mode.getVsyncRate());
+                                             mode.getPeakFps());
     }
 
     display->setLayerFilter(makeLayerFilterForDisplay(display->getId(), state.layerStack));
@@ -4265,11 +4278,6 @@ void SurfaceFlinger::requestHardwareVsync(PhysicalDisplayId displayId, bool enab
     getHwComposer().setVsyncEnabled(displayId, enable ? hal::Vsync::ENABLE : hal::Vsync::DISABLE);
 }
 
-// This callback originates from Scheduler::applyPolicy, whose thread context may be the main thread
-// (via Scheduler::chooseRefreshRateForContent) or a OneShotTimer thread. The latter case imposes a
-// deadlock prevention rule: If the main thread is processing hotplug, then mStateLock is locked as
-// the main thread stops the OneShotTimer and joins with its thread. Hence, the OneShotTimer thread
-// must not lock mStateLock in this callback, which would deadlock with the join.
 void SurfaceFlinger::requestDisplayModes(std::vector<display::DisplayModeRequest> modeRequests) {
     if (mBootStage != BootStage::FINISHED) {
         ALOGV("Currently in the boot stage, skipping display mode changes");
@@ -4278,14 +4286,21 @@ void SurfaceFlinger::requestDisplayModes(std::vector<display::DisplayModeRequest
 
     SFTRACE_CALL();
 
+    // If this is called from the main thread mStateLock must be locked before
+    // Currently the only way to call this function from the main thread is from
+    // Scheduler::chooseRefreshRateForContent
+
+    ConditionalLock lock(mStateLock, std::this_thread::get_id() != mMainThreadId);
+
     for (auto& request : modeRequests) {
         const auto& modePtr = request.mode.modePtr;
+
         const auto displayId = modePtr->getPhysicalDisplayId();
+        const auto display = getDisplayDeviceLocked(displayId);
 
-        const auto selectorPtr = mDisplayModeController.selectorPtrFor(displayId);
-        if (!selectorPtr) continue;
+        if (!display) continue;
 
-        if (selectorPtr->isModeAllowed(request.mode)) {
+        if (display->refreshRateSelector().isModeAllowed(request.mode)) {
             setDesiredMode(std::move(request));
         } else {
             ALOGV("%s: Mode %d is disallowed for display %s", __func__,
@@ -5166,7 +5181,7 @@ bool SurfaceFlinger::shouldLatchUnsignaled(const layer_state_t& state, size_t nu
 
 status_t SurfaceFlinger::setTransactionState(
         const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& states,
-        Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
+        const Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
         InputWindowCommands inputWindowCommands, int64_t desiredPresentTime, bool isAutoTimestamp,
         const std::vector<client_cache_t>& uncacheBuffers, bool hasListenerCallbacks,
         const std::vector<ListenerCallbacks>& listenerCallbacks, uint64_t transactionId,
@@ -5181,7 +5196,7 @@ status_t SurfaceFlinger::setTransactionState(
         composerState.state.sanitize(permissions);
     }
 
-    for (DisplayState& display : displays) {
+    for (DisplayState display : displays) {
         display.sanitize(permissions);
     }
 

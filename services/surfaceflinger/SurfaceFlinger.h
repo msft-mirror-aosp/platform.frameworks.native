@@ -560,7 +560,7 @@ private:
     sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId displayId) const;
     status_t setTransactionState(
             const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& state,
-            Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
+            const Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
             InputWindowCommands inputWindowCommands, int64_t desiredPresentTime,
             bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffers,
             bool hasListenerCallbacks, const std::vector<ListenerCallbacks>& listenerCallbacks,
@@ -734,14 +734,14 @@ private:
     // Show hdr sdr ratio overlay
     bool mHdrSdrRatioOverlay = false;
 
-    void setDesiredMode(display::DisplayModeRequest&&);
+    void setDesiredMode(display::DisplayModeRequest&&) REQUIRES(mStateLock);
 
     status_t setActiveModeFromBackdoor(const sp<display::DisplayToken>&, DisplayModeId, Fps minFps,
                                        Fps maxFps);
 
-    void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) EXCLUDES(mStateLock);
+    void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) REQUIRES(mStateLock);
     void finalizeDisplayModeChange(PhysicalDisplayId) REQUIRES(kMainThreadContext)
-            EXCLUDES(mStateLock);
+            REQUIRES(mStateLock);
 
     void dropModeRequest(PhysicalDisplayId) REQUIRES(kMainThreadContext);
     void applyActiveMode(PhysicalDisplayId) REQUIRES(kMainThreadContext);

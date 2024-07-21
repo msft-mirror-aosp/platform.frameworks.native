@@ -135,7 +135,7 @@ void addSample(MotionEvent& event, const InputMessage& msg) {
     }
 
     event.setMetaState(event.getMetaState() | msg.body.motion.metaState);
-    event.addSample(msg.body.motion.eventTime, pointerCoords);
+    event.addSample(msg.body.motion.eventTime, pointerCoords, msg.body.motion.eventId);
 }
 
 void initializeTouchModeEvent(TouchModeEvent& event, const InputMessage& msg) {
@@ -697,7 +697,7 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
                  currentCoords.getY(), otherCoords.getX(), otherCoords.getY(), alpha);
     }
 
-    event->addSample(sampleTime, touchState.lastResample.pointers);
+    event->addSample(sampleTime, touchState.lastResample.pointers, event->getId());
 }
 
 status_t InputConsumer::sendFinishedSignal(uint32_t seq, bool handled) {
