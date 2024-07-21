@@ -411,8 +411,6 @@ TEST_F(InputDispatcherTest, InjectInputEvent_ValidatesMotionEvents) {
             << "Should reject motion events with duplicate pointer ids.";
 }
 
-/* Test InputDispatcher for notifyConfigurationChanged and notifySwitch events */
-
 TEST_F(InputDispatcherTest, NotifySwitch_CallsPolicy) {
     NotifySwitchArgs args(InputEvent::nextId(), /*eventTime=*/20, /*policyFlags=*/0,
                           /*switchValues=*/1,

@@ -42,8 +42,6 @@ public:
     void assertInputDevicesNotChanged();
     void assertStylusGestureNotified(int32_t deviceId);
     void assertStylusGestureNotNotified();
-    void assertConfigurationChanged();
-    void assertConfigurationNotChanged();
 
     virtual void clearViewports();
     std::optional<DisplayViewport> getDisplayViewportByUniqueId(const std::string& uniqueId) const;
@@ -84,7 +82,6 @@ public:
 private:
     void getReaderConfiguration(InputReaderConfiguration* outConfig) override;
     void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>& inputDevices) override;
-    void notifyConfigurationChanged(nsecs_t when) override;
     std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(
             const InputDeviceIdentifier&, const std::optional<KeyboardLayoutInfo>) override;
     std::string getDeviceAlias(const InputDeviceIdentifier&) override;
@@ -93,12 +90,10 @@ private:
 
     mutable std::mutex mLock;
     std::condition_variable mDevicesChangedCondition;
-    std::condition_variable mConfigurationChangedCondition;
 
     InputReaderConfiguration mConfig;
     std::vector<InputDeviceInfo> mInputDevices GUARDED_BY(mLock);
     bool mInputDevicesChanged GUARDED_BY(mLock){false};
-    bool mConfigurationChanged GUARDED_BY(mLock){false};
     std::vector<DisplayViewport> mViewports;
     TouchAffineTransformation transform;
     bool mIsInputMethodConnectionActive{false};
