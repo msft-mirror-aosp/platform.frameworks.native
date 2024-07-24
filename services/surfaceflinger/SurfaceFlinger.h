@@ -1507,7 +1507,7 @@ private:
 
     bool mPowerHintSessionEnabled;
 
-    bool mLayerLifecycleManagerEnabled = false;
+    bool mLayerLifecycleManagerEnabled = true;
     // Whether a display should be turned on when initialized
     bool mSkipPowerOnForQuiescent;
 

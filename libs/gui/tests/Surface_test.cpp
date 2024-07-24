@@ -27,7 +27,6 @@
 #include <configstore/Utils.h>
 #include <gui/AidlStatusUtil.h>
 #include <gui/BufferItemConsumer.h>
-#include <gui/IProducerListener.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/Surface.h>
 #include <gui/SurfaceComposerClient.h>
@@ -82,7 +81,7 @@ public:
     virtual void onBuffersDiscarded(const std::vector<sp<GraphicBuffer>>& buffers) {
         mDiscardedBuffers.insert(mDiscardedBuffers.end(), buffers.begin(), buffers.end());
     }
-
+    virtual void onBufferDetached(int /*slot*/) {}
     int getReleaseNotifyCount() const {
         return mBuffersReleased;
     }
@@ -491,7 +490,7 @@ TEST_F(SurfaceTest, GetAndFlushRemovedBuffers) {
 
     sp<Surface> surface = new Surface(producer);
     sp<ANativeWindow> window(surface);
-    sp<StubProducerListener> listener = new StubProducerListener();
+    sp<StubSurfaceListener> listener = new StubSurfaceListener();
     ASSERT_EQ(OK, surface->connect(
             NATIVE_WINDOW_API_CPU,
             /*listener*/listener,
@@ -2154,7 +2153,7 @@ TEST_F(SurfaceTest, BatchOperations) {
     sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
     sp<Surface> surface = new Surface(producer);
     sp<ANativeWindow> window(surface);
-    sp<StubProducerListener> listener = new StubProducerListener();
+    sp<StubSurfaceListener> listener = new StubSurfaceListener();
 
     ASSERT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, /*listener*/listener,
             /*reportBufferRemoval*/false));
@@ -2206,7 +2205,7 @@ TEST_F(SurfaceTest, BatchIllegalOperations) {
     sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
     sp<Surface> surface = new Surface(producer);
     sp<ANativeWindow> window(surface);
-    sp<StubProducerListener> listener = new StubProducerListener();
+    sp<StubSurfaceListener> listener = new StubSurfaceListener();
 
     ASSERT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, /*listener*/listener,
             /*reportBufferRemoval*/false));
