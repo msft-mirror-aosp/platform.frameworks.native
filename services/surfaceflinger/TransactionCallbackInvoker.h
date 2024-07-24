@@ -28,6 +28,7 @@
 #include <android-base/thread_annotations.h>
 #include <binder/IBinder.h>
 #include <ftl/future.h>
+#include <gui/BufferReleaseChannel.h>
 #include <gui/ITransactionCompletedListener.h>
 #include <ui/Fence.h>
 #include <ui/FenceResult.h>
@@ -59,6 +60,7 @@ public:
     uint64_t frameNumber = 0;
     uint64_t previousFrameNumber = 0;
     ReleaseCallbackId previousReleaseCallbackId = ReleaseCallbackId::INVALID_ID;
+    std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint> bufferReleaseChannel;
 };
 
 class TransactionCallbackInvoker {
@@ -85,6 +87,13 @@ private:
 
     std::unordered_map<sp<IBinder>, std::deque<TransactionStats>, IListenerHash>
         mCompletedTransactions;
+
+    struct BufferRelease {
+        std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint> channel;
+        ReleaseCallbackId callbackId;
+        sp<Fence> fence;
+    };
+    std::vector<BufferRelease> mBufferReleases;
 
     sp<Fence> mPresentFence;
 };

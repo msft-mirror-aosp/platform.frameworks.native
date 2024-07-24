@@ -58,7 +58,6 @@ public:
         mFlinger.setupMockScheduler();
         mFlinger.setupRenderEngine(std::unique_ptr<renderengine::RenderEngine>(mRenderEngine));
         mFlinger.flinger()->addTransactionReadyFilters();
-        mFlinger.enableLayerLifecycleManager();
     }
 
     ~TransactionApplicationTest() {

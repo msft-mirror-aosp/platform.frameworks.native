@@ -827,9 +827,6 @@ private:
     TransactionHandler::TransactionReadiness transactionReadyTimelineCheck(
             const TransactionHandler::TransactionFlushState& flushState)
             REQUIRES(kMainThreadContext);
-    TransactionHandler::TransactionReadiness transactionReadyBufferCheckLegacy(
-            const TransactionHandler::TransactionFlushState& flushState)
-            REQUIRES(kMainThreadContext);
     TransactionHandler::TransactionReadiness transactionReadyBufferCheck(
             const TransactionHandler::TransactionFlushState& flushState)
             REQUIRES(kMainThreadContext);
@@ -934,12 +931,6 @@ private:
             std::optional<OutputCompositionState>& displayState,
             std::vector<std::pair<Layer*, sp<LayerFE>>>& layers,
             std::vector<sp<LayerFE>>& layerFEs);
-
-    // If the uid provided is not UNSET_UID, the traverse will skip any layers that don't have a
-    // matching ownerUid
-    void traverseLayersInLayerStack(ui::LayerStack, const int32_t uid,
-                                    std::unordered_set<uint32_t> excludeLayerIds,
-                                    const LayerVector::Visitor&);
 
     void readPersistentProperties();
 
@@ -1157,7 +1148,6 @@ private:
     void dumpAll(const DumpArgs& args, const std::string& compositionLayers,
                  std::string& result) const EXCLUDES(mStateLock);
     void dumpHwcLayersMinidump(std::string& result) const REQUIRES(mStateLock, kMainThreadContext);
-    void dumpHwcLayersMinidumpLockedLegacy(std::string& result) const REQUIRES(mStateLock);
 
     void appendSfConfigString(std::string& result) const;
     void listLayers(std::string& result) const REQUIRES(kMainThreadContext);
@@ -1506,8 +1496,6 @@ private:
     }
 
     bool mPowerHintSessionEnabled;
-
-    bool mLayerLifecycleManagerEnabled = false;
     // Whether a display should be turned on when initialized
     bool mSkipPowerOnForQuiescent;
 

@@ -114,7 +114,6 @@ public:
         mFlinger.setupComposer(std::unique_ptr<Hwc2::Composer>(mComposer));
         mFlinger.setupPowerAdvisor(std::unique_ptr<Hwc2::PowerAdvisor>(mPowerAdvisor));
         mFlinger.mutableMaxRenderTargetSize() = 16384;
-        mFlinger.enableLayerLifecycleManager();
     }
 
     ~CompositionTest() {

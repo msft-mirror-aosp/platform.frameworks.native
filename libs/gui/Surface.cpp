@@ -44,8 +44,6 @@
 #include <gui/AidlStatusUtil.h>
 #include <gui/BufferItem.h>
 
-#include <gui/IProducerListener.h>
-
 #include <gui/ISurfaceComposer.h>
 #include <gui/LayerState.h>
 #include <private/gui/ComposerService.h>
@@ -1860,30 +1858,31 @@ bool Surface::transformToDisplayInverse() const {
 }
 
 int Surface::connect(int api) {
-    static sp<IProducerListener> listener = new StubProducerListener();
+    static sp<SurfaceListener> listener = new StubSurfaceListener();
     return connect(api, listener);
 }
 
-int Surface::connect(int api, const sp<IProducerListener>& listener) {
+int Surface::connect(int api, const sp<SurfaceListener>& listener) {
     return connect(api, listener, false);
 }
 
 int Surface::connect(
         int api, bool reportBufferRemoval, const sp<SurfaceListener>& sListener) {
-    if (sListener != nullptr) {
-        mListenerProxy = new ProducerListenerProxy(this, sListener);
-    }
-    return connect(api, mListenerProxy, reportBufferRemoval);
+    return connect(api, sListener, reportBufferRemoval);
 }
 
-int Surface::connect(
-        int api, const sp<IProducerListener>& listener, bool reportBufferRemoval) {
+int Surface::connect(int api, const sp<SurfaceListener>& listener, bool reportBufferRemoval) {
     ATRACE_CALL();
     ALOGV("Surface::connect");
     Mutex::Autolock lock(mMutex);
     IGraphicBufferProducer::QueueBufferOutput output;
     mReportRemovedBuffers = reportBufferRemoval;
-    int err = mGraphicBufferProducer->connect(listener, api, mProducerControlledByApp, &output);
+    if (listener != nullptr) {
+        mListenerProxy = new ProducerListenerProxy(this, listener);
+    }
+
+    int err =
+            mGraphicBufferProducer->connect(mListenerProxy, api, mProducerControlledByApp, &output);
     if (err == NO_ERROR) {
         mDefaultWidth = output.width;
         mDefaultHeight = output.height;
@@ -1910,7 +1909,6 @@ int Surface::connect(
 
     return err;
 }
-
 
 int Surface::disconnect(int api, IGraphicBufferProducer::DisconnectMode mode) {
     ATRACE_CALL();
