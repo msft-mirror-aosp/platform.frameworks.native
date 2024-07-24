@@ -30,6 +30,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <algorithm>
 
 #include <binder/Binder.h>
 #include <binder/BpBinder.h>
@@ -67,6 +68,10 @@
 // Needed by {read,write}Pointer
 typedef uintptr_t binder_uintptr_t;
 #endif // BINDER_WITH_KERNEL_IPC
+
+#ifdef __BIONIC__
+#include <android/fdsan.h>
+#endif
 
 #define LOG_REFS(...)
 // #define LOG_REFS(...) ALOG(LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -112,6 +117,37 @@ constexpr size_t kMaxFds = 1024;
 // Maximum size of a blob to transfer in-place.
 [[maybe_unused]] static const size_t BLOB_INPLACE_LIMIT = 16 * 1024;
 
+#if defined(__BIONIC__)
+static void FdTag(int fd, const void* old_addr, const void* new_addr) {
+    if (android_fdsan_exchange_owner_tag) {
+        uint64_t old_tag = android_fdsan_create_owner_tag(ANDROID_FDSAN_OWNER_TYPE_PARCEL,
+                                                          reinterpret_cast<uint64_t>(old_addr));
+        uint64_t new_tag = android_fdsan_create_owner_tag(ANDROID_FDSAN_OWNER_TYPE_PARCEL,
+                                                          reinterpret_cast<uint64_t>(new_addr));
+        android_fdsan_exchange_owner_tag(fd, old_tag, new_tag);
+    }
+}
+static void FdTagClose(int fd, const void* addr) {
+    if (android_fdsan_close_with_tag) {
+        uint64_t tag = android_fdsan_create_owner_tag(ANDROID_FDSAN_OWNER_TYPE_PARCEL,
+                                                      reinterpret_cast<uint64_t>(addr));
+        android_fdsan_close_with_tag(fd, tag);
+    } else {
+        close(fd);
+    }
+}
+#else
+static void FdTag(int fd, const void* old_addr, const void* new_addr) {
+    (void)fd;
+    (void)old_addr;
+    (void)new_addr;
+}
+static void FdTagClose(int fd, const void* addr) {
+    (void)addr;
+    close(fd);
+}
+#endif
+
 enum {
     BLOB_INPLACE = 0,
     BLOB_ASHMEM_IMMUTABLE = 1,
@@ -137,6 +173,9 @@ static void acquire_object(const sp<ProcessState>& proc, const flat_binder_objec
             return;
         }
         case BINDER_TYPE_FD: {
+            if (obj.cookie != 0) { // owned
+                FdTag(obj.handle, nullptr, who);
+            }
             return;
         }
     }
@@ -162,8 +201,10 @@ static void release_object(const sp<ProcessState>& proc, const flat_binder_objec
             return;
         }
         case BINDER_TYPE_FD: {
+            // note: this path is not used when mOwner, so the tag is also released
+            // in 'closeFileDescriptors'
             if (obj.cookie != 0) { // owned
-                close(obj.handle);
+                FdTagClose(obj.handle, who);
             }
             return;
         }
@@ -216,7 +257,7 @@ status_t Parcel::flattenBinder(const sp<IBinder>& binder) {
 
     if (const auto* rpcFields = maybeRpcFields()) {
         if (binder) {
-            status_t status = writeInt32(1); // non-null
+            status_t status = writeInt32(RpcFields::TYPE_BINDER); // non-null
             if (status != OK) return status;
             uint64_t address;
             // TODO(b/167966510): need to undo this if the Parcel is not sent
@@ -226,7 +267,7 @@ status_t Parcel::flattenBinder(const sp<IBinder>& binder) {
             status = writeUint64(address);
             if (status != OK) return status;
         } else {
-            status_t status = writeInt32(0); // null
+            status_t status = writeInt32(RpcFields::TYPE_BINDER_NULL); // null
             if (status != OK) return status;
         }
         return finishFlattenBinder(binder);
@@ -557,7 +598,6 @@ status_t Parcel::appendFrom(const Parcel* parcel, size_t offset, size_t len) {
                 kernelFields->mObjectsSize++;
 
                 flat_binder_object* flat = reinterpret_cast<flat_binder_object*>(mData + off);
-                acquire_object(proc, *flat, this);
 
                 if (flat->hdr.type == BINDER_TYPE_FD) {
                     // If this is a file descriptor, we need to dup it so the
@@ -570,6 +610,8 @@ status_t Parcel::appendFrom(const Parcel* parcel, size_t offset, size_t len) {
                         err = FDS_NOT_ALLOWED;
                     }
                 }
+
+                acquire_object(proc, *flat, this);
             }
         }
 #else
@@ -699,6 +741,12 @@ bool Parcel::hasFileDescriptors() const
     return kernelFields->mHasFds;
 }
 
+status_t Parcel::hasBinders(bool* result) const {
+    status_t status = hasBindersInRange(0, dataSize(), result);
+    ALOGE_IF(status != NO_ERROR, "Error %d calling hasBindersInRange()", status);
+    return status;
+}
+
 std::vector<sp<IBinder>> Parcel::debugReadAllStrongBinders() const {
     std::vector<sp<IBinder>> ret;
 
@@ -756,6 +804,46 @@ std::vector<int> Parcel::debugReadAllFileDescriptors() const {
     }
 
     return ret;
+}
+
+status_t Parcel::hasBindersInRange(size_t offset, size_t len, bool* result) const {
+    if (len > INT32_MAX || offset > INT32_MAX) {
+        // Don't accept size_t values which may have come from an inadvertent conversion from a
+        // negative int.
+        return BAD_VALUE;
+    }
+    size_t limit;
+    if (__builtin_add_overflow(offset, len, &limit) || limit > mDataSize) {
+        return BAD_VALUE;
+    }
+    *result = false;
+    if (const auto* kernelFields = maybeKernelFields()) {
+#ifdef BINDER_WITH_KERNEL_IPC
+        for (size_t i = 0; i < kernelFields->mObjectsSize; i++) {
+            size_t pos = kernelFields->mObjects[i];
+            if (pos < offset) continue;
+            if (pos + sizeof(flat_binder_object) > offset + len) {
+                if (kernelFields->mObjectsSorted) {
+                    break;
+                } else {
+                    continue;
+                }
+            }
+            const flat_binder_object* flat =
+                    reinterpret_cast<const flat_binder_object*>(mData + pos);
+            if (flat->hdr.type == BINDER_TYPE_BINDER || flat->hdr.type == BINDER_TYPE_HANDLE) {
+                *result = true;
+                break;
+            }
+        }
+#else
+        LOG_ALWAYS_FATAL("Binder kernel driver disabled at build time");
+        return INVALID_OPERATION;
+#endif // BINDER_WITH_KERNEL_IPC
+    } else if (const auto* rpcFields = maybeRpcFields()) {
+        return INVALID_OPERATION;
+    }
+    return NO_ERROR;
 }
 
 status_t Parcel::hasFileDescriptorsInRange(size_t offset, size_t len, bool* result) const {
@@ -1497,10 +1585,15 @@ status_t Parcel::writeFileDescriptor(int fd, bool takeOwnership) {
             fdVariant = borrowed_fd(fd);
         }
         if (!mAllowFds) {
+            ALOGE("FDs are not allowed in this parcel. Both the service and the client must set "
+                  "the FileDescriptorTransportMode and agree on the support.");
             return FDS_NOT_ALLOWED;
         }
         switch (rpcFields->mSession->getFileDescriptorTransportMode()) {
             case RpcSession::FileDescriptorTransportMode::NONE: {
+                ALOGE("FDs are not allowed in this RpcSession. Both the service and the client "
+                      "must set "
+                      "the FileDescriptorTransportMode and agree on the support.");
                 return FDS_NOT_ALLOWED;
             }
             case RpcSession::FileDescriptorTransportMode::UNIX:
@@ -2596,7 +2689,8 @@ void Parcel::closeFileDescriptors() {
                     reinterpret_cast<flat_binder_object*>(mData + kernelFields->mObjects[i]);
             if (flat->hdr.type == BINDER_TYPE_FD) {
                 // ALOGI("Closing fd: %ld", flat->handle);
-                close(flat->handle);
+                // FDs from the kernel are always owned
+                FdTagClose(flat->handle, this);
             }
         }
 #else  // BINDER_WITH_KERNEL_IPC
@@ -2676,6 +2770,10 @@ void Parcel::ipcSetDataReference(const uint8_t* data, size_t dataSize, const bin
             // don't rely on mObjectsSize in their release_func.
             kernelFields->mObjectsSize = 0;
             break;
+        }
+        if (type == BINDER_TYPE_FD) {
+            // FDs from the kernel are always owned
+            FdTag(flat->handle, nullptr, this);
         }
         minOffset = offset + sizeof(flat_binder_object);
     }

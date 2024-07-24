@@ -64,12 +64,12 @@ constexpr char kTrustyIpcDevice[] = "/dev/trusty-ipc-dev0";
 
 static std::string WaitStatusToString(int wstatus) {
     if (WIFEXITED(wstatus)) {
-        return std::format("exit status {}", WEXITSTATUS(wstatus));
+        return "exit status " + std::to_string(WEXITSTATUS(wstatus));
     }
     if (WIFSIGNALED(wstatus)) {
-        return std::format("term signal {}", WTERMSIG(wstatus));
+        return "term signal " + std::to_string(WTERMSIG(wstatus));
     }
-    return std::format("unexpected state {}", wstatus);
+    return "unexpected state " + std::to_string(wstatus);
 }
 
 static void debugBacktrace(pid_t pid) {
@@ -141,11 +141,6 @@ static std::string allocateSocketAddress() {
     return ret;
 };
 
-static unsigned int allocateVsockPort() {
-    static unsigned int vsockPort = 34567;
-    return vsockPort++;
-}
-
 static unique_fd initUnixSocket(std::string addr) {
     auto socket_addr = UnixSocketAddress(addr.c_str());
     unique_fd fd(TEMP_FAILURE_RETRY(socket(socket_addr.addr()->sa_family, SOCK_STREAM, AF_UNIX)));
@@ -177,7 +172,7 @@ public:
 
             EXPECT_NE(nullptr, session);
             EXPECT_NE(nullptr, session->state());
-            EXPECT_EQ(0, session->state()->countBinders()) << (session->state()->dump(), "dump:");
+            EXPECT_EQ(0u, session->state()->countBinders()) << (session->state()->dump(), "dump:");
 
             wp<RpcSession> weakSession = session;
             session = nullptr;
@@ -235,7 +230,7 @@ static unique_fd connectToUnixBootstrap(const RpcTransportFd& transportFd) {
     if (binder::os::sendMessageOnSocket(transportFd, &iov, 1, &fds) < 0) {
         PLOGF("Failed sendMessageOnSocket");
     }
-    return std::move(sockClient);
+    return sockClient;
 }
 #endif // BINDER_RPC_TO_TRUSTY_TEST
 
@@ -263,9 +258,8 @@ std::unique_ptr<ProcessSession> BinderRpc::createRpcTestSocketServerProcessEtc(
     bool noKernel = GetParam().noKernel;
 
     std::string path = GetExecutableDirectory();
-    auto servicePath =
-            std::format("{}/binder_rpc_test_service{}{}", path,
-                        singleThreaded ? "_single_threaded" : "", noKernel ? "_no_kernel" : "");
+    auto servicePath = path + "/binder_rpc_test_service" +
+            (singleThreaded ? "_single_threaded" : "") + (noKernel ? "_no_kernel" : "");
 
     unique_fd bootstrapClientFd, socketFd;
 
@@ -301,7 +295,6 @@ std::unique_ptr<ProcessSession> BinderRpc::createRpcTestSocketServerProcessEtc(
     serverConfig.socketType = static_cast<int32_t>(socketType);
     serverConfig.rpcSecurity = static_cast<int32_t>(rpcSecurity);
     serverConfig.serverVersion = serverVersion;
-    serverConfig.vsockPort = allocateVsockPort();
     serverConfig.addr = addr;
     serverConfig.socketFd = socketFd.get();
     for (auto mode : options.serverSupportedFileDescriptorTransportModes) {
@@ -380,7 +373,7 @@ std::unique_ptr<ProcessSession> BinderRpc::createRpcTestSocketServerProcessEtc(
                         unique_fd(dup(bootstrapClientFd.get())));
                 break;
             case SocketType::VSOCK:
-                status = session->setupVsockClient(VMADDR_CID_LOCAL, serverConfig.vsockPort);
+                status = session->setupVsockClient(VMADDR_CID_LOCAL, serverInfo.port);
                 break;
             case SocketType::INET:
                 status = session->setupInetClient("127.0.0.1", serverInfo.port);
@@ -623,7 +616,7 @@ TEST_P(BinderRpc, OnewayCallQueueing) {
     for (size_t i = 0; i + 1 < kNumQueued; i++) {
         int n;
         proc.rootIface->blockingRecvInt(&n);
-        EXPECT_EQ(n, i);
+        EXPECT_EQ(n, static_cast<ssize_t>(i));
     }
 
     saturateThreadPool(1 + kNumExtraServerThreads, proc.rootIface);
@@ -1148,13 +1141,11 @@ static std::vector<BinderRpc::ParamType> getTrustyBinderRpcParams() {
     return ret;
 }
 
-INSTANTIATE_TEST_CASE_P(Trusty, BinderRpc, ::testing::ValuesIn(getTrustyBinderRpcParams()),
-                        BinderRpc::PrintParamInfo);
+INSTANTIATE_TEST_SUITE_P(Trusty, BinderRpc, ::testing::ValuesIn(getTrustyBinderRpcParams()),
+                         BinderRpc::PrintParamInfo);
 #else // BINDER_RPC_TO_TRUSTY_TEST
 bool testSupportVsockLoopback() {
     // We don't need to enable TLS to know if vsock is supported.
-    unsigned int vsockPort = allocateVsockPort();
-
     unique_fd serverFd(
             TEMP_FAILURE_RETRY(socket(AF_VSOCK, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0)));
 
@@ -1166,16 +1157,22 @@ bool testSupportVsockLoopback() {
 
     sockaddr_vm serverAddr{
             .svm_family = AF_VSOCK,
-            .svm_port = vsockPort,
+            .svm_port = VMADDR_PORT_ANY,
             .svm_cid = VMADDR_CID_ANY,
     };
     int ret = TEMP_FAILURE_RETRY(
             bind(serverFd.get(), reinterpret_cast<sockaddr*>(&serverAddr), sizeof(serverAddr)));
-    LOG_ALWAYS_FATAL_IF(0 != ret, "Could not bind socket to port %u: %s", vsockPort,
+    LOG_ALWAYS_FATAL_IF(0 != ret, "Could not bind socket to port VMADDR_PORT_ANY: %s",
                         strerror(errno));
 
+    socklen_t len = sizeof(serverAddr);
+    ret = getsockname(serverFd.get(), reinterpret_cast<sockaddr*>(&serverAddr), &len);
+    LOG_ALWAYS_FATAL_IF(0 != ret, "Failed to getsockname: %s", strerror(errno));
+    LOG_ALWAYS_FATAL_IF(len < static_cast<socklen_t>(sizeof(serverAddr)),
+                        "getsockname didn't read the full addr struct");
+
     ret = TEMP_FAILURE_RETRY(listen(serverFd.get(), 1 /*backlog*/));
-    LOG_ALWAYS_FATAL_IF(0 != ret, "Could not listen socket on port %u: %s", vsockPort,
+    LOG_ALWAYS_FATAL_IF(0 != ret, "Could not listen socket on port %u: %s", serverAddr.svm_port,
                         strerror(errno));
 
     // Try to connect to the server using the VMADDR_CID_LOCAL cid
@@ -1184,13 +1181,13 @@ bool testSupportVsockLoopback() {
     // and they return ETIMEDOUT after that.
     unique_fd connectFd(
             TEMP_FAILURE_RETRY(socket(AF_VSOCK, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0)));
-    LOG_ALWAYS_FATAL_IF(!connectFd.ok(), "Could not create socket for port %u: %s", vsockPort,
-                        strerror(errno));
+    LOG_ALWAYS_FATAL_IF(!connectFd.ok(), "Could not create socket for port %u: %s",
+                        serverAddr.svm_port, strerror(errno));
 
     bool success = false;
     sockaddr_vm connectAddr{
             .svm_family = AF_VSOCK,
-            .svm_port = vsockPort,
+            .svm_port = serverAddr.svm_port,
             .svm_cid = VMADDR_CID_LOCAL,
     };
     ret = TEMP_FAILURE_RETRY(connect(connectFd.get(), reinterpret_cast<sockaddr*>(&connectAddr),
@@ -1279,7 +1276,7 @@ static std::vector<BinderRpc::ParamType> getBinderRpcParams() {
                 for (const auto& clientVersion : testVersions()) {
                     for (const auto& serverVersion : testVersions()) {
                         for (bool singleThreaded : {false, true}) {
-                            for (bool noKernel : {false, true}) {
+                            for (bool noKernel : noKernelValues()) {
                                 ret.push_back(BinderRpc::ParamType{
                                         .type = type,
                                         .security = security,
@@ -1300,7 +1297,7 @@ static std::vector<BinderRpc::ParamType> getBinderRpcParams() {
                     .clientVersion = RPC_WIRE_PROTOCOL_VERSION,
                     .serverVersion = RPC_WIRE_PROTOCOL_VERSION,
                     .singleThreaded = false,
-                    .noKernel = false,
+                    .noKernel = !kEnableKernelIpcTesting,
             });
         }
     }
@@ -1308,8 +1305,8 @@ static std::vector<BinderRpc::ParamType> getBinderRpcParams() {
     return ret;
 }
 
-INSTANTIATE_TEST_CASE_P(PerSocket, BinderRpc, ::testing::ValuesIn(getBinderRpcParams()),
-                        BinderRpc::PrintParamInfo);
+INSTANTIATE_TEST_SUITE_P(PerSocket, BinderRpc, ::testing::ValuesIn(getBinderRpcParams()),
+                         BinderRpc::PrintParamInfo);
 
 class BinderRpcServerRootObject
       : public ::testing::TestWithParam<std::tuple<bool, bool, RpcSecurity>> {};
@@ -1337,9 +1334,9 @@ TEST_P(BinderRpcServerRootObject, WeakRootObject) {
     EXPECT_EQ((isStrong2 ? binderRaw2 : nullptr), server->getRootObject());
 }
 
-INSTANTIATE_TEST_CASE_P(BinderRpc, BinderRpcServerRootObject,
-                        ::testing::Combine(::testing::Bool(), ::testing::Bool(),
-                                           ::testing::ValuesIn(RpcSecurityValues())));
+INSTANTIATE_TEST_SUITE_P(BinderRpc, BinderRpcServerRootObject,
+                         ::testing::Combine(::testing::Bool(), ::testing::Bool(),
+                                            ::testing::ValuesIn(RpcSecurityValues())));
 
 class OneOffSignal {
 public:
@@ -1384,7 +1381,7 @@ TEST(BinderRpc, Java) {
     auto binder = sm->checkService(String16("batteryproperties"));
     ASSERT_NE(nullptr, binder);
     auto descriptor = binder->getInterfaceDescriptor();
-    ASSERT_GE(descriptor.size(), 0);
+    ASSERT_GE(descriptor.size(), 0u);
     ASSERT_EQ(OK, binder->pingBinder());
 
     auto rpcServer = RpcServer::make();
@@ -1468,10 +1465,10 @@ TEST_P(BinderRpcServerOnly, Shutdown) {
             << "After server->shutdown() returns true, join() did not stop after 2s";
 }
 
-INSTANTIATE_TEST_CASE_P(BinderRpc, BinderRpcServerOnly,
-                        ::testing::Combine(::testing::ValuesIn(RpcSecurityValues()),
-                                           ::testing::ValuesIn(testVersions())),
-                        BinderRpcServerOnly::PrintTestParam);
+INSTANTIATE_TEST_SUITE_P(BinderRpc, BinderRpcServerOnly,
+                         ::testing::Combine(::testing::ValuesIn(RpcSecurityValues()),
+                                            ::testing::ValuesIn(testVersions())),
+                         BinderRpcServerOnly::PrintTestParam);
 
 class RpcTransportTestUtils {
 public:
@@ -1539,8 +1536,9 @@ public:
                     };
                 } break;
                 case SocketType::VSOCK: {
-                    auto port = allocateVsockPort();
-                    auto status = rpcServer->setupVsockServer(VMADDR_CID_LOCAL, port);
+                    unsigned port;
+                    auto status =
+                            rpcServer->setupVsockServer(VMADDR_CID_LOCAL, VMADDR_PORT_ANY, &port);
                     if (status != OK) {
                         return AssertionFailure() << "setupVsockServer: " << statusToString(status);
                     }
@@ -2018,9 +2016,9 @@ TEST_P(RpcTransportTest, CheckWaitingForRead) {
     server->shutdown();
 }
 
-INSTANTIATE_TEST_CASE_P(BinderRpc, RpcTransportTest,
-                        ::testing::ValuesIn(RpcTransportTest::getRpcTranportTestParams()),
-                        RpcTransportTest::PrintParamInfo);
+INSTANTIATE_TEST_SUITE_P(BinderRpc, RpcTransportTest,
+                         ::testing::ValuesIn(RpcTransportTest::getRpcTranportTestParams()),
+                         RpcTransportTest::PrintParamInfo);
 
 class RpcTransportTlsKeyTest
       : public testing::TestWithParam<
@@ -2075,7 +2073,7 @@ TEST_P(RpcTransportTlsKeyTest, PreSignedCertificate) {
     client.run();
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
         BinderRpc, RpcTransportTlsKeyTest,
         testing::Combine(testing::ValuesIn(testSocketTypes(false /* hasPreconnected*/)),
                          testing::Values(RpcCertificateFormat::PEM, RpcCertificateFormat::DER),
