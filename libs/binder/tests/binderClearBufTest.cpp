@@ -75,10 +75,9 @@ class FooBar : public BBinder {
 };
 
 TEST(BinderClearBuf, ClearKernelBuffer) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    LIBBINDER_IGNORE("-Wdeprecated-declarations")
     sp<IBinder> binder = defaultServiceManager()->getService(kServerName);
-#pragma clang diagnostic pop
+    LIBBINDER_IGNORE_END()
     ASSERT_NE(nullptr, binder);
 
     std::string replyBuffer;
@@ -88,7 +87,7 @@ TEST(BinderClearBuf, ClearKernelBuffer) {
     // the buffer must have at least some length for the string, but we will
     // just check it has some length, to avoid assuming anything about the
     // format
-    EXPECT_GT(replyBuffer.size(), 0);
+    EXPECT_GT(replyBuffer.size(), 0u);
 
     for (size_t i = 0; i < replyBuffer.size(); i++) {
         EXPECT_EQ(replyBuffer[i], '0') << "reply buffer at " << i;

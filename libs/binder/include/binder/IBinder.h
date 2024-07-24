@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <binder/Common.h>
 #include <binder/unique_fd.h>
 #include <utils/Errors.h>
 #include <utils/RefBase.h>
@@ -48,8 +49,7 @@ class IShellCallback;
  * (method calls, property get and set) is down through a low-level
  * protocol implemented on top of the transact() API.
  */
-class [[clang::lto_visibility_public]] IBinder : public virtual RefBase
-{
+class [[clang::lto_visibility_public]] LIBBINDER_EXPORTED IBinder : public virtual RefBase {
 public:
     enum {
         FIRST_CALL_TRANSACTION = 0x00000001,
@@ -102,6 +102,10 @@ public:
      */
     virtual const String16& getInterfaceDescriptor() const = 0;
 
+    /**
+     * Last known alive status, from last call. May be arbitrarily stale.
+     * May be incorrect if a service returns an incorrect status code.
+     */
     virtual bool            isBinderAlive() const = 0;
     virtual status_t        pingBinder() = 0;
     virtual status_t        dump(int fd, const Vector<String16>& args) = 0;
