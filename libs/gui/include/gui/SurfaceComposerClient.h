@@ -45,6 +45,7 @@
 #include <android/gui/BnJankListener.h>
 #include <android/gui/ISurfaceComposerClient.h>
 
+#include <gui/BufferReleaseChannel.h>
 #include <gui/CpuConsumer.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/ITransactionCompletedListener.h>
@@ -762,6 +763,10 @@ public:
         Transaction& setDestinationFrame(const sp<SurfaceControl>& sc,
                                          const Rect& destinationFrame);
         Transaction& setDropInputMode(const sp<SurfaceControl>& sc, gui::DropInputMode mode);
+
+        Transaction& setBufferReleaseChannel(
+                const sp<SurfaceControl>& sc,
+                const std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint>& channel);
 
         status_t setDisplaySurface(const sp<IBinder>& token,
                 const sp<IGraphicBufferProducer>& bufferProducer);

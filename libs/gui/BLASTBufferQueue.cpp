@@ -38,13 +38,17 @@
 #include <private/gui/ComposerService.h>
 #include <private/gui/ComposerServiceAIDL.h>
 
+#include <android-base/stringprintf.h>
 #include <android-base/thread_annotations.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <chrono>
 
 #include <com_android_graphics_libgui_flags.h>
 
 using namespace com::android::graphics::libgui;
 using namespace std::chrono_literals;
+using android::base::unique_fd;
 
 namespace {
 inline const char* boolToString(bool b) {
@@ -179,8 +183,6 @@ BLASTBufferQueue::BLASTBufferQueue(const std::string& name, bool updateDestinati
     // explicitly so that dequeueBuffer will block
     mProducer->setDequeueTimeout(std::numeric_limits<int64_t>::max());
 
-    // safe default, most producers are expected to override this
-    mProducer->setMaxDequeuedBufferCount(2);
     mBufferItemConsumer = new BLASTBufferItemConsumer(mConsumer,
                                                       GraphicBuffer::USAGE_HW_COMPOSER |
                                                               GraphicBuffer::USAGE_HW_TEXTURE,
@@ -209,6 +211,12 @@ BLASTBufferQueue::BLASTBufferQueue(const std::string& name, bool updateDestinati
                 if (callbackCopy) callbackCopy(reason);
             },
             this);
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
+    std::unique_ptr<gui::BufferReleaseChannel::ConsumerEndpoint> bufferReleaseConsumer;
+    gui::BufferReleaseChannel::open(mName, bufferReleaseConsumer, mBufferReleaseProducer);
+    mBufferReleaseReader.emplace(std::move(bufferReleaseConsumer));
+#endif
 
     BQA_LOGV("BLASTBufferQueue created");
 }
@@ -259,6 +267,9 @@ void BLASTBufferQueue::update(const sp<SurfaceControl>& surface, uint32_t width,
     if (surfaceControlChanged) {
         t.setFlags(mSurfaceControl, layer_state_t::eEnableBackpressure,
                    layer_state_t::eEnableBackpressure);
+        if (mBufferReleaseProducer) {
+            t.setBufferReleaseChannel(mSurfaceControl, mBufferReleaseProducer);
+        }
         applyTransaction = true;
     }
     mTransformHint = mSurfaceControl->getTransformHint();
@@ -439,6 +450,21 @@ void BLASTBufferQueue::releaseBufferCallback(
     BBQ_TRACE();
     releaseBufferCallbackLocked(id, releaseFence, currentMaxAcquiredBufferCount,
                                 false /* fakeRelease */);
+    if (!mBufferReleaseReader) {
+        return;
+    }
+    // Drain the buffer release channel socket
+    while (true) {
+        ReleaseCallbackId releaseCallbackId;
+        sp<Fence> releaseFence;
+        if (status_t status =
+                    mBufferReleaseReader->readNonBlocking(releaseCallbackId, releaseFence);
+            status != OK) {
+            break;
+        }
+        releaseBufferCallbackLocked(releaseCallbackId, releaseFence, std::nullopt,
+                                    false /* fakeRelease */);
+    }
 }
 
 void BLASTBufferQueue::releaseBufferCallbackLocked(
@@ -495,11 +521,13 @@ void BLASTBufferQueue::releaseBuffer(const ReleaseCallbackId& callbackId,
                                      const sp<Fence>& releaseFence) {
     auto it = mSubmitted.find(callbackId);
     if (it == mSubmitted.end()) {
-        BQA_LOGE("ERROR: releaseBufferCallback without corresponding submitted buffer %s",
-                 callbackId.to_string().c_str());
         return;
     }
     mNumAcquired--;
+    updateDequeueShouldBlockLocked();
+    if (mBufferReleaseReader) {
+        mBufferReleaseReader->interruptBlockingRead();
+    }
     BBQ_TRACE("frame=%" PRIu64, callbackId.framenumber);
     BQA_LOGV("released %s", callbackId.to_string().c_str());
     mBufferItemConsumer->releaseBuffer(it->second, releaseFence);
@@ -564,6 +592,7 @@ status_t BLASTBufferQueue::acquireNextBufferLocked(
 
     auto buffer = bufferItem.mGraphicBuffer;
     mNumFrameAvailable--;
+    updateDequeueShouldBlockLocked();
     BBQ_TRACE("frame=%" PRIu64, bufferItem.mFrameNumber);
 
     if (buffer == nullptr) {
@@ -582,6 +611,7 @@ status_t BLASTBufferQueue::acquireNextBufferLocked(
     }
 
     mNumAcquired++;
+    updateDequeueShouldBlockLocked();
     mLastAcquiredFrameNumber = bufferItem.mFrameNumber;
     ReleaseCallbackId releaseCallbackId(buffer->getId(), mLastAcquiredFrameNumber);
     mSubmitted[releaseCallbackId] = bufferItem;
@@ -708,6 +738,7 @@ void BLASTBufferQueue::acquireAndReleaseBuffer() {
         return;
     }
     mNumFrameAvailable--;
+    updateDequeueShouldBlockLocked();
     mBufferItemConsumer->releaseBuffer(bufferItem, bufferItem.mFence);
 }
 
@@ -761,7 +792,9 @@ void BLASTBufferQueue::onFrameAvailable(const BufferItem& item) {
         }
 
         // add to shadow queue
+        mNumDequeued--;
         mNumFrameAvailable++;
+        updateDequeueShouldBlockLocked();
         if (waitForTransactionCallback && mNumFrameAvailable >= 2) {
             acquireAndReleaseBuffer();
         }
@@ -812,11 +845,24 @@ void BLASTBufferQueue::onFrameReplaced(const BufferItem& item) {
 void BLASTBufferQueue::onFrameDequeued(const uint64_t bufferId) {
     std::lock_guard _lock{mTimestampMutex};
     mDequeueTimestamps[bufferId] = systemTime();
-};
+    mNumDequeued++;
+}
 
 void BLASTBufferQueue::onFrameCancelled(const uint64_t bufferId) {
-    std::lock_guard _lock{mTimestampMutex};
-    mDequeueTimestamps.erase(bufferId);
+    {
+        std::lock_guard _lock{mTimestampMutex};
+        mDequeueTimestamps.erase(bufferId);
+    }
+
+    {
+        std::lock_guard lock{mMutex};
+        mNumDequeued--;
+        updateDequeueShouldBlockLocked();
+    }
+
+    if (mBufferReleaseReader) {
+        mBufferReleaseReader->interruptBlockingRead();
+    }
 };
 
 bool BLASTBufferQueue::syncNextTransaction(
@@ -886,6 +932,22 @@ bool BLASTBufferQueue::rejectBuffer(const BufferItem& item) {
 
     // reject buffers if the buffer size doesn't match.
     return mSize != bufferSize;
+}
+
+void BLASTBufferQueue::updateDequeueShouldBlockLocked() {
+    int32_t buffersInUse = mNumDequeued + mNumFrameAvailable + mNumAcquired;
+    int32_t maxBufferCount = std::min(mMaxAcquiredBuffers + mMaxDequeuedBuffers, kMaxBufferCount);
+    bool bufferAvailable = buffersInUse < maxBufferCount;
+    // BLASTBufferQueueProducer should block until a buffer is released if
+    // (1) There are no free buffers available.
+    // (2) We're not in async mode. In async mode, BufferQueueProducer::dequeueBuffer returns
+    //     WOULD_BLOCK instead of blocking when there are no free buffers.
+    // (3) We're not in shared buffer mode. In shared buffer mode, both the producer and consumer
+    //     can access the same buffer simultaneously. BufferQueueProducer::dequeueBuffer returns
+    //     the shared buffer immediately instead of blocking.
+    mDequeueShouldBlock = !(bufferAvailable || mAsyncMode || mSharedBufferMode);
+    ATRACE_INT("Dequeued", mNumDequeued);
+    ATRACE_INT("DequeueShouldBlock", mDequeueShouldBlock);
 }
 
 class BBQSurface : public Surface {
@@ -1116,24 +1178,64 @@ public:
                                             producerControlledByApp, output);
     }
 
+    status_t disconnect(int api, DisconnectMode mode) override {
+        if (status_t status = BufferQueueProducer::disconnect(api, mode); status != OK) {
+            return status;
+        }
+
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return OK;
+        }
+
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mNumDequeued = 0;
+            bbq->mNumFrameAvailable = 0;
+            bbq->mNumAcquired = 0;
+            bbq->mSubmitted.clear();
+            bbq->updateDequeueShouldBlockLocked();
+        }
+
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
+
+        return OK;
+    }
+
     // We want to resize the frame history when changing the size of the buffer queue
     status_t setMaxDequeuedBufferCount(int maxDequeuedBufferCount) override {
         int maxBufferCount;
         status_t status = BufferQueueProducer::setMaxDequeuedBufferCount(maxDequeuedBufferCount,
                                                                          &maxBufferCount);
-        // if we can't determine the max buffer count, then just skip growing the history size
-        if (status == OK) {
-            size_t newFrameHistorySize = maxBufferCount + 2; // +2 because triple buffer rendering
-            // optimize away resizing the frame history unless it will grow
-            if (newFrameHistorySize > FrameEventHistory::INITIAL_MAX_FRAME_HISTORY) {
-                sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
-                if (bbq != nullptr) {
-                    ALOGV("increasing frame history size to %zu", newFrameHistorySize);
-                    bbq->resizeFrameEventHistory(newFrameHistorySize);
-                }
-            }
+        if (status != OK) {
+            return status;
         }
-        return status;
+
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return OK;
+        }
+
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mMaxDequeuedBuffers = maxDequeuedBufferCount;
+            bbq->updateDequeueShouldBlockLocked();
+        }
+
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
+
+        size_t newFrameHistorySize = maxBufferCount + 2; // +2 because triple buffer rendering
+        // optimize away resizing the frame history unless it will grow
+        if (newFrameHistorySize > FrameEventHistory::INITIAL_MAX_FRAME_HISTORY) {
+            ALOGV("increasing frame history size to %zu", newFrameHistorySize);
+            bbq->resizeFrameEventHistory(newFrameHistorySize);
+        }
+
+        return OK;
     }
 
     int query(int what, int* value) override {
@@ -1142,6 +1244,131 @@ public:
             return NO_ERROR;
         }
         return BufferQueueProducer::query(what, value);
+    }
+
+    status_t setAsyncMode(bool asyncMode) override {
+        if (status_t status = BufferQueueProducer::setAsyncMode(asyncMode); status != NO_ERROR) {
+            return status;
+        }
+
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return NO_ERROR;
+        }
+
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mAsyncMode = asyncMode;
+            bbq->updateDequeueShouldBlockLocked();
+        }
+
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
+        return NO_ERROR;
+    }
+
+    status_t setSharedBufferMode(bool sharedBufferMode) override {
+        if (status_t status = BufferQueueProducer::setSharedBufferMode(sharedBufferMode);
+            status != NO_ERROR) {
+            return status;
+        }
+
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return NO_ERROR;
+        }
+
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mSharedBufferMode = sharedBufferMode;
+            bbq->updateDequeueShouldBlockLocked();
+        }
+
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
+        return NO_ERROR;
+    }
+
+    status_t detachBuffer(int slot) override {
+        if (status_t status = BufferQueueProducer::detachBuffer(slot); status != NO_ERROR) {
+            return status;
+        }
+
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return NO_ERROR;
+        }
+
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mNumDequeued--;
+            bbq->updateDequeueShouldBlockLocked();
+        }
+
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
+        return NO_ERROR;
+    }
+
+    // Override dequeueBuffer to block if there are no free buffers.
+    //
+    // Buffer releases are communicated via the BufferReleaseChannel. When dequeueBuffer determines
+    // a free buffer is not available, it blocks on an epoll file descriptor. Epoll is configured to
+    // detect messages on the BufferReleaseChannel's socket and an eventfd. The eventfd is signaled
+    // whenever an event other than a buffer release occurs that may change the number of free
+    // buffers. dequeueBuffer uses epoll in a similar manner as a condition variable by testing for
+    // the availability of a free buffer in a loop, breaking the loop once a free buffer is
+    // available.
+    //
+    // This is an optimization implemented to reduce thread scheduling delays in the previously
+    // existing binder release callback. The binder buffer release callback is still used and there
+    // are no guarantees around order between buffer releases via binder and the
+    // BufferReleaseChannel. If we attempt to a release a buffer here that has already been released
+    // via binder, the release is ignored.
+    status_t dequeueBuffer(int* outSlot, sp<Fence>* outFence, uint32_t width, uint32_t height,
+                           PixelFormat format, uint64_t usage, uint64_t* outBufferAge,
+                           FrameEventHistoryDelta* outTimestamps) {
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq || !bbq->mBufferReleaseReader) {
+            return BufferQueueProducer::dequeueBuffer(outSlot, outFence, width, height, format,
+                                                      usage, outBufferAge, outTimestamps);
+        }
+
+        if (bbq->mDequeueShouldBlock) {
+            ATRACE_FORMAT("waiting for free buffer");
+            auto maxWaitTime = std::chrono::steady_clock::now() + 1s;
+            do {
+                auto timeout = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        maxWaitTime - std::chrono::steady_clock::now());
+                if (timeout <= 0ms) {
+                    break;
+                }
+
+                ReleaseCallbackId releaseCallbackId;
+                sp<Fence> releaseFence;
+                status_t status = bbq->mBufferReleaseReader->readBlocking(releaseCallbackId,
+                                                                          releaseFence, timeout);
+                if (status == WOULD_BLOCK) {
+                    // readBlocking was interrupted. The loop will test if we have a free buffer.
+                    continue;
+                }
+
+                if (status != OK) {
+                    // An error occurred or readBlocking timed out.
+                    break;
+                }
+
+                std::lock_guard lock{bbq->mMutex};
+                bbq->releaseBufferCallbackLocked(releaseCallbackId, releaseFence, std::nullopt,
+                                                 false);
+            } while (bbq->mDequeueShouldBlock);
+        }
+
+        return BufferQueueProducer::dequeueBuffer(outSlot, outFence, width, height, format, usage,
+                                                  outBufferAge, outTimestamps);
     }
 
 private:
@@ -1171,6 +1398,16 @@ void BLASTBufferQueue::createBufferQueue(sp<IGraphicBufferProducer>* outProducer
 
     *outProducer = producer;
     *outConsumer = consumer;
+}
+
+void BLASTBufferQueue::onFirstRef() {
+    // safe default, most producers are expected to override this
+    //
+    // This is done in onFirstRef instead of BLASTBufferQueue's constructor because
+    // BBQBufferQueueProducer::setMaxDequeuedBufferCount promotes a weak pointer to BLASTBufferQueue
+    // to a strong pointer. If this is done in the constructor, then when the strong pointer goes
+    // out of scope, it's the last reference so BLASTBufferQueue is deleted.
+    mProducer->setMaxDequeuedBufferCount(2);
 }
 
 void BLASTBufferQueue::resizeFrameEventHistory(size_t newSize) {
@@ -1220,6 +1457,74 @@ void BLASTBufferQueue::setTransactionHangCallback(
         std::function<void(const std::string&)> callback) {
     std::lock_guard _lock{mMutex};
     mTransactionHangCallback = callback;
+}
+
+BLASTBufferQueue::BufferReleaseReader::BufferReleaseReader(
+        std::unique_ptr<gui::BufferReleaseChannel::ConsumerEndpoint> endpoint)
+      : mEndpoint(std::move(endpoint)) {
+    mEpollFd = android::base::unique_fd(epoll_create1(0));
+    if (!mEpollFd.ok()) {
+        ALOGE("Failed to create buffer release epoll file descriptor. errno=%d message='%s'", errno,
+              strerror(errno));
+    }
+
+    epoll_event event;
+    event.events = EPOLLIN;
+    event.data.fd = mEndpoint->getFd();
+    if (epoll_ctl(mEpollFd.get(), EPOLL_CTL_ADD, mEndpoint->getFd(), &event) == -1) {
+        ALOGE("Failed to register buffer release consumer file descriptor with epoll. errno=%d "
+              "message='%s'",
+              errno, strerror(errno));
+    }
+
+    mEventFd = android::base::unique_fd(eventfd(0, EFD_NONBLOCK));
+    event.data.fd = mEventFd.get();
+    if (epoll_ctl(mEpollFd.get(), EPOLL_CTL_ADD, mEventFd.get(), &event) == -1) {
+        ALOGE("Failed to register buffer release eventfd with epoll. errno=%d message='%s'", errno,
+              strerror(errno));
+    }
+}
+
+status_t BLASTBufferQueue::BufferReleaseReader::readNonBlocking(ReleaseCallbackId& outId,
+                                                                sp<Fence>& outFence) {
+    std::lock_guard lock{mMutex};
+    return mEndpoint->readReleaseFence(outId, outFence);
+}
+
+status_t BLASTBufferQueue::BufferReleaseReader::readBlocking(ReleaseCallbackId& outId,
+                                                             sp<Fence>& outFence,
+                                                             std::chrono::milliseconds timeout) {
+    epoll_event event;
+    int eventCount = epoll_wait(mEpollFd.get(), &event, 1 /* maxevents */, timeout.count());
+
+    if (eventCount == -1) {
+        ALOGE("epoll_wait error while waiting for buffer release. errno=%d message='%s'", errno,
+              strerror(errno));
+        return UNKNOWN_ERROR;
+    }
+
+    if (eventCount == 0) {
+        return TIMED_OUT;
+    }
+
+    if (event.data.fd == mEventFd.get()) {
+        uint64_t value;
+        if (read(mEventFd.get(), &value, sizeof(uint64_t)) == -1 && errno != EWOULDBLOCK) {
+            ALOGE("error while reading from eventfd. errno=%d message='%s'", errno,
+                  strerror(errno));
+        }
+        return WOULD_BLOCK;
+    }
+
+    std::lock_guard lock{mMutex};
+    return mEndpoint->readReleaseFence(outId, outFence);
+}
+
+void BLASTBufferQueue::BufferReleaseReader::interruptBlockingRead() {
+    uint64_t value = 1;
+    if (write(mEventFd.get(), &value, sizeof(uint64_t)) == -1) {
+        ALOGE("failed to notify dequeue event. errno=%d message='%s'", errno, strerror(errno));
+    }
 }
 
 } // namespace android
