@@ -2540,10 +2540,6 @@ bool Layer::hasInputInfo() const {
 compositionengine::OutputLayer* Layer::findOutputLayerForDisplay(
         const DisplayDevice* display) const {
     if (!display) return nullptr;
-    if (!mFlinger->mLayerLifecycleManagerEnabled) {
-        return display->getCompositionDisplay()->getOutputLayerForLayer(
-                getCompositionEngineLayerFE());
-    }
     sp<LayerFE> layerFE;
     frontend::LayerHierarchy::TraversalPath path{.id = static_cast<uint32_t>(sequence)};
     for (auto& [p, layer] : mLayerFEs) {
@@ -2559,10 +2555,6 @@ compositionengine::OutputLayer* Layer::findOutputLayerForDisplay(
 compositionengine::OutputLayer* Layer::findOutputLayerForDisplay(
         const DisplayDevice* display, const frontend::LayerHierarchy::TraversalPath& path) const {
     if (!display) return nullptr;
-    if (!mFlinger->mLayerLifecycleManagerEnabled) {
-        return display->getCompositionDisplay()->getOutputLayerForLayer(
-                getCompositionEngineLayerFE());
-    }
     sp<LayerFE> layerFE;
     for (auto& [p, layer] : mLayerFEs) {
         if (p == path) {
@@ -2783,11 +2775,14 @@ void Layer::callReleaseBufferCallback(const sp<ITransactionCompletedListener>& l
         return;
     }
     SFTRACE_FORMAT_INSTANT("callReleaseBufferCallback %s - %" PRIu64, getDebugName(), framenumber);
+    ReleaseCallbackId callbackId{buffer->getId(), framenumber};
+    const sp<Fence>& fence = releaseFence ? releaseFence : Fence::NO_FENCE;
     uint32_t currentMaxAcquiredBufferCount =
             mFlinger->getMaxAcquiredBufferCountForCurrentRefreshRate(mOwnerUid);
-    listener->onReleaseBuffer({buffer->getId(), framenumber},
-                              releaseFence ? releaseFence : Fence::NO_FENCE,
-                              currentMaxAcquiredBufferCount);
+    listener->onReleaseBuffer(callbackId, fence, currentMaxAcquiredBufferCount);
+    if (mBufferReleaseChannel) {
+        mBufferReleaseChannel->writeReleaseFence(callbackId, fence);
+    }
 }
 
 sp<CallbackHandle> Layer::findCallbackHandle() {
@@ -2905,6 +2900,7 @@ void Layer::onLayerDisplayed(ftl::SharedFuture<FenceResult> futureFenceResult,
 
 void Layer::releasePendingBuffer(nsecs_t dequeueReadyTime) {
     for (const auto& handle : mDrawingState.callbackHandles) {
+        handle->bufferReleaseChannel = mBufferReleaseChannel;
         handle->transformHint = mTransformHint;
         handle->dequeueReadyTime = dequeueReadyTime;
         handle->currentMaxAcquiredBufferCount =
@@ -4374,6 +4370,11 @@ bool Layer::setTrustedPresentationInfo(TrustedPresentationThresholds const& thre
     // path to ensure it recomutes the current state and invokes the TrustedPresentationListener if
     // we're already in the requested state.
     return haveTrustedPresentationListener;
+}
+
+void Layer::setBufferReleaseChannel(
+        const std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint>& channel) {
+    mBufferReleaseChannel = channel;
 }
 
 void Layer::updateLastLatchTime(nsecs_t latchTime) {
