@@ -525,7 +525,9 @@ void BLASTBufferQueue::releaseBuffer(const ReleaseCallbackId& callbackId,
     }
     mNumAcquired--;
     updateDequeueShouldBlockLocked();
-    mBufferReleaseReader->interruptBlockingRead();
+    if (mBufferReleaseReader) {
+        mBufferReleaseReader->interruptBlockingRead();
+    }
     BBQ_TRACE("frame=%" PRIu64, callbackId.framenumber);
     BQA_LOGV("released %s", callbackId.to_string().c_str());
     mBufferItemConsumer->releaseBuffer(it->second, releaseFence);
@@ -857,7 +859,10 @@ void BLASTBufferQueue::onFrameCancelled(const uint64_t bufferId) {
         mNumDequeued--;
         updateDequeueShouldBlockLocked();
     }
-    mBufferReleaseReader->interruptBlockingRead();
+
+    if (mBufferReleaseReader) {
+        mBufferReleaseReader->interruptBlockingRead();
+    }
 };
 
 bool BLASTBufferQueue::syncNextTransaction(
@@ -1191,7 +1196,10 @@ public:
             bbq->mSubmitted.clear();
             bbq->updateDequeueShouldBlockLocked();
         }
-        bbq->mBufferReleaseReader->interruptBlockingRead();
+
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
 
         return OK;
     }
@@ -1215,7 +1223,10 @@ public:
             bbq->mMaxDequeuedBuffers = maxDequeuedBufferCount;
             bbq->updateDequeueShouldBlockLocked();
         }
-        bbq->mBufferReleaseReader->interruptBlockingRead();
+
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
 
         size_t newFrameHistorySize = maxBufferCount + 2; // +2 because triple buffer rendering
         // optimize away resizing the frame history unless it will grow
@@ -1251,7 +1262,9 @@ public:
             bbq->updateDequeueShouldBlockLocked();
         }
 
-        bbq->mBufferReleaseReader->interruptBlockingRead();
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
         return NO_ERROR;
     }
 
@@ -1272,7 +1285,9 @@ public:
             bbq->updateDequeueShouldBlockLocked();
         }
 
-        bbq->mBufferReleaseReader->interruptBlockingRead();
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
         return NO_ERROR;
     }
 
@@ -1292,7 +1307,9 @@ public:
             bbq->updateDequeueShouldBlockLocked();
         }
 
-        bbq->mBufferReleaseReader->interruptBlockingRead();
+        if (bbq->mBufferReleaseReader) {
+            bbq->mBufferReleaseReader->interruptBlockingRead();
+        }
         return NO_ERROR;
     }
 
