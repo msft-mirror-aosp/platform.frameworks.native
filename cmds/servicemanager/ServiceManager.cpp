@@ -112,13 +112,15 @@ struct AidlName {
     std::string iface;
     std::string instance;
 
-    static bool fill(const std::string& name, AidlName* aname) {
+    static bool fill(const std::string& name, AidlName* aname, bool logError) {
         size_t firstSlash = name.find('/');
         size_t lastDot = name.rfind('.', firstSlash);
         if (firstSlash == std::string::npos || lastDot == std::string::npos) {
-            ALOGE("VINTF HALs require names in the format type/instance (e.g. "
-                  "some.package.foo.IFoo/default) but got: %s",
-                  name.c_str());
+            if (logError) {
+                ALOGE("VINTF HALs require names in the format type/instance (e.g. "
+                      "some.package.foo.IFoo/default) but got: %s",
+                      name.c_str());
+            }
             return false;
         }
         aname->package = name.substr(0, lastDot);
@@ -151,7 +153,7 @@ static bool isVintfDeclared(const Access::CallingContext& ctx, const std::string
     }
 
     AidlName aname;
-    if (!AidlName::fill(name, &aname)) return false;
+    if (!AidlName::fill(name, &aname, true)) return false;
 
     bool found = forEachManifest([&](const ManifestWithDescription& mwd) {
         if (mwd.manifest->hasAidlInstance(aname.package, aname.iface, aname.instance)) {
@@ -209,7 +211,7 @@ static std::optional<std::string> getVintfUpdatableApex(const std::string& name)
     }
 
     AidlName aname;
-    if (!AidlName::fill(name, &aname)) return std::nullopt;
+    if (!AidlName::fill(name, &aname, true)) return std::nullopt;
 
     std::optional<std::string> updatableViaApex;
 
@@ -251,7 +253,7 @@ static std::vector<std::string> getVintfUpdatableNames(const std::string& apexNa
 
 static std::optional<std::string> getVintfAccessorName(const std::string& name) {
     AidlName aname;
-    if (!AidlName::fill(name, &aname)) return std::nullopt;
+    if (!AidlName::fill(name, &aname, false)) return std::nullopt;
 
     std::optional<std::string> accessor;
     forEachManifest([&](const ManifestWithDescription& mwd) {
@@ -270,7 +272,7 @@ static std::optional<std::string> getVintfAccessorName(const std::string& name) 
 
 static std::optional<ConnectionInfo> getVintfConnectionInfo(const std::string& name) {
     AidlName aname;
-    if (!AidlName::fill(name, &aname)) return std::nullopt;
+    if (!AidlName::fill(name, &aname, true)) return std::nullopt;
 
     std::optional<std::string> ip;
     std::optional<uint64_t> port;

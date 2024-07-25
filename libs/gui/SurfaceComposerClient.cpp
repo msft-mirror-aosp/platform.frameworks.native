@@ -1174,7 +1174,8 @@ void SurfaceComposerClient::doUncacheBufferTransaction(uint64_t cacheId) {
     uncacheBuffer.token = BufferCache::getInstance().getToken();
     uncacheBuffer.id = cacheId;
     Vector<ComposerState> composerStates;
-    status_t status = sf->setTransactionState(FrameTimelineInfo{}, composerStates, {},
+    Vector<DisplayState> displayStates;
+    status_t status = sf->setTransactionState(FrameTimelineInfo{}, composerStates, displayStates,
                                               ISurfaceComposer::eOneWay,
                                               Transaction::getDefaultApplyToken(), {}, systemTime(),
                                               true, {uncacheBuffer}, false, {}, generateId(), {});
@@ -2389,6 +2390,22 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setDropI
 
     s->what |= layer_state_t::eDropInputModeChanged;
     s->dropInputMode = mode;
+
+    registerSurfaceControlForCallback(sc);
+    return *this;
+}
+
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBufferReleaseChannel(
+        const sp<SurfaceControl>& sc,
+        const std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint>& channel) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+
+    s->what |= layer_state_t::eBufferReleaseChannelChanged;
+    s->bufferReleaseChannel = channel;
 
     registerSurfaceControlForCallback(sc);
     return *this;

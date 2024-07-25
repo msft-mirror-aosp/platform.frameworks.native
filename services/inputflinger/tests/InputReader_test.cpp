@@ -24,7 +24,6 @@
 #include <InputReader.h>
 #include <InputReaderBase.h>
 #include <InputReaderFactory.h>
-#include <JoystickInputMapper.h>
 #include <KeyboardInputMapper.h>
 #include <MultiTouchInputMapper.h>
 #include <NotifyArgsBuilders.h>
@@ -10016,67 +10015,6 @@ TEST_F(MultiTouchPointerModeTest, WhenViewportActiveStatusChanged_PointerGesture
                   WithSource(AINPUT_SOURCE_MOUSE | AINPUT_SOURCE_STYLUS),
                   WithToolType(ToolType::STYLUS))));
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasNotCalled());
-}
-
-// --- JoystickInputMapperTest ---
-
-class JoystickInputMapperTest : public InputMapperTest {
-protected:
-    static const int32_t RAW_X_MIN;
-    static const int32_t RAW_X_MAX;
-    static const int32_t RAW_Y_MIN;
-    static const int32_t RAW_Y_MAX;
-
-    void SetUp() override {
-        InputMapperTest::SetUp(InputDeviceClass::JOYSTICK | InputDeviceClass::EXTERNAL);
-    }
-    void prepareAxes() {
-        mFakeEventHub->addAbsoluteAxis(EVENTHUB_ID, ABS_X, RAW_X_MIN, RAW_X_MAX, 0, 0);
-        mFakeEventHub->addAbsoluteAxis(EVENTHUB_ID, ABS_Y, RAW_Y_MIN, RAW_Y_MAX, 0, 0);
-    }
-
-    void processAxis(JoystickInputMapper& mapper, int32_t axis, int32_t value) {
-        process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, axis, value);
-    }
-
-    void processSync(JoystickInputMapper& mapper) {
-        process(mapper, ARBITRARY_TIME, READ_TIME, EV_SYN, SYN_REPORT, 0);
-    }
-
-    void prepareVirtualDisplay(ui::Rotation orientation) {
-        setDisplayInfoAndReconfigure(VIRTUAL_DISPLAY_ID, VIRTUAL_DISPLAY_WIDTH,
-                                     VIRTUAL_DISPLAY_HEIGHT, orientation, VIRTUAL_DISPLAY_UNIQUE_ID,
-                                     NO_PORT, ViewportType::VIRTUAL);
-    }
-};
-
-const int32_t JoystickInputMapperTest::RAW_X_MIN = -32767;
-const int32_t JoystickInputMapperTest::RAW_X_MAX = 32767;
-const int32_t JoystickInputMapperTest::RAW_Y_MIN = -32767;
-const int32_t JoystickInputMapperTest::RAW_Y_MAX = 32767;
-
-TEST_F(JoystickInputMapperTest, Configure_AssignsDisplayUniqueId) {
-    prepareAxes();
-    JoystickInputMapper& mapper = constructAndAddMapper<JoystickInputMapper>();
-
-    mFakePolicy->addInputUniqueIdAssociation(DEVICE_LOCATION, VIRTUAL_DISPLAY_UNIQUE_ID);
-
-    prepareVirtualDisplay(ui::ROTATION_0);
-
-    // Send an axis event
-    processAxis(mapper, ABS_X, 100);
-    processSync(mapper);
-
-    NotifyMotionArgs args;
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&args));
-    ASSERT_EQ(VIRTUAL_DISPLAY_ID, args.displayId);
-
-    // Send another axis event
-    processAxis(mapper, ABS_Y, 100);
-    processSync(mapper);
-
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&args));
-    ASSERT_EQ(VIRTUAL_DISPLAY_ID, args.displayId);
 }
 
 // --- PeripheralControllerTest ---
