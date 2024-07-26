@@ -24,24 +24,26 @@
 #include <android/gui/ISurfaceComposer.h>
 #include <android/hardware/configstore/1.0/ISurfaceFlingerConfigs.h>
 #include <binder/ProcessState.h>
+#include <com_android_graphics_libgui_flags.h>
 #include <configstore/Utils.h>
 #include <gui/AidlStatusUtil.h>
 #include <gui/BufferItemConsumer.h>
-#include <gui/IProducerListener.h>
+#include <gui/CpuConsumer.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/Surface.h>
 #include <gui/SurfaceComposerClient.h>
 #include <gui/SyncScreenCaptureListener.h>
-#include <inttypes.h>
 #include <private/gui/ComposerService.h>
 #include <private/gui/ComposerServiceAIDL.h>
 #include <sys/types.h>
 #include <ui/BufferQueueDefs.h>
 #include <ui/DisplayMode.h>
+#include <ui/GraphicBuffer.h>
 #include <ui/Rect.h>
 #include <utils/Errors.h>
 #include <utils/String8.h>
 
+#include <cstddef>
 #include <limits>
 #include <thread>
 
@@ -82,7 +84,7 @@ public:
     virtual void onBuffersDiscarded(const std::vector<sp<GraphicBuffer>>& buffers) {
         mDiscardedBuffers.insert(mDiscardedBuffers.end(), buffers.begin(), buffers.end());
     }
-
+    virtual void onBufferDetached(int /*slot*/) {}
     int getReleaseNotifyCount() const {
         return mBuffersReleased;
     }
@@ -491,7 +493,7 @@ TEST_F(SurfaceTest, GetAndFlushRemovedBuffers) {
 
     sp<Surface> surface = new Surface(producer);
     sp<ANativeWindow> window(surface);
-    sp<StubProducerListener> listener = new StubProducerListener();
+    sp<StubSurfaceListener> listener = new StubSurfaceListener();
     ASSERT_EQ(OK, surface->connect(
             NATIVE_WINDOW_API_CPU,
             /*listener*/listener,
@@ -986,6 +988,19 @@ public:
     }
 
     binder::Status notifyShutdown() override { return binder::Status::ok(); }
+
+    binder::Status addJankListener(const sp<IBinder>& /*layer*/,
+                                   const sp<gui::IJankListener>& /*listener*/) override {
+        return binder::Status::ok();
+    }
+
+    binder::Status flushJankData(int32_t /*layerId*/) override { return binder::Status::ok(); }
+
+    binder::Status removeJankListener(int32_t /*layerId*/,
+                                      const sp<gui::IJankListener>& /*listener*/,
+                                      int64_t /*afterVsync*/) override {
+        return binder::Status::ok();
+    }
 
 protected:
     IBinder* onAsBinder() override { return nullptr; }
@@ -2141,7 +2156,7 @@ TEST_F(SurfaceTest, BatchOperations) {
     sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
     sp<Surface> surface = new Surface(producer);
     sp<ANativeWindow> window(surface);
-    sp<StubProducerListener> listener = new StubProducerListener();
+    sp<StubSurfaceListener> listener = new StubSurfaceListener();
 
     ASSERT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, /*listener*/listener,
             /*reportBufferRemoval*/false));
@@ -2193,7 +2208,7 @@ TEST_F(SurfaceTest, BatchIllegalOperations) {
     sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
     sp<Surface> surface = new Surface(producer);
     sp<ANativeWindow> window(surface);
-    sp<StubProducerListener> listener = new StubProducerListener();
+    sp<StubSurfaceListener> listener = new StubSurfaceListener();
 
     ASSERT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, /*listener*/listener,
             /*reportBufferRemoval*/false));
@@ -2212,5 +2227,91 @@ TEST_F(SurfaceTest, BatchIllegalOperations) {
 
     ASSERT_EQ(NO_ERROR, surface->disconnect(NATIVE_WINDOW_API_CPU));
 }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
+TEST_F(SurfaceTest, PlatformBufferMethods) {
+    sp<IGraphicBufferProducer> producer;
+    sp<IGraphicBufferConsumer> consumer;
+    BufferQueue::createBufferQueue(&producer, &consumer);
+
+    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(consumer, 1);
+    sp<Surface> surface = sp<Surface>::make(producer);
+    sp<StubSurfaceListener> listener = sp<StubSurfaceListener>::make();
+    sp<GraphicBuffer> buffer;
+    sp<Fence> fence;
+
+    EXPECT_EQ(OK,
+              surface->connect(NATIVE_WINDOW_API_CPU, listener, /* reportBufferRemoval */ false));
+
+    //
+    // Verify nullptrs are handled safely:
+    //
+
+    EXPECT_EQ(BAD_VALUE, surface->dequeueBuffer((sp<GraphicBuffer>*)nullptr, nullptr));
+    EXPECT_EQ(BAD_VALUE, surface->dequeueBuffer((sp<GraphicBuffer>*)nullptr, &fence));
+    EXPECT_EQ(BAD_VALUE, surface->dequeueBuffer(&buffer, nullptr));
+    EXPECT_EQ(BAD_VALUE, surface->queueBuffer(nullptr, nullptr));
+    EXPECT_EQ(BAD_VALUE, surface->detachBuffer(nullptr));
+
+    //
+    // Verify dequeue/queue:
+    //
+
+    EXPECT_EQ(OK, surface->dequeueBuffer(&buffer, &fence));
+    EXPECT_NE(nullptr, buffer);
+    EXPECT_EQ(OK, surface->queueBuffer(buffer, fence));
+
+    //
+    // Verify dequeue/detach:
+    //
+
+    wp<GraphicBuffer> weakBuffer;
+    {
+        EXPECT_EQ(OK, surface->dequeueBuffer(&buffer, &fence));
+
+        EXPECT_EQ(OK, surface->detachBuffer(buffer));
+
+        weakBuffer = buffer;
+        buffer = nullptr;
+    }
+    EXPECT_EQ(nullptr, weakBuffer.promote()) << "Weak buffer still held by Surface.";
+
+    //
+    // Verify detach without borrowing the buffer does not work:
+    //
+
+    sp<GraphicBuffer> heldTooLongBuffer;
+    EXPECT_EQ(OK, surface->dequeueBuffer(&heldTooLongBuffer, &fence));
+    EXPECT_EQ(OK, surface->queueBuffer(heldTooLongBuffer));
+    EXPECT_EQ(BAD_VALUE, surface->detachBuffer(heldTooLongBuffer));
+}
+
+TEST_F(SurfaceTest, AllowAllocation) {
+    sp<IGraphicBufferProducer> producer;
+    sp<IGraphicBufferConsumer> consumer;
+    BufferQueue::createBufferQueue(&producer, &consumer);
+
+    // controlledByApp must be true to disable blocking
+    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(consumer, 1, /*controlledByApp*/ true);
+    sp<Surface> surface = sp<Surface>::make(producer, /*controlledByApp*/ true);
+    sp<StubSurfaceListener> listener = sp<StubSurfaceListener>::make();
+    sp<GraphicBuffer> buffer;
+    sp<Fence> fence;
+
+    EXPECT_EQ(OK,
+              surface->connect(NATIVE_WINDOW_API_CPU, listener, /* reportBufferRemoval */ false));
+    EXPECT_EQ(OK, surface->allowAllocation(false));
+
+    EXPECT_EQ(OK, surface->setDequeueTimeout(-1));
+    EXPECT_EQ(WOULD_BLOCK, surface->dequeueBuffer(&buffer, &fence));
+
+    EXPECT_EQ(OK, surface->setDequeueTimeout(10));
+    EXPECT_EQ(TIMED_OUT, surface->dequeueBuffer(&buffer, &fence));
+
+    EXPECT_EQ(OK, surface->allowAllocation(true));
+    EXPECT_EQ(OK, surface->dequeueBuffer(&buffer, &fence));
+}
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 } // namespace android

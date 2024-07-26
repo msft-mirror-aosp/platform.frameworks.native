@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <android-base/properties.h>
 #include <android/os/BnServiceManager.h>
 #include <android/os/IServiceManager.h>
 #include <binder/IPCThreadState.h>
@@ -28,7 +27,8 @@ public:
 
     sp<os::IServiceManager> getImpl();
     binder::Status getService(const ::std::string& name, sp<IBinder>* _aidl_return) override;
-    binder::Status checkService(const ::std::string& name, sp<IBinder>* _aidl_return) override;
+    binder::Status getService2(const ::std::string& name, os::Service* out) override;
+    binder::Status checkService(const ::std::string& name, os::Service* out) override;
     binder::Status addService(const ::std::string& name, const sp<IBinder>& service,
                               bool allowIsolated, int32_t dumpPriority) override;
     binder::Status listServices(int32_t dumpPriority,
@@ -61,6 +61,7 @@ public:
 
 private:
     sp<os::IServiceManager> mTheRealServiceManager;
+    void toBinderService(const os::Service& in, os::Service* _out);
 };
 
 sp<BackendUnifiedServiceManager> getBackendUnifiedServiceManager();

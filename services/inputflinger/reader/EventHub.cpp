@@ -517,10 +517,10 @@ ftl::Flags<InputDeviceClass> getAbsAxisUsage(int32_t axis,
 
 // --- RawAbsoluteAxisInfo ---
 
-std::ostream& operator<<(std::ostream& out, const RawAbsoluteAxisInfo& info) {
-    if (info.valid) {
-        out << "min=" << info.minValue << ", max=" << info.maxValue << ", flat=" << info.flat
-            << ", fuzz=" << info.fuzz << ", resolution=" << info.resolution;
+std::ostream& operator<<(std::ostream& out, const std::optional<RawAbsoluteAxisInfo>& info) {
+    if (info) {
+        out << "min=" << info->minValue << ", max=" << info->maxValue << ", flat=" << info->flat
+            << ", fuzz=" << info->fuzz << ", resolution=" << info->resolution;
     } else {
         out << "unknown range";
     }
@@ -649,7 +649,6 @@ void EventHub::Device::populateAbsoluteAxisStates() {
             continue;
         }
         auto& [axisInfo, value] = absState[axis];
-        axisInfo.valid = true;
         axisInfo.minValue = info.minimum;
         axisInfo.maxValue = info.maximum;
         axisInfo.flat = info.flat;
@@ -889,7 +888,6 @@ EventHub::EventHub(void)
       : mBuiltInKeyboardId(NO_BUILT_IN_KEYBOARD),
         mNextDeviceId(1),
         mControllerNumbers(),
-        mNeedToSendFinishedDeviceScan(false),
         mNeedToReopenDevices(false),
         mNeedToScanDevices(true),
         mPendingEventCount(0),
@@ -1878,7 +1876,6 @@ std::vector<RawEvent> EventHub::getEvents(int timeoutMillis) {
                     .type = DEVICE_REMOVED,
             });
             it = mClosingDevices.erase(it);
-            mNeedToSendFinishedDeviceScan = true;
             if (events.size() == EVENT_BUFFER_SIZE) {
                 break;
             }
@@ -1887,7 +1884,6 @@ std::vector<RawEvent> EventHub::getEvents(int timeoutMillis) {
         if (mNeedToScanDevices) {
             mNeedToScanDevices = false;
             scanDevicesLocked();
-            mNeedToSendFinishedDeviceScan = true;
         }
 
         while (!mOpeningDevices.empty()) {
@@ -1916,18 +1912,6 @@ std::vector<RawEvent> EventHub::getEvents(int timeoutMillis) {
             if (!inserted) {
                 ALOGW("Device id %d exists, replaced.", device->id);
             }
-            mNeedToSendFinishedDeviceScan = true;
-            if (events.size() == EVENT_BUFFER_SIZE) {
-                break;
-            }
-        }
-
-        if (mNeedToSendFinishedDeviceScan) {
-            mNeedToSendFinishedDeviceScan = false;
-            events.push_back({
-                    .when = now,
-                    .type = FINISHED_DEVICE_SCAN,
-            });
             if (events.size() == EVENT_BUFFER_SIZE) {
                 break;
             }

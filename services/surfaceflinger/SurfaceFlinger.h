@@ -27,7 +27,9 @@
 #include <android/gui/BnSurfaceComposer.h>
 #include <android/gui/DisplayStatInfo.h>
 #include <android/gui/DisplayState.h>
+#include <android/gui/IJankListener.h>
 #include <android/gui/ISurfaceComposerClient.h>
+#include <common/trace.h>
 #include <cutils/atomic.h>
 #include <cutils/compiler.h>
 #include <ftl/algorithm.h>
@@ -52,7 +54,6 @@
 #include <utils/KeyedVector.h>
 #include <utils/RefBase.h>
 #include <utils/SortedVector.h>
-#include <utils/Trace.h>
 #include <utils/threads.h>
 
 #include <compositionengine/OutputColorSetting.h>
@@ -272,7 +273,7 @@ public:
     enum class FrameHint { kNone, kActive };
 
     // Schedule commit of transactions on the main thread ahead of the next VSYNC.
-    void scheduleCommit(FrameHint);
+    void scheduleCommit(FrameHint, Duration workDurationSlack = Duration::fromNs(0));
     // As above, but also force composite regardless if transactions were committed.
     void scheduleComposite(FrameHint);
     // As above, but also force dirty geometry to repaint.
@@ -449,7 +450,7 @@ private:
             if (it != mCounterByLayerHandle.end()) {
                 auto [name, pendingBuffers] = it->second;
                 int32_t count = ++(*pendingBuffers);
-                ATRACE_INT(name.c_str(), count);
+                SFTRACE_INT(name.c_str(), count);
             } else {
                 ALOGW("Handle not found! %p", layerHandle);
             }
@@ -703,6 +704,7 @@ private:
                                      Fps renderRate) override;
     void onCommitNotComposited(PhysicalDisplayId pacesetterDisplayId) override
             REQUIRES(kMainThreadContext);
+    void vrrDisplayIdle(bool idle) override;
 
     // ICEPowerCallback overrides:
     void notifyCpuLoadUp() override;
@@ -737,9 +739,9 @@ private:
     status_t setActiveModeFromBackdoor(const sp<display::DisplayToken>&, DisplayModeId, Fps minFps,
                                        Fps maxFps);
 
-    void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) EXCLUDES(mStateLock);
+    void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) REQUIRES(mStateLock);
     void finalizeDisplayModeChange(PhysicalDisplayId) REQUIRES(kMainThreadContext)
-            EXCLUDES(mStateLock);
+            REQUIRES(mStateLock);
 
     void dropModeRequest(PhysicalDisplayId) REQUIRES(kMainThreadContext);
     void applyActiveMode(PhysicalDisplayId) REQUIRES(kMainThreadContext);
@@ -825,9 +827,6 @@ private:
     TransactionHandler::TransactionReadiness transactionReadyTimelineCheck(
             const TransactionHandler::TransactionFlushState& flushState)
             REQUIRES(kMainThreadContext);
-    TransactionHandler::TransactionReadiness transactionReadyBufferCheckLegacy(
-            const TransactionHandler::TransactionFlushState& flushState)
-            REQUIRES(kMainThreadContext);
     TransactionHandler::TransactionReadiness transactionReadyBufferCheck(
             const TransactionHandler::TransactionFlushState& flushState)
             REQUIRES(kMainThreadContext);
@@ -896,7 +895,7 @@ private:
 
     using OutputCompositionState = compositionengine::impl::OutputCompositionState;
 
-    std::optional<OutputCompositionState> getDisplayAndLayerSnapshotsFromMainThread(
+    std::optional<OutputCompositionState> getSnapshotsFromMainThread(
             RenderAreaBuilderVariant& renderAreaBuilder,
             GetLayerSnapshotsFunction getLayerSnapshotsFn, std::vector<sp<LayerFE>>& layerFEs);
 
@@ -932,12 +931,6 @@ private:
             std::optional<OutputCompositionState>& displayState,
             std::vector<std::pair<Layer*, sp<LayerFE>>>& layers,
             std::vector<sp<LayerFE>>& layerFEs);
-
-    // If the uid provided is not UNSET_UID, the traverse will skip any layers that don't have a
-    // matching ownerUid
-    void traverseLayersInLayerStack(ui::LayerStack, const int32_t uid,
-                                    std::unordered_set<uint32_t> excludeLayerIds,
-                                    const LayerVector::Visitor&);
 
     void readPersistentProperties();
 
@@ -1155,7 +1148,6 @@ private:
     void dumpAll(const DumpArgs& args, const std::string& compositionLayers,
                  std::string& result) const EXCLUDES(mStateLock);
     void dumpHwcLayersMinidump(std::string& result) const REQUIRES(mStateLock, kMainThreadContext);
-    void dumpHwcLayersMinidumpLockedLegacy(std::string& result) const REQUIRES(mStateLock);
 
     void appendSfConfigString(std::string& result) const;
     void listLayers(std::string& result) const REQUIRES(kMainThreadContext);
@@ -1182,7 +1174,8 @@ private:
     perfetto::protos::LayersProto dumpDrawingStateProto(uint32_t traceFlags) const
             REQUIRES(kMainThreadContext);
     void dumpOffscreenLayersProto(perfetto::protos::LayersProto& layersProto,
-                                  uint32_t traceFlags = LayerTracing::TRACE_ALL) const;
+                                  uint32_t traceFlags = LayerTracing::TRACE_ALL) const
+            REQUIRES(kMainThreadContext);
     google::protobuf::RepeatedPtrField<perfetto::protos::DisplayProto> dumpDisplayProto() const;
     void doActiveLayersTracingIfNeeded(bool isCompositionComputed, bool visibleRegionDirty,
                                        TimePoint, VsyncId) REQUIRES(kMainThreadContext);
@@ -1503,8 +1496,6 @@ private:
     }
 
     bool mPowerHintSessionEnabled;
-
-    bool mLayerLifecycleManagerEnabled = false;
     // Whether a display should be turned on when initialized
     bool mSkipPowerOnForQuiescent;
 
@@ -1693,6 +1684,11 @@ public:
             int pid, std::optional<gui::StalledTransactionInfo>* outInfo) override;
     binder::Status getSchedulingPolicy(gui::SchedulingPolicy* outPolicy) override;
     binder::Status notifyShutdown() override;
+    binder::Status addJankListener(const sp<IBinder>& layer,
+                                   const sp<gui::IJankListener>& listener) override;
+    binder::Status flushJankData(int32_t layerId) override;
+    binder::Status removeJankListener(int32_t layerId, const sp<gui::IJankListener>& listener,
+                                      int64_t afterVsync) override;
 
 private:
     static const constexpr bool kUsePermissionCache = true;

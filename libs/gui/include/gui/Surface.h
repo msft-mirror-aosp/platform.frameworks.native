@@ -18,6 +18,7 @@
 #define ANDROID_GUI_SURFACE_H
 
 #include <android/gui/FrameTimelineInfo.h>
+#include <com_android_graphics_libgui_flags.h>
 #include <gui/BufferQueueDefs.h>
 #include <gui/HdrMetadata.h>
 #include <gui/IGraphicBufferProducer.h>
@@ -34,6 +35,8 @@
 #include <unordered_set>
 
 namespace android {
+
+class GraphicBuffer;
 
 namespace gui {
 class ISurfaceComposer;
@@ -56,6 +59,16 @@ public:
     virtual bool needsReleaseNotify() = 0;
 
     virtual void onBuffersDiscarded(const std::vector<sp<GraphicBuffer>>& buffers) = 0;
+    virtual void onBufferDetached(int slot) = 0;
+};
+
+class StubSurfaceListener : public SurfaceListener {
+public:
+    virtual ~StubSurfaceListener() {}
+    virtual void onBufferReleased() override {}
+    virtual bool needsReleaseNotify() { return false; }
+    virtual void onBuffersDiscarded(const std::vector<sp<GraphicBuffer>>& /*buffers*/) override {}
+    virtual void onBufferDetached(int /*slot*/) override {}
 };
 
 /*
@@ -153,6 +166,11 @@ public:
      * buffers allocated, this function has no effect.
      */
     virtual void allocateBuffers();
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    // See IGraphicBufferProducer::allowAllocation
+    status_t allowAllocation(bool allowAllocation);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
     /* Sets the generation number on the IGraphicBufferProducer and updates the
      * generation number on any buffers attached to the Surface after this call.
@@ -357,15 +375,13 @@ public:
     virtual int unlockAndPost();
     virtual int query(int what, int* value) const;
 
-    virtual int connect(int api, const sp<IProducerListener>& listener);
+    virtual int connect(int api, const sp<SurfaceListener>& listener);
 
     // When reportBufferRemoval is true, clients must call getAndFlushRemovedBuffers to fetch
     // GraphicBuffers removed from this surface after a dequeueBuffer, detachNextBuffer or
     // attachBuffer call. This allows clients with their own buffer caches to free up buffers no
     // longer in use by this surface.
-    virtual int connect(
-            int api, const sp<IProducerListener>& listener,
-            bool reportBufferRemoval);
+    virtual int connect(int api, const sp<SurfaceListener>& listener, bool reportBufferRemoval);
     virtual int detachNextBuffer(sp<GraphicBuffer>* outBuffer,
             sp<Fence>* outFence);
     virtual int attachBuffer(ANativeWindowBuffer*);
@@ -386,6 +402,20 @@ public:
 
     static status_t attachAndQueueBufferWithDataspace(Surface* surface, sp<GraphicBuffer> buffer,
                                                       ui::Dataspace dataspace);
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    // Dequeues a buffer and its outFence, which must be signalled before the buffer can be used.
+    status_t dequeueBuffer(sp<GraphicBuffer>* buffer, sp<Fence>* outFence);
+
+    // Queues a buffer, with an optional fd fence that captures pending work on the buffer. This
+    // buffer must have been returned by dequeueBuffer or associated with this Surface via an
+    // attachBuffer operation.
+    status_t queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd = Fence::NO_FENCE);
+
+    // Detaches this buffer, dissociating it from this Surface. This buffer must have been returned
+    // by queueBuffer or associated with this Surface via an attachBuffer operation.
+    status_t detachBuffer(const sp<GraphicBuffer>& buffer);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
     // Batch version of dequeueBuffer, cancelBuffer and queueBuffer
     // Note that these batched operations are not supported when shared buffer mode is being used.
@@ -421,6 +451,8 @@ protected:
         virtual bool needsReleaseNotify() {
             return mSurfaceListener->needsReleaseNotify();
         }
+
+        virtual void onBufferDetached(int slot) { mSurfaceListener->onBufferDetached(slot); }
 
         virtual void onBuffersDiscarded(const std::vector<int32_t>& slots);
     private:
