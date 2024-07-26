@@ -19,7 +19,7 @@
 
 #include <gui/BufferItem.h>
 #include <gui/BufferItemConsumer.h>
-#include <gui/BufferReleaseChannel.h>
+
 #include <gui/IGraphicBufferProducer.h>
 #include <gui/SurfaceComposerClient.h>
 
@@ -28,6 +28,7 @@
 #include <utils/RefBase.h>
 
 #include <system/window.h>
+#include <thread>
 #include <queue>
 
 #include <com_android_graphics_libgui_flags.h>
@@ -130,8 +131,6 @@ public:
 
     virtual ~BLASTBufferQueue();
 
-    void onFirstRef() override;
-
 private:
     friend class BLASTBufferQueueHelper;
     friend class BBQBufferQueueProducer;
@@ -171,22 +170,10 @@ private:
 
     // BufferQueue internally allows 1 more than
     // the max to be acquired
-    int32_t mMaxAcquiredBuffers GUARDED_BY(mMutex) = 1;
-    int32_t mMaxDequeuedBuffers GUARDED_BY(mMutex) = 1;
-    static constexpr int32_t kMaxBufferCount = BufferQueueDefs::NUM_BUFFER_SLOTS;
+    int32_t mMaxAcquiredBuffers = 1;
 
-    // mNumDequeued is an atomic instead of being guarded by mMutex so that it can be incremented in
-    // onFrameDequeued while avoiding lock contention. updateDequeueShouldBlockLocked is not called
-    // after mNumDequeued is incremented for this reason. This means mDequeueShouldBlock may be
-    // temporarily false when it should be true. This can happen if multiple threads are dequeuing
-    // buffers or if dequeueBuffers is called multiple times in a row without queuing a buffer in
-    // between. As mDequeueShouldBlock is only used for optimization, this is OK.
-    std::atomic_int mNumDequeued;
     int32_t mNumFrameAvailable GUARDED_BY(mMutex) = 0;
     int32_t mNumAcquired GUARDED_BY(mMutex) = 0;
-
-    bool mAsyncMode GUARDED_BY(mMutex) = false;
-    bool mSharedBufferMode GUARDED_BY(mMutex) = false;
 
     // A value used to identify if a producer has been changed for the same SurfaceControl.
     // This is needed to know when the frame number has been reset to make sure we don't
@@ -313,41 +300,6 @@ private:
     std::function<void(const std::string&)> mTransactionHangCallback;
 
     std::unordered_set<uint64_t> mSyncedFrameNumbers GUARDED_BY(mMutex);
-
-    class BufferReleaseReader {
-    public:
-        BufferReleaseReader(std::unique_ptr<gui::BufferReleaseChannel::ConsumerEndpoint>);
-
-        BufferReleaseReader(const BufferReleaseReader&) = delete;
-        BufferReleaseReader& operator=(const BufferReleaseReader&) = delete;
-
-        // Block until we can release a buffer.
-        //
-        // Returns:
-        // * OK if a ReleaseCallbackId and Fence were successfully read.
-        // * TIMED_OUT if the specified timeout was reached.
-        // * WOULD_BLOCK if the blocking read was interrupted by interruptBlockingRead.
-        // * UNKNOWN_ERROR if something went wrong.
-        status_t readBlocking(ReleaseCallbackId&, sp<Fence>&, std::chrono::milliseconds timeout);
-
-        status_t readNonBlocking(ReleaseCallbackId&, sp<Fence>&);
-
-        void interruptBlockingRead();
-
-    private:
-        std::mutex mMutex;
-        std::unique_ptr<gui::BufferReleaseChannel::ConsumerEndpoint> mEndpoint GUARDED_BY(mMutex);
-        android::base::unique_fd mEpollFd;
-        android::base::unique_fd mEventFd;
-    };
-
-    // BufferReleaseChannel is used to communicate buffer releases from SurfaceFlinger to
-    // the client. See BBQBufferQueueProducer::dequeueBuffer for details.
-    std::optional<BufferReleaseReader> mBufferReleaseReader;
-    std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint> mBufferReleaseProducer;
-
-    std::atomic_bool mDequeueShouldBlock{false};
-    void updateDequeueShouldBlockLocked() REQUIRES(mMutex);
 };
 
 } // namespace android
