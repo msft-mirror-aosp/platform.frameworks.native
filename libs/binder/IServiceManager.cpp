@@ -143,7 +143,7 @@ protected:
     // mUnifiedServiceManager->getService so that it can be overridden in ServiceManagerHostShim.
     virtual Status realGetService(const std::string& name, sp<IBinder>* _aidl_return) {
         Service service;
-        Status status = mUnifiedServiceManager->getService(name, &service);
+        Status status = mUnifiedServiceManager->getService2(name, &service);
         *_aidl_return = service.get<Service::Tag::binder>();
         return status;
     }
