@@ -72,7 +72,7 @@ public:
     inline std::optional<std::string> getDeviceTypeAssociation() const {
         return mAssociatedDeviceType;
     }
-    inline std::optional<DisplayViewport> getAssociatedViewport() const {
+    inline virtual std::optional<DisplayViewport> getAssociatedViewport() const {
         return mAssociatedViewport;
     }
     inline bool hasMic() const { return mHasMic; }
