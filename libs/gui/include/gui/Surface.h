@@ -18,6 +18,7 @@
 #define ANDROID_GUI_SURFACE_H
 
 #include <android/gui/FrameTimelineInfo.h>
+#include <com_android_graphics_libgui_flags.h>
 #include <gui/BufferQueueDefs.h>
 #include <gui/HdrMetadata.h>
 #include <gui/IGraphicBufferProducer.h>
@@ -34,6 +35,8 @@
 #include <unordered_set>
 
 namespace android {
+
+class GraphicBuffer;
 
 namespace gui {
 class ISurfaceComposer;
@@ -163,6 +166,11 @@ public:
      * buffers allocated, this function has no effect.
      */
     virtual void allocateBuffers();
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    // See IGraphicBufferProducer::allowAllocation
+    status_t allowAllocation(bool allowAllocation);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
     /* Sets the generation number on the IGraphicBufferProducer and updates the
      * generation number on any buffers attached to the Surface after this call.
@@ -394,6 +402,20 @@ public:
 
     static status_t attachAndQueueBufferWithDataspace(Surface* surface, sp<GraphicBuffer> buffer,
                                                       ui::Dataspace dataspace);
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    // Dequeues a buffer and its outFence, which must be signalled before the buffer can be used.
+    status_t dequeueBuffer(sp<GraphicBuffer>* buffer, sp<Fence>* outFence);
+
+    // Queues a buffer, with an optional fd fence that captures pending work on the buffer. This
+    // buffer must have been returned by dequeueBuffer or associated with this Surface via an
+    // attachBuffer operation.
+    status_t queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd = Fence::NO_FENCE);
+
+    // Detaches this buffer, dissociating it from this Surface. This buffer must have been returned
+    // by queueBuffer or associated with this Surface via an attachBuffer operation.
+    status_t detachBuffer(const sp<GraphicBuffer>& buffer);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
     // Batch version of dequeueBuffer, cancelBuffer and queueBuffer
     // Note that these batched operations are not supported when shared buffer mode is being used.

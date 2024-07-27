@@ -392,7 +392,16 @@ ServiceManager::~ServiceManager() {
     }
 }
 
-Status ServiceManager::getService(const std::string& name, os::Service* outService) {
+Status ServiceManager::getService(const std::string& name, sp<IBinder>* outBinder) {
+    SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_PROTO_FIELDS(
+            PERFETTO_TE_PROTO_FIELD_CSTR(kProtoServiceName, name.c_str())));
+
+    *outBinder = tryGetBinder(name, true);
+    // returns ok regardless of result for legacy reasons
+    return Status::ok();
+}
+
+Status ServiceManager::getService2(const std::string& name, os::Service* outService) {
     SM_PERFETTO_TRACE_FUNC(PERFETTO_TE_PROTO_FIELDS(
             PERFETTO_TE_PROTO_FIELD_CSTR(kProtoServiceName, name.c_str())));
 
