@@ -21,6 +21,8 @@
 #include <gui/Surface.h>
 
 #include <condition_variable>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -43,8 +45,6 @@
 
 #include <gui/AidlStatusUtil.h>
 #include <gui/BufferItem.h>
-
-#include <gui/IProducerListener.h>
 
 #include <gui/ISurfaceComposer.h>
 #include <gui/LayerState.h>
@@ -162,6 +162,12 @@ void Surface::allocateBuffers() {
     mGraphicBufferProducer->allocateBuffers(reqWidth, reqHeight,
             mReqFormat, mReqUsage);
 }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+status_t Surface::allowAllocation(bool allowAllocation) {
+    return mGraphicBufferProducer->allowAllocation(allowAllocation);
+}
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 status_t Surface::setGenerationNumber(uint32_t generation) {
     status_t result = mGraphicBufferProducer->setGenerationNumber(generation);
@@ -694,6 +700,50 @@ int Surface::dequeueBuffer(android_native_buffer_t** buffer, int* fenceFd) {
 
     return OK;
 }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
+status_t Surface::dequeueBuffer(sp<GraphicBuffer>* buffer, sp<Fence>* outFence) {
+    if (buffer == nullptr || outFence == nullptr) {
+        return BAD_VALUE;
+    }
+
+    android_native_buffer_t* anb;
+    int fd = -1;
+    status_t res = dequeueBuffer(&anb, &fd);
+    *buffer = GraphicBuffer::from(anb);
+    *outFence = sp<Fence>::make(fd);
+    return res;
+}
+
+status_t Surface::queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd) {
+    if (buffer == nullptr) {
+        return BAD_VALUE;
+    }
+    return queueBuffer(buffer.get(), fd ? fd->get() : -1);
+}
+
+status_t Surface::detachBuffer(const sp<GraphicBuffer>& buffer) {
+    if (nullptr == buffer) {
+        return BAD_VALUE;
+    }
+
+    Mutex::Autolock lock(mMutex);
+
+    uint64_t bufferId = buffer->getId();
+    for (int slot = 0; slot < Surface::NUM_BUFFER_SLOTS; ++slot) {
+        auto& bufferSlot = mSlots[slot];
+        if (bufferSlot.buffer != nullptr && bufferSlot.buffer->getId() == bufferId) {
+            bufferSlot.buffer = nullptr;
+            bufferSlot.dirtyRegion = Region::INVALID_REGION;
+            return mGraphicBufferProducer->detachBuffer(slot);
+        }
+    }
+
+    return BAD_VALUE;
+}
+
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 int Surface::dequeueBuffers(std::vector<BatchBuffer>* buffers) {
     using DequeueBufferInput = IGraphicBufferProducer::DequeueBufferInput;
@@ -1860,30 +1910,31 @@ bool Surface::transformToDisplayInverse() const {
 }
 
 int Surface::connect(int api) {
-    static sp<IProducerListener> listener = new StubProducerListener();
+    static sp<SurfaceListener> listener = new StubSurfaceListener();
     return connect(api, listener);
 }
 
-int Surface::connect(int api, const sp<IProducerListener>& listener) {
+int Surface::connect(int api, const sp<SurfaceListener>& listener) {
     return connect(api, listener, false);
 }
 
 int Surface::connect(
         int api, bool reportBufferRemoval, const sp<SurfaceListener>& sListener) {
-    if (sListener != nullptr) {
-        mListenerProxy = new ProducerListenerProxy(this, sListener);
-    }
-    return connect(api, mListenerProxy, reportBufferRemoval);
+    return connect(api, sListener, reportBufferRemoval);
 }
 
-int Surface::connect(
-        int api, const sp<IProducerListener>& listener, bool reportBufferRemoval) {
+int Surface::connect(int api, const sp<SurfaceListener>& listener, bool reportBufferRemoval) {
     ATRACE_CALL();
     ALOGV("Surface::connect");
     Mutex::Autolock lock(mMutex);
     IGraphicBufferProducer::QueueBufferOutput output;
     mReportRemovedBuffers = reportBufferRemoval;
-    int err = mGraphicBufferProducer->connect(listener, api, mProducerControlledByApp, &output);
+    if (listener != nullptr) {
+        mListenerProxy = new ProducerListenerProxy(this, listener);
+    }
+
+    int err =
+            mGraphicBufferProducer->connect(mListenerProxy, api, mProducerControlledByApp, &output);
     if (err == NO_ERROR) {
         mDefaultWidth = output.width;
         mDefaultHeight = output.height;
@@ -1910,7 +1961,6 @@ int Surface::connect(
 
     return err;
 }
-
 
 int Surface::disconnect(int api, IGraphicBufferProducer::DisconnectMode mode) {
     ATRACE_CALL();
