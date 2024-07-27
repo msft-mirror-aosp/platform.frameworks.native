@@ -104,7 +104,7 @@ private:
         void freeze(TimePoint lastVsync);
         std::optional<TimePoint> validUntil() const { return mValidUntil; }
         bool isVSyncInPhase(Model, nsecs_t vsync, Fps frameRate);
-        void shiftVsyncSequence(Duration phase);
+        void shiftVsyncSequence(Duration phase, Period minFramePeriod);
         void setRenderRate(std::optional<Fps> renderRateOpt) { mRenderRateOpt = renderRateOpt; }
 
         enum class VsyncOnTimeline {

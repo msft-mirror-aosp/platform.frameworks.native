@@ -21,6 +21,8 @@
 #include <gui/Surface.h>
 
 #include <condition_variable>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -160,6 +162,12 @@ void Surface::allocateBuffers() {
     mGraphicBufferProducer->allocateBuffers(reqWidth, reqHeight,
             mReqFormat, mReqUsage);
 }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+status_t Surface::allowAllocation(bool allowAllocation) {
+    return mGraphicBufferProducer->allowAllocation(allowAllocation);
+}
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 status_t Surface::setGenerationNumber(uint32_t generation) {
     status_t result = mGraphicBufferProducer->setGenerationNumber(generation);
@@ -692,6 +700,50 @@ int Surface::dequeueBuffer(android_native_buffer_t** buffer, int* fenceFd) {
 
     return OK;
 }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
+status_t Surface::dequeueBuffer(sp<GraphicBuffer>* buffer, sp<Fence>* outFence) {
+    if (buffer == nullptr || outFence == nullptr) {
+        return BAD_VALUE;
+    }
+
+    android_native_buffer_t* anb;
+    int fd = -1;
+    status_t res = dequeueBuffer(&anb, &fd);
+    *buffer = GraphicBuffer::from(anb);
+    *outFence = sp<Fence>::make(fd);
+    return res;
+}
+
+status_t Surface::queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd) {
+    if (buffer == nullptr) {
+        return BAD_VALUE;
+    }
+    return queueBuffer(buffer.get(), fd ? fd->get() : -1);
+}
+
+status_t Surface::detachBuffer(const sp<GraphicBuffer>& buffer) {
+    if (nullptr == buffer) {
+        return BAD_VALUE;
+    }
+
+    Mutex::Autolock lock(mMutex);
+
+    uint64_t bufferId = buffer->getId();
+    for (int slot = 0; slot < Surface::NUM_BUFFER_SLOTS; ++slot) {
+        auto& bufferSlot = mSlots[slot];
+        if (bufferSlot.buffer != nullptr && bufferSlot.buffer->getId() == bufferId) {
+            bufferSlot.buffer = nullptr;
+            bufferSlot.dirtyRegion = Region::INVALID_REGION;
+            return mGraphicBufferProducer->detachBuffer(slot);
+        }
+    }
+
+    return BAD_VALUE;
+}
+
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 int Surface::dequeueBuffers(std::vector<BatchBuffer>* buffers) {
     using DequeueBufferInput = IGraphicBufferProducer::DequeueBufferInput;
