@@ -62,7 +62,7 @@ public:
     }
 
     MOCK_METHOD(void, scheduleConfigure, (), (override));
-    MOCK_METHOD(void, scheduleFrame, (), (override));
+    MOCK_METHOD(void, scheduleFrame, (Duration), (override));
     MOCK_METHOD(void, postMessage, (sp<MessageHandler>&&), (override));
 
     void doFrameSignal(ICompositor& compositor, VsyncId vsyncId) {
