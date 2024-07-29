@@ -1539,4 +1539,48 @@ TEST_F(LayerSnapshotTest, doNotOverrideParentTrustedOverlayState) {
             gui::WindowInfo::InputConfig::TRUSTED_OVERLAY));
 }
 
+static constexpr const FloatRect LARGE_FLOAT_RECT{std::numeric_limits<float>::min(),
+                                                  std::numeric_limits<float>::min(),
+                                                  std::numeric_limits<float>::max(),
+                                                  std::numeric_limits<float>::max()};
+TEST_F(LayerSnapshotTest, layerVisibleByDefault) {
+    DisplayInfo info;
+    info.info.logicalHeight = 1000000;
+    info.info.logicalWidth = 1000000;
+    mFrontEndDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(1), info);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_FALSE(getSnapshot(1)->isHiddenByPolicy());
+}
+
+TEST_F(LayerSnapshotTest, hideLayerWithZeroMatrix) {
+    DisplayInfo info;
+    info.info.logicalHeight = 1000000;
+    info.info.logicalWidth = 1000000;
+    mFrontEndDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(1), info);
+    setMatrix(1, 0.f, 0.f, 0.f, 0.f);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, {2});
+    EXPECT_TRUE(getSnapshot(1)->isHiddenByPolicy());
+}
+
+TEST_F(LayerSnapshotTest, hideLayerWithInfMatrix) {
+    DisplayInfo info;
+    info.info.logicalHeight = 1000000;
+    info.info.logicalWidth = 1000000;
+    mFrontEndDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(1), info);
+    setMatrix(1, std::numeric_limits<float>::infinity(), 0.f, 0.f,
+              std::numeric_limits<float>::infinity());
+    UPDATE_AND_VERIFY(mSnapshotBuilder, {2});
+    EXPECT_TRUE(getSnapshot(1)->isHiddenByPolicy());
+}
+
+TEST_F(LayerSnapshotTest, hideLayerWithNanMatrix) {
+    DisplayInfo info;
+    info.info.logicalHeight = 1000000;
+    info.info.logicalWidth = 1000000;
+    mFrontEndDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(1), info);
+    setMatrix(1, std::numeric_limits<float>::quiet_NaN(), 0.f, 0.f,
+              std::numeric_limits<float>::quiet_NaN());
+    UPDATE_AND_VERIFY(mSnapshotBuilder, {2});
+    EXPECT_TRUE(getSnapshot(1)->isHiddenByPolicy());
+}
 } // namespace android::surfaceflinger::frontend

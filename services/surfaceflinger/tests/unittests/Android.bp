@@ -94,7 +94,6 @@ cc_test {
         "LayerHierarchyTest.cpp",
         "LayerLifecycleManagerTest.cpp",
         "LayerSnapshotTest.cpp",
-        "LayerTest.cpp",
         "LayerTestUtils.cpp",
         "MessageQueueTest.cpp",
         "PowerAdvisorTest.cpp",
