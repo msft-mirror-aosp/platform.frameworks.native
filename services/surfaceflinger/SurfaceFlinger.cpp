@@ -73,7 +73,7 @@
 #include <gui/Surface.h>
 #include <gui/SurfaceComposerClient.h>
 #include <hidl/ServiceManagement.h>
-#include <layerproto/LayerProtoParser.h>
+#include <layerproto/LayerProtoHeader.h>
 #include <linux/sched/types.h>
 #include <log/log.h>
 #include <private/android_filesystem_config.h>

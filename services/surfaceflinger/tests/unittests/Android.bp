@@ -153,6 +153,7 @@ cc_defaults {
         "android.hardware.power-ndk_static",
         "librenderengine_deps",
         "libsurfaceflinger_common_test_deps",
+        "libsurfaceflinger_proto_deps",
     ],
     static_libs: [
         "android.hardware.common-V2-ndk",
@@ -171,7 +172,6 @@ cc_defaults {
         "libframetimeline",
         "libgmock",
         "libgui_mocks",
-        "liblayers_proto",
         "libperfetto_client_experimental",
         "librenderengine",
         "librenderengine_mocks",
