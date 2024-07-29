@@ -58,6 +58,7 @@ cc_test {
     ],
     test_suites: ["device-tests"],
     static_libs: ["libc++fs"],
+    header_libs: ["surfaceflinger_tests_common_headers"],
     srcs: [
         ":libsurfaceflinger_mock_sources",
         ":libsurfaceflinger_sources",
@@ -93,7 +94,6 @@ cc_test {
         "LayerHierarchyTest.cpp",
         "LayerLifecycleManagerTest.cpp",
         "LayerSnapshotTest.cpp",
-        "LayerTest.cpp",
         "LayerTestUtils.cpp",
         "MessageQueueTest.cpp",
         "PowerAdvisorTest.cpp",
@@ -152,6 +152,7 @@ cc_defaults {
         "android.hardware.power-ndk_static",
         "librenderengine_deps",
         "libsurfaceflinger_common_test_deps",
+        "libsurfaceflinger_proto_deps",
     ],
     static_libs: [
         "android.hardware.common-V2-ndk",
@@ -170,7 +171,6 @@ cc_defaults {
         "libframetimeline",
         "libgmock",
         "libgui_mocks",
-        "liblayers_proto",
         "libperfetto_client_experimental",
         "librenderengine",
         "librenderengine_mocks",
@@ -209,6 +209,7 @@ cc_defaults {
         "libsync",
         "libui",
         "libutils",
+        "libtracing_perfetto",
     ],
     header_libs: [
         "android.hardware.graphics.composer3-command-buffer",

@@ -114,7 +114,7 @@ void addSample(MotionEvent& event, const InputMessage& msg) {
 
     // TODO(b/329770983): figure out if it's safe to combine events with mismatching metaState
     event.setMetaState(event.getMetaState() | msg.body.motion.metaState);
-    event.addSample(msg.body.motion.eventTime, pointerCoords.data());
+    event.addSample(msg.body.motion.eventTime, pointerCoords.data(), msg.body.motion.eventId);
 }
 
 std::unique_ptr<TouchModeEvent> createTouchModeEvent(const InputMessage& msg) {
@@ -445,6 +445,27 @@ void InputConsumerNoResampling::handleMessage(const InputMessage& msg) const {
     }
 }
 
+std::pair<std::unique_ptr<MotionEvent>, std::optional<uint32_t>>
+InputConsumerNoResampling::createBatchedMotionEvent(const nsecs_t frameTime,
+                                                    std::queue<InputMessage>& messages) {
+    std::unique_ptr<MotionEvent> motionEvent;
+    std::optional<uint32_t> firstSeqForBatch;
+    while (!messages.empty() && !(messages.front().body.motion.eventTime > frameTime)) {
+        if (motionEvent == nullptr) {
+            motionEvent = createMotionEvent(messages.front());
+            firstSeqForBatch = messages.front().header.seq;
+            const auto [_, inserted] = mBatchedSequenceNumbers.insert({*firstSeqForBatch, {}});
+            LOG_IF(FATAL, !inserted)
+                    << "The sequence " << messages.front().header.seq << " was already present!";
+        } else {
+            addSample(*motionEvent, messages.front());
+            mBatchedSequenceNumbers[*firstSeqForBatch].push_back(messages.front().header.seq);
+        }
+        messages.pop();
+    }
+    return std::make_pair(std::move(motionEvent), firstSeqForBatch);
+}
+
 bool InputConsumerNoResampling::consumeBatchedInputEvents(
         std::optional<nsecs_t> requestedFrameTime) {
     ensureCalledOnLooperThread(__func__);
@@ -452,28 +473,8 @@ bool InputConsumerNoResampling::consumeBatchedInputEvents(
     // infinite frameTime.
     const nsecs_t frameTime = requestedFrameTime.value_or(std::numeric_limits<nsecs_t>::max());
     bool producedEvents = false;
-    for (auto& [deviceId, messages] : mBatches) {
-        std::unique_ptr<MotionEvent> motion;
-        std::optional<uint32_t> firstSeqForBatch;
-        std::vector<uint32_t> sequences;
-        while (!messages.empty()) {
-            const InputMessage& msg = messages.front();
-            if (msg.body.motion.eventTime > frameTime) {
-                break;
-            }
-            if (motion == nullptr) {
-                motion = createMotionEvent(msg);
-                firstSeqForBatch = msg.header.seq;
-                const auto [_, inserted] = mBatchedSequenceNumbers.insert({*firstSeqForBatch, {}});
-                if (!inserted) {
-                    LOG(FATAL) << "The sequence " << msg.header.seq << " was already present!";
-                }
-            } else {
-                addSample(*motion, msg);
-                mBatchedSequenceNumbers[*firstSeqForBatch].push_back(msg.header.seq);
-            }
-            messages.pop();
-        }
+    for (auto& [_, messages] : mBatches) {
+        auto [motion, firstSeqForBatch] = createBatchedMotionEvent(frameTime, messages);
         if (motion != nullptr) {
             LOG_ALWAYS_FATAL_IF(!firstSeqForBatch.has_value());
             mCallbacks.onMotionEvent(std::move(motion), *firstSeqForBatch);
