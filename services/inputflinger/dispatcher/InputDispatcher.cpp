@@ -2448,12 +2448,19 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
         if (isDown) {
             targets += findOutsideTargetsLocked(displayId, newTouchedWindowHandle, pointer.id);
         }
+        LOG_IF(INFO, newTouchedWindowHandle == nullptr)
+                << "No new touched window at (" << std::format("{:.1f}, {:.1f}", x, y)
+                << ") in display " << displayId;
         // Handle the case where we did not find a window.
-        if (newTouchedWindowHandle == nullptr) {
-            ALOGD("No new touched window at (%.1f, %.1f) in display %s", x, y,
-                  displayId.toString().c_str());
-            // Try to assign the pointer to the first foreground window we find, if there is one.
-            newTouchedWindowHandle = tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
+        if (!input_flags::split_all_touches()) {
+            // If we are force splitting all touches, then touches outside of the window should
+            // be dropped, even if this device already has pointers down in another window.
+            if (newTouchedWindowHandle == nullptr) {
+                // Try to assign the pointer to the first foreground window we find, if there is
+                // one.
+                newTouchedWindowHandle =
+                        tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
+            }
         }
 
         // Verify targeted injection.
@@ -7007,6 +7014,13 @@ void InputDispatcher::onWindowInfosChanged(const gui::WindowInfosUpdate& update)
     for (const auto& info : update.windowInfos) {
         handlesPerDisplay.emplace(info.displayId, std::vector<sp<WindowInfoHandle>>());
         handlesPerDisplay[info.displayId].push_back(sp<WindowInfoHandle>::make(info));
+        if (input_flags::split_all_touches()) {
+            handlesPerDisplay[info.displayId]
+                    .back()
+                    ->editInfo()
+                    ->setInputConfig(android::gui::WindowInfo::InputConfig::PREVENT_SPLITTING,
+                                     false);
+        }
     }
 
     { // acquire lock

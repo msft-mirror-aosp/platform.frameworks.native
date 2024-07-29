@@ -37,6 +37,14 @@ flag {
 } # trace_frame_rate_override
 
 flag {
+  name: "wb_consumer_base_owns_bq"
+  namespace: "core_graphics"
+  description: "ConsumerBase-based classes now own their own bufferqueue"
+  bug: "340933754"
+  is_fixed_read_only: true
+} # wb_consumer_base_owns_bq
+
+flag {
   name: "wb_platform_api_improvements"
   namespace: "core_graphics"
   description: "Simple improvements to Surface and ConsumerBase classes"

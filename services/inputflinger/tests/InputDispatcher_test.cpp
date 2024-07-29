@@ -4168,6 +4168,7 @@ TEST_F(InputDispatcherTest, SplitTouchesSendCorrectActionDownTime) {
  * the event routing because the first window prevents splitting.
  */
 TEST_F(InputDispatcherTest, SplitTouchesSendCorrectActionDownTimeForNewWindow) {
+    SCOPED_FLAG_OVERRIDE(split_all_touches, false);
     std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
     sp<FakeWindowHandle> window1 =
             sp<FakeWindowHandle>::make(application, mDispatcher, "Window1", DISPLAY_ID);
@@ -4225,6 +4226,7 @@ TEST_F(InputDispatcherTest, SplitTouchesSendCorrectActionDownTimeForNewWindow) {
  * (and the touch occurred outside of the bounds of window1).
  */
 TEST_F(InputDispatcherTest, SplitTouchesDropsEventForNonSplittableSecondWindow) {
+    SCOPED_FLAG_OVERRIDE(split_all_touches, false);
     std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
     sp<FakeWindowHandle> window1 =
             sp<FakeWindowHandle>::make(application, mDispatcher, "Window1", DISPLAY_ID);
@@ -4600,6 +4602,7 @@ class SpyThatPreventsSplittingWithApplicationFixture : public InputDispatcherTes
  * This test attempts to reproduce a crash in the dispatcher.
  */
 TEST_P(SpyThatPreventsSplittingWithApplicationFixture, SpyThatPreventsSplittingWithApplication) {
+    SCOPED_FLAG_OVERRIDE(split_all_touches, false);
     std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
 
     sp<FakeWindowHandle> spyWindow = sp<FakeWindowHandle>::make(application, mDispatcher, "Spy",
@@ -5583,6 +5586,7 @@ TEST_F(InputDispatcherTest, OnWindowInfosChanged_RemoveAllWindowsOnDisplay) {
 }
 
 TEST_F(InputDispatcherTest, NonSplitTouchableWindowReceivesMultiTouch) {
+    SCOPED_FLAG_OVERRIDE(split_all_touches, false);
     std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
     sp<FakeWindowHandle> window =
             sp<FakeWindowHandle>::make(application, mDispatcher, "Fake Window",
@@ -5628,6 +5632,7 @@ TEST_F(InputDispatcherTest, NonSplitTouchableWindowReceivesMultiTouch) {
  * "incomplete" gestures.
  */
 TEST_F(InputDispatcherTest, SplittableAndNonSplittableWindows) {
+    SCOPED_FLAG_OVERRIDE(split_all_touches, false);
     std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
     sp<FakeWindowHandle> leftWindow =
             sp<FakeWindowHandle>::make(application, mDispatcher, "Left splittable Window",
@@ -5665,6 +5670,7 @@ TEST_F(InputDispatcherTest, SplittableAndNonSplittableWindows) {
  * This test attempts to reproduce a crash.
  */
 TEST_F(InputDispatcherTest, MultiDeviceTwoWindowsPreventSplitting) {
+    SCOPED_FLAG_OVERRIDE(split_all_touches, false);
     std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
     sp<FakeWindowHandle> leftWindow =
             sp<FakeWindowHandle>::make(application, mDispatcher, "Left window (prevent splitting)",
@@ -8411,6 +8417,7 @@ TEST_F(InputDispatcherTest, HoverEnterExitSynthesisUsesNewEventId) {
  * the previous window should receive this event and not be dropped.
  */
 TEST_F(InputDispatcherMultiDeviceTest, SingleDevicePointerDownEventRetentionWithoutWindowTarget) {
+    SCOPED_FLAG_OVERRIDE(split_all_touches, false);
     std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
     sp<FakeWindowHandle> window = sp<FakeWindowHandle>::make(application, mDispatcher, "Window",
                                                              ui::LogicalDisplayId::DEFAULT);
