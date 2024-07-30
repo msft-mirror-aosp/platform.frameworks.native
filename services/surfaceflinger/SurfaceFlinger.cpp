@@ -2521,7 +2521,9 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
         it->second->latchBufferImpl(unused, latchTime, bgColorOnly);
         newDataLatched = true;
 
-        mLayersWithQueuedFrames.emplace(it->second);
+        frontend::LayerSnapshot* snapshot = mLayerSnapshotBuilder.getSnapshot(it->second->sequence);
+        gui::GameMode gameMode = (snapshot) ? snapshot->gameMode : gui::GameMode::Unsupported;
+        mLayersWithQueuedFrames.emplace(it->second, gameMode);
         mLayersIdsWithQueuedFrames.emplace(it->second->sequence);
     }
 
@@ -2750,16 +2752,12 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
 
     const bool updateTaskMetadata = mCompositionEngine->getFeatureFlags().test(
             compositionengine::Feature::kSnapshotLayerMetadata);
-    if (updateTaskMetadata && (mVisibleRegionsDirty || mLayerMetadataSnapshotNeeded)) {
-        updateLayerMetadataSnapshot();
-        mLayerMetadataSnapshotNeeded = false;
-    }
 
     refreshArgs.bufferIdsToUncache = std::move(mBufferIdsToUncache);
 
     if (!FlagManager::getInstance().ce_fence_promise()) {
         refreshArgs.layersWithQueuedFrames.reserve(mLayersWithQueuedFrames.size());
-        for (auto& layer : mLayersWithQueuedFrames) {
+        for (auto& [layer, _] : mLayersWithQueuedFrames) {
             if (const auto& layerFE = layer->getCompositionEngineLayerFE())
                 refreshArgs.layersWithQueuedFrames.push_back(layerFE);
         }
@@ -2835,7 +2833,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         }
 
         refreshArgs.layersWithQueuedFrames.reserve(mLayersWithQueuedFrames.size());
-        for (auto& layer : mLayersWithQueuedFrames) {
+        for (auto& [layer, _] : mLayersWithQueuedFrames) {
             if (const auto& layerFE = layer->getCompositionEngineLayerFE()) {
                 refreshArgs.layersWithQueuedFrames.push_back(layerFE);
                 // Some layers are not displayed and do not yet have a future release fence
@@ -3141,10 +3139,10 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
     }
     mLayersWithBuffersRemoved.clear();
 
-    for (const auto& layer: mLayersWithQueuedFrames) {
+    for (const auto& [layer, gameMode] : mLayersWithQueuedFrames) {
         layer->onCompositionPresented(pacesetterDisplay.get(),
                                       pacesetterGpuCompositionDoneFenceTime,
-                                      pacesetterPresentFenceTime, compositorTiming);
+                                      pacesetterPresentFenceTime, compositorTiming, gameMode);
         layer->releasePendingBuffer(presentTime.ns());
     }
 
@@ -5191,6 +5189,17 @@ uint32_t SurfaceFlinger::updateLayerCallbacksAndStats(const FrameTimelineInfo& f
                     sp<CallbackHandle>::make(listener, callbackIds, s.surface));
         }
     }
+
+    frontend::LayerSnapshot* snapshot = nullptr;
+    gui::GameMode gameMode = gui::GameMode::Unsupported;
+    if (what & (layer_state_t::eSidebandStreamChanged | layer_state_t::eBufferChanged) ||
+        frameTimelineInfo.vsyncId != FrameTimelineInfo::INVALID_VSYNC_ID) {
+        snapshot = mLayerSnapshotBuilder.getSnapshot(layer->sequence);
+        if (snapshot) {
+            gameMode = snapshot->gameMode;
+        }
+    }
+
     // TODO(b/238781169) remove after screenshot refactor, currently screenshots
     // requires to read drawing state from binder thread. So we need to fix that
     // before removing this.
@@ -5205,7 +5214,7 @@ uint32_t SurfaceFlinger::updateLayerCallbacksAndStats(const FrameTimelineInfo& f
         if (layer->setCrop(s.crop)) flags |= eTraversalNeeded;
     }
     if (what & layer_state_t::eSidebandStreamChanged) {
-        if (layer->setSidebandStream(s.sidebandStream, frameTimelineInfo, postTime))
+        if (layer->setSidebandStream(s.sidebandStream, frameTimelineInfo, postTime, gameMode))
             flags |= eTraversalNeeded;
     }
     if (what & layer_state_t::eDataspaceChanged) {
@@ -5223,18 +5232,17 @@ uint32_t SurfaceFlinger::updateLayerCallbacksAndStats(const FrameTimelineInfo& f
     }
     if (what & layer_state_t::eBufferChanged) {
         std::optional<ui::Transform::RotationFlags> transformHint = std::nullopt;
-        frontend::LayerSnapshot* snapshot = mLayerSnapshotBuilder.getSnapshot(layer->sequence);
         if (snapshot) {
             transformHint = snapshot->transformHint;
         }
         layer->setTransformHint(transformHint);
         if (layer->setBuffer(composerState.externalTexture, *s.bufferData, postTime,
-                             desiredPresentTime, isAutoTimestamp, frameTimelineInfo)) {
+                             desiredPresentTime, isAutoTimestamp, frameTimelineInfo, gameMode)) {
             flags |= eTraversalNeeded;
         }
-        mLayersWithQueuedFrames.emplace(layer);
+        mLayersWithQueuedFrames.emplace(layer, gameMode);
     } else if (frameTimelineInfo.vsyncId != FrameTimelineInfo::INVALID_VSYNC_ID) {
-        layer->setFrameTimelineVsyncForBufferlessTransaction(frameTimelineInfo, postTime);
+        layer->setFrameTimelineVsyncForBufferlessTransaction(frameTimelineInfo, postTime, gameMode);
     }
 
     if ((what & layer_state_t::eBufferChanged) == 0) {
@@ -8484,31 +8492,6 @@ std::shared_ptr<renderengine::ExternalTexture> SurfaceFlinger::getExternalTextur
     }
 
     return nullptr;
-}
-
-void SurfaceFlinger::updateLayerMetadataSnapshot() {
-    LayerMetadata parentMetadata;
-    for (const auto& layer : mDrawingState.layersSortedByZ) {
-        layer->updateMetadataSnapshot(parentMetadata);
-    }
-
-    std::unordered_set<Layer*> visited;
-    mDrawingState.traverse([&visited](Layer* layer) {
-        if (visited.find(layer) != visited.end()) {
-            return;
-        }
-
-        // If the layer isRelativeOf, then either it's relative metadata will be set
-        // recursively when updateRelativeMetadataSnapshot is called on its relative parent or
-        // it's relative parent has been deleted. Clear the layer's relativeLayerMetadata to ensure
-        // that layers with deleted relative parents don't hold stale relativeLayerMetadata.
-        if (layer->getDrawingState().isRelativeOf) {
-            layer->editLayerSnapshot()->relativeLayerMetadata = {};
-            return;
-        }
-
-        layer->updateRelativeMetadataSnapshot({}, visited);
-    });
 }
 
 void SurfaceFlinger::moveSnapshotsFromCompositionArgs(
