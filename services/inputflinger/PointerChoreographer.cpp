@@ -21,6 +21,7 @@
 #if defined(__ANDROID__)
 #include <gui/SurfaceComposerClient.h>
 #endif
+#include <input/Keyboard.h>
 #include <input/PrintTools.h>
 #include <unordered_set>
 
@@ -137,6 +138,7 @@ PointerChoreographer::PointerChoreographer(
         mNotifiedPointerDisplayId(ui::LogicalDisplayId::INVALID),
         mShowTouchesEnabled(false),
         mStylusPointerIconEnabled(false),
+        mCurrentFocusedDisplay(ui::LogicalDisplayId::DEFAULT),
         mRegisterListener(registerListener),
         mUnregisterListener(unregisterListener) {}
 
@@ -163,11 +165,8 @@ void PointerChoreographer::notifyInputDevicesChanged(const NotifyInputDevicesCha
     mNextListener.notify(args);
 }
 
-void PointerChoreographer::notifyConfigurationChanged(const NotifyConfigurationChangedArgs& args) {
-    mNextListener.notify(args);
-}
-
 void PointerChoreographer::notifyKey(const NotifyKeyArgs& args) {
+    fadeMouseCursorOnKeyPress(args);
     mNextListener.notify(args);
 }
 
@@ -175,6 +174,33 @@ void PointerChoreographer::notifyMotion(const NotifyMotionArgs& args) {
     NotifyMotionArgs newArgs = processMotion(args);
 
     mNextListener.notify(newArgs);
+}
+
+void PointerChoreographer::fadeMouseCursorOnKeyPress(const android::NotifyKeyArgs& args) {
+    if (args.action == AKEY_EVENT_ACTION_UP || isMetaKey(args.keyCode)) {
+        return;
+    }
+    // Meta state for these keys is ignored for dismissing cursor while typing
+    constexpr static int32_t ALLOW_FADING_META_STATE_MASK = AMETA_CAPS_LOCK_ON | AMETA_NUM_LOCK_ON |
+            AMETA_SCROLL_LOCK_ON | AMETA_SHIFT_LEFT_ON | AMETA_SHIFT_RIGHT_ON | AMETA_SHIFT_ON;
+    if (args.metaState & ~ALLOW_FADING_META_STATE_MASK) {
+        // Do not fade if any other meta state is active
+        return;
+    }
+    if (!mPolicy.isInputMethodConnectionActive()) {
+        return;
+    }
+
+    std::scoped_lock _l(mLock);
+    ui::LogicalDisplayId targetDisplay = args.displayId;
+    if (targetDisplay == ui::LogicalDisplayId::INVALID) {
+        targetDisplay = mCurrentFocusedDisplay;
+    }
+    auto it = mMousePointersByDisplay.find(targetDisplay);
+    if (it != mMousePointersByDisplay.end()) {
+        mPolicy.notifyMouseCursorFadedOnTyping();
+        it->second->fade(PointerControllerInterface::Transition::GRADUAL);
+    }
 }
 
 NotifyMotionArgs PointerChoreographer::processMotion(const NotifyMotionArgs& args) {
@@ -338,7 +364,8 @@ void PointerChoreographer::processTouchscreenAndStylusEventLocked(const NotifyMo
     const uint8_t actionIndex = MotionEvent::getActionIndex(args.action);
     std::array<uint32_t, MAX_POINTER_ID + 1> idToIndex;
     BitSet32 idBits;
-    if (maskedAction != AMOTION_EVENT_ACTION_UP && maskedAction != AMOTION_EVENT_ACTION_CANCEL) {
+    if (maskedAction != AMOTION_EVENT_ACTION_UP && maskedAction != AMOTION_EVENT_ACTION_CANCEL &&
+        maskedAction != AMOTION_EVENT_ACTION_HOVER_EXIT) {
         for (size_t i = 0; i < args.getPointerCount(); i++) {
             if (maskedAction == AMOTION_EVENT_ACTION_POINTER_UP && actionIndex == i) {
                 continue;
@@ -804,6 +831,11 @@ void PointerChoreographer::setPointerIconVisibility(ui::LogicalDisplayId display
             controller->fade(PointerControllerInterface::Transition::IMMEDIATE);
         }
     }
+}
+
+void PointerChoreographer::setFocusedDisplay(ui::LogicalDisplayId displayId) {
+    std::scoped_lock lock(mLock);
+    mCurrentFocusedDisplay = displayId;
 }
 
 PointerChoreographer::ControllerConstructor PointerChoreographer::getMouseControllerConstructor(

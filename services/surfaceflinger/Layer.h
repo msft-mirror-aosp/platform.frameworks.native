@@ -312,7 +312,7 @@ public:
     bool setBuffer(std::shared_ptr<renderengine::ExternalTexture>& /* buffer */,
                    const BufferData& /* bufferData */, nsecs_t /* postTime */,
                    nsecs_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/,
-                   std::optional<nsecs_t> /* dequeueTime */, const FrameTimelineInfo& /*info*/);
+                   const FrameTimelineInfo& /*info*/, gui::GameMode gameMode);
     void setDesiredPresentTime(nsecs_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/);
     bool setDataspace(ui::Dataspace /*dataspace*/);
     bool setExtendedRangeBrightness(float currentBufferRatio, float desiredRatio);
@@ -322,7 +322,8 @@ public:
     bool setSurfaceDamageRegion(const Region& /*surfaceDamage*/);
     bool setApi(int32_t /*api*/);
     bool setSidebandStream(const sp<NativeHandle>& /*sidebandStream*/,
-                           const FrameTimelineInfo& /* info*/, nsecs_t /* postTime */);
+                           const FrameTimelineInfo& /* info*/, nsecs_t /* postTime */,
+                           gui::GameMode gameMode);
     bool setTransactionCompletedListeners(const std::vector<sp<CallbackHandle>>& /*handles*/,
                                           bool willPresent);
     virtual bool setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace)
@@ -439,7 +440,7 @@ public:
     void onCompositionPresented(const DisplayDevice*,
                                 const std::shared_ptr<FenceTime>& /*glDoneFence*/,
                                 const std::shared_ptr<FenceTime>& /*presentFence*/,
-                                const CompositorTiming&);
+                                const CompositorTiming&, gui::GameMode gameMode);
 
     // If a buffer was replaced this frame, release the former buffer
     void releasePendingBuffer(nsecs_t /*dequeueReadyTime*/);
@@ -794,9 +795,10 @@ public:
     bool setFrameRateSelectionStrategy(FrameRateSelectionStrategy);
 
     virtual void setFrameTimelineInfoForBuffer(const FrameTimelineInfo& /*info*/) {}
-    void setFrameTimelineVsyncForBufferTransaction(const FrameTimelineInfo& info, nsecs_t postTime);
+    void setFrameTimelineVsyncForBufferTransaction(const FrameTimelineInfo& info, nsecs_t postTime,
+                                                   gui::GameMode gameMode);
     void setFrameTimelineVsyncForBufferlessTransaction(const FrameTimelineInfo& info,
-                                                       nsecs_t postTime);
+                                                       nsecs_t postTime, gui::GameMode gameMode);
 
     void addSurfaceFrameDroppedForBuffer(std::shared_ptr<frametimeline::SurfaceFrame>& surfaceFrame,
                                          nsecs_t dropTime);
@@ -805,11 +807,12 @@ public:
             nsecs_t currentLatchTime);
 
     std::shared_ptr<frametimeline::SurfaceFrame> createSurfaceFrameForTransaction(
-            const FrameTimelineInfo& info, nsecs_t postTime);
+            const FrameTimelineInfo& info, nsecs_t postTime, gui::GameMode gameMode);
     std::shared_ptr<frametimeline::SurfaceFrame> createSurfaceFrameForBuffer(
-            const FrameTimelineInfo& info, nsecs_t queueTime, std::string debugName);
+            const FrameTimelineInfo& info, nsecs_t queueTime, std::string debugName,
+            gui::GameMode gameMode);
     void setFrameTimelineVsyncForSkippedFrames(const FrameTimelineInfo& info, nsecs_t postTime,
-                                               std::string debugName);
+                                               std::string debugName, gui::GameMode gameMode);
 
     bool setTrustedPresentationInfo(TrustedPresentationThresholds const& thresholds,
                                     TrustedPresentationListener const& listener);
@@ -831,13 +834,6 @@ public:
      * Returns whether this layer has an explicitly set input-info.
      */
     bool hasInputInfo() const;
-
-    // Sets the gui::GameMode for the tree rooted at this layer. A layer in the tree inherits this
-    // gui::GameMode unless it (or an ancestor) has GAME_MODE_METADATA.
-    void setGameModeForTree(gui::GameMode);
-
-    void setGameMode(gui::GameMode gameMode) { mGameMode = gameMode; }
-    gui::GameMode getGameMode() const { return mGameMode; }
 
     virtual uid_t getOwnerUid() const { return mOwnerUid; }
 
@@ -899,9 +895,6 @@ public:
     // CompositionEngine to create a single path for composing layers.
     void updateSnapshot(bool updateGeometry);
     void updateChildrenSnapshots(bool updateGeometry);
-    void updateMetadataSnapshot(const LayerMetadata& parentMetadata);
-    void updateRelativeMetadataSnapshot(const LayerMetadata& relativeLayerMetadata,
-                                        std::unordered_set<Layer*>& visited);
     sp<Layer> getClonedFrom() const {
         return mClonedFrom != nullptr ? mClonedFrom.promote() : nullptr;
     }
@@ -980,7 +973,6 @@ protected:
     void preparePerFrameBufferCompositionState();
     void preparePerFrameEffectsCompositionState();
     void gatherBufferInfo();
-    void onSurfaceFrameCreated(const std::shared_ptr<frametimeline::SurfaceFrame>&);
 
     bool isClonedFromAlive() { return getClonedFrom() != nullptr; }
 
@@ -1195,11 +1187,6 @@ private:
 
     bool hasSomethingToDraw() const { return hasEffect() || hasBufferOrSidebandStream(); }
 
-    // Fills the provided vector with the currently available JankData and removes the processed
-    // JankData from the pending list.
-    void transferAvailableJankData(const std::deque<sp<CallbackHandle>>& handles,
-                                   std::vector<JankData>& jankData);
-
     bool shouldOverrideChildrenFrameRate() const {
         return getDrawingState().frameRateSelectionStrategy ==
                 FrameRateSelectionStrategy::OverrideChildren;
@@ -1268,14 +1255,10 @@ private:
     // time.
     std::variant<nsecs_t, sp<Fence>> mCallbackHandleAcquireTimeOrFence = -1;
 
-    std::deque<std::shared_ptr<android::frametimeline::SurfaceFrame>> mPendingJankClassifications;
-    // An upper bound on the number of SurfaceFrames in the pending classifications deque.
-    static constexpr int kPendingClassificationMaxSurfaceFrames = 50;
-
     const std::string mBlastTransactionName{"BufferTX - " + mName};
     // This integer is incremented everytime a buffer arrives at the server for this layer,
     // and decremented when a buffer is dropped or latched. When changed the integer is exported
-    // to systrace with ATRACE_INT and mBlastTransactionName. This way when debugging perf it is
+    // to systrace with SFTRACE_INT and mBlastTransactionName. This way when debugging perf it is
     // possible to see when a buffer arrived at the server, and in which frame it latched.
     //
     // You can understand the trace this way:

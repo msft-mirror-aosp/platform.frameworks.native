@@ -54,13 +54,6 @@ void FakeInputDispatcherPolicy::assertFilterInputEventWasNotCalled() {
     ASSERT_EQ(nullptr, mFilteredEvent);
 }
 
-void FakeInputDispatcherPolicy::assertNotifyConfigurationChangedWasCalled(nsecs_t when) {
-    std::scoped_lock lock(mLock);
-    ASSERT_TRUE(mConfigurationChangedTime) << "Timed out waiting for configuration changed call";
-    ASSERT_EQ(*mConfigurationChangedTime, when);
-    mConfigurationChangedTime = std::nullopt;
-}
-
 void FakeInputDispatcherPolicy::assertNotifySwitchWasCalled(const NotifySwitchArgs& args) {
     std::scoped_lock lock(mLock);
     ASSERT_TRUE(mLastNotifySwitch);
@@ -215,6 +208,28 @@ void FakeInputDispatcherPolicy::setStaleEventTimeout(std::chrono::nanoseconds ti
     mStaleEventTimeout = timeout;
 }
 
+void FakeInputDispatcherPolicy::setConsumeKeyBeforeDispatching(bool consumeKeyBeforeDispatching) {
+    mConsumeKeyBeforeDispatching = consumeKeyBeforeDispatching;
+}
+
+void FakeInputDispatcherPolicy::assertFocusedDisplayNotified(ui::LogicalDisplayId expectedDisplay) {
+    std::unique_lock lock(mLock);
+    base::ScopedLockAssertion assumeLocked(mLock);
+
+    if (!mFocusedDisplayNotifiedCondition.wait_for(lock, 100ms,
+                                                   [this, expectedDisplay]() REQUIRES(mLock) {
+                                                       if (!mNotifiedFocusedDisplay.has_value() ||
+                                                           mNotifiedFocusedDisplay.value() !=
+                                                                   expectedDisplay) {
+                                                           return false;
+                                                       }
+                                                       return true;
+                                                   })) {
+        ADD_FAILURE() << "Timed out waiting for notifyFocusedDisplayChanged(" << expectedDisplay
+                      << ") to be called.";
+    }
+}
+
 void FakeInputDispatcherPolicy::assertUserActivityNotPoked() {
     std::unique_lock lock(mLock);
     base::ScopedLockAssertion assumeLocked(mLock);
@@ -320,11 +335,6 @@ std::optional<T> FakeInputDispatcherPolicy::getItemFromStorageLockedInterruptibl
     return std::make_optional(item);
 }
 
-void FakeInputDispatcherPolicy::notifyConfigurationChanged(nsecs_t when) {
-    std::scoped_lock lock(mLock);
-    mConfigurationChangedTime = when;
-}
-
 void FakeInputDispatcherPolicy::notifyWindowUnresponsive(const sp<IBinder>& connectionToken,
                                                          std::optional<gui::Pid> pid,
                                                          const std::string&) {
@@ -401,6 +411,9 @@ void FakeInputDispatcherPolicy::interceptMotionBeforeQueueing(ui::LogicalDisplay
 
 nsecs_t FakeInputDispatcherPolicy::interceptKeyBeforeDispatching(const sp<IBinder>&,
                                                                  const KeyEvent&, uint32_t) {
+    if (mConsumeKeyBeforeDispatching) {
+        return -1;
+    }
     nsecs_t delay = std::chrono::nanoseconds(mInterceptKeyTimeout).count();
     // Clear intercept state so we could dispatch the event in next wake.
     mInterceptKeyTimeout = 0ms;
@@ -464,6 +477,12 @@ void FakeInputDispatcherPolicy::assertFilterInputEventWasCalledInternal(
     ASSERT_NE(nullptr, mFilteredEvent) << "Expected filterInputEvent() to have been called.";
     verify(*mFilteredEvent);
     mFilteredEvent = nullptr;
+}
+
+void FakeInputDispatcherPolicy::notifyFocusedDisplayChanged(ui::LogicalDisplayId displayId) {
+    std::scoped_lock lock(mLock);
+    mNotifiedFocusedDisplay = displayId;
+    mFocusedDisplayNotifiedCondition.notify_all();
 }
 
 } // namespace android

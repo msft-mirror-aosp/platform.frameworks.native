@@ -16,6 +16,7 @@
 
 #include "FakeInputReaderPolicy.h"
 
+#include <android-base/properties.h>
 #include <android-base/thread_annotations.h>
 #include <gtest/gtest.h>
 
@@ -23,6 +24,12 @@
 #include "ui/Rotation.h"
 
 namespace android {
+
+namespace {
+
+static const int HW_TIMEOUT_MULTIPLIER = base::GetIntProperty("ro.hw_timeout_multiplier", 1);
+
+} // namespace
 
 void FakeInputReaderPolicy::assertInputDevicesChanged() {
     waitForInputDevices([](bool devicesChanged) {
@@ -241,9 +248,11 @@ void FakeInputReaderPolicy::waitForInputDevices(std::function<void(bool)> proces
     base::ScopedLockAssertion assumeLocked(mLock);
 
     const bool devicesChanged =
-            mDevicesChangedCondition.wait_for(lock, WAIT_TIMEOUT, [this]() REQUIRES(mLock) {
-                return mInputDevicesChanged;
-            });
+            mDevicesChangedCondition.wait_for(lock,
+                                              ADD_INPUT_DEVICE_TIMEOUT * HW_TIMEOUT_MULTIPLIER,
+                                              [this]() REQUIRES(mLock) {
+                                                  return mInputDevicesChanged;
+                                              });
     ASSERT_NO_FATAL_FAILURE(processDevicesChanged(devicesChanged));
     mInputDevicesChanged = false;
 }

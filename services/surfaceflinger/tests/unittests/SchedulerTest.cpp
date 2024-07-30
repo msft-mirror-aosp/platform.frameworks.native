@@ -34,6 +34,7 @@
 #include "mock/MockSchedulerCallback.h"
 
 #include <FrontEnd/LayerHierarchy.h>
+#include <scheduler/FrameTime.h>
 
 #include <com_android_graphics_surfaceflinger_flags.h>
 #include "FpsOps.h"
@@ -343,12 +344,15 @@ TEST_F(SchedulerTest, chooseDisplayModesSingleDisplayHighHintTouchSignal) {
 }
 
 TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
+    constexpr PhysicalDisplayId kActiveDisplayId = kDisplayId1;
     mScheduler->registerDisplay(kDisplayId1,
                                 std::make_shared<RefreshRateSelector>(kDisplay1Modes,
-                                                                      kDisplay1Mode60->getId()));
+                                                                      kDisplay1Mode60->getId()),
+                                kActiveDisplayId);
     mScheduler->registerDisplay(kDisplayId2,
                                 std::make_shared<RefreshRateSelector>(kDisplay2Modes,
-                                                                      kDisplay2Mode60->getId()));
+                                                                      kDisplay2Mode60->getId()),
+                                kActiveDisplayId);
 
     mScheduler->setDisplayPowerMode(kDisplayId1, hal::PowerMode::ON);
     mScheduler->setDisplayPowerMode(kDisplayId2, hal::PowerMode::ON);
@@ -411,10 +415,10 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
     {
         // The kDisplayId3 does not support 120Hz, The pacesetter display rate is chosen to be 120
         // Hz. In this case only the display kDisplayId3 choose 60Hz as it does not support 120Hz.
-        mScheduler
-                ->registerDisplay(kDisplayId3,
-                                  std::make_shared<RefreshRateSelector>(kDisplay3Modes,
-                                                                        kDisplay3Mode60->getId()));
+        mScheduler->registerDisplay(kDisplayId3,
+                                    std::make_shared<RefreshRateSelector>(kDisplay3Modes,
+                                                                          kDisplay3Mode60->getId()),
+                                    kActiveDisplayId);
         mScheduler->setDisplayPowerMode(kDisplayId3, hal::PowerMode::ON);
 
         const GlobalSignals globalSignals = {.touch = true};
@@ -457,12 +461,15 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
 }
 
 TEST_F(SchedulerTest, onFrameSignalMultipleDisplays) {
+    constexpr PhysicalDisplayId kActiveDisplayId = kDisplayId1;
     mScheduler->registerDisplay(kDisplayId1,
                                 std::make_shared<RefreshRateSelector>(kDisplay1Modes,
-                                                                      kDisplay1Mode60->getId()));
+                                                                      kDisplay1Mode60->getId()),
+                                kActiveDisplayId);
     mScheduler->registerDisplay(kDisplayId2,
                                 std::make_shared<RefreshRateSelector>(kDisplay2Modes,
-                                                                      kDisplay2Mode60->getId()));
+                                                                      kDisplay2Mode60->getId()),
+                                kActiveDisplayId);
 
     using VsyncIds = std::vector<std::pair<PhysicalDisplayId, VsyncId>>;
 
@@ -585,7 +592,8 @@ TEST_F(SchedulerTest, nextFrameIntervalTest) {
                                 mFlinger.getTimeStats(),
                                 mSchedulerCallback};
 
-    scheduler.registerDisplay(kMode->getPhysicalDisplayId(), vrrSelectorPtr, vrrTracker);
+    scheduler.registerDisplay(kMode->getPhysicalDisplayId(), vrrSelectorPtr, std::nullopt,
+                              vrrTracker);
     vrrSelectorPtr->setActiveMode(kMode->getId(), frameRate);
     scheduler.setRenderRate(kMode->getPhysicalDisplayId(), frameRate, /*applyImmediately*/ false);
     vrrTracker->addVsyncTimestamp(0);
@@ -600,7 +608,8 @@ TEST_F(SchedulerTest, nextFrameIntervalTest) {
                                              TimePoint::fromNs(2000)));
 
     // Not crossing the min frame period
-    vrrTracker->onFrameBegin(TimePoint::fromNs(2000), TimePoint::fromNs(1500));
+    vrrTracker->onFrameBegin(TimePoint::fromNs(2000),
+                             {TimePoint::fromNs(1500), TimePoint::fromNs(1500)});
     EXPECT_EQ(Fps::fromPeriodNsecs(1000),
               scheduler.getNextFrameInterval(kMode->getPhysicalDisplayId(),
                                              TimePoint::fromNs(2500)));

@@ -53,7 +53,7 @@ public:
                       factory, selectorPtr->getActiveMode().fps, timeStats) {
         const auto displayId = selectorPtr->getActiveMode().modePtr->getPhysicalDisplayId();
         registerDisplay(displayId, std::move(selectorPtr), std::move(controller),
-                        std::move(tracker));
+                        std::move(tracker), displayId);
 
         ON_CALL(*this, postMessage).WillByDefault([](sp<MessageHandler>&& handler) {
             // Execute task to prevent broken promise exception on destruction.
@@ -62,7 +62,7 @@ public:
     }
 
     MOCK_METHOD(void, scheduleConfigure, (), (override));
-    MOCK_METHOD(void, scheduleFrame, (), (override));
+    MOCK_METHOD(void, scheduleFrame, (Duration), (override));
     MOCK_METHOD(void, postMessage, (sp<MessageHandler>&&), (override));
 
     void doFrameSignal(ICompositor& compositor, VsyncId vsyncId) {
@@ -85,14 +85,16 @@ public:
 
     void registerDisplay(
             PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr,
+            std::optional<PhysicalDisplayId> activeDisplayIdOpt = {},
             std::shared_ptr<VSyncTracker> vsyncTracker = std::make_shared<mock::VSyncTracker>()) {
         registerDisplay(displayId, std::move(selectorPtr),
-                        std::make_unique<mock::VsyncController>(), vsyncTracker);
+                        std::make_unique<mock::VsyncController>(), vsyncTracker,
+                        activeDisplayIdOpt.value_or(displayId));
     }
 
     void registerDisplay(PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr,
                          std::unique_ptr<VsyncController> controller,
-                         std::shared_ptr<VSyncTracker> tracker) {
+                         std::shared_ptr<VSyncTracker> tracker, PhysicalDisplayId activeDisplayId) {
         ftl::FakeGuard guard(kMainThreadContext);
         Scheduler::registerDisplayInternal(displayId, std::move(selectorPtr),
                                            std::shared_ptr<VsyncSchedule>(
@@ -101,15 +103,11 @@ public:
                                                                              mock::VSyncDispatch>(),
                                                                      std::move(controller),
                                                                      mockRequestHardwareVsync
-                                                                             .AsStdFunction())));
+                                                                             .AsStdFunction())),
+                                           activeDisplayId);
     }
 
     testing::MockFunction<void(PhysicalDisplayId, bool)> mockRequestHardwareVsync;
-
-    void unregisterDisplay(PhysicalDisplayId displayId) {
-        ftl::FakeGuard guard(kMainThreadContext);
-        Scheduler::unregisterDisplay(displayId);
-    }
 
     void setDisplayPowerMode(PhysicalDisplayId displayId, hal::PowerMode powerMode) {
         ftl::FakeGuard guard(kMainThreadContext);
