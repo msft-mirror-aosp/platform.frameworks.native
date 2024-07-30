@@ -899,9 +899,6 @@ public:
     // CompositionEngine to create a single path for composing layers.
     void updateSnapshot(bool updateGeometry);
     void updateChildrenSnapshots(bool updateGeometry);
-    void updateMetadataSnapshot(const LayerMetadata& parentMetadata);
-    void updateRelativeMetadataSnapshot(const LayerMetadata& relativeLayerMetadata,
-                                        std::unordered_set<Layer*>& visited);
     sp<Layer> getClonedFrom() const {
         return mClonedFrom != nullptr ? mClonedFrom.promote() : nullptr;
     }

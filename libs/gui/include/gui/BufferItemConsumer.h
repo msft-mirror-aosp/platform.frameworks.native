@@ -17,13 +17,15 @@
 #ifndef ANDROID_GUI_BUFFERITEMCONSUMER_H
 #define ANDROID_GUI_BUFFERITEMCONSUMER_H
 
-#include <gui/ConsumerBase.h>
+#include <com_android_graphics_libgui_flags.h>
 #include <gui/BufferQueue.h>
+#include <gui/ConsumerBase.h>
 
 #define ANDROID_GRAPHICS_BUFFERITEMCONSUMER_JNI_ID "mBufferItemConsumer"
 
 namespace android {
 
+class GraphicBuffer;
 class String8;
 
 /**
@@ -85,7 +87,15 @@ class BufferItemConsumer: public ConsumerBase
     status_t releaseBuffer(const BufferItem &item,
             const sp<Fence>& releaseFence = Fence::NO_FENCE);
 
-   private:
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    status_t releaseBuffer(const sp<GraphicBuffer>& buffer,
+                           const sp<Fence>& releaseFence = Fence::NO_FENCE);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
+private:
+    status_t releaseBufferSlotLocked(int slotIndex, const sp<GraphicBuffer>& buffer,
+                                     const sp<Fence>& releaseFence);
+
     void freeBufferLocked(int slotIndex) override;
 
     // mBufferFreedListener is the listener object that will be called when

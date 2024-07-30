@@ -34,6 +34,8 @@
 #include <shared_mutex>
 #include <unordered_set>
 
+#include <com_android_graphics_libgui_flags.h>
+
 namespace android {
 
 class GraphicBuffer;
@@ -60,6 +62,10 @@ public:
 
     virtual void onBuffersDiscarded(const std::vector<sp<GraphicBuffer>>& buffers) = 0;
     virtual void onBufferDetached(int slot) = 0;
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_CONSUMER_ATTACH_CALLBACK)
+    virtual void onBufferAttached() {}
+    virtual bool needsAttachNotify() { return false; }
+#endif
 };
 
 class StubSurfaceListener : public SurfaceListener {
@@ -455,6 +461,15 @@ protected:
         virtual void onBufferDetached(int slot) { mSurfaceListener->onBufferDetached(slot); }
 
         virtual void onBuffersDiscarded(const std::vector<int32_t>& slots);
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_CONSUMER_ATTACH_CALLBACK)
+        virtual void onBufferAttached() {
+            mSurfaceListener->onBufferAttached();
+        }
+
+        virtual bool needsAttachNotify() {
+            return mSurfaceListener->needsAttachNotify();
+        }
+#endif
     private:
         wp<Surface> mParent;
         sp<SurfaceListener> mSurfaceListener;
