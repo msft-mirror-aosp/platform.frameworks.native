@@ -30,15 +30,18 @@
 #include <cutils/atomic.h>
 
 #include <gui/BufferItem.h>
+#include <gui/ConsumerBase.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/SurfaceComposerClient.h>
-#include <gui/ConsumerBase.h>
+#include <ui/BufferQueueDefs.h>
 
 #include <private/gui/ComposerService.h>
 
 #include <utils/Log.h>
 #include <utils/String8.h>
 #include <utils/Trace.h>
+
+#include <com_android_graphics_libgui_flags.h>
 
 // Macros for including the ConsumerBase name in log messages
 #define CB_LOGV(x, ...) ALOGV("[%s] " x, mName.c_str(), ##__VA_ARGS__)
@@ -94,6 +97,35 @@ ConsumerBase::~ConsumerBase() {
 
 void ConsumerBase::onLastStrongRef(const void* id __attribute__((unused))) {
     abandon();
+}
+
+int ConsumerBase::getSlotForBufferLocked(const sp<GraphicBuffer>& buffer) {
+    if (!buffer) {
+        return BufferQueue::INVALID_BUFFER_SLOT;
+    }
+
+    uint64_t id = buffer->getId();
+    for (int i = 0; i < BufferQueueDefs::NUM_BUFFER_SLOTS; i++) {
+        auto& slot = mSlots[i];
+        if (slot.mGraphicBuffer && slot.mGraphicBuffer->getId() == id) {
+            return i;
+        }
+    }
+
+    return BufferQueue::INVALID_BUFFER_SLOT;
+}
+
+status_t ConsumerBase::detachBufferLocked(int slotIndex) {
+    status_t result = mConsumer->detachBuffer(slotIndex);
+
+    if (result != NO_ERROR) {
+        CB_LOGE("Failed to detach buffer: %d", result);
+        return result;
+    }
+
+    freeBufferLocked(slotIndex);
+
+    return result;
 }
 
 void ConsumerBase::freeBufferLocked(int slotIndex) {
@@ -252,16 +284,30 @@ status_t ConsumerBase::detachBuffer(int slot) {
         return NO_INIT;
     }
 
-    status_t result = mConsumer->detachBuffer(slot);
-    if (result != NO_ERROR) {
-        CB_LOGE("Failed to detach buffer: %d", result);
-        return result;
+    return detachBufferLocked(slot);
+}
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+status_t ConsumerBase::detachBuffer(const sp<GraphicBuffer>& buffer) {
+    CB_LOGV("detachBuffer");
+    Mutex::Autolock lock(mMutex);
+
+    if (mAbandoned) {
+        CB_LOGE("detachBuffer: ConsumerBase is abandoned!");
+        return NO_INIT;
+    }
+    if (buffer == nullptr) {
+        return BAD_VALUE;
     }
 
-    freeBufferLocked(slot);
+    int slotIndex = getSlotForBufferLocked(buffer);
+    if (slotIndex == BufferQueue::INVALID_BUFFER_SLOT) {
+        return BAD_VALUE;
+    }
 
-    return result;
+    return detachBufferLocked(slotIndex);
 }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 status_t ConsumerBase::setDefaultBufferSize(uint32_t width, uint32_t height) {
     Mutex::Autolock _l(mMutex);
