@@ -17,17 +17,15 @@
 #ifndef ANDROID_GUI_CONSUMERBASE_H
 #define ANDROID_GUI_CONSUMERBASE_H
 
+#include <com_android_graphics_libgui_flags.h>
 #include <gui/BufferQueueDefs.h>
 #include <gui/IConsumerListener.h>
 #include <gui/IGraphicBufferConsumer.h>
 #include <gui/OccupancyTracker.h>
-
 #include <ui/PixelFormat.h>
-
 #include <utils/String8.h>
 #include <utils/Vector.h>
 #include <utils/threads.h>
-
 
 namespace android {
 // ----------------------------------------------------------------------------
@@ -81,7 +79,13 @@ public:
     void setFrameAvailableListener(const wp<FrameAvailableListener>& listener);
 
     // See IGraphicBufferConsumer::detachBuffer
-    status_t detachBuffer(int slot);
+    status_t detachBuffer(int slot) __attribute((
+            deprecated("Please use the GraphicBuffer variant--slots are deprecated.")));
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    // See IGraphicBufferConsumer::detachBuffer
+    status_t detachBuffer(const sp<GraphicBuffer>& buffer);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
     // See IGraphicBufferConsumer::setDefaultBufferSize
     status_t setDefaultBufferSize(uint32_t width, uint32_t height);
@@ -149,6 +153,10 @@ protected:
     virtual void onFrameDetached(const uint64_t bufferId) override;
     virtual void onBuffersReleased() override;
     virtual void onSidebandStreamChanged() override;
+
+    virtual int getSlotForBufferLocked(const sp<GraphicBuffer>& buffer);
+
+    virtual status_t detachBufferLocked(int slotIndex);
 
     // freeBufferLocked frees up the given buffer slot.  If the slot has been
     // initialized this will release the reference to the GraphicBuffer in that

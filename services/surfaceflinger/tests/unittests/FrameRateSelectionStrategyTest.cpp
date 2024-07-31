@@ -28,6 +28,7 @@
 
 namespace android {
 
+using testing::_;
 using testing::DoAll;
 using testing::Mock;
 using testing::SetArgPointee;
@@ -91,7 +92,7 @@ INSTANTIATE_TEST_SUITE_P(PerLayerType, FrameRateSelectionStrategyTest,
                          PrintToStringParamName);
 
 TEST_P(FrameRateSelectionStrategyTest, SetAndGet) {
-    EXPECT_CALL(*mFlinger.scheduler(), scheduleFrame()).Times(1);
+    EXPECT_CALL(*mFlinger.scheduler(), scheduleFrame(_)).Times(1);
 
     const auto& layerFactory = GetParam();
     auto layer = mLayers.emplace_back(layerFactory->createLayer(mFlinger));
@@ -104,7 +105,7 @@ TEST_P(FrameRateSelectionStrategyTest, SetAndGet) {
 }
 
 TEST_P(FrameRateSelectionStrategyTest, SetChildOverrideChildren) {
-    EXPECT_CALL(*mFlinger.scheduler(), scheduleFrame()).Times(1);
+    EXPECT_CALL(*mFlinger.scheduler(), scheduleFrame(_)).Times(1);
 
     const auto& layerFactory = GetParam();
     auto parent = mLayers.emplace_back(layerFactory->createLayer(mFlinger));
@@ -128,7 +129,7 @@ TEST_P(FrameRateSelectionStrategyTest, SetChildOverrideChildren) {
 }
 
 TEST_P(FrameRateSelectionStrategyTest, SetParentOverrideChildren) {
-    EXPECT_CALL(*mFlinger.scheduler(), scheduleFrame()).Times(1);
+    EXPECT_CALL(*mFlinger.scheduler(), scheduleFrame(_)).Times(1);
 
     const auto& layerFactory = GetParam();
     auto layer1 = mLayers.emplace_back(layerFactory->createLayer(mFlinger));
@@ -169,7 +170,7 @@ TEST_P(FrameRateSelectionStrategyTest, SetParentOverrideChildren) {
 }
 
 TEST_P(FrameRateSelectionStrategyTest, OverrideChildrenAndSelf) {
-    EXPECT_CALL(*mFlinger.scheduler(), scheduleFrame()).Times(1);
+    EXPECT_CALL(*mFlinger.scheduler(), scheduleFrame(_)).Times(1);
 
     const auto& layerFactory = GetParam();
     auto layer1 = mLayers.emplace_back(layerFactory->createLayer(mFlinger));
