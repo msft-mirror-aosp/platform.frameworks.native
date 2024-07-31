@@ -211,7 +211,7 @@ void PowerAdvisor::sendHintSessionHint(SessionHint hint) {
         return;
     }
     SFTRACE_CALL();
-    if (sTraceHintSessionData) ATRACE_INT("Session hint", static_cast<int>(hint));
+    if (sTraceHintSessionData) SFTRACE_INT("Session hint", static_cast<int>(hint));
     {
         std::scoped_lock lock(mHintSessionMutex);
         if (!ensurePowerHintSessionRunning()) {
@@ -298,7 +298,7 @@ void PowerAdvisor::updateTargetWorkDuration(Duration targetDuration) {
     SFTRACE_CALL();
     {
         mTargetDuration = targetDuration;
-        if (sTraceHintSessionData) ATRACE_INT64("Time target", targetDuration.ns());
+        if (sTraceHintSessionData) SFTRACE_INT64("Time target", targetDuration.ns());
         if (targetDuration == mLastTargetDurationSent) return;
         std::scoped_lock lock(mHintSessionMutex);
         if (!ensurePowerHintSessionRunning()) {

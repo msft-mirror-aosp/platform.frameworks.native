@@ -79,7 +79,7 @@ public:
 
 private:
     void trace() {
-        if (CC_LIKELY(!ATRACE_ENABLED())) {
+        if (CC_LIKELY(!SFTRACE_ENABLED())) {
             return;
         }
 

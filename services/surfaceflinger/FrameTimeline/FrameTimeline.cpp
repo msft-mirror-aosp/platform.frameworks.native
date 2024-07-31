@@ -359,7 +359,11 @@ void SurfaceFrame::setActualQueueTime(nsecs_t actualQueueTime) {
 
 void SurfaceFrame::setAcquireFenceTime(nsecs_t acquireFenceTime) {
     std::scoped_lock lock(mMutex);
-    mActuals.endTime = std::max(acquireFenceTime, mActualQueueTime);
+    if (CC_UNLIKELY(acquireFenceTime == Fence::SIGNAL_TIME_PENDING)) {
+        mActuals.endTime = mActualQueueTime;
+    } else {
+        mActuals.endTime = std::max(acquireFenceTime, mActualQueueTime);
+    }
 }
 
 void SurfaceFrame::setDropTime(nsecs_t dropTime) {

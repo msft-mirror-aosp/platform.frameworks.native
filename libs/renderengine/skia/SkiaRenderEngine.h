@@ -38,6 +38,7 @@
 #include "compat/SkiaGpuContext.h"
 #include "debug/SkiaCapture.h"
 #include "filters/BlurFilter.h"
+#include "filters/EdgeExtensionShaderFactory.h"
 #include "filters/LinearEffect.h"
 #include "filters/StretchShaderFactory.h"
 
@@ -156,6 +157,7 @@ private:
         float layerDimmingRatio;
         const ui::Dataspace outputDataSpace;
         const ui::Dataspace fakeOutputDataspace;
+        const SkRect& imageBounds;
     };
     sk_sp<SkShader> createRuntimeEffectShader(const RuntimeEffectShaderParameters&);
 
@@ -175,6 +177,7 @@ private:
     AutoBackendTexture::CleanupManager mTextureCleanupMgr GUARDED_BY(mRenderingMutex);
 
     StretchShaderFactory mStretchShaderFactory;
+    EdgeExtensionShaderFactory mEdgeExtensionShaderFactory;
 
     sp<Fence> mLastDrawFence;
     BlurFilter* mBlurFilter = nullptr;
