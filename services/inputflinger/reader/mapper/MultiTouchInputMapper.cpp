@@ -189,10 +189,14 @@ std::list<NotifyArgs> MultiTouchInputMapper::reconfigure(nsecs_t when,
 void MultiTouchInputMapper::configureRawPointerAxes() {
     TouchInputMapper::configureRawPointerAxes();
 
-    // We can safely assume that ABS_MT_POSITION_X and _Y axes will be available, as EventHub won't
-    // classify a device as multitouch if they're not present.
-    mRawPointerAxes.x = getAbsoluteAxisInfo(ABS_MT_POSITION_X).value();
-    mRawPointerAxes.y = getAbsoluteAxisInfo(ABS_MT_POSITION_Y).value();
+    // TODO(b/351870641): Investigate why we are sometime not getting valid axis infos for the x/y
+    //   axes, even though those axes are required to be supported.
+    if (const auto xInfo = getAbsoluteAxisInfo(ABS_MT_POSITION_X); xInfo.has_value()) {
+        mRawPointerAxes.x = *xInfo;
+    }
+    if (const auto yInfo = getAbsoluteAxisInfo(ABS_MT_POSITION_Y); yInfo.has_value()) {
+        mRawPointerAxes.y = *yInfo;
+    }
     mRawPointerAxes.touchMajor = getAbsoluteAxisInfo(ABS_MT_TOUCH_MAJOR);
     mRawPointerAxes.touchMinor = getAbsoluteAxisInfo(ABS_MT_TOUCH_MINOR);
     mRawPointerAxes.toolMajor = getAbsoluteAxisInfo(ABS_MT_WIDTH_MAJOR);
