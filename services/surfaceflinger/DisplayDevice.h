@@ -98,7 +98,7 @@ public:
     ui::Size getSize() const { return {getWidth(), getHeight()}; }
 
     void setLayerFilter(ui::LayerFilter);
-    void setDisplaySize(int width, int height);
+    void setDisplaySize(ui::Size);
     void setProjection(ui::Rotation orientation, Rect viewport, Rect frame);
     void stageBrightness(float brightness) REQUIRES(kMainThreadContext);
     void persistBrightness(bool needsComposite) REQUIRES(kMainThreadContext);
