@@ -17,39 +17,57 @@
 
 #pragma once
 
-#include <cutils/trace.h>
-#include <stdint.h>
+#ifndef ATRACE_TAG
+#define ATRACE_TAG ATRACE_TAG_GRAPHICS
+#endif
 
-#define SFTRACE_ENABLED() ATRACE_ENABLED()
-#define SFTRACE_BEGIN(name) ATRACE_BEGIN(name)
-#define SFTRACE_END() ATRACE_END()
-#define SFTRACE_ASYNC_BEGIN(name, cookie) ATRACE_ASYNC_BEGIN(name, cookie)
-#define SFTRACE_ASYNC_END(name, cookie) ATRACE_ASYNC_END(name, cookie)
+#include <cutils/trace.h>
+#include <tracing_perfetto.h>
+
+// prevent using atrace directly, calls should go through tracing_perfetto lib
+#undef ATRACE_ENABLED
+#undef ATRACE_BEGIN
+#undef ATRACE_END
+#undef ATRACE_ASYNC_BEGIN
+#undef ATRACE_ASYNC_END
+#undef ATRACE_ASYNC_FOR_TRACK_BEGIN
+#undef ATRACE_ASYNC_FOR_TRACK_END
+#undef ATRACE_INSTANT
+#undef ATRACE_INSTANT_FOR_TRACK
+#undef ATRACE_INT
+#undef ATRACE_INT64
+#undef ATRACE_CALL
+#undef ATRACE_NAME
+#undef ATRACE_FORMAT
+#undef ATRACE_FORMAT_INSTANT
+
+#define SFTRACE_ENABLED() ::tracing_perfetto::isTagEnabled(ATRACE_TAG)
+#define SFTRACE_BEGIN(name) ::tracing_perfetto::traceBegin(ATRACE_TAG, name)
+#define SFTRACE_END() ::tracing_perfetto::traceEnd(ATRACE_TAG)
+#define SFTRACE_ASYNC_BEGIN(name, cookie) \
+    ::tracing_perfetto::traceAsyncBegin(ATRACE_TAG, name, cookie)
+#define SFTRACE_ASYNC_END(name, cookie) ::tracing_perfetto::traceAsyncEnd(ATRACE_TAG, name, cookie)
 #define SFTRACE_ASYNC_FOR_TRACK_BEGIN(track_name, name, cookie) \
-    ATRACE_ASYNC_FOR_TRACK_BEGIN(track_name, name, cookie)
+    ::tracing_perfetto::traceAsyncBeginForTrack(ATRACE_TAG, track_name, name, cookie)
 #define SFTRACE_ASYNC_FOR_TRACK_END(track_name, cookie) \
-    ATRACE_ASYNC_FOR_TRACK_END(track_name, cookie)
-#define SFTRACE_INSTANT(name) ATRACE_INSTANT(name)
-#define SFTRACE_INSTANT_FOR_TRACK(trackName, name) ATRACE_INSTANT_FOR_TRACK(trackName, name)
-#define SFTRACE_INT(name, value) ATRACE_INT(name, value)
-#define SFTRACE_INT64(name, value) ATRACE_INT64(name, value)
+    ::tracing_perfetto::traceAsyncEndForTrack(ATRACE_TAG, track_name, cookie)
+#define SFTRACE_INSTANT(name) ::tracing_perfetto::traceInstant(ATRACE_TAG, name)
+#define SFTRACE_FORMAT_INSTANT(fmt, ...) \
+    ::tracing_perfetto::traceFormatInstant(ATRACE_TAG, fmt, ##__VA_ARGS__)
+#define SFTRACE_INSTANT_FOR_TRACK(trackName, name) \
+    ::tracing_perfetto::traceInstantForTrack(ATRACE_TAG, trackName, name)
+#define SFTRACE_INT(name, value) ::tracing_perfetto::traceCounter32(ATRACE_TAG, name, value)
+#define SFTRACE_INT64(name, value) ::tracing_perfetto::traceCounter(ATRACE_TAG, name, value)
 
 // SFTRACE_NAME traces from its location until the end of its enclosing scope.
 #define _PASTE(x, y) x##y
 #define PASTE(x, y) _PASTE(x, y)
-#define SFTRACE_NAME(name) ::android::ScopedTrace PASTE(___tracer, __LINE__)(ATRACE_TAG, name)
-
-// SFTRACE_CALL is an ATRACE_NAME that uses the current function name.
+#define SFTRACE_NAME(name) ::android::ScopedTrace PASTE(___tracer, __LINE__)(name)
+// SFTRACE_CALL is an SFTRACE_NAME that uses the current function name.
 #define SFTRACE_CALL() SFTRACE_NAME(__FUNCTION__)
 
-#define SFTRACE_FORMAT(fmt, ...)                                                \
-    TraceUtils::TraceEnder traceEnder =                                         \
-            (CC_UNLIKELY(ATRACE_ENABLED()) &&                                   \
-                     (TraceUtils::atraceFormatBegin(fmt, ##__VA_ARGS__), true), \
-             TraceUtils::TraceEnder())
-
-#define SFTRACE_FORMAT_INSTANT(fmt, ...) \
-    (CC_UNLIKELY(ATRACE_ENABLED()) && (TraceUtils::instantFormat(fmt, ##__VA_ARGS__), true))
+#define SFTRACE_FORMAT(fmt, ...) \
+    ::android::ScopedTrace PASTE(___tracer, __LINE__)(fmt, ##__VA_ARGS__)
 
 #define ALOGE_AND_TRACE(fmt, ...)                   \
     do {                                            \
@@ -59,46 +77,14 @@
 
 namespace android {
 
-class TraceUtils {
-public:
-    class TraceEnder {
-    public:
-        ~TraceEnder() { ATRACE_END(); }
-    };
-
-    static void atraceFormatBegin(const char* fmt, ...) {
-        const int BUFFER_SIZE = 256;
-        va_list ap;
-        char buf[BUFFER_SIZE];
-
-        va_start(ap, fmt);
-        vsnprintf(buf, BUFFER_SIZE, fmt, ap);
-        va_end(ap);
-
-        SFTRACE_BEGIN(buf);
-    }
-
-    static void instantFormat(const char* fmt, ...) {
-        const int BUFFER_SIZE = 256;
-        va_list ap;
-        char buf[BUFFER_SIZE];
-
-        va_start(ap, fmt);
-        vsnprintf(buf, BUFFER_SIZE, fmt, ap);
-        va_end(ap);
-
-        SFTRACE_INSTANT(buf);
-    }
-};
-
 class ScopedTrace {
 public:
-    inline ScopedTrace(uint64_t tag, const char* name) : mTag(tag) { atrace_begin(mTag, name); }
-
-    inline ~ScopedTrace() { atrace_end(mTag); }
-
-private:
-    uint64_t mTag;
+    template <typename... Args>
+    inline ScopedTrace(const char* fmt, Args&&... args) {
+        ::tracing_perfetto::traceFormatBegin(ATRACE_TAG, fmt, std::forward<Args>(args)...);
+    }
+    inline ScopedTrace(const char* name) { SFTRACE_BEGIN(name); }
+    inline ~ScopedTrace() { SFTRACE_END(); }
 };
 
 } // namespace android
