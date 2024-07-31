@@ -609,8 +609,9 @@ bool RequestedLayerState::isSimpleBufferUpdate(const layer_state_t& s) const {
             layer_state_t::eSidebandStreamChanged | layer_state_t::eColorSpaceAgnosticChanged |
             layer_state_t::eShadowRadiusChanged | layer_state_t::eFixedTransformHintChanged |
             layer_state_t::eTrustedOverlayChanged | layer_state_t::eStretchChanged |
-            layer_state_t::eBufferCropChanged | layer_state_t::eDestinationFrameChanged |
-            layer_state_t::eDimmingEnabledChanged | layer_state_t::eExtendedRangeBrightnessChanged |
+            layer_state_t::eEdgeExtensionChanged | layer_state_t::eBufferCropChanged |
+            layer_state_t::eDestinationFrameChanged | layer_state_t::eDimmingEnabledChanged |
+            layer_state_t::eExtendedRangeBrightnessChanged |
             layer_state_t::eDesiredHdrHeadroomChanged |
             (FlagManager::getInstance().latch_unsignaled_with_auto_refresh_changed()
                      ? layer_state_t::eFlagsChanged

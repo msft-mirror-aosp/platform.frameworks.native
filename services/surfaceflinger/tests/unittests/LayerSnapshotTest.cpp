@@ -281,22 +281,40 @@ TEST_F(LayerSnapshotTest, FastPathSetsChangeFlagToContent) {
     EXPECT_EQ(getSnapshot(1)->clientChanges, layer_state_t::eColorChanged);
 }
 
-TEST_F(LayerSnapshotTest, GameMode) {
-    std::vector<TransactionState> transactions;
-    transactions.emplace_back();
-    transactions.back().states.push_back({});
-    transactions.back().states.front().state.what = layer_state_t::eMetadataChanged;
-    transactions.back().states.front().state.metadata = LayerMetadata();
-    transactions.back().states.front().state.metadata.setInt32(METADATA_GAME_MODE, 42);
-    transactions.back().states.front().layerId = 1;
-    transactions.back().states.front().state.layerId = static_cast<int32_t>(1);
-    mLifecycleManager.applyTransactions(transactions);
+TEST_F(LayerSnapshotTest, ChildrenInheritGameMode) {
+    setGameMode(1, gui::GameMode::Performance);
     EXPECT_EQ(mLifecycleManager.getGlobalChanges(),
               RequestedLayerState::Changes::GameMode | RequestedLayerState::Changes::Metadata);
     UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
     EXPECT_EQ(getSnapshot(1)->clientChanges, layer_state_t::eMetadataChanged);
-    EXPECT_EQ(static_cast<int32_t>(getSnapshot(1)->gameMode), 42);
-    EXPECT_EQ(static_cast<int32_t>(getSnapshot(11)->gameMode), 42);
+    EXPECT_EQ(getSnapshot(1)->gameMode, gui::GameMode::Performance);
+    EXPECT_EQ(getSnapshot(11)->gameMode, gui::GameMode::Performance);
+}
+
+TEST_F(LayerSnapshotTest, ChildrenCanOverrideGameMode) {
+    setGameMode(1, gui::GameMode::Performance);
+    setGameMode(11, gui::GameMode::Battery);
+    EXPECT_EQ(mLifecycleManager.getGlobalChanges(),
+              RequestedLayerState::Changes::GameMode | RequestedLayerState::Changes::Metadata);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot(1)->clientChanges, layer_state_t::eMetadataChanged);
+    EXPECT_EQ(getSnapshot(1)->gameMode, gui::GameMode::Performance);
+    EXPECT_EQ(getSnapshot(11)->gameMode, gui::GameMode::Battery);
+}
+
+TEST_F(LayerSnapshotTest, ReparentingUpdatesGameMode) {
+    setGameMode(1, gui::GameMode::Performance);
+    EXPECT_EQ(mLifecycleManager.getGlobalChanges(),
+              RequestedLayerState::Changes::GameMode | RequestedLayerState::Changes::Metadata);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot(1)->clientChanges, layer_state_t::eMetadataChanged);
+    EXPECT_EQ(getSnapshot(1)->gameMode, gui::GameMode::Performance);
+    EXPECT_EQ(getSnapshot(2)->gameMode, gui::GameMode::Unsupported);
+
+    reparentLayer(2, 1);
+    setZ(2, 2);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot(2)->gameMode, gui::GameMode::Performance);
 }
 
 TEST_F(LayerSnapshotTest, UpdateMetadata) {
@@ -1539,4 +1557,48 @@ TEST_F(LayerSnapshotTest, doNotOverrideParentTrustedOverlayState) {
             gui::WindowInfo::InputConfig::TRUSTED_OVERLAY));
 }
 
+static constexpr const FloatRect LARGE_FLOAT_RECT{std::numeric_limits<float>::min(),
+                                                  std::numeric_limits<float>::min(),
+                                                  std::numeric_limits<float>::max(),
+                                                  std::numeric_limits<float>::max()};
+TEST_F(LayerSnapshotTest, layerVisibleByDefault) {
+    DisplayInfo info;
+    info.info.logicalHeight = 1000000;
+    info.info.logicalWidth = 1000000;
+    mFrontEndDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(1), info);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_FALSE(getSnapshot(1)->isHiddenByPolicy());
+}
+
+TEST_F(LayerSnapshotTest, hideLayerWithZeroMatrix) {
+    DisplayInfo info;
+    info.info.logicalHeight = 1000000;
+    info.info.logicalWidth = 1000000;
+    mFrontEndDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(1), info);
+    setMatrix(1, 0.f, 0.f, 0.f, 0.f);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, {2});
+    EXPECT_TRUE(getSnapshot(1)->isHiddenByPolicy());
+}
+
+TEST_F(LayerSnapshotTest, hideLayerWithInfMatrix) {
+    DisplayInfo info;
+    info.info.logicalHeight = 1000000;
+    info.info.logicalWidth = 1000000;
+    mFrontEndDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(1), info);
+    setMatrix(1, std::numeric_limits<float>::infinity(), 0.f, 0.f,
+              std::numeric_limits<float>::infinity());
+    UPDATE_AND_VERIFY(mSnapshotBuilder, {2});
+    EXPECT_TRUE(getSnapshot(1)->isHiddenByPolicy());
+}
+
+TEST_F(LayerSnapshotTest, hideLayerWithNanMatrix) {
+    DisplayInfo info;
+    info.info.logicalHeight = 1000000;
+    info.info.logicalWidth = 1000000;
+    mFrontEndDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(1), info);
+    setMatrix(1, std::numeric_limits<float>::quiet_NaN(), 0.f, 0.f,
+              std::numeric_limits<float>::quiet_NaN());
+    UPDATE_AND_VERIFY(mSnapshotBuilder, {2});
+    EXPECT_TRUE(getSnapshot(1)->isHiddenByPolicy());
+}
 } // namespace android::surfaceflinger::frontend
