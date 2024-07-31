@@ -285,7 +285,9 @@ static const void* printCommand(std::ostream& out, const void* _cmd) {
     return cmd;
 }
 
+LIBBINDER_IGNORE("-Wzero-as-null-pointer-constant")
 static pthread_mutex_t gTLSMutex = PTHREAD_MUTEX_INITIALIZER;
+LIBBINDER_IGNORE_END()
 static std::atomic<bool> gHaveTLS(false);
 static pthread_key_t gTLS = 0;
 static std::atomic<bool> gShutdown = false;

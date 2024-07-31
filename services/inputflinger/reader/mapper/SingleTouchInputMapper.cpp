@@ -72,10 +72,14 @@ void SingleTouchInputMapper::syncTouch(nsecs_t when, RawState* outState) {
 void SingleTouchInputMapper::configureRawPointerAxes() {
     TouchInputMapper::configureRawPointerAxes();
 
-    // We can safely assume that ABS_X and _Y axes will be available, as EventHub won't classify a
-    // device as a touch device if they're not present.
-    mRawPointerAxes.x = getAbsoluteAxisInfo(ABS_X).value();
-    mRawPointerAxes.y = getAbsoluteAxisInfo(ABS_Y).value();
+    // TODO(b/351870641): Investigate why we are sometime not getting valid axis infos for the x/y
+    //   axes, even though those axes are required to be supported.
+    if (const auto xInfo = getAbsoluteAxisInfo(ABS_X); xInfo.has_value()) {
+        mRawPointerAxes.x = *xInfo;
+    }
+    if (const auto yInfo = getAbsoluteAxisInfo(ABS_Y); yInfo.has_value()) {
+        mRawPointerAxes.y = *yInfo;
+    }
     mRawPointerAxes.pressure = getAbsoluteAxisInfo(ABS_PRESSURE);
     mRawPointerAxes.toolMajor = getAbsoluteAxisInfo(ABS_TOOL_WIDTH);
     mRawPointerAxes.distance = getAbsoluteAxisInfo(ABS_DISTANCE);

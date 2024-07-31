@@ -36,7 +36,7 @@ public:
     inline void release() { f_.reset(); }
 
 private:
-    friend scope_guard<F> android::binder::impl::make_scope_guard(F);
+    friend scope_guard<F> android::binder::impl::make_scope_guard<>(F);
 
     inline scope_guard(F&& f) : f_(std::move(f)) {}
 

@@ -58,6 +58,19 @@
         }                                       \
     } while (0)
 
+#define LIBBINDER_PRAGMA(arg) _Pragma(#arg)
+#if defined(__clang__)
+#define LIBBINDER_PRAGMA_FOR_COMPILER(arg) LIBBINDER_PRAGMA(clang arg)
+#elif defined(__GNUC__)
+#define LIBBINDER_PRAGMA_FOR_COMPILER(arg) LIBBINDER_PRAGMA(GCC arg)
+#else
+#define LIBBINDER_PRAGMA_FOR_COMPILER(arg)
+#endif
+#define LIBBINDER_IGNORE(warning_flag)             \
+    LIBBINDER_PRAGMA_FOR_COMPILER(diagnostic push) \
+    LIBBINDER_PRAGMA_FOR_COMPILER(diagnostic ignored warning_flag)
+#define LIBBINDER_IGNORE_END() LIBBINDER_PRAGMA_FOR_COMPILER(diagnostic pop)
+
 namespace android {
 
 /**
