@@ -281,22 +281,40 @@ TEST_F(LayerSnapshotTest, FastPathSetsChangeFlagToContent) {
     EXPECT_EQ(getSnapshot(1)->clientChanges, layer_state_t::eColorChanged);
 }
 
-TEST_F(LayerSnapshotTest, GameMode) {
-    std::vector<TransactionState> transactions;
-    transactions.emplace_back();
-    transactions.back().states.push_back({});
-    transactions.back().states.front().state.what = layer_state_t::eMetadataChanged;
-    transactions.back().states.front().state.metadata = LayerMetadata();
-    transactions.back().states.front().state.metadata.setInt32(METADATA_GAME_MODE, 42);
-    transactions.back().states.front().layerId = 1;
-    transactions.back().states.front().state.layerId = static_cast<int32_t>(1);
-    mLifecycleManager.applyTransactions(transactions);
+TEST_F(LayerSnapshotTest, ChildrenInheritGameMode) {
+    setGameMode(1, gui::GameMode::Performance);
     EXPECT_EQ(mLifecycleManager.getGlobalChanges(),
               RequestedLayerState::Changes::GameMode | RequestedLayerState::Changes::Metadata);
     UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
     EXPECT_EQ(getSnapshot(1)->clientChanges, layer_state_t::eMetadataChanged);
-    EXPECT_EQ(static_cast<int32_t>(getSnapshot(1)->gameMode), 42);
-    EXPECT_EQ(static_cast<int32_t>(getSnapshot(11)->gameMode), 42);
+    EXPECT_EQ(getSnapshot(1)->gameMode, gui::GameMode::Performance);
+    EXPECT_EQ(getSnapshot(11)->gameMode, gui::GameMode::Performance);
+}
+
+TEST_F(LayerSnapshotTest, ChildrenCanOverrideGameMode) {
+    setGameMode(1, gui::GameMode::Performance);
+    setGameMode(11, gui::GameMode::Battery);
+    EXPECT_EQ(mLifecycleManager.getGlobalChanges(),
+              RequestedLayerState::Changes::GameMode | RequestedLayerState::Changes::Metadata);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot(1)->clientChanges, layer_state_t::eMetadataChanged);
+    EXPECT_EQ(getSnapshot(1)->gameMode, gui::GameMode::Performance);
+    EXPECT_EQ(getSnapshot(11)->gameMode, gui::GameMode::Battery);
+}
+
+TEST_F(LayerSnapshotTest, ReparentingUpdatesGameMode) {
+    setGameMode(1, gui::GameMode::Performance);
+    EXPECT_EQ(mLifecycleManager.getGlobalChanges(),
+              RequestedLayerState::Changes::GameMode | RequestedLayerState::Changes::Metadata);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot(1)->clientChanges, layer_state_t::eMetadataChanged);
+    EXPECT_EQ(getSnapshot(1)->gameMode, gui::GameMode::Performance);
+    EXPECT_EQ(getSnapshot(2)->gameMode, gui::GameMode::Unsupported);
+
+    reparentLayer(2, 1);
+    setZ(2, 2);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot(2)->gameMode, gui::GameMode::Performance);
 }
 
 TEST_F(LayerSnapshotTest, UpdateMetadata) {
