@@ -853,6 +853,8 @@ renderengine::RenderEngine::BlurAlgorithm chooseBlurAlgorithm(bool supportsBlur)
     auto const algorithm = base::GetProperty(PROPERTY_DEBUG_RENDERENGINE_BLUR_ALGORITHM, "");
     if (algorithm == "gaussian") {
         return renderengine::RenderEngine::BlurAlgorithm::GAUSSIAN;
+    } else if (algorithm == "kawase2") {
+        return renderengine::RenderEngine::BlurAlgorithm::KAWASE_DUAL_FILTER;
     } else {
         return renderengine::RenderEngine::BlurAlgorithm::KAWASE;
     }
