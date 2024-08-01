@@ -1314,7 +1314,7 @@ bool Layer::setFrameRateSelectionStrategy(FrameRateSelectionStrategy strategy) {
 }
 
 void Layer::setFrameTimelineVsyncForBufferTransaction(const FrameTimelineInfo& info,
-                                                      nsecs_t postTime) {
+                                                      nsecs_t postTime, gui::GameMode gameMode) {
     mDrawingState.postTime = postTime;
 
     // Check if one of the bufferlessSurfaceFramesTX contains the same vsyncId. This can happen if
@@ -1330,14 +1330,15 @@ void Layer::setFrameTimelineVsyncForBufferTransaction(const FrameTimelineInfo& i
         mDrawingState.bufferSurfaceFrameTX->setActualQueueTime(postTime);
     } else {
         mDrawingState.bufferSurfaceFrameTX =
-                createSurfaceFrameForBuffer(info, postTime, mTransactionName);
+                createSurfaceFrameForBuffer(info, postTime, mTransactionName, gameMode);
     }
 
-    setFrameTimelineVsyncForSkippedFrames(info, postTime, mTransactionName);
+    setFrameTimelineVsyncForSkippedFrames(info, postTime, mTransactionName, gameMode);
 }
 
 void Layer::setFrameTimelineVsyncForBufferlessTransaction(const FrameTimelineInfo& info,
-                                                          nsecs_t postTime) {
+                                                          nsecs_t postTime,
+                                                          gui::GameMode gameMode) {
     mDrawingState.frameTimelineInfo = info;
     mDrawingState.postTime = postTime;
     mDrawingState.modified = true;
@@ -1356,17 +1357,17 @@ void Layer::setFrameTimelineVsyncForBufferlessTransaction(const FrameTimelineInf
     // targeting different vsyncs).
     auto it = mDrawingState.bufferlessSurfaceFramesTX.find(info.vsyncId);
     if (it == mDrawingState.bufferlessSurfaceFramesTX.end()) {
-        auto surfaceFrame = createSurfaceFrameForTransaction(info, postTime);
+        auto surfaceFrame = createSurfaceFrameForTransaction(info, postTime, gameMode);
         mDrawingState.bufferlessSurfaceFramesTX[info.vsyncId] = surfaceFrame;
     } else {
         if (it->second->getPresentState() == PresentState::Presented) {
             // If the SurfaceFrame was already presented, its safe to overwrite it since it must
             // have been from previous vsync.
-            it->second = createSurfaceFrameForTransaction(info, postTime);
+            it->second = createSurfaceFrameForTransaction(info, postTime, gameMode);
         }
     }
 
-    setFrameTimelineVsyncForSkippedFrames(info, postTime, mTransactionName);
+    setFrameTimelineVsyncForSkippedFrames(info, postTime, mTransactionName, gameMode);
 }
 
 void Layer::addSurfaceFrameDroppedForBuffer(
@@ -1386,12 +1387,12 @@ void Layer::addSurfaceFramePresentedForBuffer(
 }
 
 std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForTransaction(
-        const FrameTimelineInfo& info, nsecs_t postTime) {
+        const FrameTimelineInfo& info, nsecs_t postTime, gui::GameMode gameMode) {
     auto surfaceFrame =
             mFlinger->mFrameTimeline->createSurfaceFrameForToken(info, mOwnerPid, mOwnerUid,
                                                                  getSequence(), mName,
                                                                  mTransactionName,
-                                                                 /*isBuffer*/ false, getGameMode());
+                                                                 /*isBuffer*/ false, gameMode);
     surfaceFrame->setActualStartTime(info.startTimeNanos);
     // For Transactions, the post time is considered to be both queue and acquire fence time.
     surfaceFrame->setActualQueueTime(postTime);
@@ -1404,11 +1405,12 @@ std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForTransac
 }
 
 std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForBuffer(
-        const FrameTimelineInfo& info, nsecs_t queueTime, std::string debugName) {
+        const FrameTimelineInfo& info, nsecs_t queueTime, std::string debugName,
+        gui::GameMode gameMode) {
     auto surfaceFrame =
             mFlinger->mFrameTimeline->createSurfaceFrameForToken(info, mOwnerPid, mOwnerUid,
                                                                  getSequence(), mName, debugName,
-                                                                 /*isBuffer*/ true, getGameMode());
+                                                                 /*isBuffer*/ true, gameMode);
     surfaceFrame->setActualStartTime(info.startTimeNanos);
     // For buffers, acquire fence time will set during latch.
     surfaceFrame->setActualQueueTime(queueTime);
@@ -1420,7 +1422,7 @@ std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForBuffer(
 }
 
 void Layer::setFrameTimelineVsyncForSkippedFrames(const FrameTimelineInfo& info, nsecs_t postTime,
-                                                  std::string debugName) {
+                                                  std::string debugName, gui::GameMode gameMode) {
     if (info.skippedFrameVsyncId == FrameTimelineInfo::INVALID_VSYNC_ID) {
         return;
     }
@@ -1432,7 +1434,7 @@ void Layer::setFrameTimelineVsyncForSkippedFrames(const FrameTimelineInfo& info,
             mFlinger->mFrameTimeline->createSurfaceFrameForToken(skippedFrameTimelineInfo,
                                                                  mOwnerPid, mOwnerUid,
                                                                  getSequence(), mName, debugName,
-                                                                 /*isBuffer*/ false, getGameMode());
+                                                                 /*isBuffer*/ false, gameMode);
     surfaceFrame->setActualStartTime(skippedFrameTimelineInfo.skippedFrameStartTimeNanos);
     // For Transactions, the post time is considered to be both queue and acquire fence time.
     surfaceFrame->setActualQueueTime(postTime);
@@ -1671,25 +1673,12 @@ size_t Layer::getDescendantCount() const {
     return count;
 }
 
-void Layer::setGameModeForTree(GameMode gameMode) {
-    const auto& currentState = getDrawingState();
-    if (currentState.metadata.has(gui::METADATA_GAME_MODE)) {
-        gameMode =
-                static_cast<GameMode>(currentState.metadata.getInt32(gui::METADATA_GAME_MODE, 0));
-    }
-    setGameMode(gameMode);
-    for (const sp<Layer>& child : mCurrentChildren) {
-        child->setGameModeForTree(gameMode);
-    }
-}
-
 void Layer::addChild(const sp<Layer>& layer) {
     mFlinger->mSomeChildrenChanged = true;
     setTransactionFlags(eTransactionNeeded);
 
     mCurrentChildren.add(layer);
     layer->setParent(sp<Layer>::fromExisting(this));
-    layer->setGameModeForTree(mGameMode);
     updateTreeHasFrameRateVote();
 }
 
@@ -1701,7 +1690,6 @@ ssize_t Layer::removeChild(const sp<Layer>& layer) {
     const auto removeResult = mCurrentChildren.remove(layer);
 
     updateTreeHasFrameRateVote();
-    layer->setGameModeForTree(GameMode::Unsupported);
     layer->updateTreeHasFrameRateVote();
 
     return removeResult;
@@ -3082,7 +3070,7 @@ void Layer::resetDrawingStateBufferInfo() {
 
 bool Layer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>& buffer,
                       const BufferData& bufferData, nsecs_t postTime, nsecs_t desiredPresentTime,
-                      bool isAutoTimestamp, const FrameTimelineInfo& info) {
+                      bool isAutoTimestamp, const FrameTimelineInfo& info, gui::GameMode gameMode) {
     SFTRACE_FORMAT("setBuffer %s - hasBuffer=%s", getDebugName(), (buffer ? "true" : "false"));
 
     const bool frameNumberChanged =
@@ -3108,12 +3096,12 @@ bool Layer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>& buffer,
         resetDrawingStateBufferInfo();
         setTransactionFlags(eTransactionNeeded);
         mDrawingState.bufferSurfaceFrameTX = nullptr;
-        setFrameTimelineVsyncForBufferlessTransaction(info, postTime);
+        setFrameTimelineVsyncForBufferlessTransaction(info, postTime, gameMode);
         return true;
     } else {
         // release sideband stream if it exists and a non null buffer is being set
         if (mDrawingState.sidebandStream != nullptr) {
-            setSidebandStream(nullptr, info, postTime);
+            setSidebandStream(nullptr, info, postTime, gameMode);
         }
     }
 
@@ -3152,9 +3140,9 @@ bool Layer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>& buffer,
 
     const int32_t layerId = getSequence();
     mFlinger->mTimeStats->setPostTime(layerId, mDrawingState.frameNumber, getName().c_str(),
-                                      mOwnerUid, postTime, getGameMode());
+                                      mOwnerUid, postTime, gameMode);
 
-    setFrameTimelineVsyncForBufferTransaction(info, postTime);
+    setFrameTimelineVsyncForBufferTransaction(info, postTime, gameMode);
 
     if (bufferData.dequeueTime > 0) {
         const uint64_t bufferId = mDrawingState.buffer->getId();
@@ -3309,7 +3297,7 @@ bool Layer::setApi(int32_t api) {
 }
 
 bool Layer::setSidebandStream(const sp<NativeHandle>& sidebandStream, const FrameTimelineInfo& info,
-                              nsecs_t postTime) {
+                              nsecs_t postTime, gui::GameMode gameMode) {
     if (mDrawingState.sidebandStream == sidebandStream) return false;
 
     if (mDrawingState.sidebandStream != nullptr && sidebandStream == nullptr) {
@@ -3324,7 +3312,7 @@ bool Layer::setSidebandStream(const sp<NativeHandle>& sidebandStream, const Fram
         releasePreviousBuffer();
         resetDrawingStateBufferInfo();
         mDrawingState.bufferSurfaceFrameTX = nullptr;
-        setFrameTimelineVsyncForBufferlessTransaction(info, postTime);
+        setFrameTimelineVsyncForBufferlessTransaction(info, postTime, gameMode);
     }
     setTransactionFlags(eTransactionNeeded);
     if (!mSidebandStreamChanged.exchange(true)) {
@@ -3982,7 +3970,8 @@ bool Layer::isVisible() const {
 void Layer::onCompositionPresented(const DisplayDevice* display,
                                    const std::shared_ptr<FenceTime>& glDoneFence,
                                    const std::shared_ptr<FenceTime>& presentFence,
-                                   const CompositorTiming& compositorTiming) {
+                                   const CompositorTiming& compositorTiming,
+                                   gui::GameMode gameMode) {
     // mFrameLatencyNeeded is true when a new frame was latched for the
     // composition.
     if (!mBufferInfo.mFrameLatencyNeeded) return;
@@ -4029,7 +4018,6 @@ void Layer::onCompositionPresented(const DisplayDevice* display,
                 mFlinger->mScheduler->getFrameRateOverride(getOwnerUid());
 
         const auto vote = frameRateToSetFrameRateVotePayload(getFrameRateForLayerTree());
-        const auto gameMode = getGameMode();
 
         if (presentFence->isValid()) {
             mFlinger->mTimeStats->setPresentFence(layerId, mCurrentFrameNumber, presentFence,

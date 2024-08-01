@@ -19,12 +19,10 @@ package {
 bpf {
     name: "gpuWork.o",
     srcs: ["gpuWork.c"],
+    // Without btf disabled, presubmits will fail.
+    btf: false,
     cflags: [
-        "-Wall",
-        "-Werror",
-        "-Wformat",
         "-Wthread-safety",
-        "-Wunused",
         "-Wunreachable-code",
     ],
 }

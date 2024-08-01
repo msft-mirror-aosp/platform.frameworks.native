@@ -83,7 +83,6 @@ cc_test {
         "FrameRateSelectionPriorityTest.cpp",
         "FrameRateSelectionStrategyTest.cpp",
         "FrameTimelineTest.cpp",
-        "GameModeTest.cpp",
         "HWComposerTest.cpp",
         "JankTrackerTest.cpp",
         "OneShotTimerTest.cpp",

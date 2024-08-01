@@ -472,6 +472,18 @@ public:
         mLifecycleManager.applyTransactions(transactions);
     }
 
+    void setGameMode(uint32_t id, gui::GameMode gameMode) {
+        std::vector<TransactionState> transactions;
+        transactions.emplace_back();
+        transactions.back().states.push_back({});
+        transactions.back().states.front().state.what = layer_state_t::eMetadataChanged;
+        transactions.back().states.front().state.metadata = LayerMetadata();
+        transactions.back().states.front().state.metadata.setInt32(METADATA_GAME_MODE,
+                                                                   static_cast<int32_t>(gameMode));
+        transactions.back().states.front().layerId = id;
+        mLifecycleManager.applyTransactions(transactions);
+    }
+
 private:
     LayerLifecycleManager& mLifecycleManager;
 };
