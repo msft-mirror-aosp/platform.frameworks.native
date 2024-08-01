@@ -320,11 +320,8 @@ void updateMetadata(LayerSnapshot& snapshot, const RequestedLayerState& requeste
 void updateMetadataAndGameMode(LayerSnapshot& snapshot, const RequestedLayerState& requested,
                                const LayerSnapshotBuilder::Args& args,
                                const LayerSnapshot& parentSnapshot) {
-    if (snapshot.changes.test(RequestedLayerState::Changes::GameMode)) {
-        snapshot.gameMode = requested.metadata.has(gui::METADATA_GAME_MODE)
-                ? requested.gameMode
-                : parentSnapshot.gameMode;
-    }
+    snapshot.gameMode = requested.metadata.has(gui::METADATA_GAME_MODE) ? requested.gameMode
+                                                                        : parentSnapshot.gameMode;
     updateMetadata(snapshot, requested, args);
     if (args.includeMetadata) {
         snapshot.layerMetadata = parentSnapshot.layerMetadata;
@@ -780,7 +777,8 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
         }
         if (forceUpdate ||
             (args.includeMetadata &&
-             snapshot.changes.test(RequestedLayerState::Changes::Metadata))) {
+             snapshot.changes.any(RequestedLayerState::Changes::Metadata |
+                                  RequestedLayerState::Changes::Geometry))) {
             updateMetadataAndGameMode(snapshot, requested, args, parentSnapshot);
         }
         return;
@@ -848,7 +846,9 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
         }
     }
 
-    if (forceUpdate || snapshot.changes.test(RequestedLayerState::Changes::Metadata)) {
+    if (forceUpdate ||
+        snapshot.changes.any(RequestedLayerState::Changes::Metadata |
+                             RequestedLayerState::Changes::Hierarchy)) {
         updateMetadataAndGameMode(snapshot, requested, args, parentSnapshot);
     }
 
