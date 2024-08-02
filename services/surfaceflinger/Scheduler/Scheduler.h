@@ -159,8 +159,6 @@ public:
 
     void enableSyntheticVsync(bool = true) REQUIRES(kMainThreadContext);
 
-    void onFrameRateOverridesChanged(Cycle, PhysicalDisplayId);
-
     void onHdcpLevelsChanged(Cycle, PhysicalDisplayId, int32_t, int32_t);
 
     // Modifies work duration in the event thread.
@@ -326,7 +324,7 @@ public:
         return mLayerHistory.getLayerFramerate(now, id);
     }
 
-    bool updateFrameRateOverrides(GlobalSignals, Fps displayRefreshRate) EXCLUDES(mPolicyLock);
+    void updateFrameRateOverrides(GlobalSignals, Fps displayRefreshRate) EXCLUDES(mPolicyLock);
 
     // Returns true if the small dirty detection is enabled for the appId.
     bool supportSmallDirtyDetection(int32_t appId) {
@@ -450,6 +448,9 @@ private:
 
     bool updateFrameRateOverridesLocked(GlobalSignals, Fps displayRefreshRate)
             REQUIRES(mPolicyLock);
+
+    void onFrameRateOverridesChanged();
+
     void updateAttachedChoreographers(const surfaceflinger::frontend::LayerHierarchy&,
                                       Fps displayRefreshRate);
     int updateAttachedChoreographersInternal(const surfaceflinger::frontend::LayerHierarchy&,
