@@ -23,12 +23,17 @@
 #include <android/gui/IDisplayEventConnection.h>
 #include <android/gui/ISurfaceComposer.h>
 #include <android/hardware/configstore/1.0/ISurfaceFlingerConfigs.h>
+#include <android/hardware_buffer.h>
 #include <binder/ProcessState.h>
 #include <com_android_graphics_libgui_flags.h>
 #include <configstore/Utils.h>
 #include <gui/AidlStatusUtil.h>
 #include <gui/BufferItemConsumer.h>
+#include <gui/BufferQueue.h>
 #include <gui/CpuConsumer.h>
+#include <gui/IConsumerListener.h>
+#include <gui/IGraphicBufferConsumer.h>
+#include <gui/IGraphicBufferProducer.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/Surface.h>
 #include <gui/SurfaceComposerClient.h>
@@ -36,6 +41,7 @@
 #include <private/gui/ComposerService.h>
 #include <private/gui/ComposerServiceAIDL.h>
 #include <sys/types.h>
+#include <system/window.h>
 #include <ui/BufferQueueDefs.h>
 #include <ui/DisplayMode.h>
 #include <ui/GraphicBuffer.h>
@@ -145,10 +151,10 @@ protected:
         if (hasSurfaceListener) {
             listener = new FakeSurfaceListener(enableReleasedCb);
         }
-        ASSERT_EQ(OK, surface->connect(
-                NATIVE_WINDOW_API_CPU,
-                /*reportBufferRemoval*/true,
-                /*listener*/listener));
+        ASSERT_EQ(OK,
+                  surface->connect(NATIVE_WINDOW_API_CPU,
+                                   /*listener*/ listener,
+                                   /*reportBufferRemoval*/ true));
         const int BUFFER_COUNT = 4 + extraDiscardedBuffers;
         ASSERT_EQ(NO_ERROR, native_window_set_buffer_count(window.get(), BUFFER_COUNT));
         ASSERT_EQ(NO_ERROR, native_window_set_usage(window.get(), TEST_PRODUCER_USAGE_BITS));
@@ -494,10 +500,10 @@ TEST_F(SurfaceTest, GetAndFlushRemovedBuffers) {
     sp<Surface> surface = new Surface(producer);
     sp<ANativeWindow> window(surface);
     sp<StubSurfaceListener> listener = new StubSurfaceListener();
-    ASSERT_EQ(OK, surface->connect(
-            NATIVE_WINDOW_API_CPU,
-            /*listener*/listener,
-            /*reportBufferRemoval*/true));
+    ASSERT_EQ(OK,
+              surface->connect(NATIVE_WINDOW_API_CPU,
+                               /*listener*/ listener,
+                               /*reportBufferRemoval*/ true));
     const int BUFFER_COUNT = 4;
     ASSERT_EQ(NO_ERROR, native_window_set_buffer_count(window.get(), BUFFER_COUNT));
     ASSERT_EQ(NO_ERROR, native_window_set_usage(window.get(), TEST_PRODUCER_USAGE_BITS));
@@ -2311,6 +2317,76 @@ TEST_F(SurfaceTest, AllowAllocation) {
 
     EXPECT_EQ(OK, surface->allowAllocation(true));
     EXPECT_EQ(OK, surface->dequeueBuffer(&buffer, &fence));
+}
+
+TEST_F(SurfaceTest, QueueAcquireReleaseDequeue_CalledInStack_DoesNotDeadlock) {
+    class DequeuingSurfaceListener : public SurfaceListener {
+    public:
+        DequeuingSurfaceListener(const wp<Surface>& surface) : mSurface(surface) {}
+
+        virtual void onBufferReleased() override {
+            sp<Surface> surface = mSurface.promote();
+            ASSERT_NE(nullptr, surface);
+            EXPECT_EQ(OK, surface->dequeueBuffer(&mBuffer, &mFence));
+        }
+
+        virtual bool needsReleaseNotify() override { return true; }
+        virtual void onBuffersDiscarded(const std::vector<sp<GraphicBuffer>>&) override {}
+        virtual void onBufferDetached(int) override {}
+
+        sp<GraphicBuffer> mBuffer;
+        sp<Fence> mFence;
+
+    private:
+        wp<Surface> mSurface;
+    };
+
+    class ImmediateReleaseConsumerListener : public BufferItemConsumer::FrameAvailableListener {
+    public:
+        ImmediateReleaseConsumerListener(const wp<BufferItemConsumer>& consumer)
+              : mConsumer(consumer) {}
+
+        virtual void onFrameAvailable(const BufferItem&) override {
+            sp<BufferItemConsumer> consumer = mConsumer.promote();
+            ASSERT_NE(nullptr, consumer);
+
+            mCalls += 1;
+
+            BufferItem buffer;
+            EXPECT_EQ(OK, consumer->acquireBuffer(&buffer, 0));
+            EXPECT_EQ(OK, consumer->releaseBuffer(buffer));
+        }
+
+        size_t mCalls = 0;
+
+    private:
+        wp<BufferItemConsumer> mConsumer;
+    };
+
+    sp<IGraphicBufferProducer> bqProducer;
+    sp<IGraphicBufferConsumer> bqConsumer;
+    BufferQueue::createBufferQueue(&bqProducer, &bqConsumer);
+
+    sp<BufferItemConsumer> consumer = sp<BufferItemConsumer>::make(bqConsumer, 3);
+    sp<Surface> surface = sp<Surface>::make(bqProducer);
+    sp<ImmediateReleaseConsumerListener> consumerListener =
+            sp<ImmediateReleaseConsumerListener>::make(consumer);
+    consumer->setFrameAvailableListener(consumerListener);
+
+    sp<DequeuingSurfaceListener> surfaceListener = sp<DequeuingSurfaceListener>::make(surface);
+    EXPECT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, surfaceListener, false));
+
+    EXPECT_EQ(OK, surface->setMaxDequeuedBufferCount(2));
+
+    sp<GraphicBuffer> buffer;
+    sp<Fence> fence;
+    EXPECT_EQ(OK, surface->dequeueBuffer(&buffer, &fence));
+    EXPECT_EQ(OK, surface->queueBuffer(buffer, fence));
+
+    EXPECT_EQ(1u, consumerListener->mCalls);
+    EXPECT_NE(nullptr, surfaceListener->mBuffer);
+
+    EXPECT_EQ(OK, surface->disconnect(NATIVE_WINDOW_API_CPU));
 }
 #endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 

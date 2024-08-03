@@ -853,6 +853,8 @@ renderengine::RenderEngine::BlurAlgorithm chooseBlurAlgorithm(bool supportsBlur)
     auto const algorithm = base::GetProperty(PROPERTY_DEBUG_RENDERENGINE_BLUR_ALGORITHM, "");
     if (algorithm == "gaussian") {
         return renderengine::RenderEngine::BlurAlgorithm::GAUSSIAN;
+    } else if (algorithm == "kawase2") {
+        return renderengine::RenderEngine::BlurAlgorithm::KAWASE_DUAL_FILTER;
     } else {
         return renderengine::RenderEngine::BlurAlgorithm::KAWASE;
     }
@@ -911,9 +913,11 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
     LOG_ALWAYS_FATAL_IF(!configureLocked(),
                         "Initial display configuration failed: HWC did not hotplug");
 
+    mActiveDisplayId = getPrimaryDisplayIdLocked();
+
     // Commit primary display.
     sp<const DisplayDevice> display;
-    if (const auto indexOpt = mCurrentState.getDisplayIndex(getPrimaryDisplayIdLocked())) {
+    if (const auto indexOpt = mCurrentState.getDisplayIndex(mActiveDisplayId)) {
         const auto& displays = mCurrentState.displays;
 
         const auto& token = displays.keyAt(*indexOpt);
@@ -2306,37 +2310,6 @@ void SurfaceFlinger::configure() {
     }
 }
 
-bool SurfaceFlinger::updateLayerSnapshotsLegacy(VsyncId vsyncId, nsecs_t frameTimeNs,
-                                                bool flushTransactions,
-                                                bool& outTransactionsAreEmpty) {
-    SFTRACE_CALL();
-    frontend::Update update;
-    if (flushTransactions) {
-        update = flushLifecycleUpdates();
-        if (mTransactionTracing) {
-            mTransactionTracing->addCommittedTransactions(ftl::to_underlying(vsyncId), frameTimeNs,
-                                                          update, mFrontEndDisplayInfos,
-                                                          mFrontEndDisplayInfosChanged);
-        }
-    }
-
-    bool needsTraversal = false;
-    if (flushTransactions) {
-        needsTraversal |= commitMirrorDisplays(vsyncId);
-        needsTraversal |= commitCreatedLayers(vsyncId, update.layerCreatedStates);
-        needsTraversal |= applyTransactions(update.transactions, vsyncId);
-    }
-    outTransactionsAreEmpty = !needsTraversal;
-    const bool shouldCommit = (getTransactionFlags() & ~eTransactionFlushNeeded) || needsTraversal;
-    if (shouldCommit) {
-        commitTransactionsLegacy();
-    }
-
-    bool mustComposite = latchBuffers() || shouldCommit;
-    updateLayerGeometry();
-    return mustComposite;
-}
-
 void SurfaceFlinger::updateLayerHistory(nsecs_t now) {
     for (const auto& snapshot : mLayerSnapshotBuilder.getSnapshots()) {
         using Changes = frontend::RequestedLayerState::Changes;
@@ -2552,7 +2525,9 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
         it->second->latchBufferImpl(unused, latchTime, bgColorOnly);
         newDataLatched = true;
 
-        mLayersWithQueuedFrames.emplace(it->second);
+        frontend::LayerSnapshot* snapshot = mLayerSnapshotBuilder.getSnapshot(it->second->sequence);
+        gui::GameMode gameMode = (snapshot) ? snapshot->gameMode : gui::GameMode::Unsupported;
+        mLayersWithQueuedFrames.emplace(it->second, gameMode);
         mLayersIdsWithQueuedFrames.emplace(it->second->sequence);
     }
 
@@ -2781,16 +2756,12 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
 
     const bool updateTaskMetadata = mCompositionEngine->getFeatureFlags().test(
             compositionengine::Feature::kSnapshotLayerMetadata);
-    if (updateTaskMetadata && (mVisibleRegionsDirty || mLayerMetadataSnapshotNeeded)) {
-        updateLayerMetadataSnapshot();
-        mLayerMetadataSnapshotNeeded = false;
-    }
 
     refreshArgs.bufferIdsToUncache = std::move(mBufferIdsToUncache);
 
     if (!FlagManager::getInstance().ce_fence_promise()) {
         refreshArgs.layersWithQueuedFrames.reserve(mLayersWithQueuedFrames.size());
-        for (auto& layer : mLayersWithQueuedFrames) {
+        for (auto& [layer, _] : mLayersWithQueuedFrames) {
             if (const auto& layerFE = layer->getCompositionEngineLayerFE())
                 refreshArgs.layersWithQueuedFrames.push_back(layerFE);
         }
@@ -2866,7 +2837,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         }
 
         refreshArgs.layersWithQueuedFrames.reserve(mLayersWithQueuedFrames.size());
-        for (auto& layer : mLayersWithQueuedFrames) {
+        for (auto& [layer, _] : mLayersWithQueuedFrames) {
             if (const auto& layerFE = layer->getCompositionEngineLayerFE()) {
                 refreshArgs.layersWithQueuedFrames.push_back(layerFE);
                 // Some layers are not displayed and do not yet have a future release fence
@@ -3004,21 +2975,6 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     }
 
     return resultsPerDisplay;
-}
-
-void SurfaceFlinger::updateLayerGeometry() {
-    SFTRACE_CALL();
-
-    if (mVisibleRegionsDirty) {
-        computeLayerBounds();
-    }
-
-    for (auto& layer : mLayersPendingRefresh) {
-        Region visibleReg;
-        visibleReg.set(layer->getScreenBounds());
-        invalidateLayerStack(layer->getOutputFilter(), visibleReg);
-    }
-    mLayersPendingRefresh.clear();
 }
 
 bool SurfaceFlinger::isHdrLayer(const frontend::LayerSnapshot& snapshot) const {
@@ -3187,10 +3143,10 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
     }
     mLayersWithBuffersRemoved.clear();
 
-    for (const auto& layer: mLayersWithQueuedFrames) {
+    for (const auto& [layer, gameMode] : mLayersWithQueuedFrames) {
         layer->onCompositionPresented(pacesetterDisplay.get(),
                                       pacesetterGpuCompositionDoneFenceTime,
-                                      pacesetterPresentFenceTime, compositorTiming);
+                                      pacesetterPresentFenceTime, compositorTiming, gameMode);
         layer->releasePendingBuffer(presentTime.ns());
     }
 
@@ -3333,36 +3289,6 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
     logFrameStats(presentTime);
 }
 
-FloatRect SurfaceFlinger::getMaxDisplayBounds() {
-    const ui::Size maxSize = [this] {
-        ftl::FakeGuard guard(mStateLock);
-
-        // The LayerTraceGenerator tool runs without displays.
-        if (mDisplays.empty()) return ui::Size{5000, 5000};
-
-        return std::accumulate(mDisplays.begin(), mDisplays.end(), ui::kEmptySize,
-                               [](ui::Size size, const auto& pair) -> ui::Size {
-                                   const auto& display = pair.second;
-                                   return {std::max(size.getWidth(), display->getWidth()),
-                                           std::max(size.getHeight(), display->getHeight())};
-                               });
-    }();
-
-    // Ignore display bounds for now since they will be computed later. Use a large Rect bound
-    // to ensure it's bigger than an actual display will be.
-    const float xMax = maxSize.getWidth() * 10.f;
-    const float yMax = maxSize.getHeight() * 10.f;
-
-    return {-xMax, -yMax, xMax, yMax};
-}
-
-void SurfaceFlinger::computeLayerBounds() {
-    const FloatRect maxBounds = getMaxDisplayBounds();
-    for (const auto& layer : mDrawingState.layersSortedByZ) {
-        layer->computeBounds(maxBounds, ui::Transform(), 0.f /* shadowRadius */);
-    }
-}
-
 void SurfaceFlinger::commitTransactions() {
     SFTRACE_CALL();
     mDebugInTransaction = systemTime();
@@ -3373,28 +3299,6 @@ void SurfaceFlinger::commitTransactions() {
     // mCurrentState won't change until the transaction is committed.
     mScheduler->modulateVsync({}, &VsyncModulator::onTransactionCommit);
     commitTransactionsLocked(clearTransactionFlags(eTransactionMask));
-    mDebugInTransaction = 0;
-}
-
-void SurfaceFlinger::commitTransactionsLegacy() {
-    SFTRACE_CALL();
-
-    // Keep a copy of the drawing state (that is going to be overwritten
-    // by commitTransactionsLocked) outside of mStateLock so that the side
-    // effects of the State assignment don't happen with mStateLock held,
-    // which can cause deadlocks.
-    State drawingState(mDrawingState);
-
-    Mutex::Autolock lock(mStateLock);
-    mDebugInTransaction = systemTime();
-
-    // Here we're guaranteed that some transaction flags are set
-    // so we can call commitTransactionsLocked unconditionally.
-    // We clear the flags with mStateLock held to guarantee that
-    // mCurrentState won't change until the transaction is committed.
-    mScheduler->modulateVsync({}, &VsyncModulator::onTransactionCommit);
-    commitTransactionsLocked(clearTransactionFlags(eTransactionMask));
-
     mDebugInTransaction = 0;
 }
 
@@ -4278,15 +4182,6 @@ void SurfaceFlinger::requestDisplayModes(std::vector<display::DisplayModeRequest
     }
 }
 
-void SurfaceFlinger::triggerOnFrameRateOverridesChanged() {
-    PhysicalDisplayId displayId = [&]() {
-        ConditionalLock lock(mStateLock, std::this_thread::get_id() != mMainThreadId);
-        return getDefaultDisplayDeviceLocked()->getPhysicalId();
-    }();
-
-    mScheduler->onFrameRateOverridesChanged(scheduler::Cycle::Render, displayId);
-}
-
 void SurfaceFlinger::notifyCpuLoadUp() {
     mPowerAdvisor->notifyCpuLoadUp();
 }
@@ -4596,97 +4491,6 @@ void SurfaceFlinger::invalidateLayerStack(const ui::LayerFilter& layerFilter, co
             display->editState().dirtyRegion.orSelf(dirty);
         }
     }
-}
-
-bool SurfaceFlinger::latchBuffers() {
-    SFTRACE_CALL();
-
-    const nsecs_t latchTime = systemTime();
-
-    bool visibleRegions = false;
-    bool frameQueued = false;
-    bool newDataLatched = false;
-
-    // Store the set of layers that need updates. This set must not change as
-    // buffers are being latched, as this could result in a deadlock.
-    // Example: Two producers share the same command stream and:
-    // 1.) Layer 0 is latched
-    // 2.) Layer 0 gets a new frame
-    // 2.) Layer 1 gets a new frame
-    // 3.) Layer 1 is latched.
-    // Display is now waiting on Layer 1's frame, which is behind layer 0's
-    // second frame. But layer 0's second frame could be waiting on display.
-    mDrawingState.traverse([&](Layer* layer) {
-        if (layer->clearTransactionFlags(eTransactionNeeded) || mForceTransactionDisplayChange) {
-            const uint32_t flags = layer->doTransaction(0);
-            if (flags & Layer::eVisibleRegion) {
-                mVisibleRegionsDirty = true;
-            }
-        }
-
-        if (layer->hasReadyFrame() || layer->willReleaseBufferOnLatch()) {
-            frameQueued = true;
-            mLayersWithQueuedFrames.emplace(sp<Layer>::fromExisting(layer));
-        } else {
-            layer->useEmptyDamage();
-            if (!layer->hasBuffer()) {
-                // The last latch time is used to classify a missed frame as buffer stuffing
-                // instead of a missed frame. This is used to identify scenarios where we
-                // could not latch a buffer or apply a transaction due to backpressure.
-                // We only update the latch time for buffer less layers here, the latch time
-                // is updated for buffer layers when the buffer is latched.
-                layer->updateLastLatchTime(latchTime);
-            }
-        }
-    });
-    mForceTransactionDisplayChange = false;
-
-    // The client can continue submitting buffers for offscreen layers, but they will not
-    // be shown on screen. Therefore, we need to latch and release buffers of offscreen
-    // layers to ensure dequeueBuffer doesn't block indefinitely.
-    for (Layer* offscreenLayer : mOffscreenLayers) {
-        offscreenLayer->traverse(LayerVector::StateSet::Drawing,
-                                         [&](Layer* l) { l->latchAndReleaseBuffer(); });
-    }
-
-    if (!mLayersWithQueuedFrames.empty()) {
-        // mStateLock is needed for latchBuffer as LayerRejecter::reject()
-        // writes to Layer current state. See also b/119481871
-        Mutex::Autolock lock(mStateLock);
-
-        for (const auto& layer : mLayersWithQueuedFrames) {
-            if (layer->willReleaseBufferOnLatch()) {
-                mLayersWithBuffersRemoved.emplace(layer);
-            }
-            if (layer->latchBuffer(visibleRegions, latchTime)) {
-                mLayersPendingRefresh.push_back(layer);
-                newDataLatched = true;
-            }
-            layer->useSurfaceDamage();
-        }
-    }
-
-    mVisibleRegionsDirty |= visibleRegions;
-
-    // If we will need to wake up at some time in the future to deal with a
-    // queued frame that shouldn't be displayed during this vsync period, wake
-    // up during the next vsync period to check again.
-    if (frameQueued && (mLayersWithQueuedFrames.empty() || !newDataLatched)) {
-        scheduleCommit(FrameHint::kNone);
-    }
-
-    // enter boot animation on first buffer latch
-    if (CC_UNLIKELY(mBootStage == BootStage::BOOTLOADER && newDataLatched)) {
-        ALOGI("Enter boot animation");
-        mBootStage = BootStage::BOOTANIMATION;
-    }
-
-    if (mLayerMirrorRoots.size() > 0) {
-        mDrawingState.traverse([&](Layer* layer) { layer->updateCloneBufferInfo(); });
-    }
-
-    // Only continue with the refresh if there is actually new work to do
-    return !mLayersWithQueuedFrames.empty() && newDataLatched;
 }
 
 status_t SurfaceFlinger::addClientLayer(LayerCreationArgs& args, const sp<IBinder>& handle,
@@ -5328,364 +5132,6 @@ bool SurfaceFlinger::callingThreadHasUnscopedSurfaceFlingerAccess(bool usePermis
     return true;
 }
 
-uint32_t SurfaceFlinger::setClientStateLocked(const FrameTimelineInfo& frameTimelineInfo,
-                                              ResolvedComposerState& composerState,
-                                              int64_t desiredPresentTime, bool isAutoTimestamp,
-                                              int64_t postTime, uint64_t transactionId) {
-    layer_state_t& s = composerState.state;
-
-    std::vector<ListenerCallbacks> filteredListeners;
-    for (auto& listener : s.listeners) {
-        // Starts a registration but separates the callback ids according to callback type. This
-        // allows the callback invoker to send on latch callbacks earlier.
-        // note that startRegistration will not re-register if the listener has
-        // already be registered for a prior surface control
-
-        ListenerCallbacks onCommitCallbacks = listener.filter(CallbackId::Type::ON_COMMIT);
-        if (!onCommitCallbacks.callbackIds.empty()) {
-            filteredListeners.push_back(onCommitCallbacks);
-        }
-
-        ListenerCallbacks onCompleteCallbacks = listener.filter(CallbackId::Type::ON_COMPLETE);
-        if (!onCompleteCallbacks.callbackIds.empty()) {
-            filteredListeners.push_back(onCompleteCallbacks);
-        }
-    }
-
-    const uint64_t what = s.what;
-    uint32_t flags = 0;
-    sp<Layer> layer = nullptr;
-    if (s.surface) {
-        layer = LayerHandle::getLayer(s.surface);
-    } else {
-        // The client may provide us a null handle. Treat it as if the layer was removed.
-        ALOGW("Attempt to set client state with a null layer handle");
-    }
-    if (layer == nullptr) {
-        for (auto& [listener, callbackIds] : s.listeners) {
-            mTransactionCallbackInvoker.addCallbackHandle(
-                    sp<CallbackHandle>::make(listener, callbackIds, s.surface));
-        }
-        return 0;
-    }
-    MUTEX_ALIAS(mStateLock, layer->mFlinger->mStateLock);
-
-    ui::LayerStack oldLayerStack = layer->getLayerStack(LayerVector::StateSet::Current);
-
-    // Only set by BLAST adapter layers
-    if (what & layer_state_t::eProducerDisconnect) {
-        layer->onDisconnect();
-    }
-
-    if (what & layer_state_t::ePositionChanged) {
-        if (layer->setPosition(s.x, s.y)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eLayerChanged) {
-        // NOTE: index needs to be calculated before we update the state
-        const auto& p = layer->getParent();
-        if (p == nullptr) {
-            ssize_t idx = mCurrentState.layersSortedByZ.indexOf(layer);
-            if (layer->setLayer(s.z) && idx >= 0) {
-                mCurrentState.layersSortedByZ.removeAt(idx);
-                mCurrentState.layersSortedByZ.add(layer);
-                // we need traversal (state changed)
-                // AND transaction (list changed)
-                flags |= eTransactionNeeded|eTraversalNeeded;
-            }
-        } else {
-            if (p->setChildLayer(layer, s.z)) {
-                flags |= eTransactionNeeded|eTraversalNeeded;
-            }
-        }
-    }
-    if (what & layer_state_t::eRelativeLayerChanged) {
-        // NOTE: index needs to be calculated before we update the state
-        const auto& p = layer->getParent();
-        const auto& relativeHandle = s.relativeLayerSurfaceControl ?
-                s.relativeLayerSurfaceControl->getHandle() : nullptr;
-        if (p == nullptr) {
-            ssize_t idx = mCurrentState.layersSortedByZ.indexOf(layer);
-            if (layer->setRelativeLayer(relativeHandle, s.z) &&
-                idx >= 0) {
-                mCurrentState.layersSortedByZ.removeAt(idx);
-                mCurrentState.layersSortedByZ.add(layer);
-                // we need traversal (state changed)
-                // AND transaction (list changed)
-                flags |= eTransactionNeeded|eTraversalNeeded;
-            }
-        } else {
-            if (p->setChildRelativeLayer(layer, relativeHandle, s.z)) {
-                flags |= eTransactionNeeded|eTraversalNeeded;
-            }
-        }
-    }
-    if (what & layer_state_t::eAlphaChanged) {
-        if (layer->setAlpha(s.color.a)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eColorChanged) {
-        if (layer->setColor(s.color.rgb)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eColorTransformChanged) {
-        if (layer->setColorTransform(s.colorTransform)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eBackgroundColorChanged) {
-        if (layer->setBackgroundColor(s.bgColor.rgb, s.bgColor.a, s.bgColorDataspace)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eMatrixChanged) {
-        if (layer->setMatrix(s.matrix)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eTransparentRegionChanged) {
-        if (layer->setTransparentRegionHint(s.transparentRegion))
-            flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eFlagsChanged) {
-        if (layer->setFlags(s.flags, s.mask)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eCornerRadiusChanged) {
-        if (layer->setCornerRadius(s.cornerRadius))
-            flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eBackgroundBlurRadiusChanged && mSupportsBlur) {
-        if (layer->setBackgroundBlurRadius(s.backgroundBlurRadius)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eBlurRegionsChanged) {
-        if (layer->setBlurRegions(s.blurRegions)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eLayerStackChanged) {
-        ssize_t idx = mCurrentState.layersSortedByZ.indexOf(layer);
-        // We only allow setting layer stacks for top level layers,
-        // everything else inherits layer stack from its parent.
-        if (layer->hasParent()) {
-            ALOGE("Attempt to set layer stack on layer with parent (%s) is invalid",
-                  layer->getDebugName());
-        } else if (idx < 0) {
-            ALOGE("Attempt to set layer stack on layer without parent (%s) that "
-                  "that also does not appear in the top level layer list. Something"
-                  " has gone wrong.",
-                  layer->getDebugName());
-        } else if (layer->setLayerStack(s.layerStack)) {
-            mCurrentState.layersSortedByZ.removeAt(idx);
-            mCurrentState.layersSortedByZ.add(layer);
-            // we need traversal (state changed)
-            // AND transaction (list changed)
-            flags |= eTransactionNeeded | eTraversalNeeded | eTransformHintUpdateNeeded;
-        }
-    }
-    if (what & layer_state_t::eBufferTransformChanged) {
-        if (layer->setTransform(s.bufferTransform)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eTransformToDisplayInverseChanged) {
-        if (layer->setTransformToDisplayInverse(s.transformToDisplayInverse))
-            flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eCropChanged) {
-        if (layer->setCrop(s.crop)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eDataspaceChanged) {
-        if (layer->setDataspace(s.dataspace)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eSurfaceDamageRegionChanged) {
-        if (layer->setSurfaceDamageRegion(s.surfaceDamageRegion)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eApiChanged) {
-        if (layer->setApi(s.api)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eSidebandStreamChanged) {
-        if (layer->setSidebandStream(s.sidebandStream, frameTimelineInfo, postTime))
-            flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eInputInfoChanged) {
-        layer->setInputInfo(*s.windowInfoHandle->getInfo());
-        flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eMetadataChanged) {
-        if (const int32_t gameMode = s.metadata.getInt32(gui::METADATA_GAME_MODE, -1);
-            gameMode != -1) {
-            // The transaction will be received on the Task layer and needs to be applied to all
-            // child layers. Child layers that are added at a later point will obtain the game mode
-            // info through addChild().
-            layer->setGameModeForTree(static_cast<GameMode>(gameMode));
-        }
-
-        if (layer->setMetadata(s.metadata)) {
-            flags |= eTraversalNeeded;
-            mLayerMetadataSnapshotNeeded = true;
-        }
-    }
-    if (what & layer_state_t::eColorSpaceAgnosticChanged) {
-        if (layer->setColorSpaceAgnostic(s.colorSpaceAgnostic)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eShadowRadiusChanged) {
-        if (layer->setShadowRadius(s.shadowRadius)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eDefaultFrameRateCompatibilityChanged) {
-        const auto compatibility =
-                Layer::FrameRate::convertCompatibility(s.defaultFrameRateCompatibility);
-
-        if (layer->setDefaultFrameRateCompatibility(compatibility)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eFrameRateSelectionPriority) {
-        if (layer->setFrameRateSelectionPriority(s.frameRateSelectionPriority)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eFrameRateChanged) {
-        const auto compatibility =
-            Layer::FrameRate::convertCompatibility(s.frameRateCompatibility);
-        const auto strategy =
-            Layer::FrameRate::convertChangeFrameRateStrategy(s.changeFrameRateStrategy);
-
-        if (layer->setFrameRate(Layer::FrameRate::FrameRateVote(Fps::fromValue(s.frameRate),
-                                                                compatibility, strategy))) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eFrameRateCategoryChanged) {
-        const FrameRateCategory category = Layer::FrameRate::convertCategory(s.frameRateCategory);
-        if (layer->setFrameRateCategory(category, s.frameRateCategorySmoothSwitchOnly)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eFrameRateSelectionStrategyChanged) {
-        const scheduler::LayerInfo::FrameRateSelectionStrategy strategy =
-                scheduler::LayerInfo::convertFrameRateSelectionStrategy(
-                        s.frameRateSelectionStrategy);
-        if (layer->setFrameRateSelectionStrategy(strategy)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eFixedTransformHintChanged) {
-        if (layer->setFixedTransformHint(s.fixedTransformHint)) {
-            flags |= eTraversalNeeded | eTransformHintUpdateNeeded;
-        }
-    }
-    if (what & layer_state_t::eAutoRefreshChanged) {
-        layer->setAutoRefresh(s.autoRefresh);
-    }
-    if (what & layer_state_t::eDimmingEnabledChanged) {
-        if (layer->setDimmingEnabled(s.dimmingEnabled)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eExtendedRangeBrightnessChanged) {
-        if (layer->setExtendedRangeBrightness(s.currentHdrSdrRatio, s.desiredHdrSdrRatio)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eDesiredHdrHeadroomChanged) {
-        if (layer->setDesiredHdrHeadroom(s.desiredHdrSdrRatio)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eCachingHintChanged) {
-        if (layer->setCachingHint(s.cachingHint)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eHdrMetadataChanged) {
-        if (layer->setHdrMetadata(s.hdrMetadata)) flags |= eTraversalNeeded;
-    }
-    if (what & layer_state_t::eTrustedOverlayChanged) {
-        if (layer->setTrustedOverlay(s.trustedOverlay == gui::TrustedOverlay::ENABLED)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eStretchChanged) {
-        if (layer->setStretchEffect(s.stretchEffect)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eBufferCropChanged) {
-        if (layer->setBufferCrop(s.bufferCrop)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eDestinationFrameChanged) {
-        if (layer->setDestinationFrame(s.destinationFrame)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-    if (what & layer_state_t::eDropInputModeChanged) {
-        if (layer->setDropInputMode(s.dropInputMode)) {
-            flags |= eTraversalNeeded;
-            mUpdateInputInfo = true;
-        }
-    }
-    // This has to happen after we reparent children because when we reparent to null we remove
-    // child layers from current state and remove its relative z. If the children are reparented in
-    // the same transaction, then we have to make sure we reparent the children first so we do not
-    // lose its relative z order.
-    if (what & layer_state_t::eReparent) {
-        bool hadParent = layer->hasParent();
-        auto parentHandle = (s.parentSurfaceControlForChild)
-                ? s.parentSurfaceControlForChild->getHandle()
-                : nullptr;
-        if (layer->reparent(parentHandle)) {
-            if (!hadParent) {
-                layer->setIsAtRoot(false);
-                mCurrentState.layersSortedByZ.remove(layer);
-            }
-            flags |= eTransactionNeeded | eTraversalNeeded;
-        }
-    }
-    std::vector<sp<CallbackHandle>> callbackHandles;
-    if ((what & layer_state_t::eHasListenerCallbacksChanged) && (!filteredListeners.empty())) {
-        for (auto& [listener, callbackIds] : filteredListeners) {
-            callbackHandles.emplace_back(
-                    sp<CallbackHandle>::make(listener, callbackIds, s.surface));
-        }
-    }
-
-    if (what & layer_state_t::eBufferChanged) {
-        if (layer->setBuffer(composerState.externalTexture, *s.bufferData, postTime,
-                             desiredPresentTime, isAutoTimestamp, frameTimelineInfo)) {
-            flags |= eTraversalNeeded;
-        }
-    } else if (frameTimelineInfo.vsyncId != FrameTimelineInfo::INVALID_VSYNC_ID) {
-        layer->setFrameTimelineVsyncForBufferlessTransaction(frameTimelineInfo, postTime);
-    }
-
-    if ((what & layer_state_t::eBufferChanged) == 0) {
-        layer->setDesiredPresentTime(desiredPresentTime, isAutoTimestamp);
-    }
-
-    if (what & layer_state_t::eTrustedPresentationInfoChanged) {
-        if (layer->setTrustedPresentationInfo(s.trustedPresentationThresholds,
-                                              s.trustedPresentationListener)) {
-            flags |= eTraversalNeeded;
-        }
-    }
-
-    if (what & layer_state_t::eFlushJankData) {
-        // Do nothing. Processing the transaction completed listeners currently cause the flush.
-    }
-
-    if (layer->setTransactionCompletedListeners(callbackHandles,
-                                                layer->willPresentCurrentTransaction() ||
-                                                        layer->willReleaseBufferOnLatch())) {
-        flags |= eTraversalNeeded;
-    }
-
-    // Do not put anything that updates layer state or modifies flags after
-    // setTransactionCompletedListener
-
-    // if the layer has been parented on to a new display, update its transform hint.
-    if (((flags & eTransformHintUpdateNeeded) == 0) &&
-        oldLayerStack != layer->getLayerStack(LayerVector::StateSet::Current)) {
-        flags |= eTransformHintUpdateNeeded;
-    }
-
-    return flags;
-}
-
 uint32_t SurfaceFlinger::updateLayerCallbacksAndStats(const FrameTimelineInfo& frameTimelineInfo,
                                                       ResolvedComposerState& composerState,
                                                       int64_t desiredPresentTime,
@@ -5738,6 +5184,17 @@ uint32_t SurfaceFlinger::updateLayerCallbacksAndStats(const FrameTimelineInfo& f
                     sp<CallbackHandle>::make(listener, callbackIds, s.surface));
         }
     }
+
+    frontend::LayerSnapshot* snapshot = nullptr;
+    gui::GameMode gameMode = gui::GameMode::Unsupported;
+    if (what & (layer_state_t::eSidebandStreamChanged | layer_state_t::eBufferChanged) ||
+        frameTimelineInfo.vsyncId != FrameTimelineInfo::INVALID_VSYNC_ID) {
+        snapshot = mLayerSnapshotBuilder.getSnapshot(layer->sequence);
+        if (snapshot) {
+            gameMode = snapshot->gameMode;
+        }
+    }
+
     // TODO(b/238781169) remove after screenshot refactor, currently screenshots
     // requires to read drawing state from binder thread. So we need to fix that
     // before removing this.
@@ -5752,7 +5209,7 @@ uint32_t SurfaceFlinger::updateLayerCallbacksAndStats(const FrameTimelineInfo& f
         if (layer->setCrop(s.crop)) flags |= eTraversalNeeded;
     }
     if (what & layer_state_t::eSidebandStreamChanged) {
-        if (layer->setSidebandStream(s.sidebandStream, frameTimelineInfo, postTime))
+        if (layer->setSidebandStream(s.sidebandStream, frameTimelineInfo, postTime, gameMode))
             flags |= eTraversalNeeded;
     }
     if (what & layer_state_t::eDataspaceChanged) {
@@ -5770,18 +5227,17 @@ uint32_t SurfaceFlinger::updateLayerCallbacksAndStats(const FrameTimelineInfo& f
     }
     if (what & layer_state_t::eBufferChanged) {
         std::optional<ui::Transform::RotationFlags> transformHint = std::nullopt;
-        frontend::LayerSnapshot* snapshot = mLayerSnapshotBuilder.getSnapshot(layer->sequence);
         if (snapshot) {
             transformHint = snapshot->transformHint;
         }
         layer->setTransformHint(transformHint);
         if (layer->setBuffer(composerState.externalTexture, *s.bufferData, postTime,
-                             desiredPresentTime, isAutoTimestamp, frameTimelineInfo)) {
+                             desiredPresentTime, isAutoTimestamp, frameTimelineInfo, gameMode)) {
             flags |= eTraversalNeeded;
         }
-        mLayersWithQueuedFrames.emplace(layer);
+        mLayersWithQueuedFrames.emplace(layer, gameMode);
     } else if (frameTimelineInfo.vsyncId != FrameTimelineInfo::INVALID_VSYNC_ID) {
-        layer->setFrameTimelineVsyncForBufferlessTransaction(frameTimelineInfo, postTime);
+        layer->setFrameTimelineVsyncForBufferlessTransaction(frameTimelineInfo, postTime, gameMode);
     }
 
     if ((what & layer_state_t::eBufferChanged) == 0) {
@@ -7308,15 +6764,9 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                 return NO_ERROR;
             }
             case 1039: {
-                PhysicalDisplayId displayId = [&]() {
-                    Mutex::Autolock lock(mStateLock);
-                    return getDefaultDisplayDeviceLocked()->getPhysicalId();
-                }();
-
-                auto inUid = static_cast<uid_t>(data.readInt32());
+                const auto uid = static_cast<uid_t>(data.readInt32());
                 const auto refreshRate = data.readFloat();
-                mScheduler->setPreferredRefreshRateForUid(FrameRateOverride{inUid, refreshRate});
-                mScheduler->onFrameRateOverridesChanged(scheduler::Cycle::Render, displayId);
+                mScheduler->setPreferredRefreshRateForUid(FrameRateOverride{uid, refreshRate});
                 return NO_ERROR;
             }
             // Toggle caching feature
@@ -8539,10 +7989,7 @@ status_t SurfaceFlinger::applyRefreshRateSelectorPolicy(
     setDesiredMode({std::move(preferredMode), .emitEvent = true});
 
     // Update the frameRateOverride list as the display render rate might have changed
-    if (mScheduler->updateFrameRateOverrides(scheduler::GlobalSignals{}, preferredFps)) {
-        triggerOnFrameRateOverridesChanged();
-    }
-
+    mScheduler->updateFrameRateOverrides(scheduler::GlobalSignals{}, preferredFps);
     return NO_ERROR;
 }
 
@@ -8702,13 +8149,7 @@ const std::unordered_map<std::string, uint32_t>& SurfaceFlinger::getGenericLayer
 }
 
 status_t SurfaceFlinger::setGameModeFrameRateOverride(uid_t uid, float frameRate) {
-    PhysicalDisplayId displayId = [&]() {
-        Mutex::Autolock lock(mStateLock);
-        return getDefaultDisplayDeviceLocked()->getPhysicalId();
-    }();
-
-    mScheduler->setGameModeFrameRateForUid(FrameRateOverride{static_cast<uid_t>(uid), frameRate});
-    mScheduler->onFrameRateOverridesChanged(scheduler::Cycle::Render, displayId);
+    mScheduler->setGameModeFrameRateForUid(FrameRateOverride{uid, frameRate});
     return NO_ERROR;
 }
 
@@ -9033,92 +8474,6 @@ std::shared_ptr<renderengine::ExternalTexture> SurfaceFlinger::getExternalTextur
     return nullptr;
 }
 
-bool SurfaceFlinger::commitMirrorDisplays(VsyncId vsyncId) {
-    std::vector<MirrorDisplayState> mirrorDisplays;
-    {
-        std::scoped_lock<std::mutex> lock(mMirrorDisplayLock);
-        mirrorDisplays = std::move(mMirrorDisplays);
-        mMirrorDisplays.clear();
-        if (mirrorDisplays.size() == 0) {
-            return false;
-        }
-    }
-
-    sp<IBinder> unused;
-    for (const auto& mirrorDisplay : mirrorDisplays) {
-        // Set mirror layer's default layer stack to -1 so it doesn't end up rendered on a display
-        // accidentally.
-        sp<Layer> rootMirrorLayer = LayerHandle::getLayer(mirrorDisplay.rootHandle);
-        ssize_t idx = mCurrentState.layersSortedByZ.indexOf(rootMirrorLayer);
-        bool ret = rootMirrorLayer->setLayerStack(ui::LayerStack::fromValue(-1));
-        if (idx >= 0 && ret) {
-            mCurrentState.layersSortedByZ.removeAt(idx);
-            mCurrentState.layersSortedByZ.add(rootMirrorLayer);
-        }
-
-        for (const auto& layer : mDrawingState.layersSortedByZ) {
-            if (layer->getLayerStack() != mirrorDisplay.layerStack ||
-                layer->isInternalDisplayOverlay()) {
-                continue;
-            }
-
-            LayerCreationArgs mirrorArgs(this, mirrorDisplay.client, "MirrorLayerParent",
-                                         ISurfaceComposerClient::eNoColorFill,
-                                         gui::LayerMetadata());
-            sp<Layer> childMirror;
-            {
-                Mutex::Autolock lock(mStateLock);
-                createEffectLayer(mirrorArgs, &unused, &childMirror);
-                MUTEX_ALIAS(mStateLock, childMirror->mFlinger->mStateLock);
-                childMirror->setClonedChild(layer->createClone());
-                childMirror->reparent(mirrorDisplay.rootHandle);
-            }
-            // lock on mStateLock needs to be released before binder handle gets destroyed
-            unused.clear();
-        }
-    }
-    return true;
-}
-
-bool SurfaceFlinger::commitCreatedLayers(VsyncId vsyncId,
-                                         std::vector<LayerCreatedState>& createdLayers) {
-    if (createdLayers.size() == 0) {
-        return false;
-    }
-
-    Mutex::Autolock _l(mStateLock);
-    for (const auto& createdLayer : createdLayers) {
-        handleLayerCreatedLocked(createdLayer, vsyncId);
-    }
-    mLayersAdded = true;
-    return mLayersAdded;
-}
-
-void SurfaceFlinger::updateLayerMetadataSnapshot() {
-    LayerMetadata parentMetadata;
-    for (const auto& layer : mDrawingState.layersSortedByZ) {
-        layer->updateMetadataSnapshot(parentMetadata);
-    }
-
-    std::unordered_set<Layer*> visited;
-    mDrawingState.traverse([&visited](Layer* layer) {
-        if (visited.find(layer) != visited.end()) {
-            return;
-        }
-
-        // If the layer isRelativeOf, then either it's relative metadata will be set
-        // recursively when updateRelativeMetadataSnapshot is called on its relative parent or
-        // it's relative parent has been deleted. Clear the layer's relativeLayerMetadata to ensure
-        // that layers with deleted relative parents don't hold stale relativeLayerMetadata.
-        if (layer->getDrawingState().isRelativeOf) {
-            layer->editLayerSnapshot()->relativeLayerMetadata = {};
-            return;
-        }
-
-        layer->updateRelativeMetadataSnapshot({}, visited);
-    });
-}
-
 void SurfaceFlinger::moveSnapshotsFromCompositionArgs(
         compositionengine::CompositionRefreshArgs& refreshArgs,
         const std::vector<std::pair<Layer*, LayerFE*>>& layers) {
@@ -9289,33 +8644,6 @@ SurfaceFlinger::getLayerSnapshotsForScreenshots(uint32_t rootLayerId, uint32_t u
         mLayerSnapshotBuilder.update(args);
         return layers;
     };
-}
-
-frontend::Update SurfaceFlinger::flushLifecycleUpdates() {
-    frontend::Update update;
-    SFTRACE_NAME("TransactionHandler:flushTransactions");
-    // Locking:
-    // 1. to prevent onHandleDestroyed from being called while the state lock is held,
-    // we must keep a copy of the transactions (specifically the composer
-    // states) around outside the scope of the lock.
-    // 2. Transactions and created layers do not share a lock. To prevent applying
-    // transactions with layers still in the createdLayer queue, flush the transactions
-    // before committing the created layers.
-    mTransactionHandler.collectTransactions();
-    update.transactions = mTransactionHandler.flushTransactions();
-    {
-        // TODO(b/238781169) lockless queue this and keep order.
-        std::scoped_lock<std::mutex> lock(mCreatedLayersLock);
-        update.layerCreatedStates = std::move(mCreatedLayers);
-        mCreatedLayers.clear();
-        update.newLayers = std::move(mNewLayers);
-        mNewLayers.clear();
-        update.layerCreationArgs = std::move(mNewLayerArgs);
-        mNewLayerArgs.clear();
-        update.destroyedHandles = std::move(mDestroyedHandles);
-        mDestroyedHandles.clear();
-    }
-    return update;
 }
 
 void SurfaceFlinger::doActiveLayersTracingIfNeeded(bool isCompositionComputed,
