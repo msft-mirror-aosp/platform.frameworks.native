@@ -4879,6 +4879,10 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
                     logDispatchStateLocked();
                     LOG(ERROR) << "Inconsistent event: " << motionEvent
                                << ", reason: " << result.error();
+                    if (policyFlags & POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY) {
+                        mLock.unlock();
+                        return InputEventInjectionResult::FAILED;
+                    }
                 }
             }
 
