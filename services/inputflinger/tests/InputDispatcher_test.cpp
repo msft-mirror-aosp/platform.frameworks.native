@@ -5037,6 +5037,54 @@ TEST_F_WITH_FLAGS(InputDispatcherTest, InvalidA11yHoverStreamDoesNotCrash,
 }
 
 /**
+ * Invalid events injected by input filter are rejected.
+ */
+TEST_F(InputDispatcherTest, InvalidA11yEventsGetRejected) {
+    std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
+    sp<FakeWindowHandle> window = sp<FakeWindowHandle>::make(application, mDispatcher, "Window",
+                                                             ui::LogicalDisplayId::DEFAULT);
+
+    mDispatcher->setFocusedApplication(ui::LogicalDisplayId::DEFAULT, application);
+
+    mDispatcher->onWindowInfosChanged({{*window->getInfo()}, {}, 0, 0});
+
+    // a11y sets 'POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY' policy flag during injection, so define
+    // a custom injection function here for convenience.
+    auto injectFromAccessibility = [&](int32_t action, float x, float y) {
+        MotionEvent event = MotionEventBuilder(action, AINPUT_SOURCE_TOUCHSCREEN)
+                                    .pointer(PointerBuilder(0, ToolType::FINGER).x(x).y(y))
+                                    .addFlag(AMOTION_EVENT_FLAG_IS_ACCESSIBILITY_EVENT)
+                                    .build();
+        return injectMotionEvent(*mDispatcher, event, 100ms,
+                                 InputEventInjectionSync::WAIT_FOR_RESULT, /*targetUid=*/{},
+                                 POLICY_FLAG_PASS_TO_USER | POLICY_FLAG_FILTERED |
+                                         POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY);
+    };
+
+    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+              injectFromAccessibility(ACTION_DOWN, /*x=*/300, /*y=*/400));
+    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+              injectFromAccessibility(ACTION_MOVE, /*x=*/310, /*y=*/420));
+    window->consumeMotionEvent(WithMotionAction(ACTION_DOWN));
+    window->consumeMotionEvent(WithMotionAction(ACTION_MOVE));
+    // finger is still down, so a new DOWN event should be rejected!
+    ASSERT_EQ(InputEventInjectionResult::FAILED,
+              injectFromAccessibility(ACTION_DOWN, /*x=*/340, /*y=*/410));
+
+    // if the gesture is correctly finished, new down event will succeed
+    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+              injectFromAccessibility(ACTION_MOVE, /*x=*/320, /*y=*/430));
+    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+              injectFromAccessibility(ACTION_UP, /*x=*/320, /*y=*/430));
+    window->consumeMotionEvent(WithMotionAction(ACTION_MOVE));
+    window->consumeMotionEvent(WithMotionAction(ACTION_UP));
+
+    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+              injectFromAccessibility(ACTION_DOWN, /*x=*/350, /*y=*/460));
+    window->consumeMotionEvent(WithMotionAction(ACTION_DOWN));
+}
+
+/**
  * If mouse is hovering when the touch goes down, the hovering should be stopped via HOVER_EXIT.
  */
 TEST_F(InputDispatcherTest, TouchDownAfterMouseHover_legacy) {
