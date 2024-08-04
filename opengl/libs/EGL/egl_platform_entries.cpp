@@ -1324,7 +1324,7 @@ private:
     std::mutex mMutex;
 };
 
-EGLBoolean eglSwapBuffersWithDamageKHRImpl(EGLDisplay dpy, EGLSurface draw, EGLint* rects,
+EGLBoolean eglSwapBuffersWithDamageKHRImpl(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
                                            EGLint n_rects) {
     const egl_display_t* dp = validate_display(dpy);
     if (!dp) return EGL_FALSE;

@@ -53,6 +53,7 @@
  */
 
 #include <android/api-level.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <unistd.h>
 
