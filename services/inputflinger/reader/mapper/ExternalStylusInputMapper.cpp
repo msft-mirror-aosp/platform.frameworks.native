@@ -33,7 +33,7 @@ uint32_t ExternalStylusInputMapper::getSources() const {
 
 void ExternalStylusInputMapper::populateDeviceInfo(InputDeviceInfo& info) {
     InputMapper::populateDeviceInfo(info);
-    if (mRawPressureAxis) {
+    if (mRawPressureAxis || mTouchButtonAccumulator.hasButtonTouch()) {
         info.addMotionRange(AMOTION_EVENT_AXIS_PRESSURE, AINPUT_SOURCE_STYLUS, 0.0f, 1.0f, 0.0f,
                             0.0f, 0.0f);
     }

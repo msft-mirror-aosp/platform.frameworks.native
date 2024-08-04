@@ -1168,6 +1168,117 @@ void Surface::onBufferQueuedLocked(int slot, sp<Fence> fence,
     }
 }
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
+int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
+    ATRACE_CALL();
+    ALOGV("Surface::queueBuffer");
+
+    IGraphicBufferProducer::QueueBufferOutput output;
+    IGraphicBufferProducer::QueueBufferInput input;
+    int slot;
+    sp<Fence> fence;
+    {
+        Mutex::Autolock lock(mMutex);
+
+        slot = getSlotFromBufferLocked(buffer);
+        if (slot < 0) {
+            if (fenceFd >= 0) {
+                close(fenceFd);
+            }
+            return slot;
+        }
+        if (mSharedBufferSlot == slot && mSharedBufferHasBeenQueued) {
+            if (fenceFd >= 0) {
+                close(fenceFd);
+            }
+            return OK;
+        }
+
+        getQueueBufferInputLocked(buffer, fenceFd, mTimestamp, &input);
+        applyGrallocMetadataLocked(buffer, input);
+        fence = input.fence;
+    }
+    nsecs_t now = systemTime();
+    // Drop the lock temporarily while we touch the underlying producer. In the case of a local
+    // BufferQueue, the following should be allowable:
+    //
+    //    Surface::queueBuffer
+    // -> IConsumerListener::onFrameAvailable callback triggers automatically
+    // ->   implementation calls IGraphicBufferConsumer::acquire/release immediately
+    // -> SurfaceListener::onBufferRelesed callback triggers automatically
+    // ->   implementation calls Surface::dequeueBuffer
+    status_t err = mGraphicBufferProducer->queueBuffer(slot, input, &output);
+    {
+        Mutex::Autolock lock(mMutex);
+
+        mLastQueueDuration = systemTime() - now;
+        if (err != OK) {
+            ALOGE("queueBuffer: error queuing buffer, %d", err);
+        }
+
+        onBufferQueuedLocked(slot, fence, output);
+    }
+
+    return err;
+}
+
+int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers) {
+    ATRACE_CALL();
+    ALOGV("Surface::queueBuffers");
+
+    size_t numBuffers = buffers.size();
+    std::vector<IGraphicBufferProducer::QueueBufferInput> queueBufferInputs(numBuffers);
+    std::vector<IGraphicBufferProducer::QueueBufferOutput> queueBufferOutputs;
+    std::vector<int> bufferSlots(numBuffers, -1);
+    std::vector<sp<Fence>> bufferFences(numBuffers);
+
+    int err;
+    {
+        Mutex::Autolock lock(mMutex);
+
+        if (mSharedBufferMode) {
+            ALOGE("%s: batched operation is not supported in shared buffer mode", __FUNCTION__);
+            return INVALID_OPERATION;
+        }
+
+        for (size_t batchIdx = 0; batchIdx < numBuffers; batchIdx++) {
+            int i = getSlotFromBufferLocked(buffers[batchIdx].buffer);
+            if (i < 0) {
+                if (buffers[batchIdx].fenceFd >= 0) {
+                    close(buffers[batchIdx].fenceFd);
+                }
+                return i;
+            }
+            bufferSlots[batchIdx] = i;
+
+            IGraphicBufferProducer::QueueBufferInput input;
+            getQueueBufferInputLocked(buffers[batchIdx].buffer, buffers[batchIdx].fenceFd,
+                                      buffers[batchIdx].timestamp, &input);
+            bufferFences[batchIdx] = input.fence;
+            queueBufferInputs[batchIdx] = input;
+        }
+    }
+    nsecs_t now = systemTime();
+    err = mGraphicBufferProducer->queueBuffers(queueBufferInputs, &queueBufferOutputs);
+    {
+        Mutex::Autolock lock(mMutex);
+        mLastQueueDuration = systemTime() - now;
+        if (err != OK) {
+            ALOGE("%s: error queuing buffer, %d", __FUNCTION__, err);
+        }
+
+        for (size_t batchIdx = 0; batchIdx < numBuffers; batchIdx++) {
+            onBufferQueuedLocked(bufferSlots[batchIdx], bufferFences[batchIdx],
+                                 queueBufferOutputs[batchIdx]);
+        }
+    }
+
+    return err;
+}
+
+#else
+
 int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
     ATRACE_CALL();
     ALOGV("Surface::queueBuffer");
@@ -1254,6 +1365,8 @@ int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers) {
 
     return err;
 }
+
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 void Surface::querySupportedTimestampsLocked() const {
     // mMutex must be locked when calling this method.
@@ -1912,15 +2025,6 @@ bool Surface::transformToDisplayInverse() const {
 int Surface::connect(int api) {
     static sp<SurfaceListener> listener = new StubSurfaceListener();
     return connect(api, listener);
-}
-
-int Surface::connect(int api, const sp<SurfaceListener>& listener) {
-    return connect(api, listener, false);
-}
-
-int Surface::connect(
-        int api, bool reportBufferRemoval, const sp<SurfaceListener>& sListener) {
-    return connect(api, sListener, reportBufferRemoval);
 }
 
 int Surface::connect(int api, const sp<SurfaceListener>& listener, bool reportBufferRemoval) {
