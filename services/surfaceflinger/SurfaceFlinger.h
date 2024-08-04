@@ -697,7 +697,6 @@ private:
     void requestHardwareVsync(PhysicalDisplayId, bool) override;
     void requestDisplayModes(std::vector<display::DisplayModeRequest>) override;
     void kernelTimerChanged(bool expired) override;
-    void triggerOnFrameRateOverridesChanged() override;
     void onChoreographerAttached() override;
     void onExpectedPresentTimePosted(TimePoint expectedPresentTime, ftl::NonNull<DisplayModePtr>,
                                      Fps renderRate) override;
@@ -963,18 +962,12 @@ private:
         return nullptr;
     }
 
-    // Returns the primary display or (for foldables) the active display, assuming that the inner
-    // and outer displays have mutually exclusive power states.
+    // Returns the primary display or (for foldables) the active display.
     sp<const DisplayDevice> getDefaultDisplayDeviceLocked() const REQUIRES(mStateLock) {
         return const_cast<SurfaceFlinger*>(this)->getDefaultDisplayDeviceLocked();
     }
 
     sp<DisplayDevice> getDefaultDisplayDeviceLocked() REQUIRES(mStateLock) {
-        if (const auto display = getDisplayDeviceLocked(mActiveDisplayId)) {
-            return display;
-        }
-        // The active display is outdated, so fall back to the primary display.
-        mActiveDisplayId = getPrimaryDisplayIdLocked();
         return getDisplayDeviceLocked(mActiveDisplayId);
     }
 
@@ -1274,10 +1267,17 @@ private:
     bool mForceTransactionDisplayChange = false;
     bool mUpdateAttachedChoreographer = false;
 
+    struct LayerIntHash {
+        size_t operator()(const std::pair<sp<Layer>, gui::GameMode>& k) const {
+            return std::hash<Layer*>()(k.first.get()) ^
+                    std::hash<int32_t>()(static_cast<int32_t>(k.second));
+        }
+    };
+
     // TODO(b/238781169) validate these on composition
     // Tracks layers that have pending frames which are candidates for being
     // latched.
-    std::unordered_set<sp<Layer>, SpHash<Layer>> mLayersWithQueuedFrames;
+    std::unordered_set<std::pair<sp<Layer>, gui::GameMode>, LayerIntHash> mLayersWithQueuedFrames;
     std::unordered_set<sp<Layer>, SpHash<Layer>> mLayersWithBuffersRemoved;
     std::unordered_set<uint32_t> mLayersIdsWithQueuedFrames;
 
@@ -1308,7 +1308,7 @@ private:
 
     display::PhysicalDisplays mPhysicalDisplays GUARDED_BY(mStateLock);
 
-    // The inner or outer display for foldables, assuming they have mutually exclusive power states.
+    // The inner or outer display for foldables, while unfolded or folded, respectively.
     std::atomic<PhysicalDisplayId> mActiveDisplayId;
 
     display::DisplayModeController mDisplayModeController;

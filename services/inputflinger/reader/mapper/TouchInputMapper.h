@@ -365,6 +365,16 @@ protected:
     RawState mLastRawState;
     CookedState mLastCookedState;
 
+    enum class ExternalStylusPresence {
+        // No external stylus connected.
+        NONE,
+        // An external stylus that can report touch/pressure that can be fused with the touchscreen.
+        TOUCH_FUSION,
+        // An external stylus that can only report buttons.
+        BUTTON_FUSION,
+        ftl_last = BUTTON_FUSION,
+    };
+    ExternalStylusPresence mExternalStylusPresence{ExternalStylusPresence::NONE};
     // State provided by an external stylus
     StylusState mExternalStylusState;
     // If an external stylus is capable of reporting pointer-specific data like pressure, we will
@@ -459,8 +469,6 @@ private:
     float mTiltXScale;
     float mTiltYCenter;
     float mTiltYScale;
-
-    bool mExternalStylusConnected;
 
     // Oriented motion ranges for input device info.
     struct OrientedRanges {
