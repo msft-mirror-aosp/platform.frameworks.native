@@ -149,7 +149,10 @@ uint32_t TouchInputMapper::getSources() const {
     // The SOURCE_BLUETOOTH_STYLUS is added to events dynamically if the current stream is modified
     // by the external stylus state. That's why we don't add it directly to mSource during
     // configuration.
-    return mSource | (hasExternalStylus() ? AINPUT_SOURCE_BLUETOOTH_STYLUS : 0);
+    return mSource |
+            (mExternalStylusPresence == ExternalStylusPresence::TOUCH_FUSION
+                     ? AINPUT_SOURCE_BLUETOOTH_STYLUS
+                     : 0);
 }
 
 void TouchInputMapper::populateDeviceInfo(InputDeviceInfo& info) {
@@ -270,8 +273,8 @@ void TouchInputMapper::dump(std::string& dump) {
     }
 
     dump += INDENT3 "Stylus Fusion:\n";
-    dump += StringPrintf(INDENT4 "ExternalStylusConnected: %s\n",
-                         toString(mExternalStylusConnected));
+    dump += StringPrintf(INDENT4 "ExternalStylusPresence: %s\n",
+                         ftl::enum_string(mExternalStylusPresence).c_str());
     dump += StringPrintf(INDENT4 "Fused External Stylus Pointer ID: %s\n",
                          toString(mFusedStylusPointerId).c_str());
     dump += StringPrintf(INDENT4 "External Stylus Data Timeout: %" PRId64 "\n",
@@ -356,11 +359,19 @@ std::list<NotifyArgs> TouchInputMapper::reconfigure(nsecs_t when,
 void TouchInputMapper::resolveExternalStylusPresence() {
     std::vector<InputDeviceInfo> devices;
     getContext()->getExternalStylusDevices(devices);
-    mExternalStylusConnected = !devices.empty();
-
-    if (!mExternalStylusConnected) {
+    if (devices.empty()) {
+        mExternalStylusPresence = ExternalStylusPresence::NONE;
         resetExternalStylus();
+        return;
     }
+    mExternalStylusPresence =
+            std::any_of(devices.begin(), devices.end(),
+                        [](const auto& info) {
+                            return info.getMotionRange(AMOTION_EVENT_AXIS_PRESSURE,
+                                                       AINPUT_SOURCE_STYLUS) != nullptr;
+                        })
+            ? ExternalStylusPresence::TOUCH_FUSION
+            : ExternalStylusPresence::BUTTON_FUSION;
 }
 
 TouchInputMapper::Parameters TouchInputMapper::computeParameters(
@@ -520,7 +531,7 @@ void TouchInputMapper::dumpRawPointerAxes(std::string& dump) {
 }
 
 bool TouchInputMapper::hasExternalStylus() const {
-    return mExternalStylusConnected;
+    return mExternalStylusPresence != ExternalStylusPresence::NONE;
 }
 
 /**
