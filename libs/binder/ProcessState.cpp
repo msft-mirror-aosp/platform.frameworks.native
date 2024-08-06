@@ -24,7 +24,6 @@
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
 #include <binder/Stability.h>
-#include <cutils/atomic.h>
 #include <utils/AndroidThreads.h>
 #include <utils/String8.h>
 #include <utils/Thread.h>
@@ -387,7 +386,7 @@ void ProcessState::expungeHandle(int32_t handle, IBinder* binder)
 }
 
 String8 ProcessState::makeBinderThreadName() {
-    int32_t s = android_atomic_add(1, &mThreadPoolSeq);
+    int32_t s = mThreadPoolSeq.fetch_add(1, std::memory_order_release);
     pid_t pid = getpid();
 
     std::string_view driverName = mDriverName.c_str();
@@ -429,8 +428,17 @@ status_t ProcessState::setThreadPoolMaxThreadCount(size_t maxThreads) {
 }
 
 size_t ProcessState::getThreadPoolMaxTotalThreadCount() const {
+    // Need to read `mKernelStartedThreads` before `mThreadPoolStarted` (with
+    // non-relaxed memory ordering) to avoid a race like the following:
+    //
+    // thread A: if (mThreadPoolStarted) { // evaluates false
+    // thread B: mThreadPoolStarted = true;
+    // thread B: mKernelStartedThreads++;
+    // thread A: size_t kernelStarted = mKernelStartedThreads;
+    // thread A: LOG_ALWAYS_FATAL_IF(kernelStarted != 0, ...);
+    size_t kernelStarted = mKernelStartedThreads;
+
     if (mThreadPoolStarted) {
-        size_t kernelStarted = mKernelStartedThreads;
         size_t max = mMaxThreads;
         size_t current = mCurrentThreads;
 
@@ -460,7 +468,6 @@ size_t ProcessState::getThreadPoolMaxTotalThreadCount() const {
 
     // must not be initialized or maybe has poll thread setup, we
     // currently don't track this in libbinder
-    size_t kernelStarted = mKernelStartedThreads;
     LOG_ALWAYS_FATAL_IF(kernelStarted != 0, "Expecting 0 kernel started threads but have %zu",
                         kernelStarted);
     return mCurrentThreads;
