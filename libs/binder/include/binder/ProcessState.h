@@ -188,8 +188,8 @@ private:
     Vector<handle_entry> mHandleToObject;
 
     bool mForked;
-    bool mThreadPoolStarted;
-    volatile int32_t mThreadPoolSeq;
+    std::atomic_bool mThreadPoolStarted;
+    std::atomic_int32_t mThreadPoolSeq;
 
     CallRestriction mCallRestriction;
 };
