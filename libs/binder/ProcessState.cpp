@@ -584,7 +584,7 @@ ProcessState::ProcessState(const char* driver)
 #ifdef __ANDROID__
     LOG_ALWAYS_FATAL_IF(!opened.ok(),
                         "Binder driver '%s' could not be opened. Error: %s. Terminating.",
-                        error.c_str(), driver);
+                        driver, error.c_str());
 #endif
 
     if (opened.ok()) {
