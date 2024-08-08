@@ -28,7 +28,6 @@
 #include <utils/RefBase.h>
 
 #include <system/window.h>
-#include <thread>
 #include <queue>
 
 #include <com_android_graphics_libgui_flags.h>
@@ -131,6 +130,8 @@ public:
 
     virtual ~BLASTBufferQueue();
 
+    void onFirstRef() override;
+
 private:
     friend class BLASTBufferQueueHelper;
     friend class BBQBufferQueueProducer;
@@ -170,8 +171,16 @@ private:
 
     // BufferQueue internally allows 1 more than
     // the max to be acquired
-    int32_t mMaxAcquiredBuffers = 1;
+    int32_t mMaxAcquiredBuffers GUARDED_BY(mMutex) = 1;
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
+    int32_t mMaxDequeuedBuffers GUARDED_BY(mMutex) = 1;
+    static constexpr int32_t kMaxBufferCount = BufferQueueDefs::NUM_BUFFER_SLOTS;
 
+    bool mAsyncMode GUARDED_BY(mMutex) = false;
+    bool mSharedBufferMode GUARDED_BY(mMutex) = false;
+
+    int32_t mNumDequeued GUARDED_BY(mMutex) = 0;
+#endif
     int32_t mNumFrameAvailable GUARDED_BY(mMutex) = 0;
     int32_t mNumAcquired GUARDED_BY(mMutex) = 0;
 
