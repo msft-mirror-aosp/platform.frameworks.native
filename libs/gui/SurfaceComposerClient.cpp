@@ -2390,6 +2390,22 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setDropI
     return *this;
 }
 
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBufferReleaseChannel(
+        const sp<SurfaceControl>& sc,
+        const std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint>& channel) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+
+    s->what |= layer_state_t::eBufferReleaseChannelChanged;
+    s->bufferReleaseChannel = channel;
+
+    registerSurfaceControlForCallback(sc);
+    return *this;
+}
+
 // ---------------------------------------------------------------------------
 
 DisplayState& SurfaceComposerClient::Transaction::getDisplayState(const sp<IBinder>& token) {

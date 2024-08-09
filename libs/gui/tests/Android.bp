@@ -33,6 +33,7 @@ cc_test {
         "BLASTBufferQueue_test.cpp",
         "BufferItemConsumer_test.cpp",
         "BufferQueue_test.cpp",
+        "BufferReleaseChannel_test.cpp",
         "Choreographer_test.cpp",
         "CompositorTiming_test.cpp",
         "CpuConsumer_test.cpp",
