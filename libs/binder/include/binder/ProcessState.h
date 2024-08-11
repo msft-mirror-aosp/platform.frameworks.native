@@ -133,6 +133,7 @@ public:
     enum class DriverFeature {
         ONEWAY_SPAM_DETECTION,
         EXTENDED_ERROR,
+        FREEZE_NOTIFICATION,
     };
     // Determine whether a feature is supported by the binder driver.
     LIBBINDER_EXPORTED static bool isDriverFeatureEnabled(const DriverFeature feature);
