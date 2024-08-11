@@ -403,7 +403,7 @@ sp<SensorEventQueue> SensorManager::createEventQueue(
             ALOGE("createEventQueue: connection is NULL.");
             return nullptr;
         }
-        queue = new SensorEventQueue(connection, *this);
+        queue = new SensorEventQueue(connection, *this, packageName);
         break;
     }
     return queue;
