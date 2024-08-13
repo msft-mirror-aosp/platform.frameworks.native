@@ -49,6 +49,7 @@ cc_defaults {
         "libtonemap",
         "libaidlcommonsupport",
         "libprocessgroup",
+        "libprocessgroup_util",
         "libcgrouprc",
         "libjsoncpp",
         "libcgrouprc_format",
