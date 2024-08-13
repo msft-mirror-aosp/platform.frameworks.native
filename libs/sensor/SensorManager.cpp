@@ -73,8 +73,6 @@ int getDeviceIdForUid(uid_t uid) {
                 return deviceId;
             }
         }
-    } else {
-        ALOGW("Cannot get virtualdevice_native service");
     }
     return DEVICE_ID_DEFAULT;
 }
