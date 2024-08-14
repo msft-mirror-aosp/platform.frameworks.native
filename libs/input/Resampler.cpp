@@ -62,8 +62,8 @@ inline float lerp(float a, float b, float alpha) {
 
 const PointerCoords calculateResampledCoords(const PointerCoords& a, const PointerCoords& b,
                                              const float alpha) {
-    // Ensure the struct PointerCoords is initialized.
-    PointerCoords resampledCoords{};
+    // We use the value of alpha to initialize resampledCoords with the latest sample information.
+    PointerCoords resampledCoords = (alpha < 1.0f) ? a : b;
     resampledCoords.isResampled = true;
     resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_X, lerp(a.getX(), b.getX(), alpha));
     resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_Y, lerp(a.getY(), b.getY(), alpha));
