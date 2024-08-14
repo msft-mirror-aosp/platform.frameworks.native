@@ -272,13 +272,9 @@ TEST_F(SurfaceTest, LayerCountIsOne) {
 TEST_F(SurfaceTest, QueryConsumerUsage) {
     const int TEST_USAGE_FLAGS =
             GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_HW_RENDER;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-    sp<BufferItemConsumer> c = new BufferItemConsumer(consumer,
-            TEST_USAGE_FLAGS);
-    sp<Surface> s = new Surface(producer);
+    sp<BufferItemConsumer> c = new BufferItemConsumer(TEST_USAGE_FLAGS);
 
+    sp<Surface> s = c->getSurface();
     sp<ANativeWindow> anw(s);
 
     int flags = -1;
@@ -290,15 +286,11 @@ TEST_F(SurfaceTest, QueryConsumerUsage) {
 
 TEST_F(SurfaceTest, QueryDefaultBuffersDataSpace) {
     const android_dataspace TEST_DATASPACE = HAL_DATASPACE_V0_SRGB;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
 
+    sp<CpuConsumer> cpuConsumer = new CpuConsumer(1);
     cpuConsumer->setDefaultBufferDataSpace(TEST_DATASPACE);
 
-    sp<Surface> s = new Surface(producer);
-
+    sp<Surface> s = cpuConsumer->getSurface();
     sp<ANativeWindow> anw(s);
 
     android_dataspace dataSpace;
@@ -311,11 +303,8 @@ TEST_F(SurfaceTest, QueryDefaultBuffersDataSpace) {
 }
 
 TEST_F(SurfaceTest, SettingGenerationNumber) {
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
-    sp<Surface> surface = new Surface(producer);
+    sp<CpuConsumer> cpuConsumer = new CpuConsumer(1);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<ANativeWindow> window(surface);
 
     // Allocate a buffer with a generation number of 0
@@ -2155,12 +2144,9 @@ TEST_F(SurfaceTest, DefaultMaxBufferCountSetAndUpdated) {
 TEST_F(SurfaceTest, BatchOperations) {
     const int BUFFER_COUNT = 16;
     const int BATCH_SIZE = 8;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
-    sp<Surface> surface = new Surface(producer);
+    sp<CpuConsumer> cpuConsumer = new CpuConsumer(1);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<ANativeWindow> window(surface);
     sp<StubSurfaceListener> listener = new StubSurfaceListener();
 
@@ -2207,12 +2193,9 @@ TEST_F(SurfaceTest, BatchOperations) {
 TEST_F(SurfaceTest, BatchIllegalOperations) {
     const int BUFFER_COUNT = 16;
     const int BATCH_SIZE = 8;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
-    sp<Surface> surface = new Surface(producer);
+    sp<CpuConsumer> cpuConsumer = new CpuConsumer(1);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<ANativeWindow> window(surface);
     sp<StubSurfaceListener> listener = new StubSurfaceListener();
 
@@ -2237,12 +2220,8 @@ TEST_F(SurfaceTest, BatchIllegalOperations) {
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 TEST_F(SurfaceTest, PlatformBufferMethods) {
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-
-    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(consumer, 1);
-    sp<Surface> surface = sp<Surface>::make(producer);
+    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(1);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<StubSurfaceListener> listener = sp<StubSurfaceListener>::make();
     sp<GraphicBuffer> buffer;
     sp<Fence> fence;
@@ -2294,13 +2273,9 @@ TEST_F(SurfaceTest, PlatformBufferMethods) {
 }
 
 TEST_F(SurfaceTest, AllowAllocation) {
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-
     // controlledByApp must be true to disable blocking
-    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(consumer, 1, /*controlledByApp*/ true);
-    sp<Surface> surface = sp<Surface>::make(producer, /*controlledByApp*/ true);
+    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(1, /*controlledByApp*/ true);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<StubSurfaceListener> listener = sp<StubSurfaceListener>::make();
     sp<GraphicBuffer> buffer;
     sp<Fence> fence;
