@@ -1067,8 +1067,6 @@ private:
                                const DisplayDeviceState& drawingState)
             REQUIRES(mStateLock, kMainThreadContext);
 
-    void dispatchDisplayModeChangeEvent(PhysicalDisplayId, const scheduler::FrameRateMode&);
-
     /*
      * VSYNC
      */

@@ -1358,7 +1358,7 @@ void SurfaceFlinger::setDesiredMode(display::DisplayModeRequest&& desiredMode) {
             }
 
             if (emitEvent) {
-                dispatchDisplayModeChangeEvent(displayId, mode);
+                mScheduler->onDisplayModeChanged(displayId, mode);
             }
             break;
         case DesiredModeAction::None:
@@ -1455,7 +1455,7 @@ void SurfaceFlinger::finalizeDisplayModeChange(PhysicalDisplayId displayId) {
     }
 
     if (pendingModeOpt->emitEvent) {
-        dispatchDisplayModeChangeEvent(displayId, activeMode);
+        mScheduler->onDisplayModeChanged(displayId, activeMode);
     }
 }
 
@@ -3587,16 +3587,6 @@ void SurfaceFlinger::processHotplugDisconnect(PhysicalDisplayId displayId,
     }
 
     mPhysicalDisplays.erase(displayId);
-}
-
-void SurfaceFlinger::dispatchDisplayModeChangeEvent(PhysicalDisplayId displayId,
-                                                    const scheduler::FrameRateMode& mode) {
-    // TODO(b/255635821): Merge code paths and move to Scheduler.
-    const auto onDisplayModeChanged = displayId == mActiveDisplayId
-            ? &scheduler::Scheduler::onPrimaryDisplayModeChanged
-            : &scheduler::Scheduler::onNonPrimaryDisplayModeChanged;
-
-    ((*mScheduler).*onDisplayModeChanged)(scheduler::Cycle::Render, mode);
 }
 
 sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
@@ -7959,13 +7949,9 @@ status_t SurfaceFlinger::applyRefreshRateSelectorPolicy(
     const scheduler::RefreshRateSelector::Policy currentPolicy = selector.getCurrentPolicy();
     ALOGV("Setting desired display mode specs: %s", currentPolicy.toString().c_str());
 
-    // TODO(b/140204874): Leave the event in until we do proper testing with all apps that might
-    // be depending in this callback.
-    if (const auto activeMode = selector.getActiveMode(); displayId == mActiveDisplayId) {
-        mScheduler->onPrimaryDisplayModeChanged(scheduler::Cycle::Render, activeMode);
+    if (const bool isPacesetter =
+                mScheduler->onDisplayModeChanged(displayId, selector.getActiveMode())) {
         toggleKernelIdleTimer();
-    } else {
-        mScheduler->onNonPrimaryDisplayModeChanged(scheduler::Cycle::Render, activeMode);
     }
 
     auto preferredModeOpt = getPreferredDisplayMode(displayId, currentPolicy.defaultMode);
@@ -8082,7 +8068,7 @@ status_t SurfaceFlinger::getDesiredDisplayModeSpecs(const sp<IBinder>& displayTo
 void SurfaceFlinger::onLayerFirstRef(Layer* layer) {
     mNumLayers++;
     if (!layer->isRemovedFromCurrentState()) {
-        mScheduler->registerLayer(layer);
+        mScheduler->registerLayer(layer, scheduler::FrameRateCompatibility::Default);
     }
 }
 
