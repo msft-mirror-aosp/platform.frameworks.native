@@ -8068,7 +8068,7 @@ status_t SurfaceFlinger::getDesiredDisplayModeSpecs(const sp<IBinder>& displayTo
 void SurfaceFlinger::onLayerFirstRef(Layer* layer) {
     mNumLayers++;
     if (!layer->isRemovedFromCurrentState()) {
-        mScheduler->registerLayer(layer);
+        mScheduler->registerLayer(layer, scheduler::FrameRateCompatibility::Default);
     }
 }
 
