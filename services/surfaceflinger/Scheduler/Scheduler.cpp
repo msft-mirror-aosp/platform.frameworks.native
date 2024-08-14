@@ -664,11 +664,12 @@ void Scheduler::addPresentFence(PhysicalDisplayId id, std::shared_ptr<FenceTime>
     }
 }
 
-void Scheduler::registerLayer(Layer* layer) {
+void Scheduler::registerLayer(Layer* layer, FrameRateCompatibility frameRateCompatibility) {
     // If the content detection feature is off, we still keep the layer history,
     // since we use it for other features (like Frame Rate API), so layers
     // still need to be registered.
-    mLayerHistory.registerLayer(layer, mFeatures.test(Feature::kContentDetection));
+    mLayerHistory.registerLayer(layer, mFeatures.test(Feature::kContentDetection),
+                                frameRateCompatibility);
 }
 
 void Scheduler::deregisterLayer(Layer* layer) {
