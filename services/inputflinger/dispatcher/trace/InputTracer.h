@@ -44,7 +44,8 @@ public:
     std::unique_ptr<EventTrackerInterface> traceInboundEvent(const EventEntry&) override;
     std::unique_ptr<EventTrackerInterface> createTrackerForSyntheticEvent() override;
     void dispatchToTargetHint(const EventTrackerInterface&, const InputTarget&) override;
-    void eventProcessingComplete(const EventTrackerInterface&) override;
+    void eventProcessingComplete(const EventTrackerInterface&,
+                                 nsecs_t processingTimestamp) override;
     std::unique_ptr<EventTrackerInterface> traceDerivedEvent(const EventEntry&,
                                                              const EventTrackerInterface&) override;
     void traceEventDispatch(const DispatchEntry&, const EventTrackerInterface&) override;
@@ -61,13 +62,13 @@ private:
         explicit inline EventState(InputTracer& tracer) : tracer(tracer){};
         ~EventState();
 
-        void onEventProcessingComplete();
+        void onEventProcessingComplete(nsecs_t processingTimestamp);
 
         InputTracer& tracer;
-        std::vector<const TracedEvent> events;
+        std::vector<TracedEvent> events;
         bool isEventProcessingComplete{false};
         // A queue to hold dispatch args from being traced until event processing is complete.
-        std::vector<const WindowDispatchArgs> pendingDispatchArgs;
+        std::vector<WindowDispatchArgs> pendingDispatchArgs;
         // The metadata should not be modified after event processing is complete.
         TracedEventMetadata metadata{};
     };

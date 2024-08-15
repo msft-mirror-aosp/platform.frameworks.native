@@ -102,6 +102,7 @@ InputReader::InputReader(std::shared_ptr<EventHubInterface> eventHub,
         mEventHub(eventHub),
         mPolicy(policy),
         mNextListener(listener),
+        mKeyboardClassifier(std::make_unique<KeyboardClassifier>()),
         mGlobalMetaState(AMETA_NONE),
         mLedMetaState(AMETA_NONE),
         mGeneration(1),
@@ -179,6 +180,9 @@ void InputReader::loopOnce() {
         }
 
         if (oldGeneration != mGeneration) {
+            // Reset global meta state because it depends on connected input devices.
+            updateGlobalMetaStateLocked();
+
             inputDevicesChanged = true;
             inputDevices = getInputDevicesLocked();
             mPendingArgs.emplace_back(
@@ -245,9 +249,6 @@ std::list<NotifyArgs> InputReader::processEventsLocked(const RawEvent* rawEvents
                     break;
                 case EventHubInterface::DEVICE_REMOVED:
                     removeDeviceLocked(rawEvent->when, rawEvent->deviceId);
-                    break;
-                case EventHubInterface::FINISHED_DEVICE_SCAN:
-                    handleConfigurationChangedLocked(rawEvent->when);
                     break;
                 default:
                     ALOG_ASSERT(false); // can't happen
@@ -411,14 +412,6 @@ std::list<NotifyArgs> InputReader::timeoutExpiredLocked(nsecs_t when) {
 
 int32_t InputReader::nextInputDeviceIdLocked() {
     return ++mNextInputDeviceId;
-}
-
-void InputReader::handleConfigurationChangedLocked(nsecs_t when) {
-    // Reset global meta state because it depends on the list of all configured devices.
-    updateGlobalMetaStateLocked();
-
-    // Enqueue configuration changed.
-    mPendingArgs.emplace_back(NotifyConfigurationChangedArgs{mContext.getNextId(), when});
 }
 
 void InputReader::refreshConfigurationLocked(ConfigurationChanges changes) {
@@ -906,6 +899,12 @@ DeviceId InputReader::getLastUsedInputDeviceId() {
     return mLastUsedDeviceId;
 }
 
+void InputReader::notifyMouseCursorFadedOnTyping() {
+    std::scoped_lock _l(mLock);
+    // disable touchpad taps when cursor has faded due to typing
+    mPreventingTouchpadTaps = true;
+}
+
 void InputReader::dump(std::string& dump) {
     std::scoped_lock _l(mLock);
 
@@ -1074,6 +1073,10 @@ EventHubInterface* InputReader::ContextImpl::getEventHub() {
 
 int32_t InputReader::ContextImpl::getNextId() {
     return mIdGenerator.nextId();
+}
+
+KeyboardClassifier& InputReader::ContextImpl::getKeyboardClassifier() {
+    return *mReader->mKeyboardClassifier;
 }
 
 } // namespace android

@@ -34,7 +34,6 @@ void setAxisInfo(ThreadSafeFuzzedDataProvider& fdp, FuzzEventHub& eventHub, int3
     if (fdp.ConsumeBool()) {
         eventHub.setAbsoluteAxisInfo(id, axis,
                                      RawAbsoluteAxisInfo{
-                                             .valid = fdp.ConsumeBool(),
                                              .minValue = fdp.ConsumeIntegral<int32_t>(),
                                              .maxValue = fdp.ConsumeIntegral<int32_t>(),
                                              .flat = fdp.ConsumeIntegral<int32_t>(),
@@ -176,7 +175,7 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t* data, size_t size) {
                 },
                 [&]() -> void {
                     RawEvent event = getFuzzedRawEvent(*fdp);
-                    std::list<NotifyArgs> unused = mapper.process(&event);
+                    std::list<NotifyArgs> unused = mapper.process(event);
                 },
         })();
     }

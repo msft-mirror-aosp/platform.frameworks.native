@@ -36,7 +36,7 @@ public:
                                                     const InputReaderConfiguration& config,
                                                     ConfigurationChanges changes) override;
     [[nodiscard]] std::list<NotifyArgs> reset(nsecs_t when) override;
-    [[nodiscard]] std::list<NotifyArgs> process(const RawEvent* rawEvent) override;
+    [[nodiscard]] std::list<NotifyArgs> process(const RawEvent& rawEvent) override;
 
     int32_t getKeyCodeState(uint32_t sourceMask, int32_t keyCode) override;
     int32_t getScanCodeState(uint32_t sourceMask, int32_t scanCode) override;
@@ -60,8 +60,10 @@ private:
         int32_t flags{};
     };
 
-    uint32_t mSource{};
-    int32_t mKeyboardType{};
+    // The keyboard source for this mapper. Events generated should use the source shared
+    // by all KeyboardInputMappers for this input device.
+    uint32_t mMapperSource{};
+
     std::optional<KeyboardLayoutInfo> mKeyboardLayoutInfo;
 
     std::vector<KeyDown> mKeyDowns{}; // keys that are down
@@ -85,8 +87,7 @@ private:
     } mParameters{};
 
     KeyboardInputMapper(InputDeviceContext& deviceContext,
-                        const InputReaderConfiguration& readerConfig, uint32_t source,
-                        int32_t keyboardType);
+                        const InputReaderConfiguration& readerConfig, uint32_t source);
     void configureParameters();
     void dumpParameters(std::string& dump) const;
 
@@ -108,6 +109,7 @@ private:
     std::optional<DisplayViewport> findViewport(const InputReaderConfiguration& readerConfig);
     [[nodiscard]] std::list<NotifyArgs> cancelAllDownKeys(nsecs_t when);
     void onKeyDownProcessed(nsecs_t downTime);
+    uint32_t getEventSource() const;
 };
 
 } // namespace android

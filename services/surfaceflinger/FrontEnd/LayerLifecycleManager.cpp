@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+// #define LOG_NDEBUG 0
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 
 #undef LOG_TAG
@@ -150,6 +151,10 @@ void LayerLifecycleManager::onHandlesDestroyed(
                 linkedLayer->relativeParentId = UNASSIGNED_LAYER_ID;
             }
             if (swapErase(linkedLayer->mirrorIds, layer.id)) {
+                linkedLayer->changes |= RequestedLayerState::Changes::Mirror;
+            }
+            if (linkedLayer->layerIdToMirror == layer.id) {
+                linkedLayer->layerIdToMirror = UNASSIGNED_LAYER_ID;
                 linkedLayer->changes |= RequestedLayerState::Changes::Mirror;
             }
             if (linkedLayer->touchCropId == layer.id) {

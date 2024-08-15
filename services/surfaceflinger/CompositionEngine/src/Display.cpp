@@ -15,6 +15,7 @@
  */
 
 #include <android-base/stringprintf.h>
+#include <common/trace.h>
 #include <compositionengine/CompositionEngine.h>
 #include <compositionengine/CompositionRefreshArgs.h>
 #include <compositionengine/DisplayCreationArgs.h>
@@ -25,9 +26,6 @@
 #include <compositionengine/impl/DumpHelpers.h>
 #include <compositionengine/impl/OutputLayer.h>
 #include <compositionengine/impl/RenderSurface.h>
-#include <gui/TraceUtils.h>
-
-#include <utils/Trace.h>
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
@@ -235,7 +233,7 @@ void Display::beginFrame() {
 
 bool Display::chooseCompositionStrategy(
         std::optional<android::HWComposer::DeviceRequestedChanges>* outChanges) {
-    ATRACE_FORMAT("%s for %s", __func__, getNamePlusId().c_str());
+    SFTRACE_FORMAT("%s for %s", __func__, getNamePlusId().c_str());
     ALOGV(__FUNCTION__);
 
     if (mIsDisconnected) {
@@ -359,6 +357,15 @@ void Display::applyClientTargetRequests(const ClientTargetProperty& clientTarget
     getRenderSurface()->setBufferDataspace(editState().dataspace);
     getRenderSurface()->setBufferPixelFormat(
             static_cast<ui::PixelFormat>(clientTargetProperty.clientTargetProperty.pixelFormat));
+}
+
+void Display::executeCommands() {
+    const auto halDisplayIdOpt = HalDisplayId::tryCast(mId);
+    if (mIsDisconnected || !halDisplayIdOpt) {
+        return;
+    }
+
+    getCompositionEngine().getHwComposer().executeCommands(*halDisplayIdOpt);
 }
 
 compositionengine::Output::FrameFences Display::presentFrame() {

@@ -133,9 +133,8 @@ std::list<NotifyArgs> SensorInputMapper::reconfigure(nsecs_t when,
                           .test(InputDeviceClass::SENSOR))) {
                 continue;
             }
-            RawAbsoluteAxisInfo rawAxisInfo;
-            getAbsoluteAxisInfo(abs, &rawAxisInfo);
-            if (rawAxisInfo.valid) {
+            if (std::optional<RawAbsoluteAxisInfo> rawAxisInfo = getAbsoluteAxisInfo(abs);
+                rawAxisInfo) {
                 AxisInfo axisInfo;
                 // Axis doesn't need to be mapped, as sensor mapper doesn't generate any motion
                 // input events
@@ -146,7 +145,7 @@ std::list<NotifyArgs> SensorInputMapper::reconfigure(nsecs_t when,
                 if (ret.ok()) {
                     InputDeviceSensorType sensorType = (*ret).first;
                     int32_t sensorDataIndex = (*ret).second;
-                    const Axis& axis = createAxis(axisInfo, rawAxisInfo);
+                    const Axis& axis = createAxis(axisInfo, rawAxisInfo.value());
                     parseSensorConfiguration(sensorType, abs, sensorDataIndex, axis);
 
                     mAxes.insert({abs, axis});
@@ -251,35 +250,35 @@ void SensorInputMapper::processHardWareTimestamp(nsecs_t evTime, int32_t mscTime
     mPrevMscTime = static_cast<uint32_t>(mscTime);
 }
 
-std::list<NotifyArgs> SensorInputMapper::process(const RawEvent* rawEvent) {
+std::list<NotifyArgs> SensorInputMapper::process(const RawEvent& rawEvent) {
     std::list<NotifyArgs> out;
-    switch (rawEvent->type) {
+    switch (rawEvent.type) {
         case EV_ABS: {
-            auto it = mAxes.find(rawEvent->code);
+            auto it = mAxes.find(rawEvent.code);
             if (it != mAxes.end()) {
                 Axis& axis = it->second;
-                axis.newValue = rawEvent->value * axis.scale + axis.offset;
+                axis.newValue = rawEvent.value * axis.scale + axis.offset;
             }
             break;
         }
 
         case EV_SYN:
-            switch (rawEvent->code) {
+            switch (rawEvent.code) {
                 case SYN_REPORT:
                     for (std::pair<const int32_t, Axis>& pair : mAxes) {
                         Axis& axis = pair.second;
                         axis.currentValue = axis.newValue;
                     }
-                    out += sync(rawEvent->when, /*force=*/false);
+                    out += sync(rawEvent.when, /*force=*/false);
                     break;
             }
             break;
 
         case EV_MSC:
-            switch (rawEvent->code) {
+            switch (rawEvent.code) {
                 case MSC_TIMESTAMP:
                     // hardware timestamp is nano seconds
-                    processHardWareTimestamp(rawEvent->when, rawEvent->value);
+                    processHardWareTimestamp(rawEvent.when, rawEvent.value);
                     break;
             }
     }

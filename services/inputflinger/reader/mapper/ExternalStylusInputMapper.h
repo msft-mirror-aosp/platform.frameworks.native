@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "InputMapper.h"
 
 #include "SingleTouchMotionAccumulator.h"
@@ -39,11 +41,11 @@ public:
                                                     const InputReaderConfiguration& config,
                                                     ConfigurationChanges changes) override;
     [[nodiscard]] std::list<NotifyArgs> reset(nsecs_t when) override;
-    [[nodiscard]] std::list<NotifyArgs> process(const RawEvent* rawEvent) override;
+    [[nodiscard]] std::list<NotifyArgs> process(const RawEvent& rawEvent) override;
 
 private:
     SingleTouchMotionAccumulator mSingleTouchMotionAccumulator;
-    RawAbsoluteAxisInfo mRawPressureAxis;
+    std::optional<RawAbsoluteAxisInfo> mRawPressureAxis;
     TouchButtonAccumulator mTouchButtonAccumulator;
 
     StylusState mStylusState;

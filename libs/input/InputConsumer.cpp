@@ -135,7 +135,7 @@ void addSample(MotionEvent& event, const InputMessage& msg) {
     }
 
     event.setMetaState(event.getMetaState() | msg.body.motion.metaState);
-    event.addSample(msg.body.motion.eventTime, pointerCoords);
+    event.addSample(msg.body.motion.eventTime, pointerCoords, msg.body.motion.eventId);
 }
 
 void initializeTouchModeEvent(TouchModeEvent& event, const InputMessage& msg) {
@@ -181,7 +181,8 @@ inline bool isPointerEvent(int32_t source) {
 }
 
 bool shouldResampleTool(ToolType toolType) {
-    return toolType == ToolType::FINGER || toolType == ToolType::UNKNOWN;
+    return toolType == ToolType::FINGER || toolType == ToolType::MOUSE ||
+            toolType == ToolType::STYLUS || toolType == ToolType::UNKNOWN;
 }
 
 } // namespace
@@ -234,8 +235,9 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
             mMsgDeferred = false;
         } else {
             // Receive a fresh message.
-            status_t result = mChannel->receiveMessage(&mMsg);
-            if (result == OK) {
+            android::base::Result<InputMessage> result = mChannel->receiveMessage();
+            if (result.ok()) {
+                mMsg = std::move(result.value());
                 const auto [_, inserted] =
                         mConsumeTimes.emplace(mMsg.header.seq, systemTime(SYSTEM_TIME_MONOTONIC));
                 LOG_ALWAYS_FATAL_IF(!inserted, "Already have a consume time for seq=%" PRIu32,
@@ -243,11 +245,11 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
 
                 // Trace the event processing timeline - event was just read from the socket
                 ATRACE_ASYNC_BEGIN(mProcessingTraceTag.c_str(), /*cookie=*/mMsg.header.seq);
-            }
-            if (result) {
+            } else {
                 // Consume the next batched event unless batches are being held for later.
-                if (consumeBatches || result != WOULD_BLOCK) {
-                    result = consumeBatch(factory, frameTime, outSeq, outEvent);
+                if (consumeBatches || result.error().code() != WOULD_BLOCK) {
+                    result = android::base::Error(
+                            consumeBatch(factory, frameTime, outSeq, outEvent));
                     if (*outEvent) {
                         ALOGD_IF(DEBUG_TRANSPORT_CONSUMER,
                                  "channel '%s' consumer ~ consumed batch event, seq=%u",
@@ -255,7 +257,7 @@ status_t InputConsumer::consume(InputEventFactoryInterface* factory, bool consum
                         break;
                     }
                 }
-                return result;
+                return result.error().code();
             }
         }
 
@@ -592,6 +594,11 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
             ALOGD_IF(debugResampling(), "Not resampled, missing id %d", id);
             return;
         }
+        if (!shouldResampleTool(event->getToolType(i))) {
+            ALOGD_IF(debugResampling(),
+                     "Not resampled, containing unsupported tool type at pointer %d", id);
+            return;
+        }
     }
 
     // Find the data to use for resampling.
@@ -639,8 +646,16 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
     }
 
     if (current->eventTime == sampleTime) {
-        // Prevents having 2 events with identical times and coordinates.
+        ALOGD_IF(debugResampling(), "Not resampled, 2 events with identical times.");
         return;
+    }
+
+    for (size_t i = 0; i < pointerCount; i++) {
+        uint32_t id = event->getPointerId(i);
+        if (!other->idBits.hasBit(id)) {
+            ALOGD_IF(debugResampling(), "Not resampled, the other doesn't have pointer id %d.", id);
+            return;
+        }
     }
 
     // Resample touch coordinates.
@@ -670,25 +685,19 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
         const PointerCoords& currentCoords = current->getPointerById(id);
         resampledCoords = currentCoords;
         resampledCoords.isResampled = true;
-        if (other->idBits.hasBit(id) && shouldResampleTool(event->getToolType(i))) {
-            const PointerCoords& otherCoords = other->getPointerById(id);
-            resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_X,
-                                         lerp(currentCoords.getX(), otherCoords.getX(), alpha));
-            resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_Y,
-                                         lerp(currentCoords.getY(), otherCoords.getY(), alpha));
-            ALOGD_IF(debugResampling(),
-                     "[%d] - out (%0.3f, %0.3f), cur (%0.3f, %0.3f), "
-                     "other (%0.3f, %0.3f), alpha %0.3f",
-                     id, resampledCoords.getX(), resampledCoords.getY(), currentCoords.getX(),
-                     currentCoords.getY(), otherCoords.getX(), otherCoords.getY(), alpha);
-        } else {
-            ALOGD_IF(debugResampling(), "[%d] - out (%0.3f, %0.3f), cur (%0.3f, %0.3f)", id,
-                     resampledCoords.getX(), resampledCoords.getY(), currentCoords.getX(),
-                     currentCoords.getY());
-        }
+        const PointerCoords& otherCoords = other->getPointerById(id);
+        resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_X,
+                                     lerp(currentCoords.getX(), otherCoords.getX(), alpha));
+        resampledCoords.setAxisValue(AMOTION_EVENT_AXIS_Y,
+                                     lerp(currentCoords.getY(), otherCoords.getY(), alpha));
+        ALOGD_IF(debugResampling(),
+                 "[%d] - out (%0.3f, %0.3f), cur (%0.3f, %0.3f), "
+                 "other (%0.3f, %0.3f), alpha %0.3f",
+                 id, resampledCoords.getX(), resampledCoords.getY(), currentCoords.getX(),
+                 currentCoords.getY(), otherCoords.getX(), otherCoords.getY(), alpha);
     }
 
-    event->addSample(sampleTime, touchState.lastResample.pointers);
+    event->addSample(sampleTime, touchState.lastResample.pointers, event->getId());
 }
 
 status_t InputConsumer::sendFinishedSignal(uint32_t seq, bool handled) {

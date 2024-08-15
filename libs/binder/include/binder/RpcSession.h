@@ -129,9 +129,9 @@ public:
     setupUnixDomainSocketBootstrapClient(binder::unique_fd bootstrap);
 
     /**
-     * Connects to an RPC server at the CVD & port.
+     * Connects to an RPC server at the CID & port.
      */
-    [[nodiscard]] LIBBINDER_EXPORTED status_t setupVsockClient(unsigned int cvd, unsigned int port);
+    [[nodiscard]] LIBBINDER_EXPORTED status_t setupVsockClient(unsigned int cid, unsigned int port);
 
     /**
      * Connects to an RPC server at the given address and port.
@@ -219,6 +219,12 @@ public:
 
     // internal only
     LIBBINDER_EXPORTED const std::unique_ptr<RpcState>& state() { return mRpcBinderState; }
+
+    /**
+     * Sets the session-specific root object. This is the object that will be used to attach
+     * the IAccessor binder to the RpcSession when a binder is set up via accessor.
+     */
+    LIBBINDER_EXPORTED void setSessionSpecificRoot(const sp<IBinder>& sessionSpecificRoot);
 
 private:
     friend sp<RpcSession>;
