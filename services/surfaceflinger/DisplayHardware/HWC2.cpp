@@ -41,6 +41,7 @@ using aidl::android::hardware::graphics::composer3::Color;
 using aidl::android::hardware::graphics::composer3::Composition;
 using AidlCapability = aidl::android::hardware::graphics::composer3::Capability;
 using aidl::android::hardware::graphics::composer3::DisplayCapability;
+using aidl::android::hardware::graphics::composer3::Lut;
 using aidl::android::hardware::graphics::composer3::OverlayProperties;
 
 namespace android {
@@ -79,6 +80,9 @@ Display::Display(android::Hwc2::Composer& composer,
                  DisplayType type)
       : mComposer(composer), mCapabilities(capabilities), mId(id), mType(type) {
     ALOGV("Created display %" PRIu64, id);
+    if (mType == hal::DisplayType::VIRTUAL) {
+        loadDisplayCapabilities();
+    }
 }
 
 Display::~Display() {
@@ -499,29 +503,7 @@ Error Display::setPowerMode(PowerMode mode)
     auto intError = mComposer.setPowerMode(mId, intMode);
 
     if (mode == PowerMode::ON) {
-        std::call_once(mDisplayCapabilityQueryFlag, [this]() {
-            std::vector<DisplayCapability> tmpCapabilities;
-            auto error =
-                    static_cast<Error>(mComposer.getDisplayCapabilities(mId, &tmpCapabilities));
-            if (error == Error::NONE) {
-                std::scoped_lock lock(mDisplayCapabilitiesMutex);
-                mDisplayCapabilities.emplace();
-                for (auto capability : tmpCapabilities) {
-                    mDisplayCapabilities->emplace(capability);
-                }
-            } else if (error == Error::UNSUPPORTED) {
-                std::scoped_lock lock(mDisplayCapabilitiesMutex);
-                mDisplayCapabilities.emplace();
-                if (mCapabilities.count(AidlCapability::SKIP_CLIENT_COLOR_TRANSFORM)) {
-                    mDisplayCapabilities->emplace(DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
-                }
-                bool dozeSupport = false;
-                error = static_cast<Error>(mComposer.getDozeSupport(mId, &dozeSupport));
-                if (error == Error::NONE && dozeSupport) {
-                    mDisplayCapabilities->emplace(DisplayCapability::DOZE);
-                }
-            }
-        });
+        loadDisplayCapabilities();
     }
 
     return static_cast<Error>(intError);
@@ -626,6 +608,18 @@ Error Display::getClientTargetProperty(
     return static_cast<Error>(error);
 }
 
+Error Display::getDisplayLuts(std::vector<Lut>* outLuts) {
+    std::vector<Lut> tmpLuts;
+    const auto error = mComposer.getDisplayLuts(mId, &tmpLuts);
+    for (Lut& lut : tmpLuts) {
+        if (lut.pfd.get() >= 0) {
+            outLuts->push_back(
+                    {lut.layer, ndk::ScopedFileDescriptor(lut.pfd.release()), lut.lutProperties});
+        }
+    }
+    return static_cast<Error>(error);
+}
+
 Error Display::getDisplayDecorationSupport(
         std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>*
                 support) {
@@ -652,6 +646,32 @@ void Display::setConnected(bool connected) {
 std::shared_ptr<HWC2::Layer> Display::getLayerById(HWLayerId id) const {
     auto it = mLayers.find(id);
     return it != mLayers.end() ? it->second.lock() : nullptr;
+}
+
+void Display::loadDisplayCapabilities() {
+    std::call_once(mDisplayCapabilityQueryFlag, [this]() {
+        std::vector<DisplayCapability> tmpCapabilities;
+        auto error =
+                static_cast<Error>(mComposer.getDisplayCapabilities(mId, &tmpCapabilities));
+        if (error == Error::NONE) {
+            std::scoped_lock lock(mDisplayCapabilitiesMutex);
+            mDisplayCapabilities.emplace();
+            for (auto capability : tmpCapabilities) {
+                mDisplayCapabilities->emplace(capability);
+            }
+        } else if (error == Error::UNSUPPORTED) {
+            std::scoped_lock lock(mDisplayCapabilitiesMutex);
+            mDisplayCapabilities.emplace();
+            if (mCapabilities.count(AidlCapability::SKIP_CLIENT_COLOR_TRANSFORM)) {
+                mDisplayCapabilities->emplace(DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
+            }
+            bool dozeSupport = false;
+            error = static_cast<Error>(mComposer.getDozeSupport(mId, &dozeSupport));
+            if (error == Error::NONE && dozeSupport) {
+                mDisplayCapabilities->emplace(DisplayCapability::DOZE);
+            }
+        }
+    });
 }
 } // namespace impl
 

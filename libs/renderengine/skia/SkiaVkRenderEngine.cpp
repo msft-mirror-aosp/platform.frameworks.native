@@ -29,13 +29,11 @@
 #include <GrDirectContext.h>
 #include <include/gpu/ganesh/vk/GrVkBackendSemaphore.h>
 #include <include/gpu/ganesh/vk/GrVkDirectContext.h>
-#include <vk/GrVkExtensions.h>
 #include <vk/GrVkTypes.h>
 
 #include <android-base/stringprintf.h>
-#include <gui/TraceUtils.h>
+#include <common/trace.h>
 #include <sync/sync.h>
-#include <utils/Trace.h>
 
 #include <memory>
 #include <string>

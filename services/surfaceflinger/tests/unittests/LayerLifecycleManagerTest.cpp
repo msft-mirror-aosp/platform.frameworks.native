@@ -61,18 +61,6 @@ public:
 
 class LayerLifecycleManagerTest : public LayerHierarchyTestBase {
 protected:
-    std::unique_ptr<RequestedLayerState> rootLayer(uint32_t id) {
-        return std::make_unique<RequestedLayerState>(createArgs(/*id=*/id, /*canBeRoot=*/true,
-                                                                /*parent=*/UNASSIGNED_LAYER_ID,
-                                                                /*mirror=*/UNASSIGNED_LAYER_ID));
-    }
-
-    std::unique_ptr<RequestedLayerState> childLayer(uint32_t id, uint32_t parentId) {
-        return std::make_unique<RequestedLayerState>(createArgs(/*id=*/id, /*canBeRoot=*/false,
-                                                                parentId,
-                                                                /*mirror=*/UNASSIGNED_LAYER_ID));
-    }
-
     RequestedLayerState* getRequestedLayerState(LayerLifecycleManager& lifecycleManager,
                                                 uint32_t layerId) {
         return lifecycleManager.getLayerFromId(layerId);
@@ -538,7 +526,8 @@ TEST_F(LayerLifecycleManagerTest, alphaChangesAlwaysSetsVisibleRegionFlag) {
               ftl::Flags<RequestedLayerState::Changes>(
                       RequestedLayerState::Changes::Content |
                       RequestedLayerState::Changes::AffectsChildren |
-                      RequestedLayerState::Changes::VisibleRegion)
+                      RequestedLayerState::Changes::VisibleRegion |
+                      RequestedLayerState::Changes::Input)
                       .string());
     EXPECT_EQ(mLifecycleManager.getChangedLayers()[0]->color.a, static_cast<half>(startingAlpha));
     mLifecycleManager.commitChanges();
@@ -551,7 +540,8 @@ TEST_F(LayerLifecycleManagerTest, alphaChangesAlwaysSetsVisibleRegionFlag) {
               ftl::Flags<RequestedLayerState::Changes>(
                       RequestedLayerState::Changes::Content |
                       RequestedLayerState::Changes::AffectsChildren |
-                      RequestedLayerState::Changes::VisibleRegion)
+                      RequestedLayerState::Changes::VisibleRegion |
+                      RequestedLayerState::Changes::Input)
                       .string());
     EXPECT_EQ(mLifecycleManager.getChangedLayers()[0]->color.a, static_cast<half>(endingAlpha));
     mLifecycleManager.commitChanges();
