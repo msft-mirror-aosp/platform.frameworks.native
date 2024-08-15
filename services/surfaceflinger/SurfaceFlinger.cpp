@@ -2187,14 +2187,6 @@ void SurfaceFlinger::scheduleSample() {
     static_cast<void>(mScheduler->schedule([this] { sample(); }));
 }
 
-nsecs_t SurfaceFlinger::getVsyncPeriodFromHWC() const {
-    if (const auto display = getDefaultDisplayDeviceLocked()) {
-        return display->getVsyncPeriodFromHWC();
-    }
-
-    return 0;
-}
-
 void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t timestamp,
                                         std::optional<hal::VsyncPeriodNanos> vsyncPeriod) {
     if (FlagManager::getInstance().connected_display() && timestamp < 0 &&
@@ -5724,7 +5716,7 @@ void SurfaceFlinger::listLayers(std::string& result) const {
 }
 
 void SurfaceFlinger::dumpStats(const DumpArgs& args, std::string& result) const {
-    StringAppendF(&result, "%" PRId64 "\n", getVsyncPeriodFromHWC());
+    StringAppendF(&result, "%" PRId64 "\n", mScheduler->getPacesetterVsyncPeriod().ns());
     if (args.size() < 2) return;
 
     const auto name = String8(args[1]);
@@ -5784,11 +5776,6 @@ void SurfaceFlinger::dumpScheduler(std::string& result) const {
     // TODO(b/241285876): Move to DisplayModeController.
     dumper.dump("debugDisplayModeSetByBackdoor"sv, mDebugDisplayModeSetByBackdoor);
     dumper.eol();
-
-    StringAppendF(&result,
-                  "         present offset: %9" PRId64 " ns\t        VSYNC period: %9" PRId64
-                  " ns\n\n",
-                  dispSyncPresentTimeOffset, getVsyncPeriodFromHWC());
 }
 
 void SurfaceFlinger::dumpEvents(std::string& result) const {

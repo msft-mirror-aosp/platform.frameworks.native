@@ -1068,11 +1068,6 @@ private:
             REQUIRES(mStateLock, kMainThreadContext);
 
     /*
-     * VSYNC
-     */
-    nsecs_t getVsyncPeriodFromHWC() const REQUIRES(mStateLock);
-
-    /*
      * Display identification
      */
     sp<display::DisplayToken> getPhysicalDisplayTokenLocked(PhysicalDisplayId displayId) const

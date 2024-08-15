@@ -149,6 +149,7 @@ cc_test {
         "tests/CompositionEngineTest.cpp",
         "tests/DisplayColorProfileTest.cpp",
         "tests/DisplayTest.cpp",
+        "tests/HwcAsyncWorkerTest.cpp",
         "tests/HwcBufferCacheTest.cpp",
         "tests/MockHWC2.cpp",
         "tests/MockHWComposer.cpp",
