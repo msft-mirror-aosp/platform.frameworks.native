@@ -84,7 +84,7 @@ bool findSensorNameInList(int32_t handle, const Vector<Sensor>& sensorList,
             std::ostringstream oss;
             oss << sensor.getStringType() << ":" << sensor.getName();
             if (outString) {
-                *outString = std::move(oss.str());
+                *outString = oss.str();
             }
             return true;
         }

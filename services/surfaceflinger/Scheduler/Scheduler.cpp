@@ -877,22 +877,19 @@ void Scheduler::dump(utils::Dumper& dumper) const {
     mRefreshRateStats->dump(dumper.out());
     dumper.eol();
 
-    {
-        utils::Dumper::Section section(dumper, "Frame Targeting"sv);
+    std::scoped_lock lock(mDisplayLock);
+    ftl::FakeGuard guard(kMainThreadContext);
 
-        std::scoped_lock lock(mDisplayLock);
-        ftl::FakeGuard guard(kMainThreadContext);
+    for (const auto& [id, display] : mDisplays) {
+        utils::Dumper::Section
+                section(dumper,
+                        id == mPacesetterDisplayId
+                                ? ftl::Concat("Pacesetter Display ", id.value).c_str()
+                                : ftl::Concat("Follower Display ", id.value).c_str());
 
-        for (const auto& [id, display] : mDisplays) {
-            utils::Dumper::Section
-                    section(dumper,
-                            id == mPacesetterDisplayId
-                                    ? ftl::Concat("Pacesetter Display ", id.value).c_str()
-                                    : ftl::Concat("Follower Display ", id.value).c_str());
-
-            display.targeterPtr->dump(dumper);
-            dumper.eol();
-        }
+        display.selectorPtr->dump(dumper);
+        display.targeterPtr->dump(dumper);
+        dumper.eol();
     }
 }
 
