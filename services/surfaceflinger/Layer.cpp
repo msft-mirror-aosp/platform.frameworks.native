@@ -3792,7 +3792,8 @@ void Layer::onCompositionPresented(const DisplayDevice* display,
     }
 
     if (display) {
-        const Fps refreshRate = display->refreshRateSelector().getActiveMode().fps;
+        const auto activeMode = display->refreshRateSelector().getActiveMode();
+        const Fps refreshRate = activeMode.fps;
         const std::optional<Fps> renderRate =
                 mFlinger->mScheduler->getFrameRateOverride(getOwnerUid());
 
@@ -3812,7 +3813,12 @@ void Layer::onCompositionPresented(const DisplayDevice* display,
                     mFlinger->getHwComposer().getPresentTimestamp(*displayId);
 
             const nsecs_t now = systemTime(CLOCK_MONOTONIC);
-            const nsecs_t vsyncPeriod = display->getVsyncPeriodFromHWC();
+            const nsecs_t vsyncPeriod =
+                    mFlinger->getHwComposer()
+                            .getDisplayVsyncPeriod(*displayId)
+                            .value_opt()
+                            .value_or(activeMode.modePtr->getVsyncRate().getPeriodNsecs());
+
             const nsecs_t actualPresentTime = now - ((now - presentTimestamp) % vsyncPeriod);
 
             mFlinger->mTimeStats->setPresentTime(layerId, mCurrentFrameNumber, actualPresentTime,
