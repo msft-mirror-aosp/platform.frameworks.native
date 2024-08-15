@@ -2713,7 +2713,8 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
     {
         std::vector<TouchedWindow> hoveringWindows =
                 getHoveringWindowsLocked(oldState, tempTouchState, entry,
-                                         [this]() REQUIRES(mLock) { logDispatchStateLocked(); });
+                                         std::bind_front(&InputDispatcher::logDispatchStateLocked,
+                                                         this));
         // Hardcode to single hovering pointer for now.
         std::bitset<MAX_POINTER_ID + 1> pointerIds;
         pointerIds.set(entry.pointerProperties[0].id);
