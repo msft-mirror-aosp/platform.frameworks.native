@@ -697,7 +697,6 @@ private:
     void requestHardwareVsync(PhysicalDisplayId, bool) override;
     void requestDisplayModes(std::vector<display::DisplayModeRequest>) override;
     void kernelTimerChanged(bool expired) override;
-    void triggerOnFrameRateOverridesChanged() override;
     void onChoreographerAttached() override;
     void onExpectedPresentTimePosted(TimePoint expectedPresentTime, ftl::NonNull<DisplayModePtr>,
                                      Fps renderRate) override;
@@ -708,22 +707,13 @@ private:
     // ICEPowerCallback overrides:
     void notifyCpuLoadUp() override;
 
-    // Toggles the kernel idle timer on or off depending the policy decisions around refresh rates.
-    void toggleKernelIdleTimer() REQUIRES(mStateLock);
-
     using KernelIdleTimerController = scheduler::RefreshRateSelector::KernelIdleTimerController;
 
     // Get the controller and timeout that will help decide how the kernel idle timer will be
     // configured and what value to use as the timeout.
     std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds>
             getKernelIdleTimerProperties(PhysicalDisplayId) REQUIRES(mStateLock);
-    // Updates the kernel idle timer either through HWC or through sysprop
-    // depending on which controller is provided
-    void updateKernelIdleTimer(std::chrono::milliseconds timeoutMs, KernelIdleTimerController,
-                               PhysicalDisplayId) REQUIRES(mStateLock);
-    // Keeps track of whether the kernel idle timer is currently enabled, so we don't have to
-    // make calls to sys prop each time.
-    bool mKernelIdleTimerEnabled = false;
+
     // Show spinner with refresh rate overlay
     bool mRefreshRateOverlaySpinner = false;
     // Show render rate with refresh rate overlay
@@ -963,18 +953,12 @@ private:
         return nullptr;
     }
 
-    // Returns the primary display or (for foldables) the active display, assuming that the inner
-    // and outer displays have mutually exclusive power states.
+    // Returns the primary display or (for foldables) the active display.
     sp<const DisplayDevice> getDefaultDisplayDeviceLocked() const REQUIRES(mStateLock) {
         return const_cast<SurfaceFlinger*>(this)->getDefaultDisplayDeviceLocked();
     }
 
     sp<DisplayDevice> getDefaultDisplayDeviceLocked() REQUIRES(mStateLock) {
-        if (const auto display = getDisplayDeviceLocked(mActiveDisplayId)) {
-            return display;
-        }
-        // The active display is outdated, so fall back to the primary display.
-        mActiveDisplayId = getPrimaryDisplayIdLocked();
         return getDisplayDeviceLocked(mActiveDisplayId);
     }
 
@@ -1073,13 +1057,6 @@ private:
                                const DisplayDeviceState& currentState,
                                const DisplayDeviceState& drawingState)
             REQUIRES(mStateLock, kMainThreadContext);
-
-    void dispatchDisplayModeChangeEvent(PhysicalDisplayId, const scheduler::FrameRateMode&);
-
-    /*
-     * VSYNC
-     */
-    nsecs_t getVsyncPeriodFromHWC() const REQUIRES(mStateLock);
 
     /*
      * Display identification
@@ -1315,7 +1292,7 @@ private:
 
     display::PhysicalDisplays mPhysicalDisplays GUARDED_BY(mStateLock);
 
-    // The inner or outer display for foldables, assuming they have mutually exclusive power states.
+    // The inner or outer display for foldables, while unfolded or folded, respectively.
     std::atomic<PhysicalDisplayId> mActiveDisplayId;
 
     display::DisplayModeController mDisplayModeController;

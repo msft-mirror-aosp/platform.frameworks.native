@@ -205,8 +205,6 @@ using ui::Dataspace;
 using ui::DisplayPrimaries;
 using ui::RenderIntent;
 
-using KernelIdleTimerController = scheduler::RefreshRateSelector::KernelIdleTimerController;
-
 namespace hal = android::hardware::graphics::composer::hal;
 
 namespace {
@@ -373,8 +371,6 @@ const String16 sDump("android.permission.DUMP");
 const String16 sCaptureBlackoutContent("android.permission.CAPTURE_BLACKOUT_CONTENT");
 const String16 sInternalSystemWindow("android.permission.INTERNAL_SYSTEM_WINDOW");
 const String16 sWakeupSurfaceFlinger("android.permission.WAKEUP_SURFACE_FLINGER");
-
-const char* KERNEL_IDLE_TIMER_PROP = "graphics.display.kernel_idle_timer.enabled";
 
 // ---------------------------------------------------------------------------
 int64_t SurfaceFlinger::dispSyncPresentTimeOffset;
@@ -853,6 +849,8 @@ renderengine::RenderEngine::BlurAlgorithm chooseBlurAlgorithm(bool supportsBlur)
     auto const algorithm = base::GetProperty(PROPERTY_DEBUG_RENDERENGINE_BLUR_ALGORITHM, "");
     if (algorithm == "gaussian") {
         return renderengine::RenderEngine::BlurAlgorithm::GAUSSIAN;
+    } else if (algorithm == "kawase2") {
+        return renderengine::RenderEngine::BlurAlgorithm::KAWASE_DUAL_FILTER;
     } else {
         return renderengine::RenderEngine::BlurAlgorithm::KAWASE;
     }
@@ -911,9 +909,11 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
     LOG_ALWAYS_FATAL_IF(!configureLocked(),
                         "Initial display configuration failed: HWC did not hotplug");
 
+    mActiveDisplayId = getPrimaryDisplayIdLocked();
+
     // Commit primary display.
     sp<const DisplayDevice> display;
-    if (const auto indexOpt = mCurrentState.getDisplayIndex(getPrimaryDisplayIdLocked())) {
+    if (const auto indexOpt = mCurrentState.getDisplayIndex(mActiveDisplayId)) {
         const auto& displays = mCurrentState.displays;
 
         const auto& token = displays.keyAt(*indexOpt);
@@ -1354,7 +1354,7 @@ void SurfaceFlinger::setDesiredMode(display::DisplayModeRequest&& desiredMode) {
             }
 
             if (emitEvent) {
-                dispatchDisplayModeChangeEvent(displayId, mode);
+                mScheduler->onDisplayModeChanged(displayId, mode);
             }
             break;
         case DesiredModeAction::None:
@@ -1451,7 +1451,7 @@ void SurfaceFlinger::finalizeDisplayModeChange(PhysicalDisplayId displayId) {
     }
 
     if (pendingModeOpt->emitEvent) {
-        dispatchDisplayModeChangeEvent(displayId, activeMode);
+        mScheduler->onDisplayModeChanged(displayId, activeMode);
     }
 }
 
@@ -2181,14 +2181,6 @@ void SurfaceFlinger::scheduleRepaint() {
 
 void SurfaceFlinger::scheduleSample() {
     static_cast<void>(mScheduler->schedule([this] { sample(); }));
-}
-
-nsecs_t SurfaceFlinger::getVsyncPeriodFromHWC() const {
-    if (const auto display = getDefaultDisplayDeviceLocked()) {
-        return display->getVsyncPeriodFromHWC();
-    }
-
-    return 0;
 }
 
 void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t timestamp,
@@ -3585,16 +3577,6 @@ void SurfaceFlinger::processHotplugDisconnect(PhysicalDisplayId displayId,
     mPhysicalDisplays.erase(displayId);
 }
 
-void SurfaceFlinger::dispatchDisplayModeChangeEvent(PhysicalDisplayId displayId,
-                                                    const scheduler::FrameRateMode& mode) {
-    // TODO(b/255635821): Merge code paths and move to Scheduler.
-    const auto onDisplayModeChanged = displayId == mActiveDisplayId
-            ? &scheduler::Scheduler::onPrimaryDisplayModeChanged
-            : &scheduler::Scheduler::onNonPrimaryDisplayModeChanged;
-
-    ((*mScheduler).*onDisplayModeChanged)(scheduler::Cycle::Render, mode);
-}
-
 sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
         const wp<IBinder>& displayToken,
         std::shared_ptr<compositionengine::Display> compositionDisplay,
@@ -4176,15 +4158,6 @@ void SurfaceFlinger::requestDisplayModes(std::vector<display::DisplayModeRequest
                   ftl::to_underlying(modePtr->getId()), to_string(displayId).c_str());
         }
     }
-}
-
-void SurfaceFlinger::triggerOnFrameRateOverridesChanged() {
-    PhysicalDisplayId displayId = [&]() {
-        ConditionalLock lock(mStateLock, std::this_thread::get_id() != mMainThreadId);
-        return getDefaultDisplayDeviceLocked()->getPhysicalId();
-    }();
-
-    mScheduler->onFrameRateOverridesChanged(scheduler::Cycle::Render, displayId);
 }
 
 void SurfaceFlinger::notifyCpuLoadUp() {
@@ -5739,7 +5712,7 @@ void SurfaceFlinger::listLayers(std::string& result) const {
 }
 
 void SurfaceFlinger::dumpStats(const DumpArgs& args, std::string& result) const {
-    StringAppendF(&result, "%" PRId64 "\n", getVsyncPeriodFromHWC());
+    StringAppendF(&result, "%" PRId64 "\n", mScheduler->getPacesetterVsyncPeriod().ns());
     if (args.size() < 2) return;
 
     const auto name = String8(args[1]);
@@ -5799,11 +5772,6 @@ void SurfaceFlinger::dumpScheduler(std::string& result) const {
     // TODO(b/241285876): Move to DisplayModeController.
     dumper.dump("debugDisplayModeSetByBackdoor"sv, mDebugDisplayModeSetByBackdoor);
     dumper.eol();
-
-    StringAppendF(&result,
-                  "         present offset: %9" PRId64 " ns\t        VSYNC period: %9" PRId64
-                  " ns\n\n",
-                  dispSyncPresentTimeOffset, getVsyncPeriodFromHWC());
 }
 
 void SurfaceFlinger::dumpEvents(std::string& result) const {
@@ -6769,15 +6737,9 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                 return NO_ERROR;
             }
             case 1039: {
-                PhysicalDisplayId displayId = [&]() {
-                    Mutex::Autolock lock(mStateLock);
-                    return getDefaultDisplayDeviceLocked()->getPhysicalId();
-                }();
-
-                auto inUid = static_cast<uid_t>(data.readInt32());
+                const auto uid = static_cast<uid_t>(data.readInt32());
                 const auto refreshRate = data.readFloat();
-                mScheduler->setPreferredRefreshRateForUid(FrameRateOverride{inUid, refreshRate});
-                mScheduler->onFrameRateOverridesChanged(scheduler::Cycle::Render, displayId);
+                mScheduler->setPreferredRefreshRateForUid(FrameRateOverride{uid, refreshRate});
                 return NO_ERROR;
             }
             // Toggle caching feature
@@ -6966,7 +6928,7 @@ void SurfaceFlinger::kernelTimerChanged(bool expired) {
 
     // Update the overlay on the main thread to avoid race conditions with
     // RefreshRateSelector::getActiveMode
-    static_cast<void>(mScheduler->schedule([=, this] {
+    static_cast<void>(mScheduler->schedule([=, this]() FTL_FAKE_GUARD(kMainThreadContext) {
         const auto display = FTL_FAKE_GUARD(mStateLock, getDefaultDisplayDeviceLocked());
         if (!display) {
             ALOGW("%s: default display is null", __func__);
@@ -6974,15 +6936,9 @@ void SurfaceFlinger::kernelTimerChanged(bool expired) {
         }
         if (!display->isRefreshRateOverlayEnabled()) return;
 
-        const auto desiredModeIdOpt =
-                mDisplayModeController.getDesiredMode(display->getPhysicalId())
-                        .transform([](const display::DisplayModeRequest& request) {
-                            return request.mode.modePtr->getId();
-                        });
+        const auto state = mDisplayModeController.getKernelIdleTimerState(display->getPhysicalId());
 
-        const bool timerExpired = mKernelIdleTimerEnabled && expired;
-
-        if (display->onKernelTimerChanged(desiredModeIdOpt, timerExpired)) {
+        if (display->onKernelTimerChanged(state.desiredModeIdOpt, state.isEnabled && expired)) {
             mScheduler->scheduleFrame();
         }
     }));
@@ -7004,8 +6960,8 @@ void SurfaceFlinger::vrrDisplayIdle(bool idle) {
     }));
 }
 
-std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds>
-SurfaceFlinger::getKernelIdleTimerProperties(PhysicalDisplayId displayId) {
+auto SurfaceFlinger::getKernelIdleTimerProperties(PhysicalDisplayId displayId)
+        -> std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds> {
     const bool isKernelIdleTimerHwcSupported = getHwComposer().getComposer()->isSupported(
             android::Hwc2::Composer::OptionalFeature::KernelIdleTimer);
     const auto timeout = getIdleTimerTimeout(displayId);
@@ -7027,63 +6983,6 @@ SurfaceFlinger::getKernelIdleTimerProperties(PhysicalDisplayId displayId) {
     }
 
     return {std::nullopt, timeout};
-}
-
-void SurfaceFlinger::updateKernelIdleTimer(std::chrono::milliseconds timeout,
-                                           KernelIdleTimerController controller,
-                                           PhysicalDisplayId displayId) {
-    switch (controller) {
-        case KernelIdleTimerController::HwcApi: {
-            getHwComposer().setIdleTimerEnabled(displayId, timeout);
-            break;
-        }
-        case KernelIdleTimerController::Sysprop: {
-            base::SetProperty(KERNEL_IDLE_TIMER_PROP, timeout > 0ms ? "true" : "false");
-            break;
-        }
-    }
-}
-
-void SurfaceFlinger::toggleKernelIdleTimer() {
-    using KernelIdleTimerAction = scheduler::RefreshRateSelector::KernelIdleTimerAction;
-
-    const auto display = getDefaultDisplayDeviceLocked();
-    if (!display) {
-        ALOGW("%s: default display is null", __func__);
-        return;
-    }
-
-    // If the support for kernel idle timer is disabled for the active display,
-    // don't do anything.
-    const std::optional<KernelIdleTimerController> kernelIdleTimerController =
-            display->refreshRateSelector().kernelIdleTimerController();
-    if (!kernelIdleTimerController.has_value()) {
-        return;
-    }
-
-    const KernelIdleTimerAction action = display->refreshRateSelector().getIdleTimerAction();
-
-    switch (action) {
-        case KernelIdleTimerAction::TurnOff:
-            if (mKernelIdleTimerEnabled) {
-                SFTRACE_INT("KernelIdleTimer", 0);
-                std::chrono::milliseconds constexpr kTimerDisabledTimeout = 0ms;
-                updateKernelIdleTimer(kTimerDisabledTimeout, kernelIdleTimerController.value(),
-                                      display->getPhysicalId());
-                mKernelIdleTimerEnabled = false;
-            }
-            break;
-        case KernelIdleTimerAction::TurnOn:
-            if (!mKernelIdleTimerEnabled) {
-                SFTRACE_INT("KernelIdleTimer", 1);
-                const std::chrono::milliseconds timeout =
-                        display->refreshRateSelector().getIdleTimerTimeout();
-                updateKernelIdleTimer(timeout, kernelIdleTimerController.value(),
-                                      display->getPhysicalId());
-                mKernelIdleTimerEnabled = true;
-            }
-            break;
-    }
 }
 
 // A simple RAII class to disconnect from an ANativeWindow* when it goes out of scope
@@ -7970,13 +7869,9 @@ status_t SurfaceFlinger::applyRefreshRateSelectorPolicy(
     const scheduler::RefreshRateSelector::Policy currentPolicy = selector.getCurrentPolicy();
     ALOGV("Setting desired display mode specs: %s", currentPolicy.toString().c_str());
 
-    // TODO(b/140204874): Leave the event in until we do proper testing with all apps that might
-    // be depending in this callback.
-    if (const auto activeMode = selector.getActiveMode(); displayId == mActiveDisplayId) {
-        mScheduler->onPrimaryDisplayModeChanged(scheduler::Cycle::Render, activeMode);
-        toggleKernelIdleTimer();
-    } else {
-        mScheduler->onNonPrimaryDisplayModeChanged(scheduler::Cycle::Render, activeMode);
+    if (const bool isPacesetter =
+                mScheduler->onDisplayModeChanged(displayId, selector.getActiveMode())) {
+        mDisplayModeController.updateKernelIdleTimer(displayId);
     }
 
     auto preferredModeOpt = getPreferredDisplayMode(displayId, currentPolicy.defaultMode);
@@ -8000,10 +7895,7 @@ status_t SurfaceFlinger::applyRefreshRateSelectorPolicy(
     setDesiredMode({std::move(preferredMode), .emitEvent = true});
 
     // Update the frameRateOverride list as the display render rate might have changed
-    if (mScheduler->updateFrameRateOverrides(scheduler::GlobalSignals{}, preferredFps)) {
-        triggerOnFrameRateOverridesChanged();
-    }
-
+    mScheduler->updateFrameRateOverrides(scheduler::GlobalSignals{}, preferredFps);
     return NO_ERROR;
 }
 
@@ -8096,7 +7988,7 @@ status_t SurfaceFlinger::getDesiredDisplayModeSpecs(const sp<IBinder>& displayTo
 void SurfaceFlinger::onLayerFirstRef(Layer* layer) {
     mNumLayers++;
     if (!layer->isRemovedFromCurrentState()) {
-        mScheduler->registerLayer(layer);
+        mScheduler->registerLayer(layer, scheduler::FrameRateCompatibility::Default);
     }
 }
 
@@ -8163,13 +8055,7 @@ const std::unordered_map<std::string, uint32_t>& SurfaceFlinger::getGenericLayer
 }
 
 status_t SurfaceFlinger::setGameModeFrameRateOverride(uid_t uid, float frameRate) {
-    PhysicalDisplayId displayId = [&]() {
-        Mutex::Autolock lock(mStateLock);
-        return getDefaultDisplayDeviceLocked()->getPhysicalId();
-    }();
-
-    mScheduler->setGameModeFrameRateForUid(FrameRateOverride{static_cast<uid_t>(uid), frameRate});
-    mScheduler->onFrameRateOverridesChanged(scheduler::Cycle::Render, displayId);
+    mScheduler->setGameModeFrameRateForUid(FrameRateOverride{uid, frameRate});
     return NO_ERROR;
 }
 

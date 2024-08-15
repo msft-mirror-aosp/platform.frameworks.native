@@ -152,9 +152,6 @@
     },
     {
       "name": "CtsSurfaceControlTests"
-    },
-    {
-      "name": "WmTests"
     }
   ],
   "postsubmit": [
@@ -298,7 +295,7 @@
       "name": "monkey_test"
     },
     {
-      "name": "WmTests"
+      "name": "CtsInputRootTestCases"
     }
   ],
   "staged-platinum-postsubmit": [

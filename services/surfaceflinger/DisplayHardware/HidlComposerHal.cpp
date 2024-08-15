@@ -46,6 +46,7 @@ using aidl::android::hardware::graphics::composer3::Capability;
 using aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness;
 using aidl::android::hardware::graphics::composer3::DimmingStage;
 using aidl::android::hardware::graphics::composer3::DisplayCapability;
+using aidl::android::hardware::graphics::composer3::Lut;
 using aidl::android::hardware::graphics::composer3::OverlayProperties;
 
 namespace android {
@@ -209,7 +210,7 @@ sp<GraphicBuffer> allocateClearSlotBuffer() {
     if (!buffer || buffer->initCheck() != ::android::OK) {
         return nullptr;
     }
-    return std::move(buffer);
+    return buffer;
 }
 
 } // anonymous namespace
@@ -1405,6 +1406,10 @@ Error HidlComposer::getClientTargetProperty(
                     property.pixelFormat);
     outClientTargetProperty->brightness = 1.f;
     outClientTargetProperty->dimmingStage = DimmingStage::NONE;
+    return Error::NONE;
+}
+
+Error HidlComposer::getDisplayLuts(Display, std::vector<Lut>*) {
     return Error::NONE;
 }
 
