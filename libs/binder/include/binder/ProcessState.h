@@ -25,6 +25,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <mutex>
 
 // ---------------------------------------------------------------------------
@@ -132,6 +133,7 @@ public:
     enum class DriverFeature {
         ONEWAY_SPAM_DETECTION,
         EXTENDED_ERROR,
+        FREEZE_NOTIFICATION,
     };
     // Determine whether a feature is supported by the binder driver.
     LIBBINDER_EXPORTED static bool isDriverFeatureEnabled(const DriverFeature feature);
@@ -187,8 +189,8 @@ private:
     Vector<handle_entry> mHandleToObject;
 
     bool mForked;
-    bool mThreadPoolStarted;
-    volatile int32_t mThreadPoolSeq;
+    std::atomic_bool mThreadPoolStarted;
+    std::atomic_int32_t mThreadPoolSeq;
 
     CallRestriction mCallRestriction;
 };

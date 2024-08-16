@@ -20,8 +20,11 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include <com_android_graphics_libgui_flags.h>
+
 #include <android/gui/BnWindowInfosReportedListener.h>
 #include <android/gui/DisplayState.h>
+#include <android/gui/EdgeExtensionParameters.h>
 #include <android/gui/ISurfaceComposerClient.h>
 #include <android/gui/IWindowInfosListener.h>
 #include <android/gui/TrustedPresentationThresholds.h>
@@ -824,7 +827,6 @@ SurfaceComposerClient::Transaction::Transaction() {
 
 SurfaceComposerClient::Transaction::Transaction(const Transaction& other)
       : mId(other.mId),
-        mTransactionNestCount(other.mTransactionNestCount),
         mAnimation(other.mAnimation),
         mEarlyWakeupStart(other.mEarlyWakeupStart),
         mEarlyWakeupEnd(other.mEarlyWakeupEnd),
@@ -864,7 +866,6 @@ SurfaceComposerClient::Transaction::createFromParcel(const Parcel* parcel) {
 
 status_t SurfaceComposerClient::Transaction::readFromParcel(const Parcel* parcel) {
     const uint64_t transactionId = parcel->readUint64();
-    const uint32_t transactionNestCount = parcel->readUint32();
     const bool animation = parcel->readBool();
     const bool earlyWakeupStart = parcel->readBool();
     const bool earlyWakeupEnd = parcel->readBool();
@@ -961,7 +962,6 @@ status_t SurfaceComposerClient::Transaction::readFromParcel(const Parcel* parcel
 
     // Parsing was successful. Update the object.
     mId = transactionId;
-    mTransactionNestCount = transactionNestCount;
     mAnimation = animation;
     mEarlyWakeupStart = earlyWakeupStart;
     mEarlyWakeupEnd = earlyWakeupEnd;
@@ -993,7 +993,6 @@ status_t SurfaceComposerClient::Transaction::writeToParcel(Parcel* parcel) const
     const_cast<SurfaceComposerClient::Transaction*>(this)->cacheBuffers();
 
     parcel->writeUint64(mId);
-    parcel->writeUint32(mTransactionNestCount);
     parcel->writeBool(mAnimation);
     parcel->writeBool(mEarlyWakeupStart);
     parcel->writeBool(mEarlyWakeupEnd);
@@ -1145,7 +1144,6 @@ void SurfaceComposerClient::Transaction::clear() {
     mInputWindowCommands.clear();
     mUncacheBuffers.clear();
     mMayContainBuffer = false;
-    mTransactionNestCount = 0;
     mAnimation = false;
     mEarlyWakeupStart = false;
     mEarlyWakeupEnd = false;
@@ -2330,6 +2328,23 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setStret
     return *this;
 }
 
+bool SurfaceComposerClient::flagEdgeExtensionEffectUseShader() {
+    return com::android::graphics::libgui::flags::edge_extension_shader();
+}
+
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setEdgeExtensionEffect(
+        const sp<SurfaceControl>& sc, const gui::EdgeExtensionParameters& effect) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+
+    s->what |= layer_state_t::eEdgeExtensionChanged;
+    s->edgeExtensionParameters = effect;
+    return *this;
+}
+
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBufferCrop(
         const sp<SurfaceControl>& sc, const Rect& bufferCrop) {
     layer_state_t* s = getLayerState(sc);
@@ -2370,6 +2385,22 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setDropI
 
     s->what |= layer_state_t::eDropInputModeChanged;
     s->dropInputMode = mode;
+
+    registerSurfaceControlForCallback(sc);
+    return *this;
+}
+
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBufferReleaseChannel(
+        const sp<SurfaceControl>& sc,
+        const std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint>& channel) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+
+    s->what |= layer_state_t::eBufferReleaseChannelChanged;
+    s->bufferReleaseChannel = channel;
 
     registerSurfaceControlForCallback(sc);
     return *this;

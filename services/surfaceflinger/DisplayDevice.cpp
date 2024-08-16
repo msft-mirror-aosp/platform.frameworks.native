@@ -201,19 +201,6 @@ bool DisplayDevice::isPoweredOn() const {
     return mPowerMode != hal::PowerMode::OFF;
 }
 
-nsecs_t DisplayDevice::getVsyncPeriodFromHWC() const {
-    const auto physicalId = getPhysicalId();
-    if (!mHwComposer.isConnected(physicalId)) {
-        return 0;
-    }
-
-    if (const auto vsyncPeriodOpt = mHwComposer.getDisplayVsyncPeriod(physicalId).value_opt()) {
-        return *vsyncPeriodOpt;
-    }
-
-    return refreshRateSelector().getActiveMode().modePtr->getVsyncRate().getPeriodNsecs();
-}
-
 ui::Dataspace DisplayDevice::getCompositionDataSpace() const {
     return mCompositionDisplay->getState().dataspace;
 }
@@ -466,6 +453,12 @@ bool DisplayDevice::onKernelTimerChanged(std::optional<DisplayModeId> desiredMod
     }
 
     return false;
+}
+
+void DisplayDevice::onVrrIdle(bool idle) {
+    if (mRefreshRateOverlay) {
+        mRefreshRateOverlay->onVrrIdle(idle);
+    }
 }
 
 void DisplayDevice::animateOverlay() {

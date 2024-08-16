@@ -888,7 +888,6 @@ EventHub::EventHub(void)
       : mBuiltInKeyboardId(NO_BUILT_IN_KEYBOARD),
         mNextDeviceId(1),
         mControllerNumbers(),
-        mNeedToSendFinishedDeviceScan(false),
         mNeedToReopenDevices(false),
         mNeedToScanDevices(true),
         mPendingEventCount(0),
@@ -1877,7 +1876,6 @@ std::vector<RawEvent> EventHub::getEvents(int timeoutMillis) {
                     .type = DEVICE_REMOVED,
             });
             it = mClosingDevices.erase(it);
-            mNeedToSendFinishedDeviceScan = true;
             if (events.size() == EVENT_BUFFER_SIZE) {
                 break;
             }
@@ -1886,7 +1884,6 @@ std::vector<RawEvent> EventHub::getEvents(int timeoutMillis) {
         if (mNeedToScanDevices) {
             mNeedToScanDevices = false;
             scanDevicesLocked();
-            mNeedToSendFinishedDeviceScan = true;
         }
 
         while (!mOpeningDevices.empty()) {
@@ -1915,18 +1912,6 @@ std::vector<RawEvent> EventHub::getEvents(int timeoutMillis) {
             if (!inserted) {
                 ALOGW("Device id %d exists, replaced.", device->id);
             }
-            mNeedToSendFinishedDeviceScan = true;
-            if (events.size() == EVENT_BUFFER_SIZE) {
-                break;
-            }
-        }
-
-        if (mNeedToSendFinishedDeviceScan) {
-            mNeedToSendFinishedDeviceScan = false;
-            events.push_back({
-                    .when = now,
-                    .type = FINISHED_DEVICE_SCAN,
-            });
             if (events.size() == EVENT_BUFFER_SIZE) {
                 break;
             }

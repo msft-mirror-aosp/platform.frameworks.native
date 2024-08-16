@@ -20,6 +20,7 @@
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 //#define LOG_NDEBUG 0
 
+#include <com_android_graphics_libgui_flags.h>
 #include <cutils/atomic.h>
 #include <gui/BLASTBufferQueue.h>
 #include <gui/BufferItemConsumer.h>
@@ -39,7 +40,6 @@
 #include <private/gui/ComposerServiceAIDL.h>
 
 #include <android-base/thread_annotations.h>
-#include <chrono>
 
 #include <com_android_graphics_libgui_flags.h>
 
@@ -175,16 +175,21 @@ BLASTBufferQueue::BLASTBufferQueue(const std::string& name, bool updateDestinati
         mSyncTransaction(nullptr),
         mUpdateDestinationFrame(updateDestinationFrame) {
     createBufferQueue(&mProducer, &mConsumer);
-    // since the adapter is in the client process, set dequeue timeout
-    // explicitly so that dequeueBuffer will block
-    mProducer->setDequeueTimeout(std::numeric_limits<int64_t>::max());
-
-    // safe default, most producers are expected to override this
-    mProducer->setMaxDequeuedBufferCount(2);
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
+    mBufferItemConsumer = new BLASTBufferItemConsumer(mProducer, mConsumer,
+                                                      GraphicBuffer::USAGE_HW_COMPOSER |
+                                                              GraphicBuffer::USAGE_HW_TEXTURE,
+                                                      1, false, this);
+#else
     mBufferItemConsumer = new BLASTBufferItemConsumer(mConsumer,
                                                       GraphicBuffer::USAGE_HW_COMPOSER |
                                                               GraphicBuffer::USAGE_HW_TEXTURE,
                                                       1, false, this);
+#endif //  COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
+    // since the adapter is in the client process, set dequeue timeout
+    // explicitly so that dequeueBuffer will block
+    mProducer->setDequeueTimeout(std::numeric_limits<int64_t>::max());
+
     static std::atomic<uint32_t> nextId = 0;
     mProducerId = nextId++;
     mName = name + "#" + std::to_string(mProducerId);
@@ -234,6 +239,11 @@ BLASTBufferQueue::~BLASTBufferQueue() {
     if (mTransactionReadyCallback) {
         mTransactionReadyCallback(mSyncTransaction);
     }
+}
+
+void BLASTBufferQueue::onFirstRef() {
+    // safe default, most producers are expected to override this
+    mProducer->setMaxDequeuedBufferCount(2);
 }
 
 void BLASTBufferQueue::update(const sp<SurfaceControl>& surface, uint32_t width, uint32_t height,
@@ -499,7 +509,13 @@ void BLASTBufferQueue::releaseBuffer(const ReleaseCallbackId& callbackId,
                  callbackId.to_string().c_str());
         return;
     }
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
+    if (!it->second.disconnectedAfterAcquired) {
+        mNumAcquired--;
+    }
+#else
     mNumAcquired--;
+#endif
     BBQ_TRACE("frame=%" PRIu64, callbackId.framenumber);
     BQA_LOGV("released %s", callbackId.to_string().c_str());
     mBufferItemConsumer->releaseBuffer(it->second, releaseFence);
@@ -550,7 +566,7 @@ status_t BLASTBufferQueue::acquireNextBufferLocked(
         applyTransaction = false;
     }
 
-    BufferItem bufferItem;
+    BLASTBufferItem bufferItem;
 
     status_t status =
             mBufferItemConsumer->acquireBuffer(&bufferItem, 0 /* expectedPresent */, false);
@@ -761,6 +777,9 @@ void BLASTBufferQueue::onFrameAvailable(const BufferItem& item) {
         }
 
         // add to shadow queue
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
+        mNumDequeued--;
+#endif
         mNumFrameAvailable++;
         if (waitForTransactionCallback && mNumFrameAvailable >= 2) {
             acquireAndReleaseBuffer();
@@ -815,9 +834,18 @@ void BLASTBufferQueue::onFrameDequeued(const uint64_t bufferId) {
 };
 
 void BLASTBufferQueue::onFrameCancelled(const uint64_t bufferId) {
-    std::lock_guard _lock{mTimestampMutex};
-    mDequeueTimestamps.erase(bufferId);
-};
+    {
+        std::lock_guard _lock{mTimestampMutex};
+        mDequeueTimestamps.erase(bufferId);
+    }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
+    {
+        std::lock_guard lock{mMutex};
+        mNumDequeued--;
+    }
+#endif
+}
 
 bool BLASTBufferQueue::syncNextTransaction(
         std::function<void(SurfaceComposerClient::Transaction*)> callback,
@@ -1102,9 +1130,9 @@ public:
 // can be non-blocking when the producer is in the client process.
 class BBQBufferQueueProducer : public BufferQueueProducer {
 public:
-    BBQBufferQueueProducer(const sp<BufferQueueCore>& core, wp<BLASTBufferQueue> bbq)
+    BBQBufferQueueProducer(const sp<BufferQueueCore>& core, const wp<BLASTBufferQueue>& bbq)
           : BufferQueueProducer(core, false /* consumerIsSurfaceFlinger*/),
-            mBLASTBufferQueue(std::move(bbq)) {}
+            mBLASTBufferQueue(bbq) {}
 
     status_t connect(const sp<IProducerListener>& listener, int api, bool producerControlledByApp,
                      QueueBufferOutput* output) override {
@@ -1116,30 +1144,152 @@ public:
                                             producerControlledByApp, output);
     }
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
+    status_t disconnect(int api, DisconnectMode mode) override {
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return BufferQueueProducer::disconnect(api, mode);
+        }
+
+        std::lock_guard lock{bbq->mMutex};
+        if (status_t status = BufferQueueProducer::disconnect(api, mode); status != OK) {
+            return status;
+        }
+
+        // We need to reset dequeued and acquired counts because BufferQueueProducer::disconnect
+        // calls BufferQueueCore::freeAllBuffersLocked which frees all dequeued and acquired
+        // buffers. We don't reset mNumFrameAvailable because these buffers are still available
+        // in BufferItemConsumer.
+        bbq->mNumDequeued = 0;
+        bbq->mNumAcquired = 0;
+        // SurfaceFlinger sends release callbacks for buffers that have been acquired after a
+        // disconnect. We set disconnectedAfterAcquired to true so that we can ignore any stale
+        // releases that come in after the producer is disconnected. Otherwise, releaseBuffer will
+        // decrement mNumAcquired for a buffer that was acquired before we reset mNumAcquired to
+        // zero.
+        for (auto& [releaseId, bufferItem] : bbq->mSubmitted) {
+            bufferItem.disconnectedAfterAcquired = true;
+        }
+
+        return OK;
+    }
+
+    status_t setAsyncMode(bool asyncMode) override {
+        if (status_t status = BufferQueueProducer::setAsyncMode(asyncMode); status != OK) {
+            return status;
+        }
+
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return OK;
+        }
+
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mAsyncMode = asyncMode;
+        }
+
+        return OK;
+    }
+
+    status_t setSharedBufferMode(bool sharedBufferMode) override {
+        if (status_t status = BufferQueueProducer::setSharedBufferMode(sharedBufferMode);
+            status != OK) {
+            return status;
+        }
+
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return OK;
+        }
+
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mSharedBufferMode = sharedBufferMode;
+        }
+
+        return OK;
+    }
+
+    status_t detachBuffer(int slot) override {
+        if (status_t status = BufferQueueProducer::detachBuffer(slot); status != OK) {
+            return status;
+        }
+
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return OK;
+        }
+
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mNumDequeued--;
+        }
+
+        return OK;
+    }
+
+    status_t dequeueBuffer(int* outSlot, sp<Fence>* outFence, uint32_t width, uint32_t height,
+                           PixelFormat format, uint64_t usage, uint64_t* outBufferAge,
+                           FrameEventHistoryDelta* outTimestamps) override {
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return BufferQueueProducer::dequeueBuffer(outSlot, outFence, width, height, format,
+                                                      usage, outBufferAge, outTimestamps);
+        }
+
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mNumDequeued++;
+        }
+
+        status_t status =
+                BufferQueueProducer::dequeueBuffer(outSlot, outFence, width, height, format, usage,
+                                                   outBufferAge, outTimestamps);
+        if (status < 0) {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mNumDequeued--;
+        }
+        return status;
+    }
+#endif
+
     // We want to resize the frame history when changing the size of the buffer queue
     status_t setMaxDequeuedBufferCount(int maxDequeuedBufferCount) override {
         int maxBufferCount;
-        status_t status = BufferQueueProducer::setMaxDequeuedBufferCount(maxDequeuedBufferCount,
-                                                                         &maxBufferCount);
-        // if we can't determine the max buffer count, then just skip growing the history size
-        if (status == OK) {
-            size_t newFrameHistorySize = maxBufferCount + 2; // +2 because triple buffer rendering
-            // optimize away resizing the frame history unless it will grow
-            if (newFrameHistorySize > FrameEventHistory::INITIAL_MAX_FRAME_HISTORY) {
-                sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
-                if (bbq != nullptr) {
-                    ALOGV("increasing frame history size to %zu", newFrameHistorySize);
-                    bbq->resizeFrameEventHistory(newFrameHistorySize);
-                }
-            }
+        if (status_t status = BufferQueueProducer::setMaxDequeuedBufferCount(maxDequeuedBufferCount,
+                                                                             &maxBufferCount);
+            status != OK) {
+            return status;
         }
-        return status;
+
+        sp<BLASTBufferQueue> bbq = mBLASTBufferQueue.promote();
+        if (!bbq) {
+            return OK;
+        }
+
+        // if we can't determine the max buffer count, then just skip growing the history size
+        size_t newFrameHistorySize = maxBufferCount + 2; // +2 because triple buffer rendering
+        // optimize away resizing the frame history unless it will grow
+        if (newFrameHistorySize > FrameEventHistory::INITIAL_MAX_FRAME_HISTORY) {
+            ALOGV("increasing frame history size to %zu", newFrameHistorySize);
+            bbq->resizeFrameEventHistory(newFrameHistorySize);
+        }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
+        {
+            std::lock_guard lock{bbq->mMutex};
+            bbq->mMaxDequeuedBuffers = maxDequeuedBufferCount;
+        }
+#endif
+
+        return OK;
     }
 
     int query(int what, int* value) override {
         if (what == NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER) {
             *value = 1;
-            return NO_ERROR;
+            return OK;
         }
         return BufferQueueProducer::query(what, value);
     }

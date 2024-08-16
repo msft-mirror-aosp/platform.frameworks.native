@@ -19,6 +19,12 @@
 #include <aidl/IBinderRpcTest.h>
 #endif
 
+#if defined(__LP64__)
+#define TEST_FILE_SUFFIX "64"
+#else
+#define TEST_FILE_SUFFIX "32"
+#endif
+
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
@@ -259,7 +265,8 @@ std::unique_ptr<ProcessSession> BinderRpc::createRpcTestSocketServerProcessEtc(
 
     std::string path = GetExecutableDirectory();
     auto servicePath = path + "/binder_rpc_test_service" +
-            (singleThreaded ? "_single_threaded" : "") + (noKernel ? "_no_kernel" : "");
+            (singleThreaded ? "_single_threaded" : "") + (noKernel ? "_no_kernel" : "") +
+            TEST_FILE_SUFFIX;
 
     unique_fd bootstrapClientFd, socketFd;
 
@@ -1168,7 +1175,8 @@ bool testSupportVsockLoopback() {
     socklen_t len = sizeof(serverAddr);
     ret = getsockname(serverFd.get(), reinterpret_cast<sockaddr*>(&serverAddr), &len);
     LOG_ALWAYS_FATAL_IF(0 != ret, "Failed to getsockname: %s", strerror(errno));
-    LOG_ALWAYS_FATAL_IF(len < sizeof(serverAddr), "getsockname didn't read the full addr struct");
+    LOG_ALWAYS_FATAL_IF(len < static_cast<socklen_t>(sizeof(serverAddr)),
+                        "getsockname didn't read the full addr struct");
 
     ret = TEMP_FAILURE_RETRY(listen(serverFd.get(), 1 /*backlog*/));
     LOG_ALWAYS_FATAL_IF(0 != ret, "Could not listen socket on port %u: %s", serverAddr.svm_port,
@@ -1376,8 +1384,8 @@ TEST(BinderRpc, Java) {
     sp<IServiceManager> sm = defaultServiceManager();
     ASSERT_NE(nullptr, sm);
     // Any Java service with non-empty getInterfaceDescriptor() would do.
-    // Let's pick batteryproperties.
-    auto binder = sm->checkService(String16("batteryproperties"));
+    // Let's pick activity.
+    auto binder = sm->checkService(String16("activity"));
     ASSERT_NE(nullptr, binder);
     auto descriptor = binder->getInterfaceDescriptor();
     ASSERT_GE(descriptor.size(), 0u);

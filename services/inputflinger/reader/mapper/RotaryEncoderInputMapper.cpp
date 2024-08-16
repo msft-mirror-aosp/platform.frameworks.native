@@ -27,11 +27,14 @@
 
 namespace android {
 
+constexpr float kDefaultScaleFactor = 1.0f;
+
 RotaryEncoderInputMapper::RotaryEncoderInputMapper(InputDeviceContext& deviceContext,
                                                    const InputReaderConfiguration& readerConfig)
-      : InputMapper(deviceContext, readerConfig), mOrientation(ui::ROTATION_0) {
-    mSource = AINPUT_SOURCE_ROTARY_ENCODER;
-}
+      : InputMapper(deviceContext, readerConfig),
+        mSource(AINPUT_SOURCE_ROTARY_ENCODER),
+        mScalingFactor(kDefaultScaleFactor),
+        mOrientation(ui::ROTATION_0) {}
 
 RotaryEncoderInputMapper::~RotaryEncoderInputMapper() {}
 
@@ -51,9 +54,10 @@ void RotaryEncoderInputMapper::populateDeviceInfo(InputDeviceInfo& info) {
         std::optional<float> scalingFactor = config.getFloat("device.scalingFactor");
         if (!scalingFactor.has_value()) {
             ALOGW("Rotary Encoder device configuration file didn't specify scaling factor,"
-                  "default to 1.0!\n");
+                  "default to %f!\n",
+                  kDefaultScaleFactor);
         }
-        mScalingFactor = scalingFactor.value_or(1.0f);
+        mScalingFactor = scalingFactor.value_or(kDefaultScaleFactor);
         info.addMotionRange(AMOTION_EVENT_AXIS_SCROLL, mSource, -1.0f, 1.0f, 0.0f, 0.0f,
                             res.value_or(0.0f) * mScalingFactor);
     }

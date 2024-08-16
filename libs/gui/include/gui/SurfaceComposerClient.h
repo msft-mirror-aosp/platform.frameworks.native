@@ -35,6 +35,7 @@
 #include <ui/BlurRegion.h>
 #include <ui/ConfigStoreTypes.h>
 #include <ui/DisplayedFrameStats.h>
+#include <ui/EdgeExtensionEffect.h>
 #include <ui/FrameStats.h>
 #include <ui/GraphicTypes.h>
 #include <ui/PixelFormat.h>
@@ -44,6 +45,7 @@
 #include <android/gui/BnJankListener.h>
 #include <android/gui/ISurfaceComposerClient.h>
 
+#include <gui/BufferReleaseChannel.h>
 #include <gui/CpuConsumer.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/ITransactionCompletedListener.h>
@@ -338,6 +340,8 @@ public:
     static std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>
     getDisplayDecorationSupport(const sp<IBinder>& displayToken);
 
+    static bool flagEdgeExtensionEffectUseShader();
+
     // ------------------------------------------------------------------------
     // surface creation / destruction
 
@@ -448,7 +452,6 @@ public:
 
         uint64_t mId;
 
-        uint32_t mTransactionNestCount = 0;
         bool mAnimation = false;
         bool mEarlyWakeupStart = false;
         bool mEarlyWakeupEnd = false;
@@ -744,10 +747,25 @@ public:
         Transaction& setStretchEffect(const sp<SurfaceControl>& sc,
                                       const StretchEffect& stretchEffect);
 
+        /**
+         * Provides the edge extension effect configured on a container that the
+         * surface is rendered within.
+         * @param sc target surface the edge extension should be applied to
+         * @param effect the corresponding EdgeExtensionParameters to be applied
+         *    to the surface.
+         * @return The transaction being constructed
+         */
+        Transaction& setEdgeExtensionEffect(const sp<SurfaceControl>& sc,
+                                            const gui::EdgeExtensionParameters& effect);
+
         Transaction& setBufferCrop(const sp<SurfaceControl>& sc, const Rect& bufferCrop);
         Transaction& setDestinationFrame(const sp<SurfaceControl>& sc,
                                          const Rect& destinationFrame);
         Transaction& setDropInputMode(const sp<SurfaceControl>& sc, gui::DropInputMode mode);
+
+        Transaction& setBufferReleaseChannel(
+                const sp<SurfaceControl>& sc,
+                const std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint>& channel);
 
         status_t setDisplaySurface(const sp<IBinder>& token,
                 const sp<IGraphicBufferProducer>& bufferProducer);
