@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "gui/view/Surface.h"
 #include "Constants.h"
 #include "MockConsumer.h"
 
@@ -52,6 +53,8 @@
 #include <cstddef>
 #include <limits>
 #include <thread>
+
+#include "testserver/TestServerClient.h"
 
 namespace android {
 
@@ -2362,6 +2365,14 @@ TEST_F(SurfaceTest, QueueAcquireReleaseDequeue_CalledInStack_DoesNotDeadlock) {
     EXPECT_NE(nullptr, surfaceListener->mBuffer);
 
     EXPECT_EQ(OK, surface->disconnect(NATIVE_WINDOW_API_CPU));
+}
+
+TEST_F(SurfaceTest, ViewSurface_toString) {
+    view::Surface surface{};
+    EXPECT_EQ("", surface.toString());
+
+    surface.name = String16("name");
+    EXPECT_EQ("name", surface.toString());
 }
 #endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
