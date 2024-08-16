@@ -154,12 +154,10 @@ public:
 
     void dispatchHotplugError(int32_t errorCode);
 
-    void onPrimaryDisplayModeChanged(Cycle, const FrameRateMode&) EXCLUDES(mPolicyLock);
-    void onNonPrimaryDisplayModeChanged(Cycle, const FrameRateMode&);
+    // Returns true if the PhysicalDisplayId is the pacesetter.
+    bool onDisplayModeChanged(PhysicalDisplayId, const FrameRateMode&) EXCLUDES(mPolicyLock);
 
     void enableSyntheticVsync(bool = true) REQUIRES(kMainThreadContext);
-
-    void onFrameRateOverridesChanged(Cycle, PhysicalDisplayId);
 
     void onHdcpLevelsChanged(Cycle, PhysicalDisplayId, int32_t, int32_t);
 
@@ -222,7 +220,7 @@ public:
             REQUIRES(kMainThreadContext);
 
     // Layers are registered on creation, and unregistered when the weak reference expires.
-    void registerLayer(Layer*);
+    void registerLayer(Layer*, FrameRateCompatibility);
     void recordLayerHistory(int32_t id, const LayerProps& layerProps, nsecs_t presentTime,
                             nsecs_t now, LayerHistory::LayerUpdateType) EXCLUDES(mDisplayLock);
     void setModeChangePending(bool pending);
@@ -326,7 +324,7 @@ public:
         return mLayerHistory.getLayerFramerate(now, id);
     }
 
-    bool updateFrameRateOverrides(GlobalSignals, Fps displayRefreshRate) EXCLUDES(mPolicyLock);
+    void updateFrameRateOverrides(GlobalSignals, Fps displayRefreshRate) EXCLUDES(mPolicyLock);
 
     // Returns true if the small dirty detection is enabled for the appId.
     bool supportSmallDirtyDetection(int32_t appId) {
@@ -377,8 +375,17 @@ private:
     void resyncAllToHardwareVsync(bool allowToEnable) EXCLUDES(mDisplayLock);
     void setVsyncConfig(const VsyncConfig&, Period vsyncPeriod);
 
-    void promotePacesetterDisplay(PhysicalDisplayId pacesetterId) REQUIRES(kMainThreadContext)
-            EXCLUDES(mDisplayLock);
+    // TODO: b/241286431 - Remove this option, which assumes that the pacesetter does not change
+    // when a (secondary) display is registered or unregistered. In the short term, this avoids
+    // a deadlock where the main thread joins with the timer thread as the timer thread waits to
+    // lock a mutex held by the main thread.
+    struct PromotionParams {
+        // Whether to stop and start the idle timer. Ignored unless connected_display flag is set.
+        bool toggleIdleTimer;
+    };
+
+    void promotePacesetterDisplay(PhysicalDisplayId pacesetterId, PromotionParams)
+            REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock);
 
     // Changes to the displays (e.g. registering and unregistering) must be made
     // while mDisplayLock is locked, and the new pacesetter then must be promoted while
@@ -386,13 +393,16 @@ private:
     // MessageQueue and EventThread need to use the new pacesetter's
     // VsyncSchedule, and this must happen while mDisplayLock is *not* locked,
     // or else we may deadlock with EventThread.
-    std::shared_ptr<VsyncSchedule> promotePacesetterDisplayLocked(PhysicalDisplayId pacesetterId)
+    std::shared_ptr<VsyncSchedule> promotePacesetterDisplayLocked(PhysicalDisplayId pacesetterId,
+                                                                  PromotionParams)
             REQUIRES(kMainThreadContext, mDisplayLock);
     void applyNewVsyncSchedule(std::shared_ptr<VsyncSchedule>) EXCLUDES(mDisplayLock);
 
-    // Blocks until the pacesetter's idle timer thread exits. `mDisplayLock` must not be locked by
-    // the caller on the main thread to avoid deadlock, since the timer thread locks it before exit.
-    void demotePacesetterDisplay() REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock, mPolicyLock);
+    // If toggleIdleTimer is true, the calling thread blocks until the pacesetter's idle timer
+    // thread exits, in which case mDisplayLock must not be locked by the caller to avoid deadlock,
+    // since the timer thread locks it before exit.
+    void demotePacesetterDisplay(PromotionParams) REQUIRES(kMainThreadContext)
+            EXCLUDES(mDisplayLock, mPolicyLock);
 
     void registerDisplayInternal(PhysicalDisplayId, RefreshRateSelectorPtr, VsyncSchedulePtr,
                                  PhysicalDisplayId activeDisplayId) REQUIRES(kMainThreadContext)
@@ -438,6 +448,9 @@ private:
 
     bool updateFrameRateOverridesLocked(GlobalSignals, Fps displayRefreshRate)
             REQUIRES(mPolicyLock);
+
+    void onFrameRateOverridesChanged();
+
     void updateAttachedChoreographers(const surfaceflinger::frontend::LayerHierarchy&,
                                       Fps displayRefreshRate);
     int updateAttachedChoreographersInternal(const surfaceflinger::frontend::LayerHierarchy&,
@@ -445,7 +458,7 @@ private:
     void updateAttachedChoreographersFrameRate(const surfaceflinger::frontend::RequestedLayerState&,
                                                Fps fps) EXCLUDES(mChoreographerLock);
 
-    void dispatchCachedReportedMode() REQUIRES(mPolicyLock) EXCLUDES(mDisplayLock);
+    void emitModeChangeIfNeeded() REQUIRES(mPolicyLock) EXCLUDES(mDisplayLock);
 
     // IEventThreadCallback overrides
     bool throttleVsync(TimePoint, uid_t) override;
@@ -571,13 +584,8 @@ private:
         // Chosen display mode.
         ftl::Optional<FrameRateMode> modeOpt;
 
-        struct ModeChangedParams {
-            Cycle cycle;
-            FrameRateMode mode;
-        };
-
-        // Parameters for latest dispatch of mode change event.
-        std::optional<ModeChangedParams> cachedModeChangedParams;
+        // Display mode of latest emitted event.
+        std::optional<FrameRateMode> emittedModeOpt;
     } mPolicy GUARDED_BY(mPolicyLock);
 
     std::mutex mChoreographerLock;
