@@ -69,7 +69,10 @@ bool FrameTarget::wouldPresentEarly(Period vsyncPeriod, Period minFramePeriod) c
 
 const FenceTimePtr& FrameTarget::presentFenceForPreviousFrame() const {
     if (FlagManager::getInstance().allow_n_vsyncs_in_targeter()) {
-        return mPresentFences.back().fenceTime;
+        if (mPresentFences.size() > 0) {
+            return mPresentFences.back().fenceTime;
+        }
+        return FenceTime::NO_FENCE;
     }
 
     return mPresentFencesLegacy.front().fenceTime;

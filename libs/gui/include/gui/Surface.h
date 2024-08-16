@@ -34,6 +34,8 @@
 #include <shared_mutex>
 #include <unordered_set>
 
+#include <com_android_graphics_libgui_flags.h>
+
 namespace android {
 
 class GraphicBuffer;
@@ -60,6 +62,10 @@ public:
 
     virtual void onBuffersDiscarded(const std::vector<sp<GraphicBuffer>>& buffers) = 0;
     virtual void onBufferDetached(int slot) = 0;
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_CONSUMER_ATTACH_CALLBACK)
+    virtual void onBufferAttached() {}
+    virtual bool needsAttachNotify() { return false; }
+#endif
 };
 
 class StubSurfaceListener : public SurfaceListener {
@@ -187,6 +193,14 @@ public:
      * See NATIVE_WINDOW_SET_SCALING_MODE and its parameters
      * in <system/window.h>. */
     int setScalingMode(int mode);
+
+    virtual int setBuffersTimestamp(int64_t timestamp);
+    virtual int setBuffersDataSpace(ui::Dataspace dataSpace);
+    virtual int setCrop(Rect const* rect);
+    virtual int setBuffersTransform(uint32_t transform);
+    virtual int setBuffersStickyTransform(uint32_t transform);
+    virtual int setBuffersFormat(PixelFormat format);
+    virtual int setUsage(uint64_t reqUsage);
 
     // See IGraphicBufferProducer::setDequeueTimeout
     status_t setDequeueTimeout(nsecs_t timeout);
@@ -348,16 +362,9 @@ protected:
     virtual int connect(int api);
     virtual int setBufferCount(int bufferCount);
     virtual int setBuffersUserDimensions(uint32_t width, uint32_t height);
-    virtual int setBuffersFormat(PixelFormat format);
-    virtual int setBuffersTransform(uint32_t transform);
-    virtual int setBuffersStickyTransform(uint32_t transform);
-    virtual int setBuffersTimestamp(int64_t timestamp);
-    virtual int setBuffersDataSpace(ui::Dataspace dataSpace);
     virtual int setBuffersSmpte2086Metadata(const android_smpte2086_metadata* metadata);
     virtual int setBuffersCta8613Metadata(const android_cta861_3_metadata* metadata);
     virtual int setBuffersHdr10PlusMetadata(const size_t size, const uint8_t* metadata);
-    virtual int setCrop(Rect const* rect);
-    virtual int setUsage(uint64_t reqUsage);
     virtual void setSurfaceDamage(android_native_rect_t* rects, size_t numRects);
 
 public:
@@ -375,20 +382,15 @@ public:
     virtual int unlockAndPost();
     virtual int query(int what, int* value) const;
 
-    virtual int connect(int api, const sp<SurfaceListener>& listener);
-
     // When reportBufferRemoval is true, clients must call getAndFlushRemovedBuffers to fetch
     // GraphicBuffers removed from this surface after a dequeueBuffer, detachNextBuffer or
     // attachBuffer call. This allows clients with their own buffer caches to free up buffers no
     // longer in use by this surface.
-    virtual int connect(int api, const sp<SurfaceListener>& listener, bool reportBufferRemoval);
-    virtual int detachNextBuffer(sp<GraphicBuffer>* outBuffer,
-            sp<Fence>* outFence);
+    virtual int connect(int api, const sp<SurfaceListener>& listener,
+                        bool reportBufferRemoval = false);
+    virtual int detachNextBuffer(sp<GraphicBuffer>* outBuffer, sp<Fence>* outFence);
     virtual int attachBuffer(ANativeWindowBuffer*);
 
-    virtual int connect(
-            int api, bool reportBufferRemoval,
-            const sp<SurfaceListener>& sListener);
     virtual void destroy();
 
     // When client connects to Surface with reportBufferRemoval set to true, any buffers removed
@@ -455,6 +457,15 @@ protected:
         virtual void onBufferDetached(int slot) { mSurfaceListener->onBufferDetached(slot); }
 
         virtual void onBuffersDiscarded(const std::vector<int32_t>& slots);
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_CONSUMER_ATTACH_CALLBACK)
+        virtual void onBufferAttached() {
+            mSurfaceListener->onBufferAttached();
+        }
+
+        virtual bool needsAttachNotify() {
+            return mSurfaceListener->needsAttachNotify();
+        }
+#endif
     private:
         wp<Surface> mParent;
         sp<SurfaceListener> mSurfaceListener;
