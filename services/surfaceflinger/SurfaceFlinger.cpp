@@ -205,8 +205,6 @@ using ui::Dataspace;
 using ui::DisplayPrimaries;
 using ui::RenderIntent;
 
-using KernelIdleTimerController = scheduler::RefreshRateSelector::KernelIdleTimerController;
-
 namespace hal = android::hardware::graphics::composer::hal;
 
 namespace {
@@ -373,8 +371,6 @@ const String16 sDump("android.permission.DUMP");
 const String16 sCaptureBlackoutContent("android.permission.CAPTURE_BLACKOUT_CONTENT");
 const String16 sInternalSystemWindow("android.permission.INTERNAL_SYSTEM_WINDOW");
 const String16 sWakeupSurfaceFlinger("android.permission.WAKEUP_SURFACE_FLINGER");
-
-const char* KERNEL_IDLE_TIMER_PROP = "graphics.display.kernel_idle_timer.enabled";
 
 // ---------------------------------------------------------------------------
 int64_t SurfaceFlinger::dispSyncPresentTimeOffset;
@@ -6932,7 +6928,7 @@ void SurfaceFlinger::kernelTimerChanged(bool expired) {
 
     // Update the overlay on the main thread to avoid race conditions with
     // RefreshRateSelector::getActiveMode
-    static_cast<void>(mScheduler->schedule([=, this] {
+    static_cast<void>(mScheduler->schedule([=, this]() FTL_FAKE_GUARD(kMainThreadContext) {
         const auto display = FTL_FAKE_GUARD(mStateLock, getDefaultDisplayDeviceLocked());
         if (!display) {
             ALOGW("%s: default display is null", __func__);
@@ -6940,15 +6936,9 @@ void SurfaceFlinger::kernelTimerChanged(bool expired) {
         }
         if (!display->isRefreshRateOverlayEnabled()) return;
 
-        const auto desiredModeIdOpt =
-                mDisplayModeController.getDesiredMode(display->getPhysicalId())
-                        .transform([](const display::DisplayModeRequest& request) {
-                            return request.mode.modePtr->getId();
-                        });
+        const auto state = mDisplayModeController.getKernelIdleTimerState(display->getPhysicalId());
 
-        const bool timerExpired = mKernelIdleTimerEnabled && expired;
-
-        if (display->onKernelTimerChanged(desiredModeIdOpt, timerExpired)) {
+        if (display->onKernelTimerChanged(state.desiredModeIdOpt, state.isEnabled && expired)) {
             mScheduler->scheduleFrame();
         }
     }));
@@ -6970,8 +6960,8 @@ void SurfaceFlinger::vrrDisplayIdle(bool idle) {
     }));
 }
 
-std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds>
-SurfaceFlinger::getKernelIdleTimerProperties(PhysicalDisplayId displayId) {
+auto SurfaceFlinger::getKernelIdleTimerProperties(PhysicalDisplayId displayId)
+        -> std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds> {
     const bool isKernelIdleTimerHwcSupported = getHwComposer().getComposer()->isSupported(
             android::Hwc2::Composer::OptionalFeature::KernelIdleTimer);
     const auto timeout = getIdleTimerTimeout(displayId);
@@ -6993,63 +6983,6 @@ SurfaceFlinger::getKernelIdleTimerProperties(PhysicalDisplayId displayId) {
     }
 
     return {std::nullopt, timeout};
-}
-
-void SurfaceFlinger::updateKernelIdleTimer(std::chrono::milliseconds timeout,
-                                           KernelIdleTimerController controller,
-                                           PhysicalDisplayId displayId) {
-    switch (controller) {
-        case KernelIdleTimerController::HwcApi: {
-            getHwComposer().setIdleTimerEnabled(displayId, timeout);
-            break;
-        }
-        case KernelIdleTimerController::Sysprop: {
-            base::SetProperty(KERNEL_IDLE_TIMER_PROP, timeout > 0ms ? "true" : "false");
-            break;
-        }
-    }
-}
-
-void SurfaceFlinger::toggleKernelIdleTimer() {
-    using KernelIdleTimerAction = scheduler::RefreshRateSelector::KernelIdleTimerAction;
-
-    const auto display = getDefaultDisplayDeviceLocked();
-    if (!display) {
-        ALOGW("%s: default display is null", __func__);
-        return;
-    }
-
-    // If the support for kernel idle timer is disabled for the active display,
-    // don't do anything.
-    const std::optional<KernelIdleTimerController> kernelIdleTimerController =
-            display->refreshRateSelector().kernelIdleTimerController();
-    if (!kernelIdleTimerController.has_value()) {
-        return;
-    }
-
-    const KernelIdleTimerAction action = display->refreshRateSelector().getIdleTimerAction();
-
-    switch (action) {
-        case KernelIdleTimerAction::TurnOff:
-            if (mKernelIdleTimerEnabled) {
-                SFTRACE_INT("KernelIdleTimer", 0);
-                std::chrono::milliseconds constexpr kTimerDisabledTimeout = 0ms;
-                updateKernelIdleTimer(kTimerDisabledTimeout, kernelIdleTimerController.value(),
-                                      display->getPhysicalId());
-                mKernelIdleTimerEnabled = false;
-            }
-            break;
-        case KernelIdleTimerAction::TurnOn:
-            if (!mKernelIdleTimerEnabled) {
-                SFTRACE_INT("KernelIdleTimer", 1);
-                const std::chrono::milliseconds timeout =
-                        display->refreshRateSelector().getIdleTimerTimeout();
-                updateKernelIdleTimer(timeout, kernelIdleTimerController.value(),
-                                      display->getPhysicalId());
-                mKernelIdleTimerEnabled = true;
-            }
-            break;
-    }
 }
 
 // A simple RAII class to disconnect from an ANativeWindow* when it goes out of scope
@@ -7938,7 +7871,7 @@ status_t SurfaceFlinger::applyRefreshRateSelectorPolicy(
 
     if (const bool isPacesetter =
                 mScheduler->onDisplayModeChanged(displayId, selector.getActiveMode())) {
-        toggleKernelIdleTimer();
+        mDisplayModeController.updateKernelIdleTimer(displayId);
     }
 
     auto preferredModeOpt = getPreferredDisplayMode(displayId, currentPolicy.defaultMode);
