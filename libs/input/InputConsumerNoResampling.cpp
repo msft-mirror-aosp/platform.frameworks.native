@@ -17,6 +17,8 @@
 #define LOG_TAG "InputTransport"
 #define ATRACE_TAG ATRACE_TAG_INPUT
 
+#include <chrono>
+
 #include <inttypes.h>
 
 #include <android-base/logging.h>
@@ -114,7 +116,7 @@ void addSample(MotionEvent& event, const InputMessage& msg) {
 
     // TODO(b/329770983): figure out if it's safe to combine events with mismatching metaState
     event.setMetaState(event.getMetaState() | msg.body.motion.metaState);
-    event.addSample(msg.body.motion.eventTime, pointerCoords.data());
+    event.addSample(msg.body.motion.eventTime, pointerCoords.data(), msg.body.motion.eventId);
 }
 
 std::unique_ptr<TouchModeEvent> createTouchModeEvent(const InputMessage& msg) {
@@ -168,6 +170,10 @@ InputMessage createTimelineMessage(int32_t inputEventId, nsecs_t gpuCompletedTim
     return msg;
 }
 
+bool isPointerEvent(const MotionEvent& motionEvent) {
+    return (motionEvent.getSource() & AINPUT_SOURCE_CLASS_POINTER) == AINPUT_SOURCE_CLASS_POINTER;
+}
+
 } // namespace
 
 using android::base::Result;
@@ -177,8 +183,13 @@ using android::base::StringPrintf;
 
 InputConsumerNoResampling::InputConsumerNoResampling(const std::shared_ptr<InputChannel>& channel,
                                                      sp<Looper> looper,
-                                                     InputConsumerCallbacks& callbacks)
-      : mChannel(channel), mLooper(looper), mCallbacks(callbacks), mFdEvents(0) {
+                                                     InputConsumerCallbacks& callbacks,
+                                                     std::unique_ptr<Resampler> resampler)
+      : mChannel(channel),
+        mLooper(looper),
+        mCallbacks(callbacks),
+        mResampler(std::move(resampler)),
+        mFdEvents(0) {
     LOG_ALWAYS_FATAL_IF(mLooper == nullptr);
     mCallback = sp<LooperEventCallback>::make(
             std::bind(&InputConsumerNoResampling::handleReceiveCallback, this,
@@ -362,36 +373,36 @@ void InputConsumerNoResampling::handleMessages(std::vector<InputMessage>&& messa
 std::vector<InputMessage> InputConsumerNoResampling::readAllMessages() {
     std::vector<InputMessage> messages;
     while (true) {
-        InputMessage msg;
-        status_t result = mChannel->receiveMessage(&msg);
-        switch (result) {
-            case OK: {
-                const auto [_, inserted] =
-                        mConsumeTimes.emplace(msg.header.seq, systemTime(SYSTEM_TIME_MONOTONIC));
-                LOG_ALWAYS_FATAL_IF(!inserted, "Already have a consume time for seq=%" PRIu32,
-                                    msg.header.seq);
+        android::base::Result<InputMessage> result = mChannel->receiveMessage();
+        if (result.ok()) {
+            const InputMessage& msg = *result;
+            const auto [_, inserted] =
+                    mConsumeTimes.emplace(msg.header.seq, systemTime(SYSTEM_TIME_MONOTONIC));
+            LOG_ALWAYS_FATAL_IF(!inserted, "Already have a consume time for seq=%" PRIu32,
+                                msg.header.seq);
 
-                // Trace the event processing timeline - event was just read from the socket
-                // TODO(b/329777420): distinguish between multiple instances of InputConsumer
-                // in the same process.
-                ATRACE_ASYNC_BEGIN("InputConsumer processing", /*cookie=*/msg.header.seq);
-                messages.push_back(msg);
-                break;
-            }
-            case WOULD_BLOCK: {
-                return messages;
-            }
-            case DEAD_OBJECT: {
-                LOG(FATAL) << "Got a dead object for " << mChannel->getName();
-                break;
-            }
-            case BAD_VALUE: {
-                LOG(FATAL) << "Got a bad value for " << mChannel->getName();
-                break;
-            }
-            default: {
-                LOG(FATAL) << "Unexpected error: " << result;
-                break;
+            // Trace the event processing timeline - event was just read from the socket
+            // TODO(b/329777420): distinguish between multiple instances of InputConsumer
+            // in the same process.
+            ATRACE_ASYNC_BEGIN("InputConsumer processing", /*cookie=*/msg.header.seq);
+            messages.push_back(msg);
+        } else { // !result.ok()
+            switch (result.error().code()) {
+                case WOULD_BLOCK: {
+                    return messages;
+                }
+                case DEAD_OBJECT: {
+                    LOG(FATAL) << "Got a dead object for " << mChannel->getName();
+                    break;
+                }
+                case BAD_VALUE: {
+                    LOG(FATAL) << "Got a bad value for " << mChannel->getName();
+                    break;
+                }
+                default: {
+                    LOG(FATAL) << "Unexpected error: " << result.error().message();
+                    break;
+                }
             }
         }
     }
@@ -445,6 +456,36 @@ void InputConsumerNoResampling::handleMessage(const InputMessage& msg) const {
     }
 }
 
+std::pair<std::unique_ptr<MotionEvent>, std::optional<uint32_t>>
+InputConsumerNoResampling::createBatchedMotionEvent(const nsecs_t frameTime,
+                                                    std::queue<InputMessage>& messages) {
+    std::unique_ptr<MotionEvent> motionEvent;
+    std::optional<uint32_t> firstSeqForBatch;
+    while (!messages.empty() && !(messages.front().body.motion.eventTime > frameTime)) {
+        if (motionEvent == nullptr) {
+            motionEvent = createMotionEvent(messages.front());
+            firstSeqForBatch = messages.front().header.seq;
+            const auto [_, inserted] = mBatchedSequenceNumbers.insert({*firstSeqForBatch, {}});
+            LOG_IF(FATAL, !inserted)
+                    << "The sequence " << messages.front().header.seq << " was already present!";
+        } else {
+            addSample(*motionEvent, messages.front());
+            mBatchedSequenceNumbers[*firstSeqForBatch].push_back(messages.front().header.seq);
+        }
+        messages.pop();
+    }
+    // Check if resampling should be performed.
+    if (motionEvent != nullptr && isPointerEvent(*motionEvent) && mResampler != nullptr) {
+        InputMessage* futureSample = nullptr;
+        if (!messages.empty()) {
+            futureSample = &messages.front();
+        }
+        mResampler->resampleMotionEvent(static_cast<std::chrono::nanoseconds>(frameTime),
+                                        *motionEvent, futureSample);
+    }
+    return std::make_pair(std::move(motionEvent), firstSeqForBatch);
+}
+
 bool InputConsumerNoResampling::consumeBatchedInputEvents(
         std::optional<nsecs_t> requestedFrameTime) {
     ensureCalledOnLooperThread(__func__);
@@ -452,28 +493,8 @@ bool InputConsumerNoResampling::consumeBatchedInputEvents(
     // infinite frameTime.
     const nsecs_t frameTime = requestedFrameTime.value_or(std::numeric_limits<nsecs_t>::max());
     bool producedEvents = false;
-    for (auto& [deviceId, messages] : mBatches) {
-        std::unique_ptr<MotionEvent> motion;
-        std::optional<uint32_t> firstSeqForBatch;
-        std::vector<uint32_t> sequences;
-        while (!messages.empty()) {
-            const InputMessage& msg = messages.front();
-            if (msg.body.motion.eventTime > frameTime) {
-                break;
-            }
-            if (motion == nullptr) {
-                motion = createMotionEvent(msg);
-                firstSeqForBatch = msg.header.seq;
-                const auto [_, inserted] = mBatchedSequenceNumbers.insert({*firstSeqForBatch, {}});
-                if (!inserted) {
-                    LOG(FATAL) << "The sequence " << msg.header.seq << " was already present!";
-                }
-            } else {
-                addSample(*motion, msg);
-                mBatchedSequenceNumbers[*firstSeqForBatch].push_back(msg.header.seq);
-            }
-            messages.pop();
-        }
+    for (auto& [_, messages] : mBatches) {
+        auto [motion, firstSeqForBatch] = createBatchedMotionEvent(frameTime, messages);
         if (motion != nullptr) {
             LOG_ALWAYS_FATAL_IF(!firstSeqForBatch.has_value());
             mCallbacks.onMotionEvent(std::move(motion), *firstSeqForBatch);
