@@ -372,6 +372,7 @@ std::list<NotifyArgs> TouchpadInputMapper::reconfigure(nsecs_t when,
                 .setBoolValues({config.touchpadTapDraggingEnabled});
         mPropertyProvider.getProperty("Button Right Click Zone Enable")
                 .setBoolValues({config.touchpadRightClickZoneEnabled});
+        mTouchpadHardwareStateNotificationsEnabled = config.shouldNotifyTouchpadHardwareState;
     }
     std::list<NotifyArgs> out;
     if ((!changes.any() && config.pointerCaptureRequest.isEnable()) ||
@@ -421,6 +422,11 @@ std::list<NotifyArgs> TouchpadInputMapper::process(const RawEvent& rawEvent) {
     }
     std::optional<SelfContainedHardwareState> state = mStateConverter.processRawEvent(rawEvent);
     if (state) {
+        if (mTouchpadHardwareStateNotificationsEnabled) {
+            // TODO(b/286551975): Notify policy of the touchpad hardware state.
+            LOG(DEBUG) << "Notify touchpad hardware state here!";
+        }
+
         updatePalmDetectionMetrics();
         return sendHardwareState(rawEvent.when, rawEvent.readTime, *state);
     } else {

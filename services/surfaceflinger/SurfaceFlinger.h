@@ -707,22 +707,13 @@ private:
     // ICEPowerCallback overrides:
     void notifyCpuLoadUp() override;
 
-    // Toggles the kernel idle timer on or off depending the policy decisions around refresh rates.
-    void toggleKernelIdleTimer() REQUIRES(mStateLock);
-
     using KernelIdleTimerController = scheduler::RefreshRateSelector::KernelIdleTimerController;
 
     // Get the controller and timeout that will help decide how the kernel idle timer will be
     // configured and what value to use as the timeout.
     std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds>
             getKernelIdleTimerProperties(PhysicalDisplayId) REQUIRES(mStateLock);
-    // Updates the kernel idle timer either through HWC or through sysprop
-    // depending on which controller is provided
-    void updateKernelIdleTimer(std::chrono::milliseconds timeoutMs, KernelIdleTimerController,
-                               PhysicalDisplayId) REQUIRES(mStateLock);
-    // Keeps track of whether the kernel idle timer is currently enabled, so we don't have to
-    // make calls to sys prop each time.
-    bool mKernelIdleTimerEnabled = false;
+
     // Show spinner with refresh rate overlay
     bool mRefreshRateOverlaySpinner = false;
     // Show render rate with refresh rate overlay
@@ -1067,13 +1058,6 @@ private:
                                const DisplayDeviceState& drawingState)
             REQUIRES(mStateLock, kMainThreadContext);
 
-    void dispatchDisplayModeChangeEvent(PhysicalDisplayId, const scheduler::FrameRateMode&);
-
-    /*
-     * VSYNC
-     */
-    nsecs_t getVsyncPeriodFromHWC() const REQUIRES(mStateLock);
-
     /*
      * Display identification
      */
@@ -1163,7 +1147,6 @@ private:
     void dumpHwc(std::string& result) const;
     perfetto::protos::LayersProto dumpProtoFromMainThread(
             uint32_t traceFlags = LayerTracing::TRACE_ALL) EXCLUDES(mStateLock);
-    void dumpOffscreenLayers(std::string& result) EXCLUDES(mStateLock);
     void dumpPlannerInfo(const DumpArgs& args, std::string& result) const REQUIRES(mStateLock);
 
     status_t doDump(int fd, const DumpArgs& args, bool asProto);
