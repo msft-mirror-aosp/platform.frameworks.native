@@ -1147,7 +1147,6 @@ private:
     void dumpHwc(std::string& result) const;
     perfetto::protos::LayersProto dumpProtoFromMainThread(
             uint32_t traceFlags = LayerTracing::TRACE_ALL) EXCLUDES(mStateLock);
-    void dumpOffscreenLayers(std::string& result) EXCLUDES(mStateLock);
     void dumpPlannerInfo(const DumpArgs& args, std::string& result) const REQUIRES(mStateLock);
 
     status_t doDump(int fd, const DumpArgs& args, bool asProto);
