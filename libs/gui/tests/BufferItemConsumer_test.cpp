@@ -56,15 +56,14 @@ class BufferItemConsumerTest : public ::testing::Test {
     };
 
     void SetUp() override {
-        BufferQueue::createBufferQueue(&mProducer, &mConsumer);
-        mBIC =
-            new BufferItemConsumer(mConsumer, kFormat, kMaxLockedBuffers, true);
+        mBIC = new BufferItemConsumer(kFormat, kMaxLockedBuffers, true);
         String8 name("BufferItemConsumer_Under_Test");
         mBIC->setName(name);
         mBFL = new BufferFreedListener(this);
         mBIC->setBufferFreedListener(mBFL);
 
         sp<IProducerListener> producerListener = new TrackingProducerListener(this);
+        mProducer = mBIC->getSurface()->getIGraphicBufferProducer();
         IGraphicBufferProducer::QueueBufferOutput bufferOutput;
         ASSERT_EQ(NO_ERROR,
                   mProducer->connect(producerListener, NATIVE_WINDOW_API_CPU,

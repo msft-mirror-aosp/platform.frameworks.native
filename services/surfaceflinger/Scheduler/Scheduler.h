@@ -154,8 +154,8 @@ public:
 
     void dispatchHotplugError(int32_t errorCode);
 
-    void onPrimaryDisplayModeChanged(Cycle, const FrameRateMode&) EXCLUDES(mPolicyLock);
-    void onNonPrimaryDisplayModeChanged(Cycle, const FrameRateMode&);
+    // Returns true if the PhysicalDisplayId is the pacesetter.
+    bool onDisplayModeChanged(PhysicalDisplayId, const FrameRateMode&) EXCLUDES(mPolicyLock);
 
     void enableSyntheticVsync(bool = true) REQUIRES(kMainThreadContext);
 
@@ -188,7 +188,6 @@ public:
     }
 
     void updatePhaseConfiguration(Fps);
-    void resetPhaseConfiguration(Fps) REQUIRES(kMainThreadContext);
 
     const VsyncConfiguration& getVsyncConfiguration() const { return *mVsyncConfiguration; }
 
@@ -220,7 +219,7 @@ public:
             REQUIRES(kMainThreadContext);
 
     // Layers are registered on creation, and unregistered when the weak reference expires.
-    void registerLayer(Layer*);
+    void registerLayer(Layer*, FrameRateCompatibility);
     void recordLayerHistory(int32_t id, const LayerProps& layerProps, nsecs_t presentTime,
                             nsecs_t now, LayerHistory::LayerUpdateType) EXCLUDES(mDisplayLock);
     void setModeChangePending(bool pending);
@@ -458,7 +457,7 @@ private:
     void updateAttachedChoreographersFrameRate(const surfaceflinger::frontend::RequestedLayerState&,
                                                Fps fps) EXCLUDES(mChoreographerLock);
 
-    void dispatchCachedReportedMode() REQUIRES(mPolicyLock) EXCLUDES(mDisplayLock);
+    void emitModeChangeIfNeeded() REQUIRES(mPolicyLock) EXCLUDES(mDisplayLock);
 
     // IEventThreadCallback overrides
     bool throttleVsync(TimePoint, uid_t) override;
@@ -584,13 +583,8 @@ private:
         // Chosen display mode.
         ftl::Optional<FrameRateMode> modeOpt;
 
-        struct ModeChangedParams {
-            Cycle cycle;
-            FrameRateMode mode;
-        };
-
-        // Parameters for latest dispatch of mode change event.
-        std::optional<ModeChangedParams> cachedModeChangedParams;
+        // Display mode of latest emitted event.
+        std::optional<FrameRateMode> emittedModeOpt;
     } mPolicy GUARDED_BY(mPolicyLock);
 
     std::mutex mChoreographerLock;

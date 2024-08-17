@@ -194,6 +194,14 @@ public:
      * in <system/window.h>. */
     int setScalingMode(int mode);
 
+    virtual int setBuffersTimestamp(int64_t timestamp);
+    virtual int setBuffersDataSpace(ui::Dataspace dataSpace);
+    virtual int setCrop(Rect const* rect);
+    virtual int setBuffersTransform(uint32_t transform);
+    virtual int setBuffersStickyTransform(uint32_t transform);
+    virtual int setBuffersFormat(PixelFormat format);
+    virtual int setUsage(uint64_t reqUsage);
+
     // See IGraphicBufferProducer::setDequeueTimeout
     status_t setDequeueTimeout(nsecs_t timeout);
 
@@ -354,16 +362,9 @@ protected:
     virtual int connect(int api);
     virtual int setBufferCount(int bufferCount);
     virtual int setBuffersUserDimensions(uint32_t width, uint32_t height);
-    virtual int setBuffersFormat(PixelFormat format);
-    virtual int setBuffersTransform(uint32_t transform);
-    virtual int setBuffersStickyTransform(uint32_t transform);
-    virtual int setBuffersTimestamp(int64_t timestamp);
-    virtual int setBuffersDataSpace(ui::Dataspace dataSpace);
     virtual int setBuffersSmpte2086Metadata(const android_smpte2086_metadata* metadata);
     virtual int setBuffersCta8613Metadata(const android_cta861_3_metadata* metadata);
     virtual int setBuffersHdr10PlusMetadata(const size_t size, const uint8_t* metadata);
-    virtual int setCrop(Rect const* rect);
-    virtual int setUsage(uint64_t reqUsage);
     virtual void setSurfaceDamage(android_native_rect_t* rects, size_t numRects);
 
 public:
