@@ -2520,12 +2520,18 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
     }
 
     updateLayerHistory(latchTime);
-    mLayerSnapshotBuilder.forEachVisibleSnapshot([&](const frontend::LayerSnapshot& snapshot) {
-        if (mLayersIdsWithQueuedFrames.find(snapshot.path.id) == mLayersIdsWithQueuedFrames.end())
-            return;
-        Region visibleReg;
-        visibleReg.set(snapshot.transformedBoundsWithoutTransparentRegion);
-        invalidateLayerStack(snapshot.outputFilter, visibleReg);
+    mLayerSnapshotBuilder.forEachSnapshot([&](const frontend::LayerSnapshot& snapshot) {
+        // update output dirty region if we have a queued buffer that is visible or a snapshot
+        // recently became invisible
+        // TODO(b/360050020) investigate if we need to update dirty region when layer color changes
+        if ((snapshot.isVisible &&
+             (mLayersIdsWithQueuedFrames.find(snapshot.path.id) !=
+              mLayersIdsWithQueuedFrames.end())) ||
+            (!snapshot.isVisible && snapshot.changes.test(Changes::Visibility))) {
+            Region visibleReg;
+            visibleReg.set(snapshot.transformedBoundsWithoutTransparentRegion);
+            invalidateLayerStack(snapshot.outputFilter, visibleReg);
+        }
     });
 
     for (auto& destroyedLayer : mLayerLifecycleManager.getDestroyedLayers()) {
@@ -3830,11 +3836,8 @@ void SurfaceFlinger::processDisplayChanged(const wp<IBinder>& displayToken,
                 setPowerModeInternal(display, hal::PowerMode::ON);
             }
 
-            // TODO(b/175678251) Call a listener instead.
-            if (currentState.physical->hwcDisplayId == getHwComposer().getPrimaryHwcDisplayId()) {
-                const Fps refreshRate =
-                        mDisplayModeController.getActiveMode(display->getPhysicalId()).fps;
-                mScheduler->resetPhaseConfiguration(refreshRate);
+            if (display->getPhysicalId() == mActiveDisplayId) {
+                onActiveDisplayChangedLocked(nullptr, *display);
             }
         }
         return;
@@ -3926,51 +3929,6 @@ void SurfaceFlinger::commitTransactionsLocked(uint32_t transactionFlags) {
         mUpdateInputInfo = true;
     }
 
-    // Update transform hint.
-    if (transactionFlags & (eTransformHintUpdateNeeded | eDisplayTransactionNeeded)) {
-        // Layers and/or displays have changed, so update the transform hint for each layer.
-        //
-        // NOTE: we do this here, rather than when presenting the display so that
-        // the hint is set before we acquire a buffer from the surface texture.
-        //
-        // NOTE: layer transactions have taken place already, so we use their
-        // drawing state. However, SurfaceFlinger's own transaction has not
-        // happened yet, so we must use the current state layer list
-        // (soon to become the drawing state list).
-        //
-        sp<const DisplayDevice> hintDisplay;
-        ui::LayerStack layerStack;
-
-        mCurrentState.traverse([&](Layer* layer) REQUIRES(mStateLock) {
-            // NOTE: we rely on the fact that layers are sorted by
-            // layerStack first (so we don't have to traverse the list
-            // of displays for every layer).
-            if (const auto filter = layer->getOutputFilter(); layerStack != filter.layerStack) {
-                layerStack = filter.layerStack;
-                hintDisplay = nullptr;
-
-                // Find the display that includes the layer.
-                for (const auto& [token, display] : mDisplays) {
-                    if (!display->getCompositionDisplay()->includesLayer(filter)) {
-                        continue;
-                    }
-
-                    // Pick the primary display if another display mirrors the layer.
-                    if (hintDisplay) {
-                        hintDisplay = nullptr;
-                        break;
-                    }
-
-                    hintDisplay = display;
-                }
-            }
-
-            if (hintDisplay) {
-                layer->updateTransformHint(hintDisplay->getTransformHint());
-            }
-        });
-    }
-
     if (mLayersAdded) {
         mLayersAdded = false;
         // Layers have been added.
@@ -3984,14 +3942,6 @@ void SurfaceFlinger::commitTransactionsLocked(uint32_t transactionFlags) {
         mLayersRemoved = false;
         mVisibleRegionsDirty = true;
         mUpdateInputInfo = true;
-        mDrawingState.traverseInZOrder([&](Layer* layer) {
-            if (mLayersPendingRemoval.indexOf(sp<Layer>::fromExisting(layer)) >= 0) {
-                // this layer is not visible anymore
-                Region visibleReg;
-                visibleReg.set(layer->getScreenBounds());
-                invalidateLayerStack(layer->getOutputFilter(), visibleReg);
-            }
-        });
     }
 
     if (transactionFlags & eInputInfoUpdateNeeded) {
@@ -4475,65 +4425,26 @@ status_t SurfaceFlinger::addClientLayer(LayerCreationArgs& args, const sp<IBinde
                                         const sp<Layer>& layer, const wp<Layer>& parent,
                                         uint32_t* outTransformHint) {
     if (mNumLayers >= MAX_LAYERS) {
+        static std::atomic<nsecs_t> lasttime{0};
+        nsecs_t now = systemTime();
+        if (lasttime != 0 && ns2s(now - lasttime.load()) < 10) {
+            ALOGE("AddClientLayer already dumped 10s before");
+            return NO_MEMORY;
+        } else {
+            lasttime = now;
+        }
+
         ALOGE("AddClientLayer failed, mNumLayers (%zu) >= MAX_LAYERS (%zu)", mNumLayers.load(),
               MAX_LAYERS);
-        static_cast<void>(mScheduler->schedule([=, this] {
-            ALOGE("Dumping layer keeping > 20 children alive:");
-            bool leakingParentLayerFound = false;
-            mDrawingState.traverse([&](Layer* layer) {
-                if (leakingParentLayerFound) {
-                    return;
-                }
-                if (layer->getChildrenCount() > 20) {
-                    leakingParentLayerFound = true;
-                    sp<Layer> parent = sp<Layer>::fromExisting(layer);
-                    while (parent) {
-                        ALOGE("Parent Layer: %s%s", parent->getName().c_str(),
-                              (parent->isHandleAlive() ? "handleAlive" : ""));
-                        parent = parent->getParent();
-                    }
-                    // Sample up to 100 layers
-                    ALOGE("Dumping random sampling of child layers total(%zu): ",
-                          layer->getChildrenCount());
-                    int sampleSize = (layer->getChildrenCount() / 100) + 1;
-                    layer->traverseChildren([&](Layer* layer) {
-                        if (rand() % sampleSize == 0) {
-                            ALOGE("Child Layer: %s%s", layer->getName().c_str(),
-                                  (layer->isHandleAlive() ? "handleAlive" : ""));
-                        }
-                    });
-                }
-            });
-
-            int numLayers = 0;
-            mDrawingState.traverse([&](Layer* layer) { numLayers++; });
-
-            ALOGE("Dumping random sampling of on-screen layers total(%u):", numLayers);
-            mDrawingState.traverse([&](Layer* layer) {
-                // Aim to dump about 200 layers to avoid totally trashing
-                // logcat. On the other hand, if there really are 4096 layers
-                // something has gone totally wrong its probably the most
-                // useful information in logcat.
-                if (rand() % 20 == 13) {
-                    ALOGE("Layer: %s%s", layer->getName().c_str(),
-                          (layer->isHandleAlive() ? "handleAlive" : ""));
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                }
-            });
-            ALOGE("Dumping random sampling of off-screen layers total(%zu): ",
-                  mOffscreenLayers.size());
-            for (Layer* offscreenLayer : mOffscreenLayers) {
-                if (rand() % 20 == 13) {
-                    ALOGE("Offscreen-layer: %s%s", offscreenLayer->getName().c_str(),
-                          (offscreenLayer->isHandleAlive() ? "handleAlive" : ""));
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                }
-            }
+        static_cast<void>(mScheduler->schedule([&]() FTL_FAKE_GUARD(kMainThreadContext) {
+            ALOGE("Dumping on-screen layers.");
+            mLayerHierarchyBuilder.dumpLayerSample(mLayerHierarchyBuilder.getHierarchy());
+            ALOGE("Dumping off-screen layers.");
+            mLayerHierarchyBuilder.dumpLayerSample(mLayerHierarchyBuilder.getOffscreenHierarchy());
         }));
         return NO_MEMORY;
     }
 
-    layer->updateTransformHint(mActiveDisplayTransformHint);
     if (outTransformHint) {
         *outTransformHint = mActiveDisplayTransformHint;
     }
@@ -5748,7 +5659,7 @@ void SurfaceFlinger::logFrameStats(TimePoint now) {
     sTimestamp = now;
 
     SFTRACE_CALL();
-    mDrawingState.traverse([&](Layer* layer) { layer->logFrameStats(); });
+    traverseLegacyLayers([&](Layer* layer) { layer->logFrameStats(); });
 }
 
 void SurfaceFlinger::appendSfConfigString(std::string& result) const {
@@ -6049,20 +5960,6 @@ perfetto::protos::LayersProto SurfaceFlinger::dumpProtoFromMainThread(uint32_t t
                 return dumpDrawingStateProto(traceFlags);
             })
             .get();
-}
-
-void SurfaceFlinger::dumpOffscreenLayers(std::string& result) {
-    auto future = mScheduler->schedule([this] {
-        std::string result;
-        for (Layer* offscreenLayer : mOffscreenLayers) {
-            offscreenLayer->traverse(LayerVector::StateSet::Drawing,
-                                     [&](Layer* layer) { layer->dumpOffscreenDebugInfo(result); });
-        }
-        return result;
-    });
-
-    result.append("Offscreen Layers:\n");
-    result.append(future.get());
 }
 
 void SurfaceFlinger::dumpHwcLayersMinidump(std::string& result) const {
@@ -8197,20 +8094,6 @@ void SurfaceFlinger::handleLayerCreatedLocked(const LayerCreatedState& state, Vs
     } else {
         parent->addChild(layer);
     }
-
-    ui::LayerStack layerStack = layer->getLayerStack(LayerVector::StateSet::Current);
-    sp<const DisplayDevice> hintDisplay;
-    // Find the display that includes the layer.
-    for (const auto& [token, display] : mDisplays) {
-        if (display->getLayerStack() == layerStack) {
-            hintDisplay = display;
-            break;
-        }
-    }
-
-    if (hintDisplay) {
-        layer->updateTransformHint(hintDisplay->getTransformHint());
-    }
 }
 
 void SurfaceFlinger::sample() {
@@ -8254,8 +8137,6 @@ void SurfaceFlinger::onActiveDisplayChangedLocked(const DisplayDevice* inactiveD
 
     mActiveDisplayId = activeDisplay.getPhysicalId();
     activeDisplay.getCompositionDisplay()->setLayerCachingTexturePoolEnabled(true);
-
-    mScheduler->resetPhaseConfiguration(mDisplayModeController.getActiveMode(mActiveDisplayId).fps);
 
     // TODO(b/255635711): Check for pending mode changes on other displays.
     mScheduler->setModeChangePending(false);

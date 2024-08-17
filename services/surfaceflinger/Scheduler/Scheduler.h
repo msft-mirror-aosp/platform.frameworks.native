@@ -188,7 +188,6 @@ public:
     }
 
     void updatePhaseConfiguration(Fps);
-    void resetPhaseConfiguration(Fps) REQUIRES(kMainThreadContext);
 
     const VsyncConfiguration& getVsyncConfiguration() const { return *mVsyncConfiguration; }
 
