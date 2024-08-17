@@ -1350,14 +1350,6 @@ uint32_t Layer::getEffectiveUsage(uint32_t usage) const {
     return usage;
 }
 
-void Layer::updateTransformHint(ui::Transform::RotationFlags transformHint) {
-    if (mFlinger->mDebugDisableTransformHint || transformHint & ui::Transform::ROT_INVALID) {
-        transformHint = ui::Transform::ROT_0;
-    }
-
-    setTransformHintLegacy(transformHint);
-}
-
 // ----------------------------------------------------------------------------
 // debugging
 // ----------------------------------------------------------------------------
@@ -3999,13 +3991,6 @@ ui::Dataspace Layer::translateDataspace(ui::Dataspace dataspace) {
 
 sp<GraphicBuffer> Layer::getBuffer() const {
     return mBufferInfo.mBuffer ? mBufferInfo.mBuffer->getBuffer() : nullptr;
-}
-
-void Layer::setTransformHintLegacy(ui::Transform::RotationFlags displayTransformHint) {
-    mTransformHintLegacy = getFixedTransformHint();
-    if (mTransformHintLegacy == ui::Transform::ROT_INVALID) {
-        mTransformHintLegacy = displayTransformHint;
-    }
 }
 
 const std::shared_ptr<renderengine::ExternalTexture>& Layer::getExternalTexture() const {

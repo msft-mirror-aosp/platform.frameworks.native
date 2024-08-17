@@ -687,10 +687,6 @@ public:
      */
     void addToCurrentState();
 
-    /*
-     * Sets display transform hint on BufferLayerConsumer.
-     */
-    void updateTransformHint(ui::Transform::RotationFlags);
     inline const State& getDrawingState() const { return mDrawingState; }
     inline State& getDrawingState() { return mDrawingState; }
 
@@ -1212,13 +1208,11 @@ private:
 
     bool findInHierarchy(const sp<Layer>&);
 
-    void setTransformHintLegacy(ui::Transform::RotationFlags);
     void releasePreviousBuffer();
     void resetDrawingStateBufferInfo();
 
     // Transform hint provided to the producer. This must be accessed holding
     // the mStateLock.
-    ui::Transform::RotationFlags mTransformHintLegacy = ui::Transform::ROT_0;
     std::optional<ui::Transform::RotationFlags> mTransformHint = std::nullopt;
 
     ReleaseCallbackId mPreviousReleaseCallbackId = ReleaseCallbackId::INVALID_ID;
