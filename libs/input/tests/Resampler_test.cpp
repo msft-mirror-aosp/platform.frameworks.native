@@ -229,6 +229,38 @@ void ResamplerTest::assertMotionEventIsNotResampled(const MotionEvent& original,
     EXPECT_EQ(originalSampleSize, notResampledSampleSize);
 }
 
+TEST_F(ResamplerTest, NonResampledAxesArePreserved) {
+    constexpr float TOUCH_MAJOR_VALUE = 1.0f;
+
+    MotionEvent motionEvent =
+            InputStream{{{5ms, {{.id = 0, .x = 1.0f, .y = 1.0f, .isResampled = false}}}},
+                        AMOTION_EVENT_ACTION_MOVE};
+
+    constexpr std::chrono::nanoseconds eventTime{10ms};
+    PointerCoords pointerCoords{};
+    pointerCoords.isResampled = false;
+    pointerCoords.setAxisValue(AMOTION_EVENT_AXIS_X, 2.0f);
+    pointerCoords.setAxisValue(AMOTION_EVENT_AXIS_Y, 2.0f);
+    pointerCoords.setAxisValue(AMOTION_EVENT_AXIS_TOUCH_MAJOR, TOUCH_MAJOR_VALUE);
+
+    motionEvent.addSample(eventTime.count(), &pointerCoords, motionEvent.getId());
+
+    const InputMessage futureSample =
+            InputSample{15ms, {{.id = 0, .x = 3.0f, .y = 4.0f, .isResampled = false}}};
+
+    const MotionEvent originalMotionEvent = motionEvent;
+
+    mResampler->resampleMotionEvent(11ms, motionEvent, &futureSample);
+
+    EXPECT_EQ(motionEvent.getTouchMajor(0), TOUCH_MAJOR_VALUE);
+
+    assertMotionEventIsResampledAndCoordsNear(originalMotionEvent, motionEvent,
+                                              Pointer{.id = 0,
+                                                      .x = 2.2f,
+                                                      .y = 2.4f,
+                                                      .isResampled = true});
+}
+
 TEST_F(ResamplerTest, SinglePointerNotEnoughDataToResample) {
     MotionEvent motionEvent =
             InputStream{{{5ms, {{.id = 0, .x = 1.0f, .y = 1.0f, .isResampled = false}}}},

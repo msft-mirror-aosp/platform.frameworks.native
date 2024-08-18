@@ -112,6 +112,10 @@ private:
     std::optional<ui::LogicalDisplayId> mDisplayId;
 
     nsecs_t mGestureStartTime{0};
+
+    // True if hardware state update notifications is available for usage based on its feature flag
+    // and settings value.
+    bool mTouchpadHardwareStateNotificationsEnabled = false;
 };
 
 } // namespace android
