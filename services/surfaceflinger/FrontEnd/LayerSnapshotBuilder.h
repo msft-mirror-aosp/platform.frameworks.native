@@ -91,6 +91,9 @@ public:
     // snapshots in z-order
     void forEachSnapshot(const Visitor& visitor, const ConstPredicate& predicate);
 
+    // Visit each snapshot
+    void forEachSnapshot(const ConstVisitor& visitor) const;
+
     // Visit each snapshot interesting to input reverse z-order
     void forEachInputSnapshot(const ConstVisitor& visitor) const;
 
@@ -130,7 +133,9 @@ private:
                                   const RequestedLayerState& layer,
                                   const LayerSnapshot& parentSnapshot);
     void updateFrameRateFromChildSnapshot(LayerSnapshot& snapshot,
-                                          const LayerSnapshot& childSnapshot, const Args& args);
+                                          const LayerSnapshot& childSnapshot,
+                                          const RequestedLayerState& requestedCHildState,
+                                          const Args& args, bool* outChildHasValidFrameRate);
     void updateTouchableRegionCrop(const Args& args);
 
     std::unordered_map<LayerHierarchy::TraversalPath, LayerSnapshot*,

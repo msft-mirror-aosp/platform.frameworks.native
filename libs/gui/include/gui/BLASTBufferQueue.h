@@ -17,9 +17,10 @@
 #ifndef ANDROID_GUI_BLAST_BUFFER_QUEUE_H
 #define ANDROID_GUI_BLAST_BUFFER_QUEUE_H
 
+#include <com_android_graphics_libgui_flags.h>
 #include <gui/BufferItem.h>
 #include <gui/BufferItemConsumer.h>
-
+#include <gui/IGraphicBufferConsumer.h>
 #include <gui/IGraphicBufferProducer.h>
 #include <gui/SurfaceComposerClient.h>
 
@@ -39,12 +40,20 @@ class BufferItemConsumer;
 
 class BLASTBufferItemConsumer : public BufferItemConsumer {
 public:
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
+    BLASTBufferItemConsumer(const sp<IGraphicBufferProducer>& producer,
+                            const sp<IGraphicBufferConsumer>& consumer, uint64_t consumerUsage,
+                            int bufferCount, bool controlledByApp, wp<BLASTBufferQueue> bbq)
+          : BufferItemConsumer(producer, consumer, consumerUsage, bufferCount, controlledByApp),
+#else
     BLASTBufferItemConsumer(const sp<IGraphicBufferConsumer>& consumer, uint64_t consumerUsage,
                             int bufferCount, bool controlledByApp, wp<BLASTBufferQueue> bbq)
           : BufferItemConsumer(consumer, consumerUsage, bufferCount, controlledByApp),
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
             mBLASTBufferQueue(std::move(bbq)),
             mCurrentlyConnected(false),
-            mPreviouslyConnected(false) {}
+            mPreviouslyConnected(false) {
+    }
 
     void onDisconnect() override EXCLUDES(mMutex);
     void addAndGetFrameTimestamps(const NewFrameEventsEntry* newTimestamps,
@@ -189,9 +198,16 @@ private:
     // latch stale buffers and that we don't wait on barriers from an old producer.
     uint32_t mProducerId = 0;
 
+    class BLASTBufferItem : public BufferItem {
+    public:
+        // True if BBQBufferQueueProducer is disconnected after the buffer is acquried but
+        // before it is released.
+        bool disconnectedAfterAcquired{false};
+    };
+
     // Keep a reference to the submitted buffers so we can release when surfaceflinger drops the
     // buffer or the buffer has been presented and a new buffer is ready to be presented.
-    std::unordered_map<ReleaseCallbackId, BufferItem, ReleaseBufferCallbackIdHash> mSubmitted
+    std::unordered_map<ReleaseCallbackId, BLASTBufferItem, ReleaseBufferCallbackIdHash> mSubmitted
             GUARDED_BY(mMutex);
 
     // Keep a queue of the released buffers instead of immediately releasing

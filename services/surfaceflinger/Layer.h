@@ -330,18 +330,10 @@ public:
             REQUIRES(mFlinger->mStateLock);
     virtual bool setColorSpaceAgnostic(const bool agnostic);
     virtual bool setDimmingEnabled(const bool dimmingEnabled);
-    virtual bool setDefaultFrameRateCompatibility(FrameRateCompatibility compatibility);
-    virtual bool setFrameRateSelectionPriority(int32_t priority);
     virtual bool setFixedTransformHint(ui::Transform::RotationFlags fixedTransformHint);
     void setAutoRefresh(bool /* autoRefresh */);
     bool setDropInputMode(gui::DropInputMode);
 
-    //  If the variable is not set on the layer, it traverses up the tree to inherit the frame
-    //  rate priority from its parent.
-    virtual int32_t getFrameRateSelectionPriority() const;
-    //
-    virtual FrameRateCompatibility getDefaultFrameRateCompatibility() const;
-    //
     ui::Dataspace getDataSpace() const;
 
     virtual bool isFrontBuffered() const;
@@ -695,14 +687,9 @@ public:
      */
     void addToCurrentState();
 
-    /*
-     * Sets display transform hint on BufferLayerConsumer.
-     */
-    void updateTransformHint(ui::Transform::RotationFlags);
     inline const State& getDrawingState() const { return mDrawingState; }
     inline State& getDrawingState() { return mDrawingState; }
 
-    void miniDumpLegacy(std::string& result, const DisplayDevice&) const;
     void miniDump(std::string& result, const frontend::LayerSnapshot&, const DisplayDevice&) const;
     void dumpFrameStats(std::string& result) const;
     void dumpOffscreenDebugInfo(std::string& result) const;
@@ -788,11 +775,6 @@ public:
      * bounds are constrained by its parent bounds.
      */
     Rect getCroppedBufferSize(const Layer::State& s) const;
-
-    bool setFrameRate(FrameRate::FrameRateVote);
-    bool setFrameRateCategory(FrameRateCategory, bool smoothSwitchOnly);
-
-    bool setFrameRateSelectionStrategy(FrameRateSelectionStrategy);
 
     virtual void setFrameTimelineInfoForBuffer(const FrameTimelineInfo& /*info*/) {}
     void setFrameTimelineVsyncForBufferTransaction(const FrameTimelineInfo& info, nsecs_t postTime,
@@ -905,19 +887,9 @@ public:
     void callReleaseBufferCallback(const sp<ITransactionCompletedListener>& listener,
                                    const sp<GraphicBuffer>& buffer, uint64_t framenumber,
                                    const sp<Fence>& releaseFence);
-    bool setFrameRateForLayerTreeLegacy(FrameRate, nsecs_t now);
     bool setFrameRateForLayerTree(FrameRate, const scheduler::LayerProps&, nsecs_t now);
     void recordLayerHistoryBufferUpdate(const scheduler::LayerProps&, nsecs_t now);
     void recordLayerHistoryAnimationTx(const scheduler::LayerProps&, nsecs_t now);
-    auto getLayerProps() const {
-        return scheduler::LayerProps{.visible = isVisible(),
-                                     .bounds = getBounds(),
-                                     .transform = getTransform(),
-                                     .setFrameRateVote = getFrameRateForLayerTree(),
-                                     .frameRateSelectionPriority = getFrameRateSelectionPriority(),
-                                     .isSmallDirty = mSmallDirty,
-                                     .isFrontBuffered = isFrontBuffered()};
-    };
     bool hasBuffer() const { return mBufferInfo.mBuffer != nullptr; }
     void setTransformHint(std::optional<ui::Transform::RotationFlags> transformHint) {
         mTransformHint = transformHint;
@@ -1128,7 +1100,6 @@ private:
     LayerVector makeChildrenTraversalList(LayerVector::StateSet,
                                           const std::vector<Layer*>& layersInTree);
 
-    void updateTreeHasFrameRateVote();
     bool propagateFrameRateForLayerTree(FrameRate parentFrameRate, bool overrideChildren,
                                         bool* transactionNeeded);
     void setZOrderRelativeOf(const wp<Layer>& relativeOf);
@@ -1237,13 +1208,11 @@ private:
 
     bool findInHierarchy(const sp<Layer>&);
 
-    void setTransformHintLegacy(ui::Transform::RotationFlags);
     void releasePreviousBuffer();
     void resetDrawingStateBufferInfo();
 
     // Transform hint provided to the producer. This must be accessed holding
     // the mStateLock.
-    ui::Transform::RotationFlags mTransformHintLegacy = ui::Transform::ROT_0;
     std::optional<ui::Transform::RotationFlags> mTransformHint = std::nullopt;
 
     ReleaseCallbackId mPreviousReleaseCallbackId = ReleaseCallbackId::INVALID_ID;
