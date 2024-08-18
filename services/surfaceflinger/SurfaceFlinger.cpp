@@ -4369,13 +4369,6 @@ void SurfaceFlinger::doCommitTransactions() {
                 l->setIsAtRoot(false);
                 mCurrentState.layersSortedByZ.remove(l);
             }
-
-            // If the layer has been removed and has no parent, then it will not be reachable
-            // when traversing layers on screen. Add the layer to the offscreenLayers set to
-            // ensure we can copy its current to drawing state.
-            if (!l->getParent()) {
-                mOffscreenLayers.emplace(l.get());
-            }
         }
         mLayersPendingRemoval.clear();
     }
@@ -4389,7 +4382,6 @@ void SurfaceFlinger::doCommitTransactions() {
         }
     }
 
-    commitOffscreenLayers();
     if (mLayerMirrorRoots.size() > 0) {
         std::deque<Layer*> pendingUpdates;
         pendingUpdates.insert(pendingUpdates.end(), mLayerMirrorRoots.begin(),
@@ -4408,17 +4400,6 @@ void SurfaceFlinger::doCommitTransactions() {
         for (Layer* cloneRoot : needsUpdating) {
             cloneRoot->updateMirrorInfo({});
         }
-    }
-}
-
-void SurfaceFlinger::commitOffscreenLayers() {
-    for (Layer* offscreenLayer : mOffscreenLayers) {
-        offscreenLayer->traverse(LayerVector::StateSet::Drawing, [](Layer* layer) {
-            if (layer->clearTransactionFlags(eTransactionNeeded)) {
-                layer->doTransaction(0);
-                layer->commitChildList();
-            }
-        });
     }
 }
 
@@ -7901,7 +7882,6 @@ void SurfaceFlinger::onLayerFirstRef(Layer* layer) {
 
 void SurfaceFlinger::onLayerDestroyed(Layer* layer) {
     mNumLayers--;
-    removeHierarchyFromOffscreenLayers(layer);
     if (!layer->isRemovedFromCurrentState()) {
         mScheduler->deregisterLayer(layer);
     }
@@ -7913,24 +7893,6 @@ void SurfaceFlinger::onLayerDestroyed(Layer* layer) {
 
 void SurfaceFlinger::onLayerUpdate() {
     scheduleCommit(FrameHint::kActive);
-}
-
-// WARNING: ONLY CALL THIS FROM LAYER DTOR
-// Here we add children in the current state to offscreen layers and remove the
-// layer itself from the offscreen layer list.  Since
-// this is the dtor, it is safe to access the current state.  This keeps us
-// from dangling children layers such that they are not reachable from the
-// Drawing state nor the offscreen layer list
-// See b/141111965
-void SurfaceFlinger::removeHierarchyFromOffscreenLayers(Layer* layer) {
-    for (auto& child : layer->getCurrentChildren()) {
-        mOffscreenLayers.emplace(child.get());
-    }
-    mOffscreenLayers.erase(layer);
-}
-
-void SurfaceFlinger::removeFromOffscreenLayers(Layer* layer) {
-    mOffscreenLayers.erase(layer);
 }
 
 status_t SurfaceFlinger::setGlobalShadowSettings(const half4& ambientColor, const half4& spotColor,
