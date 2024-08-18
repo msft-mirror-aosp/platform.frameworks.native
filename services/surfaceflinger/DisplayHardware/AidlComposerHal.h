@@ -244,6 +244,9 @@ public:
     Error setRefreshRateChangedCallbackDebugEnabled(Display, bool) override;
     Error notifyExpectedPresent(Display, nsecs_t expectedPresentTime,
                                 int32_t frameIntervalNs) override;
+    Error getDisplayLuts(
+            Display display,
+            std::vector<aidl::android::hardware::graphics::composer3::Lut>* outLuts) override;
 
 private:
     // Many public functions above simply write a command into the command

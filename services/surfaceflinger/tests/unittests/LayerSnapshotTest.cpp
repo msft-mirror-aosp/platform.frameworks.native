@@ -56,6 +56,17 @@ using namespace com::android::graphics::surfaceflinger;
 
 class LayerSnapshotTest : public LayerSnapshotTestBase {
 protected:
+    const Layer::FrameRate FRAME_RATE_VOTE1 =
+            Layer::FrameRate(67_Hz, scheduler::FrameRateCompatibility::Default);
+    const Layer::FrameRate FRAME_RATE_VOTE2 =
+            Layer::FrameRate(14_Hz, scheduler::FrameRateCompatibility::Default);
+    const Layer::FrameRate FRAME_RATE_VOTE3 =
+            Layer::FrameRate(99_Hz, scheduler::FrameRateCompatibility::Default);
+    const Layer::FrameRate FRAME_RATE_TREE =
+            Layer::FrameRate(Fps(), scheduler::FrameRateCompatibility::NoVote);
+    const Layer::FrameRate FRAME_RATE_NO_VOTE =
+            Layer::FrameRate(Fps(), scheduler::FrameRateCompatibility::Default);
+
     LayerSnapshotTest() : LayerSnapshotTestBase() {
         UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
     }
@@ -787,6 +798,155 @@ TEST_F(LayerSnapshotTest, framerate) {
               scheduler::FrameRateCompatibility::Default);
 }
 
+TEST_F(LayerSnapshotTest, frameRateSetAndGet) {
+    setFrameRate(1, FRAME_RATE_VOTE1.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    // verify parent is gets no vote
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE1);
+}
+
+TEST_F(LayerSnapshotTest, frameRateSetAndGetParent) {
+    setFrameRate(111, FRAME_RATE_VOTE1.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_TREE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_TREE);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE1);
+
+    setFrameRate(111, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_NO_VOTE);
+}
+
+TEST_F(LayerSnapshotTest, frameRateSetAndGetParentAllVote) {
+    setFrameRate(1, FRAME_RATE_VOTE3.vote.rate.getValue(), 0, 0);
+    setFrameRate(11, FRAME_RATE_VOTE2.vote.rate.getValue(), 0, 0);
+    setFrameRate(111, FRAME_RATE_VOTE1.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE3);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE2);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE1);
+
+    setFrameRate(111, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE3);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE2);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE2);
+
+    setFrameRate(11, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE3);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE3);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE3);
+
+    setFrameRate(1, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_NO_VOTE);
+}
+
+TEST_F(LayerSnapshotTest, frameRateSetAndGetChild) {
+    setFrameRate(1, FRAME_RATE_VOTE1.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE1);
+
+    setFrameRate(1, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_NO_VOTE);
+}
+
+TEST_F(LayerSnapshotTest, frameRateSetAndGetChildAllVote) {
+    setFrameRate(1, FRAME_RATE_VOTE3.vote.rate.getValue(), 0, 0);
+    setFrameRate(11, FRAME_RATE_VOTE2.vote.rate.getValue(), 0, 0);
+    setFrameRate(111, FRAME_RATE_VOTE1.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE3);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE2);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE1);
+
+    setFrameRate(1, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_TREE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE2);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE1);
+
+    setFrameRate(11, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_TREE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_TREE);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE1);
+
+    setFrameRate(111, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_NO_VOTE);
+}
+
+TEST_F(LayerSnapshotTest, frameRateSetAndGetChildAddAfterVote) {
+    setFrameRate(1, FRAME_RATE_VOTE1.vote.rate.getValue(), 0, 0);
+    reparentLayer(111, 2);
+    std::vector<uint32_t> traversalOrder = {1, 11, 12, 121, 122, 1221, 13, 2, 111};
+    UPDATE_AND_VERIFY(mSnapshotBuilder, traversalOrder);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_NO_VOTE);
+
+    reparentLayer(111, 11);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE1);
+
+    setFrameRate(1, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_NO_VOTE);
+}
+
+TEST_F(LayerSnapshotTest, frameRateSetAndGetChildRemoveAfterVote) {
+    setFrameRate(1, FRAME_RATE_VOTE1.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_VOTE1);
+
+    reparentLayer(111, 2);
+    std::vector<uint32_t> traversalOrder = {1, 11, 12, 121, 122, 1221, 13, 2, 111};
+    UPDATE_AND_VERIFY(mSnapshotBuilder, traversalOrder);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_NO_VOTE);
+
+    setFrameRate(1, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, traversalOrder);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 111})->frameRate, FRAME_RATE_NO_VOTE);
+}
+
+TEST_F(LayerSnapshotTest, frameRateAddChildForParentWithTreeVote) {
+    setFrameRate(11, FRAME_RATE_VOTE1.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_TREE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_VOTE1);
+    EXPECT_EQ(getSnapshot({.id = 12})->frameRate, FRAME_RATE_NO_VOTE);
+
+    setFrameRate(11, FRAME_RATE_NO_VOTE.vote.rate.getValue(), 0, 0);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot({.id = 1})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 11})->frameRate, FRAME_RATE_NO_VOTE);
+    EXPECT_EQ(getSnapshot({.id = 12})->frameRate, FRAME_RATE_NO_VOTE);
+}
+
 TEST_F(LayerSnapshotTest, translateDataspace) {
     setDataspace(1, ui::Dataspace::UNKNOWN);
     UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
@@ -965,7 +1125,7 @@ TEST_F(LayerSnapshotTest, frameRateSelectionStrategy) {
     EXPECT_FALSE(getSnapshot({.id = 1})->frameRate.vote.rate.isValid());
     EXPECT_EQ(getSnapshot({.id = 1})->frameRate.vote.type,
               scheduler::FrameRateCompatibility::NoVote);
-    EXPECT_FALSE(getSnapshot({.id = 1})->changes.test(RequestedLayerState::Changes::FrameRate));
+    EXPECT_TRUE(getSnapshot({.id = 1})->changes.test(RequestedLayerState::Changes::FrameRate));
 
     // verify layer 12 and all descendants (121, 122, 1221) get the requested vote
     EXPECT_FALSE(getSnapshot({.id = 12})->frameRate.vote.rate.isValid());
@@ -1056,7 +1216,7 @@ TEST_F(LayerSnapshotTest, frameRateSelectionStrategyWithCategory) {
     EXPECT_EQ(getSnapshot({.id = 1})->frameRate.vote.type,
               scheduler::FrameRateCompatibility::NoVote);
     EXPECT_EQ(getSnapshot({.id = 1})->frameRate.category, FrameRateCategory::Default);
-    EXPECT_FALSE(getSnapshot({.id = 1})->changes.test(RequestedLayerState::Changes::FrameRate));
+    EXPECT_TRUE(getSnapshot({.id = 1})->changes.test(RequestedLayerState::Changes::FrameRate));
 
     // verify layer 12 and all descendants (121, 122, 1221) get the requested vote
     EXPECT_FALSE(getSnapshot({.id = 12})->frameRate.vote.rate.isValid());
