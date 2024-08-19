@@ -6993,7 +6993,8 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
                                     const sp<IScreenCaptureListener>& captureListener) {
     SFTRACE_CALL();
 
-    status_t validate = validateScreenshotPermissions(args);
+    const auto& captureArgs = args.captureArgs;
+    status_t validate = validateScreenshotPermissions(captureArgs);
     if (validate != OK) {
         ALOGD("Permission denied to captureDisplay");
         invokeScreenCaptureError(validate, captureListener);
@@ -7006,7 +7007,7 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
         return;
     }
 
-    if (args.captureSecureLayers && !hasCaptureBlackoutContentPermission()) {
+    if (captureArgs.captureSecureLayers && !hasCaptureBlackoutContentPermission()) {
         ALOGD("Attempting to capture secure layers without CAPTURE_BLACKOUT_CONTENT");
         invokeScreenCaptureError(PERMISSION_DENIED, captureListener);
         return;
@@ -7032,7 +7033,7 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
             reqSize = display->getLayerStackSpaceRect().getSize();
         }
 
-        for (const auto& handle : args.excludeHandles) {
+        for (const auto& handle : captureArgs.excludeHandles) {
             uint32_t excludeLayer = LayerHandle::getLayerId(handle);
             if (excludeLayer != UNASSIGNED_LAYER_ID) {
                 excludeLayerIds.emplace(excludeLayer);
@@ -7045,17 +7046,21 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
     }
 
     GetLayerSnapshotsFunction getLayerSnapshotsFn =
-            getLayerSnapshotsForScreenshots(layerStack, args.uid, std::move(excludeLayerIds));
+            getLayerSnapshotsForScreenshots(layerStack, captureArgs.uid,
+                                            std::move(excludeLayerIds));
 
     ftl::Flags<RenderArea::Options> options;
-    if (args.captureSecureLayers) options |= RenderArea::Options::CAPTURE_SECURE_LAYERS;
-    if (args.hintForSeamlessTransition)
+    if (captureArgs.captureSecureLayers) options |= RenderArea::Options::CAPTURE_SECURE_LAYERS;
+    if (captureArgs.hintForSeamlessTransition)
         options |= RenderArea::Options::HINT_FOR_SEAMLESS_TRANSITION;
     captureScreenCommon(RenderAreaBuilderVariant(std::in_place_type<DisplayRenderAreaBuilder>,
-                                                 args.sourceCrop, reqSize, args.dataspace,
+                                                 gui::aidl_utils::fromARect(captureArgs.sourceCrop),
+                                                 reqSize,
+                                                 static_cast<ui::Dataspace>(captureArgs.dataspace),
                                                  displayWeak, options),
-                        getLayerSnapshotsFn, reqSize, args.pixelFormat, args.allowProtected,
-                        args.grayscale, captureListener);
+                        getLayerSnapshotsFn, reqSize,
+                        static_cast<ui::PixelFormat>(captureArgs.pixelFormat),
+                        captureArgs.allowProtected, captureArgs.grayscale, captureListener);
 }
 
 void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args,
@@ -7108,10 +7113,11 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
     if (args.hintForSeamlessTransition)
         options |= RenderArea::Options::HINT_FOR_SEAMLESS_TRANSITION;
     captureScreenCommon(RenderAreaBuilderVariant(std::in_place_type<DisplayRenderAreaBuilder>,
-                                                 Rect(), size, args.dataspace, displayWeak,
-                                                 options),
-                        getLayerSnapshotsFn, size, args.pixelFormat, kAllowProtected, kGrayscale,
-                        captureListener);
+                                                 Rect(), size,
+                                                 static_cast<ui::Dataspace>(args.dataspace),
+                                                 displayWeak, options),
+                        getLayerSnapshotsFn, size, static_cast<ui::PixelFormat>(args.pixelFormat),
+                        kAllowProtected, kGrayscale, captureListener);
 }
 
 ScreenCaptureResults SurfaceFlinger::captureLayersSync(const LayerCaptureArgs& args) {
@@ -7124,20 +7130,23 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
                                    const sp<IScreenCaptureListener>& captureListener) {
     SFTRACE_CALL();
 
-    status_t validate = validateScreenshotPermissions(args);
+    const auto& captureArgs = args.captureArgs;
+
+    status_t validate = validateScreenshotPermissions(captureArgs);
     if (validate != OK) {
         ALOGD("Permission denied to captureLayers");
         invokeScreenCaptureError(validate, captureListener);
         return;
     }
 
+    auto crop = gui::aidl_utils::fromARect(captureArgs.sourceCrop);
+
     ui::Size reqSize;
     sp<Layer> parent;
-    Rect crop(args.sourceCrop);
     std::unordered_set<uint32_t> excludeLayerIds;
-    ui::Dataspace dataspace = args.dataspace;
+    ui::Dataspace dataspace = static_cast<ui::Dataspace>(captureArgs.dataspace);
 
-    if (args.captureSecureLayers && !hasCaptureBlackoutContentPermission()) {
+    if (captureArgs.captureSecureLayers && !hasCaptureBlackoutContentPermission()) {
         ALOGD("Attempting to capture secure layers without CAPTURE_BLACKOUT_CONTENT");
         invokeScreenCaptureError(PERMISSION_DENIED, captureListener);
         return;
@@ -7154,26 +7163,27 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
         }
 
         Rect parentSourceBounds = parent->getCroppedBufferSize(parent->getDrawingState());
-        if (args.sourceCrop.width() <= 0) {
+        if (crop.width() <= 0) {
             crop.left = 0;
             crop.right = parentSourceBounds.getWidth();
         }
 
-        if (args.sourceCrop.height() <= 0) {
+        if (crop.height() <= 0) {
             crop.top = 0;
             crop.bottom = parentSourceBounds.getHeight();
         }
 
-        if (crop.isEmpty() || args.frameScaleX <= 0.0f || args.frameScaleY <= 0.0f) {
+        if (crop.isEmpty() || captureArgs.frameScaleX <= 0.0f || captureArgs.frameScaleY <= 0.0f) {
             // Error out if the layer has no source bounds (i.e. they are boundless) and a source
             // crop was not specified, or an invalid frame scale was provided.
             ALOGD("Boundless layer, unspecified crop, or invalid frame scale to captureLayers");
             invokeScreenCaptureError(BAD_VALUE, captureListener);
             return;
         }
-        reqSize = ui::Size(crop.width() * args.frameScaleX, crop.height() * args.frameScaleY);
+        reqSize = ui::Size(crop.width() * captureArgs.frameScaleX,
+                           crop.height() * captureArgs.frameScaleY);
 
-        for (const auto& handle : args.excludeHandles) {
+        for (const auto& handle : captureArgs.excludeHandles) {
             uint32_t excludeLayer = LayerHandle::getLayerId(handle);
             if (excludeLayer != UNASSIGNED_LAYER_ID) {
                 excludeLayerIds.emplace(excludeLayer);
@@ -7199,8 +7209,9 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
     }
 
     GetLayerSnapshotsFunction getLayerSnapshotsFn =
-            getLayerSnapshotsForScreenshots(parent->sequence, args.uid, std::move(excludeLayerIds),
-                                            args.childrenOnly, parentCrop);
+            getLayerSnapshotsForScreenshots(parent->sequence, captureArgs.uid,
+                                            std::move(excludeLayerIds), args.childrenOnly,
+                                            parentCrop);
 
     if (captureListener == nullptr) {
         ALOGD("capture screen must provide a capture listener callback");
@@ -7209,14 +7220,15 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
     }
 
     ftl::Flags<RenderArea::Options> options;
-    if (args.captureSecureLayers) options |= RenderArea::Options::CAPTURE_SECURE_LAYERS;
-    if (args.hintForSeamlessTransition)
+    if (captureArgs.captureSecureLayers) options |= RenderArea::Options::CAPTURE_SECURE_LAYERS;
+    if (captureArgs.hintForSeamlessTransition)
         options |= RenderArea::Options::HINT_FOR_SEAMLESS_TRANSITION;
     captureScreenCommon(RenderAreaBuilderVariant(std::in_place_type<LayerRenderAreaBuilder>, crop,
                                                  reqSize, dataspace, parent, args.childrenOnly,
                                                  options),
-                        getLayerSnapshotsFn, reqSize, args.pixelFormat, args.allowProtected,
-                        args.grayscale, captureListener);
+                        getLayerSnapshotsFn, reqSize,
+                        static_cast<ui::PixelFormat>(captureArgs.pixelFormat),
+                        captureArgs.allowProtected, captureArgs.grayscale, captureListener);
 }
 
 // Creates a Future release fence for a layer and keeps track of it in a list to
