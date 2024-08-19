@@ -210,6 +210,8 @@ public:
         // within the timeout of DisplayPowerTimer.
         bool powerOnImminent = false;
 
+        bool shouldEmitEvent() const { return !idle; }
+
         bool operator==(GlobalSignals other) const {
             return touch == other.touch && idle == other.idle &&
                     powerOnImminent == other.powerOnImminent;
@@ -321,7 +323,10 @@ public:
     RefreshRateSelector(const RefreshRateSelector&) = delete;
     RefreshRateSelector& operator=(const RefreshRateSelector&) = delete;
 
-    const DisplayModes& displayModes() const { return mDisplayModes; }
+    DisplayModes displayModes() const {
+        std::lock_guard lock(mLock);
+        return mDisplayModes;
+    }
 
     // Returns whether switching modes (refresh rate or resolution) is possible.
     // TODO(b/158780872): Consider HAL support, and skip frame rate detection if the modes only
@@ -383,6 +388,7 @@ public:
 
         Callbacks platform;
         Callbacks kernel;
+        Callbacks vrr;
     };
 
     void setIdleTimerCallbacks(IdleTimerCallbacks callbacks) EXCLUDES(mIdleTimerCallbacksMutex) {
@@ -501,6 +507,9 @@ private:
     std::optional<IdleTimerCallbacks::Callbacks> getIdleTimerCallbacks() const
             REQUIRES(mIdleTimerCallbacksMutex) {
         if (!mIdleTimerCallbacks) return {};
+
+        if (mIsVrrDevice) return mIdleTimerCallbacks->vrr;
+
         return mConfig.kernelIdleTimerController.has_value() ? mIdleTimerCallbacks->kernel
                                                              : mIdleTimerCallbacks->platform;
     }
@@ -536,7 +545,7 @@ private:
     std::vector<FrameRateMode> mAppRequestFrameRates GUARDED_BY(mLock);
 
     // Caches whether the device is VRR-compatible based on the active display mode.
-    bool mIsVrrDevice GUARDED_BY(mLock) = false;
+    std::atomic_bool mIsVrrDevice = false;
 
     Policy mDisplayManagerPolicy GUARDED_BY(mLock);
     std::optional<Policy> mOverridePolicy GUARDED_BY(mLock);

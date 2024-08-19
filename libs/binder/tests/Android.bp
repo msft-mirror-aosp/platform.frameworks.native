@@ -42,6 +42,9 @@ cc_test {
     defaults: ["binder_test_defaults"],
     header_libs: ["libbinder_headers"],
     srcs: ["binderDriverInterfaceTest.cpp"],
+    shared_libs: [
+        "libbinder",
+    ],
     test_suites: [
         "device-tests",
         "vts",
@@ -127,6 +130,7 @@ cc_test {
         "libbase",
         "libbinder",
         "liblog",
+        "libprocessgroup",
         "libutils",
     ],
     static_libs: [
@@ -235,6 +239,16 @@ cc_defaults {
         "binder_test_defaults",
     ],
 
+    compile_multilib: "both",
+    multilib: {
+        lib32: {
+            suffix: "32",
+        },
+        lib64: {
+            suffix: "64",
+        },
+    },
+
     static_libs: [
         "libbinder_test_utils",
         "libbinder_tls_static",
@@ -336,7 +350,7 @@ cc_defaults {
     ],
 }
 
-cc_test {
+cc_binary {
     // The module name cannot start with "binderRpcTest" because
     // then atest tries to execute it as part of binderRpcTest
     name: "binder_rpc_test_service",
@@ -347,7 +361,7 @@ cc_test {
     ],
 }
 
-cc_test {
+cc_binary {
     name: "binder_rpc_test_service_no_kernel",
     defaults: [
         "binderRpcTest_service_defaults",
@@ -358,7 +372,7 @@ cc_test {
     ],
 }
 
-cc_test {
+cc_binary {
     name: "binder_rpc_test_service_single_threaded",
     defaults: [
         "binderRpcTest_service_defaults",
@@ -373,7 +387,7 @@ cc_test {
     ],
 }
 
-cc_test {
+cc_binary {
     name: "binder_rpc_test_service_single_threaded_no_kernel",
     defaults: [
         "binderRpcTest_service_defaults",

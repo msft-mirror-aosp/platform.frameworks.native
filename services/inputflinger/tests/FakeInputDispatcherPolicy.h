@@ -66,7 +66,6 @@ public:
     void assertFilterInputEventWasCalled(const NotifyKeyArgs& args);
     void assertFilterInputEventWasCalled(const NotifyMotionArgs& args, vec2 point);
     void assertFilterInputEventWasNotCalled();
-    void assertNotifyConfigurationChangedWasCalled(nsecs_t when);
     void assertNotifySwitchWasCalled(const NotifySwitchArgs& args);
     void assertOnPointerDownEquals(const sp<IBinder>& touchedToken);
     void assertOnPointerDownWasNotCalled();
@@ -116,15 +115,18 @@ public:
     void assertUnhandledKeyReported(int32_t keycode);
     void assertUnhandledKeyNotReported();
     void setConsumeKeyBeforeDispatching(bool consumeKeyBeforeDispatching);
+    void assertFocusedDisplayNotified(ui::LogicalDisplayId expectedDisplay);
 
 private:
     std::mutex mLock;
     std::unique_ptr<InputEvent> mFilteredEvent GUARDED_BY(mLock);
-    std::optional<nsecs_t> mConfigurationChangedTime GUARDED_BY(mLock);
     sp<IBinder> mOnPointerDownToken GUARDED_BY(mLock);
     std::optional<NotifySwitchArgs> mLastNotifySwitch GUARDED_BY(mLock);
 
     std::condition_variable mPointerCaptureChangedCondition;
+
+    std::optional<ui::LogicalDisplayId> mNotifiedFocusedDisplay GUARDED_BY(mLock);
+    std::condition_variable mFocusedDisplayNotifiedCondition;
 
     std::optional<PointerCaptureRequest> mPointerCaptureRequest GUARDED_BY(mLock);
     // ANR handling
@@ -169,7 +171,6 @@ private:
                                                            std::condition_variable& condition)
             REQUIRES(mLock);
 
-    void notifyConfigurationChanged(nsecs_t when) override;
     void notifyWindowUnresponsive(const sp<IBinder>& connectionToken, std::optional<gui::Pid> pid,
                                   const std::string&) override;
     void notifyWindowResponsive(const sp<IBinder>& connectionToken,
@@ -201,6 +202,7 @@ private:
     void notifyDropWindow(const sp<IBinder>& token, float x, float y) override;
     void notifyDeviceInteraction(int32_t deviceId, nsecs_t timestamp,
                                  const std::set<gui::Uid>& uids) override;
+    void notifyFocusedDisplayChanged(ui::LogicalDisplayId displayId) override;
 
     void assertFilterInputEventWasCalledInternal(
             const std::function<void(const InputEvent&)>& verify);
