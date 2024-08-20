@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <optional>
+#include <vector>
 
 #include <input/Input.h>
 #include <input/InputTransport.h>
@@ -71,7 +72,15 @@ private:
 
     struct Sample {
         std::chrono::nanoseconds eventTime;
-        Pointer pointer;
+        std::vector<Pointer> pointers;
+
+        std::vector<PointerCoords> asPointerCoords() const {
+            std::vector<PointerCoords> pointersCoords;
+            for (const Pointer& pointer : pointers) {
+                pointersCoords.push_back(pointer.coords);
+            }
+            return pointersCoords;
+        }
     };
 
     /**
@@ -88,11 +97,20 @@ private:
     RingBuffer<Sample> mLatestSamples{/*capacity=*/2};
 
     /**
-     * Adds up to mLatestSamples.capacity() of motionEvent's latest samples to mLatestSamples. (If
+     * Adds up to mLatestSamples.capacity() of motionEvent's latest samples to mLatestSamples. If
      * motionEvent has fewer samples than mLatestSamples.capacity(), then the available samples are
-     * added to mLatestSamples.)
+     * added to mLatestSamples.
      */
     void updateLatestSamples(const MotionEvent& motionEvent);
+
+    static Sample messageToSample(const InputMessage& message);
+
+    /**
+     * Checks if auxiliary sample has the same pointer properties of target sample. That is,
+     * auxiliary pointer IDs must appear in the same order as target pointer IDs, their toolType
+     * must match and be resampleable.
+     */
+    static bool pointerPropertiesResampleable(const Sample& target, const Sample& auxiliary);
 
     /**
      * Checks if there are necessary conditions to interpolate. For example, interpolation cannot
