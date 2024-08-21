@@ -43,7 +43,7 @@
 #include <ui/GraphicBuffer.h>
 #include <ui/Region.h>
 
-#include <gui/AidlStatusUtil.h>
+#include <gui/AidlUtil.h>
 #include <gui/BufferItem.h>
 
 #include <gui/ISurfaceComposer.h>
