@@ -251,7 +251,8 @@ TouchpadInputMapper::TouchpadInputMapper(InputDeviceContext& deviceContext,
     }
 
     mGestureInterpreter->Initialize(GESTURES_DEVCLASS_TOUCHPAD);
-    mGestureInterpreter->SetHardwareProperties(createHardwareProperties(deviceContext));
+    mHardwareProperties = createHardwareProperties(deviceContext);
+    mGestureInterpreter->SetHardwareProperties(mHardwareProperties);
     // Even though we don't explicitly delete copy/move semantics, it's safe to
     // give away pointers to TouchpadInputMapper and its members here because
     // 1) mGestureInterpreter's lifecycle is determined by TouchpadInputMapper, and
@@ -497,6 +498,10 @@ std::list<NotifyArgs> TouchpadInputMapper::processGestures(nsecs_t when, nsecs_t
 
 std::optional<ui::LogicalDisplayId> TouchpadInputMapper::getAssociatedDisplayId() {
     return mDisplayId;
+}
+
+std::optional<HardwareProperties> TouchpadInputMapper::getTouchpadHardwareProperties() {
+    return mHardwareProperties;
 }
 
 } // namespace android

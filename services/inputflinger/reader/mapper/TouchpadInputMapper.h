@@ -68,6 +68,8 @@ public:
 
     std::optional<ui::LogicalDisplayId> getAssociatedDisplayId() override;
 
+    std::optional<HardwareProperties> getTouchpadHardwareProperties() override;
+
 private:
     void resetGestureInterpreter(nsecs_t when);
     explicit TouchpadInputMapper(InputDeviceContext& deviceContext,
@@ -92,6 +94,7 @@ private:
     HardwareStateConverter mStateConverter;
     GestureConverter mGestureConverter;
     CapturedTouchpadEventConverter mCapturedEventConverter;
+    HardwareProperties mHardwareProperties;
 
     bool mPointerCaptured = false;
     bool mResettingInterpreter = false;
