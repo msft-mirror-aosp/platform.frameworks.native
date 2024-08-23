@@ -187,7 +187,7 @@ public:
         }
     }
 
-    void updatePhaseConfiguration(Fps);
+    void updatePhaseConfiguration(PhysicalDisplayId, Fps);
 
     const VsyncConfiguration& getVsyncConfiguration() const { return *mVsyncConfiguration; }
 
