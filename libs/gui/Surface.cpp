@@ -77,9 +77,28 @@ bool isInterceptorRegistrationOp(int op) {
 
 } // namespace
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+Surface::ProducerDeathListenerProxy::ProducerDeathListenerProxy(wp<SurfaceListener> surfaceListener)
+      : mSurfaceListener(surfaceListener) {}
+
+void Surface::ProducerDeathListenerProxy::binderDied(const wp<IBinder>&) {
+    sp<SurfaceListener> surfaceListener = mSurfaceListener.promote();
+    if (!surfaceListener) {
+        return;
+    }
+
+    if (surfaceListener->needsDeathNotify()) {
+        surfaceListener->onRemoteDied();
+    }
+}
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
 Surface::Surface(const sp<IGraphicBufferProducer>& bufferProducer, bool controlledByApp,
                  const sp<IBinder>& surfaceControlHandle)
       : mGraphicBufferProducer(bufferProducer),
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+        mSurfaceDeathListener(nullptr),
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
         mCrop(Rect::EMPTY_RECT),
         mBufferAge(0),
         mGenerationNumber(0),
@@ -134,6 +153,12 @@ Surface::~Surface() {
     if (mConnectedToCpu) {
         Surface::disconnect(NATIVE_WINDOW_API_CPU);
     }
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    if (mSurfaceDeathListener != nullptr) {
+        IInterface::asBinder(mGraphicBufferProducer)->unlinkToDeath(mSurfaceDeathListener);
+        mSurfaceDeathListener = nullptr;
+    }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 }
 
 sp<ISurfaceComposer> Surface::composerService() const {
@@ -2033,6 +2058,7 @@ int Surface::connect(int api, const sp<SurfaceListener>& listener, bool reportBu
     Mutex::Autolock lock(mMutex);
     IGraphicBufferProducer::QueueBufferOutput output;
     mReportRemovedBuffers = reportBufferRemoval;
+
     if (listener != nullptr) {
         mListenerProxy = new ProducerListenerProxy(this, listener);
     }
@@ -2053,6 +2079,13 @@ int Surface::connect(int api, const sp<SurfaceListener>& listener, bool reportBu
         }
 
         mConsumerRunningBehind = (output.numPendingBuffers >= 2);
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+        if (listener && listener->needsDeathNotify()) {
+            mSurfaceDeathListener = sp<ProducerDeathListenerProxy>::make(listener);
+            IInterface::asBinder(mGraphicBufferProducer)->linkToDeath(mSurfaceDeathListener);
+        }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
     }
     if (!err && api == NATIVE_WINDOW_API_CPU) {
         mConnectedToCpu = true;
@@ -2093,6 +2126,14 @@ int Surface::disconnect(int api, IGraphicBufferProducer::DisconnectMode mode) {
             mConnectedToCpu = false;
         }
     }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    if (mSurfaceDeathListener != nullptr) {
+        IInterface::asBinder(mGraphicBufferProducer)->unlinkToDeath(mSurfaceDeathListener);
+        mSurfaceDeathListener = nullptr;
+    }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
     return err;
 }
 
