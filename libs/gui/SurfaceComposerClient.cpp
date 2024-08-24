@@ -43,7 +43,7 @@
 
 #include <system/graphics.h>
 
-#include <gui/AidlStatusUtil.h>
+#include <gui/AidlUtil.h>
 #include <gui/BufferItemConsumer.h>
 #include <gui/CpuConsumer.h>
 #include <gui/IGraphicBufferProducer.h>
