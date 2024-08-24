@@ -50,7 +50,10 @@
 #include <utils/Errors.h>
 #include <utils/String8.h>
 
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <future>
 #include <limits>
 #include <thread>
 
@@ -106,6 +109,18 @@ private:
     bool mEnableReleaseCb;
     int32_t mBuffersReleased;
     std::vector<sp<GraphicBuffer>> mDiscardedBuffers;
+};
+
+class DeathWatcherListener : public StubSurfaceListener {
+public:
+    virtual void onRemoteDied() { mDiedPromise.set_value(true); }
+
+    virtual bool needsDeathNotify() { return true; }
+
+    std::future<bool> getDiedFuture() { return mDiedPromise.get_future(); }
+
+private:
+    std::promise<bool> mDiedPromise;
 };
 
 class SurfaceTest : public ::testing::Test {
@@ -2373,6 +2388,39 @@ TEST_F(SurfaceTest, ViewSurface_toString) {
 
     surface.name = String16("name");
     EXPECT_EQ("name", surface.toString());
+}
+
+TEST_F(SurfaceTest, TestRemoteSurfaceDied_CallbackCalled) {
+    sp<TestServerClient> testServer = TestServerClient::Create();
+    sp<IGraphicBufferProducer> producer = testServer->CreateProducer();
+    EXPECT_NE(nullptr, producer);
+
+    sp<Surface> surface = sp<Surface>::make(producer);
+    sp<DeathWatcherListener> deathWatcher = sp<DeathWatcherListener>::make();
+    EXPECT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, deathWatcher));
+
+    auto diedFuture = deathWatcher->getDiedFuture();
+    EXPECT_EQ(OK, testServer->Kill());
+
+    diedFuture.wait();
+    EXPECT_TRUE(diedFuture.get());
+}
+
+TEST_F(SurfaceTest, TestRemoteSurfaceDied_Disconnect_CallbackNotCalled) {
+    sp<TestServerClient> testServer = TestServerClient::Create();
+    sp<IGraphicBufferProducer> producer = testServer->CreateProducer();
+    EXPECT_NE(nullptr, producer);
+
+    sp<Surface> surface = sp<Surface>::make(producer);
+    sp<DeathWatcherListener> deathWatcher = sp<DeathWatcherListener>::make();
+    EXPECT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, deathWatcher));
+    EXPECT_EQ(OK, surface->disconnect(NATIVE_WINDOW_API_CPU));
+
+    auto watcherDiedFuture = deathWatcher->getDiedFuture();
+    EXPECT_EQ(OK, testServer->Kill());
+
+    std::future_status status = watcherDiedFuture.wait_for(std::chrono::seconds(1));
+    EXPECT_EQ(std::future_status::timeout, status);
 }
 #endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
