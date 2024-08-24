@@ -66,6 +66,16 @@ public:
     virtual void onBufferAttached() {}
     virtual bool needsAttachNotify() { return false; }
 #endif
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    // Called if this Surface is connected to a remote implementation and it
+    // dies or becomes unavailable.
+    virtual void onRemoteDied() {}
+
+    // Clients will overwrite this if they want to receive a notification
+    // via onRemoteDied. This should return a constant value.
+    virtual bool needsDeathNotify() { return false; }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 };
 
 class StubSurfaceListener : public SurfaceListener {
@@ -471,6 +481,21 @@ protected:
         sp<SurfaceListener> mSurfaceListener;
     };
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    class ProducerDeathListenerProxy : public IBinder::DeathRecipient {
+    public:
+        ProducerDeathListenerProxy(wp<SurfaceListener> surfaceListener);
+        ProducerDeathListenerProxy(ProducerDeathListenerProxy&) = delete;
+
+        // IBinder::DeathRecipient
+        virtual void binderDied(const wp<IBinder>&) override;
+
+    private:
+        wp<SurfaceListener> mSurfaceListener;
+    };
+    friend class ProducerDeathListenerProxy;
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
     void querySupportedTimestampsLocked() const;
 
     void freeAllBuffers();
@@ -501,6 +526,13 @@ protected:
     // interactions with the server using this interface.
     // TODO: rename to mBufferProducer
     sp<IGraphicBufferProducer> mGraphicBufferProducer;
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    // mSurfaceDeathListener gets registered as mGraphicBufferProducer's
+    // DeathRecipient when SurfaceListener::needsDeathNotify returns true and
+    // gets notified when it dies.
+    sp<ProducerDeathListenerProxy> mSurfaceDeathListener;
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
     // mSlots stores the buffers that have been allocated for each buffer slot.
     // It is initialized to null pointers, and gets filled in with the result of
