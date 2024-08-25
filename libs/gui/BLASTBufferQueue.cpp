@@ -356,8 +356,9 @@ static void transactionCallbackThunk(void* context, nsecs_t latchTime,
     if (context == nullptr) {
         return;
     }
-    sp<BLASTBufferQueue> bq = static_cast<BLASTBufferQueue*>(context);
+    auto bq = static_cast<BLASTBufferQueue*>(context);
     bq->transactionCallback(latchTime, presentFence, stats);
+    bq->decStrong((void*)transactionCallbackThunk);
 }
 
 void BLASTBufferQueue::transactionCallback(nsecs_t /*latchTime*/, const sp<Fence>& /*presentFence*/,
@@ -413,8 +414,6 @@ void BLASTBufferQueue::transactionCallback(nsecs_t /*latchTime*/, const sp<Fence
             BQA_LOGE("No matching SurfaceControls found: mSurfaceControlsWithPendingCallback was "
                      "empty.");
         }
-
-        decStrong((void*)transactionCallbackThunk);
     }
 }
 
