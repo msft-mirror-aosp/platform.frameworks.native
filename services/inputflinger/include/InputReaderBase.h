@@ -34,7 +34,9 @@
 #include <vector>
 
 #include "PointerControllerInterface.h"
+#include "TouchpadHardwareState.h"
 #include "VibrationElement.h"
+#include "include/gestures.h"
 
 // Maximum supported size of a vibration pattern.
 // Must be at least 2.
@@ -367,6 +369,8 @@ public:
 
     virtual std::vector<InputDeviceSensorInfo> getSensors(int32_t deviceId) = 0;
 
+    virtual std::optional<HardwareProperties> getTouchpadHardwareProperties(int32_t deviceId) = 0;
+
     /* Return true if the device can send input events to the specified display. */
     virtual bool canDispatchToDisplay(int32_t deviceId, ui::LogicalDisplayId displayId) = 0;
 
@@ -457,6 +461,10 @@ public:
      * and provides information about all current input devices.
      */
     virtual void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>& inputDevices) = 0;
+
+    /* Sends the hardware state of a connected touchpad */
+    virtual void notifyTouchpadHardwareState(const SelfContainedHardwareState& schs,
+                                             int32_t deviceId) = 0;
 
     /* Gets the keyboard layout for a particular input device. */
     virtual std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(

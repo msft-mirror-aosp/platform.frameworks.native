@@ -36,6 +36,7 @@
 #include <log/log_main.h>
 #include <stats_pull_atom_callback.h>
 #include <statslog.h>
+#include "InputReaderBase.h"
 #include "TouchCursorInputMapperCommon.h"
 #include "TouchpadInputMapper.h"
 #include "gestures/HardwareProperties.h"
@@ -251,7 +252,8 @@ TouchpadInputMapper::TouchpadInputMapper(InputDeviceContext& deviceContext,
     }
 
     mGestureInterpreter->Initialize(GESTURES_DEVCLASS_TOUCHPAD);
-    mGestureInterpreter->SetHardwareProperties(createHardwareProperties(deviceContext));
+    mHardwareProperties = createHardwareProperties(deviceContext);
+    mGestureInterpreter->SetHardwareProperties(mHardwareProperties);
     // Even though we don't explicitly delete copy/move semantics, it's safe to
     // give away pointers to TouchpadInputMapper and its members here because
     // 1) mGestureInterpreter's lifecycle is determined by TouchpadInputMapper, and
@@ -423,10 +425,8 @@ std::list<NotifyArgs> TouchpadInputMapper::process(const RawEvent& rawEvent) {
     std::optional<SelfContainedHardwareState> state = mStateConverter.processRawEvent(rawEvent);
     if (state) {
         if (mTouchpadHardwareStateNotificationsEnabled) {
-            // TODO(b/286551975): Notify policy of the touchpad hardware state.
-            LOG(DEBUG) << "Notify touchpad hardware state here!";
+            getPolicy()->notifyTouchpadHardwareState(*state, rawEvent.deviceId);
         }
-
         updatePalmDetectionMetrics();
         return sendHardwareState(rawEvent.when, rawEvent.readTime, *state);
     } else {
@@ -497,6 +497,10 @@ std::list<NotifyArgs> TouchpadInputMapper::processGestures(nsecs_t when, nsecs_t
 
 std::optional<ui::LogicalDisplayId> TouchpadInputMapper::getAssociatedDisplayId() {
     return mDisplayId;
+}
+
+std::optional<HardwareProperties> TouchpadInputMapper::getTouchpadHardwareProperties() {
+    return mHardwareProperties;
 }
 
 } // namespace android
