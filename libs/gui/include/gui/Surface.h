@@ -87,6 +87,15 @@ public:
     virtual void onBufferDetached(int /*slot*/) override {}
 };
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+// Contains additional data from the queueBuffer operation.
+struct SurfaceQueueBufferOutput {
+    // True if this queueBuffer caused a buffer to be replaced in the queue
+    // (and therefore not will not be acquired)
+    bool bufferReplaced = false;
+};
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
 /*
  * An implementation of ANativeWindow that feeds graphics buffers into a
  * BufferQueue.
@@ -363,7 +372,12 @@ private:
 protected:
     virtual int dequeueBuffer(ANativeWindowBuffer** buffer, int* fenceFd);
     virtual int cancelBuffer(ANativeWindowBuffer* buffer, int fenceFd);
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    virtual int queueBuffer(ANativeWindowBuffer* buffer, int fenceFd,
+                            SurfaceQueueBufferOutput* surfaceOutput = nullptr);
+#else
     virtual int queueBuffer(ANativeWindowBuffer* buffer, int fenceFd);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
     virtual int perform(int operation, va_list args);
     virtual int setSwapInterval(int interval);
 
@@ -422,7 +436,8 @@ public:
     // Queues a buffer, with an optional fd fence that captures pending work on the buffer. This
     // buffer must have been returned by dequeueBuffer or associated with this Surface via an
     // attachBuffer operation.
-    status_t queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd = Fence::NO_FENCE);
+    status_t queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd = Fence::NO_FENCE,
+                         SurfaceQueueBufferOutput* output = nullptr);
 
     // Detaches this buffer, dissociating it from this Surface. This buffer must have been returned
     // by queueBuffer or associated with this Surface via an attachBuffer operation.
@@ -443,8 +458,13 @@ public:
         int fenceFd = -1;
         nsecs_t timestamp = NATIVE_WINDOW_TIMESTAMP_AUTO;
     };
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    virtual int queueBuffers(const std::vector<BatchQueuedBuffer>& buffers,
+                             std::vector<SurfaceQueueBufferOutput>* queueBufferOutputs = nullptr);
+#else
     virtual int queueBuffers(
             const std::vector<BatchQueuedBuffer>& buffers);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 protected:
     enum { NUM_BUFFER_SLOTS = BufferQueueDefs::NUM_BUFFER_SLOTS };
