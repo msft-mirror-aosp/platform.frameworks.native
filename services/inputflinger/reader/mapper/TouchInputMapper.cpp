@@ -984,8 +984,9 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
         viewportChanged = mViewport != newViewport;
     }
 
+    const bool deviceModeChanged = mDeviceMode != oldDeviceMode;
     bool skipViewportUpdate = false;
-    if (viewportChanged) {
+    if (viewportChanged || deviceModeChanged) {
         const bool viewportOrientationChanged = mViewport.orientation != newViewport.orientation;
         const bool viewportDisplayIdChanged = mViewport.displayId != newViewport.displayId;
         mViewport = newViewport;
@@ -1027,7 +1028,6 @@ void TouchInputMapper::configureInputDevice(nsecs_t when, bool* outResetNeeded) 
     }
 
     // If moving between pointer modes, need to reset some state.
-    bool deviceModeChanged = mDeviceMode != oldDeviceMode;
     if (deviceModeChanged) {
         mOrientedRanges.clear();
     }
