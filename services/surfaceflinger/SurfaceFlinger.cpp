@@ -6882,7 +6882,8 @@ static status_t validateScreenshotPermissions(const CaptureArgs& captureArgs) {
     IPCThreadState* ipc = IPCThreadState::self();
     const int pid = ipc->getCallingPid();
     const int uid = ipc->getCallingUid();
-    if (uid == AID_GRAPHICS || PermissionCache::checkPermission(sReadFramebuffer, pid, uid)) {
+    if (uid == AID_GRAPHICS || uid == AID_SYSTEM ||
+        PermissionCache::checkPermission(sReadFramebuffer, pid, uid)) {
         return OK;
     }
 
