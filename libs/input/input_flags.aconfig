@@ -164,3 +164,10 @@ flag {
   description: "Show touch and pointer indicators when mirroring a single task"
   bug: "310179437"
 }
+
+flag {
+  name: "include_relative_axis_values_for_captured_touchpads"
+  namespace: "input"
+  description: "Include AXIS_RELATIVE_X and AXIS_RELATIVE_Y values when reporting touches from captured touchpads."
+  bug: "330522990"
+}
