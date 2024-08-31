@@ -741,11 +741,12 @@ status_t Surface::dequeueBuffer(sp<GraphicBuffer>* buffer, sp<Fence>* outFence) 
     return res;
 }
 
-status_t Surface::queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd) {
+status_t Surface::queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd,
+                              SurfaceQueueBufferOutput* output) {
     if (buffer == nullptr) {
         return BAD_VALUE;
     }
-    return queueBuffer(buffer.get(), fd ? fd->get() : -1);
+    return queueBuffer(buffer.get(), fd ? fd->get() : -1, output);
 }
 
 status_t Surface::detachBuffer(const sp<GraphicBuffer>& buffer) {
@@ -1195,7 +1196,8 @@ void Surface::onBufferQueuedLocked(int slot, sp<Fence> fence,
 
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
-int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
+int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd,
+                         SurfaceQueueBufferOutput* surfaceOutput) {
     ATRACE_CALL();
     ALOGV("Surface::queueBuffer");
 
@@ -1245,16 +1247,26 @@ int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
         onBufferQueuedLocked(slot, fence, output);
     }
 
+    if (surfaceOutput != nullptr) {
+        *surfaceOutput = {.bufferReplaced = output.bufferReplaced};
+    }
+
     return err;
 }
 
-int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers) {
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers,
+                          std::vector<SurfaceQueueBufferOutput>* queueBufferOutputs)
+#else
+int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers)
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+{
     ATRACE_CALL();
     ALOGV("Surface::queueBuffers");
 
     size_t numBuffers = buffers.size();
-    std::vector<IGraphicBufferProducer::QueueBufferInput> queueBufferInputs(numBuffers);
-    std::vector<IGraphicBufferProducer::QueueBufferOutput> queueBufferOutputs;
+    std::vector<IGraphicBufferProducer::QueueBufferInput> igbpQueueBufferInputs(numBuffers);
+    std::vector<IGraphicBufferProducer::QueueBufferOutput> igbpQueueBufferOutputs;
     std::vector<int> bufferSlots(numBuffers, -1);
     std::vector<sp<Fence>> bufferFences(numBuffers);
 
@@ -1280,12 +1292,13 @@ int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers) {
             IGraphicBufferProducer::QueueBufferInput input;
             getQueueBufferInputLocked(buffers[batchIdx].buffer, buffers[batchIdx].fenceFd,
                                       buffers[batchIdx].timestamp, &input);
+            input.slot = i;
             bufferFences[batchIdx] = input.fence;
-            queueBufferInputs[batchIdx] = input;
+            igbpQueueBufferInputs[batchIdx] = input;
         }
     }
     nsecs_t now = systemTime();
-    err = mGraphicBufferProducer->queueBuffers(queueBufferInputs, &queueBufferOutputs);
+    err = mGraphicBufferProducer->queueBuffers(igbpQueueBufferInputs, &igbpQueueBufferOutputs);
     {
         Mutex::Autolock lock(mMutex);
         mLastQueueDuration = systemTime() - now;
@@ -1295,9 +1308,20 @@ int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers) {
 
         for (size_t batchIdx = 0; batchIdx < numBuffers; batchIdx++) {
             onBufferQueuedLocked(bufferSlots[batchIdx], bufferFences[batchIdx],
-                                 queueBufferOutputs[batchIdx]);
+                                 igbpQueueBufferOutputs[batchIdx]);
         }
     }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    if (queueBufferOutputs != nullptr) {
+        queueBufferOutputs->clear();
+        queueBufferOutputs->resize(numBuffers);
+        for (size_t batchIdx = 0; batchIdx < numBuffers; batchIdx++) {
+            (*queueBufferOutputs)[batchIdx].bufferReplaced =
+                    igbpQueueBufferOutputs[batchIdx].bufferReplaced;
+        }
+    }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
     return err;
 }
