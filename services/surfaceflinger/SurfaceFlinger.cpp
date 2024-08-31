@@ -5063,6 +5063,10 @@ uint32_t SurfaceFlinger::updateLayerCallbacksAndStats(const FrameTimelineInfo& f
         }
     }
 
+    if (what & layer_state_t::eBufferReleaseChannelChanged) {
+        layer->setBufferReleaseChannel(s.bufferReleaseChannel);
+    }
+
     const auto& requestedLayerState = mLayerLifecycleManager.getLayerFromId(layer->getSequence());
     bool willPresentCurrentTransaction = requestedLayerState &&
             (requestedLayerState->hasReadyFrame() ||
