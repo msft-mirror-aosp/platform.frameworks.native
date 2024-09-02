@@ -35,6 +35,9 @@ use input::ModifierState;
 use log::{error, info};
 use std::sync::{Arc, Mutex, RwLock};
 
+/// Virtual keyboard device ID
+pub const VIRTUAL_KEYBOARD_DEVICE_ID: i32 = -1;
+
 /// Interface for all the sub input filters
 pub trait Filter {
     fn notify_key(&mut self, event: &KeyEvent);
@@ -214,6 +217,7 @@ mod tests {
         InputFilterConfiguration::InputFilterConfiguration, KeyEvent::KeyEvent,
         KeyEventAction::KeyEventAction,
     };
+    use input::KeyboardType;
     use std::sync::{Arc, RwLock};
 
     #[test]
@@ -256,7 +260,11 @@ mod tests {
             Arc::new(RwLock::new(Strong::new(Box::new(test_callbacks)))),
         );
         assert!(input_filter
-            .notifyInputDevicesChanged(&[DeviceInfo { deviceId: 0, external: true }])
+            .notifyInputDevicesChanged(&[DeviceInfo {
+                deviceId: 0,
+                external: true,
+                keyboardType: KeyboardType::None as i32
+            }])
             .is_ok());
         assert!(test_filter.is_device_changed_called());
     }
