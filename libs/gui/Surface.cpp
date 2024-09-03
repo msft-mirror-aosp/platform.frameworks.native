@@ -43,7 +43,7 @@
 #include <ui/GraphicBuffer.h>
 #include <ui/Region.h>
 
-#include <gui/AidlStatusUtil.h>
+#include <gui/AidlUtil.h>
 #include <gui/BufferItem.h>
 
 #include <gui/ISurfaceComposer.h>
@@ -77,9 +77,28 @@ bool isInterceptorRegistrationOp(int op) {
 
 } // namespace
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+Surface::ProducerDeathListenerProxy::ProducerDeathListenerProxy(wp<SurfaceListener> surfaceListener)
+      : mSurfaceListener(surfaceListener) {}
+
+void Surface::ProducerDeathListenerProxy::binderDied(const wp<IBinder>&) {
+    sp<SurfaceListener> surfaceListener = mSurfaceListener.promote();
+    if (!surfaceListener) {
+        return;
+    }
+
+    if (surfaceListener->needsDeathNotify()) {
+        surfaceListener->onRemoteDied();
+    }
+}
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
 Surface::Surface(const sp<IGraphicBufferProducer>& bufferProducer, bool controlledByApp,
                  const sp<IBinder>& surfaceControlHandle)
       : mGraphicBufferProducer(bufferProducer),
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+        mSurfaceDeathListener(nullptr),
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
         mCrop(Rect::EMPTY_RECT),
         mBufferAge(0),
         mGenerationNumber(0),
@@ -134,6 +153,12 @@ Surface::~Surface() {
     if (mConnectedToCpu) {
         Surface::disconnect(NATIVE_WINDOW_API_CPU);
     }
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    if (mSurfaceDeathListener != nullptr) {
+        IInterface::asBinder(mGraphicBufferProducer)->unlinkToDeath(mSurfaceDeathListener);
+        mSurfaceDeathListener = nullptr;
+    }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 }
 
 sp<ISurfaceComposer> Surface::composerService() const {
@@ -716,11 +741,12 @@ status_t Surface::dequeueBuffer(sp<GraphicBuffer>* buffer, sp<Fence>* outFence) 
     return res;
 }
 
-status_t Surface::queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd) {
+status_t Surface::queueBuffer(const sp<GraphicBuffer>& buffer, const sp<Fence>& fd,
+                              SurfaceQueueBufferOutput* output) {
     if (buffer == nullptr) {
         return BAD_VALUE;
     }
-    return queueBuffer(buffer.get(), fd ? fd->get() : -1);
+    return queueBuffer(buffer.get(), fd ? fd->get() : -1, output);
 }
 
 status_t Surface::detachBuffer(const sp<GraphicBuffer>& buffer) {
@@ -1168,6 +1194,140 @@ void Surface::onBufferQueuedLocked(int slot, sp<Fence> fence,
     }
 }
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
+int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd,
+                         SurfaceQueueBufferOutput* surfaceOutput) {
+    ATRACE_CALL();
+    ALOGV("Surface::queueBuffer");
+
+    IGraphicBufferProducer::QueueBufferOutput output;
+    IGraphicBufferProducer::QueueBufferInput input;
+    int slot;
+    sp<Fence> fence;
+    {
+        Mutex::Autolock lock(mMutex);
+
+        slot = getSlotFromBufferLocked(buffer);
+        if (slot < 0) {
+            if (fenceFd >= 0) {
+                close(fenceFd);
+            }
+            return slot;
+        }
+        if (mSharedBufferSlot == slot && mSharedBufferHasBeenQueued) {
+            if (fenceFd >= 0) {
+                close(fenceFd);
+            }
+            return OK;
+        }
+
+        getQueueBufferInputLocked(buffer, fenceFd, mTimestamp, &input);
+        applyGrallocMetadataLocked(buffer, input);
+        fence = input.fence;
+    }
+    nsecs_t now = systemTime();
+    // Drop the lock temporarily while we touch the underlying producer. In the case of a local
+    // BufferQueue, the following should be allowable:
+    //
+    //    Surface::queueBuffer
+    // -> IConsumerListener::onFrameAvailable callback triggers automatically
+    // ->   implementation calls IGraphicBufferConsumer::acquire/release immediately
+    // -> SurfaceListener::onBufferRelesed callback triggers automatically
+    // ->   implementation calls Surface::dequeueBuffer
+    status_t err = mGraphicBufferProducer->queueBuffer(slot, input, &output);
+    {
+        Mutex::Autolock lock(mMutex);
+
+        mLastQueueDuration = systemTime() - now;
+        if (err != OK) {
+            ALOGE("queueBuffer: error queuing buffer, %d", err);
+        }
+
+        onBufferQueuedLocked(slot, fence, output);
+    }
+
+    if (surfaceOutput != nullptr) {
+        *surfaceOutput = {.bufferReplaced = output.bufferReplaced};
+    }
+
+    return err;
+}
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers,
+                          std::vector<SurfaceQueueBufferOutput>* queueBufferOutputs)
+#else
+int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers)
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+{
+    ATRACE_CALL();
+    ALOGV("Surface::queueBuffers");
+
+    size_t numBuffers = buffers.size();
+    std::vector<IGraphicBufferProducer::QueueBufferInput> igbpQueueBufferInputs(numBuffers);
+    std::vector<IGraphicBufferProducer::QueueBufferOutput> igbpQueueBufferOutputs;
+    std::vector<int> bufferSlots(numBuffers, -1);
+    std::vector<sp<Fence>> bufferFences(numBuffers);
+
+    int err;
+    {
+        Mutex::Autolock lock(mMutex);
+
+        if (mSharedBufferMode) {
+            ALOGE("%s: batched operation is not supported in shared buffer mode", __FUNCTION__);
+            return INVALID_OPERATION;
+        }
+
+        for (size_t batchIdx = 0; batchIdx < numBuffers; batchIdx++) {
+            int i = getSlotFromBufferLocked(buffers[batchIdx].buffer);
+            if (i < 0) {
+                if (buffers[batchIdx].fenceFd >= 0) {
+                    close(buffers[batchIdx].fenceFd);
+                }
+                return i;
+            }
+            bufferSlots[batchIdx] = i;
+
+            IGraphicBufferProducer::QueueBufferInput input;
+            getQueueBufferInputLocked(buffers[batchIdx].buffer, buffers[batchIdx].fenceFd,
+                                      buffers[batchIdx].timestamp, &input);
+            input.slot = i;
+            bufferFences[batchIdx] = input.fence;
+            igbpQueueBufferInputs[batchIdx] = input;
+        }
+    }
+    nsecs_t now = systemTime();
+    err = mGraphicBufferProducer->queueBuffers(igbpQueueBufferInputs, &igbpQueueBufferOutputs);
+    {
+        Mutex::Autolock lock(mMutex);
+        mLastQueueDuration = systemTime() - now;
+        if (err != OK) {
+            ALOGE("%s: error queuing buffer, %d", __FUNCTION__, err);
+        }
+
+        for (size_t batchIdx = 0; batchIdx < numBuffers; batchIdx++) {
+            onBufferQueuedLocked(bufferSlots[batchIdx], bufferFences[batchIdx],
+                                 igbpQueueBufferOutputs[batchIdx]);
+        }
+    }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    if (queueBufferOutputs != nullptr) {
+        queueBufferOutputs->clear();
+        queueBufferOutputs->resize(numBuffers);
+        for (size_t batchIdx = 0; batchIdx < numBuffers; batchIdx++) {
+            (*queueBufferOutputs)[batchIdx].bufferReplaced =
+                    igbpQueueBufferOutputs[batchIdx].bufferReplaced;
+        }
+    }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
+    return err;
+}
+
+#else
+
 int Surface::queueBuffer(android_native_buffer_t* buffer, int fenceFd) {
     ATRACE_CALL();
     ALOGV("Surface::queueBuffer");
@@ -1254,6 +1414,8 @@ int Surface::queueBuffers(const std::vector<BatchQueuedBuffer>& buffers) {
 
     return err;
 }
+
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 void Surface::querySupportedTimestampsLocked() const {
     // mMutex must be locked when calling this method.
@@ -1914,21 +2076,13 @@ int Surface::connect(int api) {
     return connect(api, listener);
 }
 
-int Surface::connect(int api, const sp<SurfaceListener>& listener) {
-    return connect(api, listener, false);
-}
-
-int Surface::connect(
-        int api, bool reportBufferRemoval, const sp<SurfaceListener>& sListener) {
-    return connect(api, sListener, reportBufferRemoval);
-}
-
 int Surface::connect(int api, const sp<SurfaceListener>& listener, bool reportBufferRemoval) {
     ATRACE_CALL();
     ALOGV("Surface::connect");
     Mutex::Autolock lock(mMutex);
     IGraphicBufferProducer::QueueBufferOutput output;
     mReportRemovedBuffers = reportBufferRemoval;
+
     if (listener != nullptr) {
         mListenerProxy = new ProducerListenerProxy(this, listener);
     }
@@ -1949,6 +2103,13 @@ int Surface::connect(int api, const sp<SurfaceListener>& listener, bool reportBu
         }
 
         mConsumerRunningBehind = (output.numPendingBuffers >= 2);
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+        if (listener && listener->needsDeathNotify()) {
+            mSurfaceDeathListener = sp<ProducerDeathListenerProxy>::make(listener);
+            IInterface::asBinder(mGraphicBufferProducer)->linkToDeath(mSurfaceDeathListener);
+        }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
     }
     if (!err && api == NATIVE_WINDOW_API_CPU) {
         mConnectedToCpu = true;
@@ -1989,6 +2150,14 @@ int Surface::disconnect(int api, IGraphicBufferProducer::DisconnectMode mode) {
             mConnectedToCpu = false;
         }
     }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+    if (mSurfaceDeathListener != nullptr) {
+        IInterface::asBinder(mGraphicBufferProducer)->unlinkToDeath(mSurfaceDeathListener);
+        mSurfaceDeathListener = nullptr;
+    }
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
+
     return err;
 }
 

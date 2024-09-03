@@ -292,15 +292,10 @@ public:
     void onLayerDestroyed(Layer*);
     void onLayerUpdate();
 
-    void removeHierarchyFromOffscreenLayers(Layer* layer);
-    void removeFromOffscreenLayers(Layer* layer);
-
     // Called when all clients have released all their references to
     // this layer. The layer may still be kept alive by its parents but
     // the client can no longer modify this layer directly.
     void onHandleDestroyed(BBinder* handle, sp<Layer>& layer, uint32_t layerId);
-
-    std::vector<Layer*> mLayerMirrorRoots;
 
     TransactionCallbackInvoker& getTransactionCallbackInvoker() {
         return mTransactionCallbackInvoker;
@@ -392,11 +387,10 @@ private:
 
     class State {
     public:
-        explicit State(LayerVector::StateSet set) : stateSet(set), layersSortedByZ(set) {}
+        explicit State(LayerVector::StateSet set) : stateSet(set) {}
         State& operator=(const State& other) {
             // We explicitly don't copy stateSet so that, e.g., mDrawingState
             // always uses the Drawing StateSet.
-            layersSortedByZ = other.layersSortedByZ;
             displays = other.displays;
             colorMatrixChanged = other.colorMatrixChanged;
             if (colorMatrixChanged) {
@@ -408,7 +402,6 @@ private:
         }
 
         const LayerVector::StateSet stateSet = LayerVector::StateSet::Invalid;
-        LayerVector layersSortedByZ;
 
         // TODO(b/241285876): Replace deprecated DefaultKeyedVector with ftl::SmallMap.
         DefaultKeyedVector<wp<IBinder>, DisplayDeviceState> displays;
@@ -428,10 +421,6 @@ private:
         mat4 colorMatrix;
 
         ShadowSettings globalShadowSettings;
-
-        void traverse(const LayerVector::Visitor& visitor) const;
-        void traverseInZOrder(const LayerVector::Visitor& visitor) const;
-        void traverseInReverseZOrder(const LayerVector::Visitor& visitor) const;
     };
 
     // Keeps track of pending buffers per layer handle in the transaction queue or current/drawing
@@ -697,7 +686,6 @@ private:
     void requestHardwareVsync(PhysicalDisplayId, bool) override;
     void requestDisplayModes(std::vector<display::DisplayModeRequest>) override;
     void kernelTimerChanged(bool expired) override;
-    void triggerOnFrameRateOverridesChanged() override;
     void onChoreographerAttached() override;
     void onExpectedPresentTimePosted(TimePoint expectedPresentTime, ftl::NonNull<DisplayModePtr>,
                                      Fps renderRate) override;
@@ -708,22 +696,13 @@ private:
     // ICEPowerCallback overrides:
     void notifyCpuLoadUp() override;
 
-    // Toggles the kernel idle timer on or off depending the policy decisions around refresh rates.
-    void toggleKernelIdleTimer() REQUIRES(mStateLock);
-
     using KernelIdleTimerController = scheduler::RefreshRateSelector::KernelIdleTimerController;
 
     // Get the controller and timeout that will help decide how the kernel idle timer will be
     // configured and what value to use as the timeout.
     std::pair<std::optional<KernelIdleTimerController>, std::chrono::milliseconds>
             getKernelIdleTimerProperties(PhysicalDisplayId) REQUIRES(mStateLock);
-    // Updates the kernel idle timer either through HWC or through sysprop
-    // depending on which controller is provided
-    void updateKernelIdleTimer(std::chrono::milliseconds timeoutMs, KernelIdleTimerController,
-                               PhysicalDisplayId) REQUIRES(mStateLock);
-    // Keeps track of whether the kernel idle timer is currently enabled, so we don't have to
-    // make calls to sys prop each time.
-    bool mKernelIdleTimerEnabled = false;
+
     // Show spinner with refresh rate overlay
     bool mRefreshRateOverlaySpinner = false;
     // Show render rate with refresh rate overlay
@@ -768,7 +747,6 @@ private:
             REQUIRES(mStateLock, kMainThreadContext);
     void doCommitTransactions() REQUIRES(mStateLock);
 
-    void updateLayerMetadataSnapshot();
     std::vector<std::pair<Layer*, LayerFE*>> moveSnapshotsToCompositionArgs(
             compositionengine::CompositionRefreshArgs& refreshArgs, bool cursorOnly)
             REQUIRES(kMainThreadContext);
@@ -835,8 +813,6 @@ private:
     // Clears and returns the masked bits.
     uint32_t clearTransactionFlags(uint32_t mask);
 
-    void commitOffscreenLayers();
-
     static LatchUnsignaledConfig getLatchUnsignaledConfig();
     bool shouldLatchUnsignaled(const layer_state_t&, size_t numStates, bool firstTransaction) const;
     bool applyTransactionsLocked(std::vector<TransactionState>& transactions, VsyncId)
@@ -862,8 +838,6 @@ private:
 
     status_t mirrorDisplay(DisplayId displayId, const LayerCreationArgs& args,
                            gui::CreateSurfaceResult& outResult);
-
-    void markLayerPendingRemovalLocked(const sp<Layer>& layer) REQUIRES(mStateLock);
 
     // add a layer to SurfaceFlinger
     status_t addClientLayer(LayerCreationArgs& args, const sp<IBinder>& handle,
@@ -964,18 +938,12 @@ private:
         return nullptr;
     }
 
-    // Returns the primary display or (for foldables) the active display, assuming that the inner
-    // and outer displays have mutually exclusive power states.
+    // Returns the primary display or (for foldables) the active display.
     sp<const DisplayDevice> getDefaultDisplayDeviceLocked() const REQUIRES(mStateLock) {
         return const_cast<SurfaceFlinger*>(this)->getDefaultDisplayDeviceLocked();
     }
 
     sp<DisplayDevice> getDefaultDisplayDeviceLocked() REQUIRES(mStateLock) {
-        if (const auto display = getDisplayDeviceLocked(mActiveDisplayId)) {
-            return display;
-        }
-        // The active display is outdated, so fall back to the primary display.
-        mActiveDisplayId = getPrimaryDisplayIdLocked();
         return getDisplayDeviceLocked(mActiveDisplayId);
     }
 
@@ -1075,13 +1043,6 @@ private:
                                const DisplayDeviceState& drawingState)
             REQUIRES(mStateLock, kMainThreadContext);
 
-    void dispatchDisplayModeChangeEvent(PhysicalDisplayId, const scheduler::FrameRateMode&);
-
-    /*
-     * VSYNC
-     */
-    nsecs_t getVsyncPeriodFromHWC() const REQUIRES(mStateLock);
-
     /*
      * Display identification
      */
@@ -1157,9 +1118,6 @@ private:
 
     perfetto::protos::LayersProto dumpDrawingStateProto(uint32_t traceFlags) const
             REQUIRES(kMainThreadContext);
-    void dumpOffscreenLayersProto(perfetto::protos::LayersProto& layersProto,
-                                  uint32_t traceFlags = LayerTracing::TRACE_ALL) const
-            REQUIRES(kMainThreadContext);
     google::protobuf::RepeatedPtrField<perfetto::protos::DisplayProto> dumpDisplayProto() const;
     void doActiveLayersTracingIfNeeded(bool isCompositionComputed, bool visibleRegionDirty,
                                        TimePoint, VsyncId) REQUIRES(kMainThreadContext);
@@ -1171,7 +1129,6 @@ private:
     void dumpHwc(std::string& result) const;
     perfetto::protos::LayersProto dumpProtoFromMainThread(
             uint32_t traceFlags = LayerTracing::TRACE_ALL) EXCLUDES(mStateLock);
-    void dumpOffscreenLayers(std::string& result) EXCLUDES(mStateLock);
     void dumpPlannerInfo(const DumpArgs& args, std::string& result) const REQUIRES(mStateLock);
 
     status_t doDump(int fd, const DumpArgs& args, bool asProto);
@@ -1232,7 +1189,6 @@ private:
     State mCurrentState{LayerVector::StateSet::Current};
     std::atomic<int32_t> mTransactionFlags = 0;
     std::atomic<uint32_t> mUniqueTransactionId = 1;
-    SortedVector<sp<Layer>> mLayersPendingRemoval;
 
     // Buffers that have been discarded by clients and need to be evicted from per-layer caches so
     // the graphics memory can be immediately freed.
@@ -1275,13 +1231,17 @@ private:
     bool mForceTransactionDisplayChange = false;
     bool mUpdateAttachedChoreographer = false;
 
-    // Set if LayerMetadata has changed since the last LayerMetadata snapshot.
-    bool mLayerMetadataSnapshotNeeded = false;
+    struct LayerIntHash {
+        size_t operator()(const std::pair<sp<Layer>, gui::GameMode>& k) const {
+            return std::hash<Layer*>()(k.first.get()) ^
+                    std::hash<int32_t>()(static_cast<int32_t>(k.second));
+        }
+    };
 
     // TODO(b/238781169) validate these on composition
     // Tracks layers that have pending frames which are candidates for being
     // latched.
-    std::unordered_set<sp<Layer>, SpHash<Layer>> mLayersWithQueuedFrames;
+    std::unordered_set<std::pair<sp<Layer>, gui::GameMode>, LayerIntHash> mLayersWithQueuedFrames;
     std::unordered_set<sp<Layer>, SpHash<Layer>> mLayersWithBuffersRemoved;
     std::unordered_set<uint32_t> mLayersIdsWithQueuedFrames;
 
@@ -1312,7 +1272,7 @@ private:
 
     display::PhysicalDisplays mPhysicalDisplays GUARDED_BY(mStateLock);
 
-    // The inner or outer display for foldables, assuming they have mutually exclusive power states.
+    // The inner or outer display for foldables, while unfolded or folded, respectively.
     std::atomic<PhysicalDisplayId> mActiveDisplayId;
 
     display::DisplayModeController mDisplayModeController;
@@ -1413,23 +1373,10 @@ private:
     // Flag used to set override desired display mode from backdoor
     bool mDebugDisplayModeSetByBackdoor = false;
 
-    // A set of layers that have no parent so they are not drawn on screen.
-    // Should only be accessed by the main thread.
-    // The Layer pointer is removed from the set when the destructor is called so there shouldn't
-    // be any issues with a raw pointer referencing an invalid object.
-    std::unordered_set<Layer*> mOffscreenLayers;
-
     BufferCountTracker mBufferCountTracker;
 
     std::unordered_map<DisplayId, sp<HdrLayerInfoReporter>> mHdrLayerInfoListeners
             GUARDED_BY(mStateLock);
-
-    mutable std::mutex mCreatedLayersLock;
-
-    // A temporay pool that store the created layers and will be added to current state in main
-    // thread.
-    std::vector<LayerCreatedState> mCreatedLayers GUARDED_BY(mCreatedLayersLock);
-    void handleLayerCreatedLocked(const LayerCreatedState&, VsyncId) REQUIRES(mStateLock);
 
     std::atomic<ui::Transform::RotationFlags> mActiveDisplayTransformHint;
 
@@ -1471,6 +1418,8 @@ private:
     frontend::LayerHierarchyBuilder mLayerHierarchyBuilder GUARDED_BY(kMainThreadContext);
     frontend::LayerSnapshotBuilder mLayerSnapshotBuilder GUARDED_BY(kMainThreadContext);
 
+    mutable std::mutex mCreatedLayersLock;
+    std::vector<sp<Layer>> mCreatedLayers GUARDED_BY(mCreatedLayersLock);
     std::vector<std::pair<uint32_t, std::string>> mDestroyedHandles GUARDED_BY(mCreatedLayersLock);
     std::vector<std::unique_ptr<frontend::RequestedLayerState>> mNewLayers
             GUARDED_BY(mCreatedLayersLock);
