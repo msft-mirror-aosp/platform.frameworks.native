@@ -235,6 +235,7 @@ mod tests {
         DeviceInfo::DeviceInfo, IInputFilter::IInputFilterCallbacks::IInputFilterCallbacks,
         KeyEvent::KeyEvent, KeyEventAction::KeyEventAction,
     };
+    use input::KeyboardType;
     use input::ModifierState;
     use std::sync::{Arc, RwLock};
 
@@ -496,7 +497,11 @@ mod tests {
             ..BASE_KEY_UP
         });
 
-        sticky_keys_filter.notify_devices_changed(&[DeviceInfo { deviceId: 2, external: true }]);
+        sticky_keys_filter.notify_devices_changed(&[DeviceInfo {
+            deviceId: 2,
+            external: true,
+            keyboardType: KeyboardType::Alphabetic as i32,
+        }]);
         assert_eq!(
             test_callbacks.get_last_modifier_state(),
             ModifierState::CtrlLeftOn | ModifierState::CtrlOn

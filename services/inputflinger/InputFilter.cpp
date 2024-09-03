@@ -60,6 +60,7 @@ void InputFilter::notifyInputDevicesChanged(const NotifyInputDevicesChangedArgs&
         AidlDeviceInfo& aidlInfo = mDeviceInfos.emplace_back();
         aidlInfo.deviceId = info.getId();
         aidlInfo.external = info.isExternal();
+        aidlInfo.keyboardType = info.getKeyboardType();
     }
     if (isFilterEnabled()) {
         LOG_ALWAYS_FATAL_IF(!mInputFilterRust->notifyInputDevicesChanged(mDeviceInfos).isOk());
