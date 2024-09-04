@@ -10,6 +10,14 @@ flag {
 } # bq_setframerate
 
 flag {
+  name: "bq_consumer_attach_callback"
+  namespace: "core_graphics"
+  description: "Controls IProducerListener to have consumer side attach callback"
+  bug: "353202582"
+  is_fixed_read_only: true
+} # bq_consumer_attach_callback
+
+flag {
   name: "frametimestamps_previousrelease"
   namespace: "core_graphics"
   description: "Controls a fence fixup for timestamp apis"
@@ -77,17 +85,17 @@ flag {
 } # buffer_release_channel
 
 flag {
-  name: "wb_surface_connect_methods"
+  name: "wb_ring_buffer"
   namespace: "core_graphics"
-  description: "Remove redundant connect methods in Surface."
-  bug: "354273690"
+  description: "Remove slot dependency in the Ring Buffer Consumer."
+  bug: "342197847"
   is_fixed_read_only: true
-} # wb_surface_connect_methods
+} # wb_ring_buffer
 
 flag {
-  name: "bq_consumer_attach_callback"
+  name: "wb_camera3_and_processors"
   namespace: "core_graphics"
-  description: "Controls IProducerListener to have consumer side attach callback"
-  bug: "353202582"
+  description: "Remove usage of IGBPs in the *Processor and Camera3*"
+  bug: "342199002"
   is_fixed_read_only: true
-} # bq_consumer_attach_callback
+} # wb_camera3_and_processors
