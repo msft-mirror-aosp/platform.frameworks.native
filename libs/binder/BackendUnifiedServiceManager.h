@@ -57,13 +57,14 @@ public:
         return mTheRealServiceManager->getInterfaceDescriptor();
     }
 
-    IBinder* onAsBinder() override { return IInterface::asBinder(mTheRealServiceManager).get(); }
-
 private:
     sp<os::IServiceManager> mTheRealServiceManager;
-    void toBinderService(const os::Service& in, os::Service* _out);
+    binder::Status toBinderService(const ::std::string& name, const os::Service& in,
+                                   os::Service* _out);
 };
 
 sp<BackendUnifiedServiceManager> getBackendUnifiedServiceManager();
+
+android::binder::Status getInjectedAccessor(const std::string& name, android::os::Service* service);
 
 } // namespace android
