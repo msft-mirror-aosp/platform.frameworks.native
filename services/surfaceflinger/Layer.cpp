@@ -231,10 +231,6 @@ Layer::~Layer() {
     LOG_ALWAYS_FATAL_IF(std::this_thread::get_id() != mFlinger->mMainThreadId,
                         "Layer destructor called off the main thread.");
 
-    // The original layer and the clone layer share the same texture and buffer. Therefore, only
-    // one of the layers, in this case the original layer, needs to handle the deletion. The
-    // original layer and the clone should be removed at the same time so there shouldn't be any
-    // issue with the clone layer trying to use the texture.
     if (mBufferInfo.mBuffer != nullptr) {
         callReleaseBufferCallback(mDrawingState.releaseBufferListener,
                                   mBufferInfo.mBuffer->getBuffer(), mBufferInfo.mFrameNumber,
@@ -249,10 +245,6 @@ Layer::~Layer() {
 
     if (mDrawingState.sidebandStream != nullptr) {
         mFlinger->mTunnelModeEnabledReporter->decrementTunnelModeCount();
-    }
-    if (mHadClonedChild) {
-        auto& roots = mFlinger->mLayerMirrorRoots;
-        roots.erase(std::remove(roots.begin(), roots.end(), this), roots.end());
     }
     if (hasTrustedPresentationListener()) {
         mFlinger->mNumTrustedPresentationListeners--;
@@ -279,49 +271,6 @@ void Layer::removeRelativeZ(const std::vector<Layer*>& layersInTree) {
         strongRelative->removeZOrderRelative(wp<Layer>::fromExisting(this));
         mFlinger->setTransactionFlags(eTraversalNeeded);
         setZOrderRelativeOf(nullptr);
-    }
-}
-
-void Layer::removeFromCurrentState() {
-    if (!mRemovedFromDrawingState) {
-        mRemovedFromDrawingState = true;
-        mFlinger->mScheduler->deregisterLayer(this);
-    }
-    updateTrustedPresentationState(nullptr, nullptr, -1 /* time_in_ms */, true /* leaveState*/);
-
-    mFlinger->markLayerPendingRemovalLocked(sp<Layer>::fromExisting(this));
-}
-
-sp<Layer> Layer::getRootLayer() {
-    sp<Layer> parent = getParent();
-    if (parent == nullptr) {
-        return sp<Layer>::fromExisting(this);
-    }
-    return parent->getRootLayer();
-}
-
-void Layer::onRemovedFromCurrentState() {
-    // Use the root layer since we want to maintain the hierarchy for the entire subtree.
-    auto layersInTree = getRootLayer()->getLayersInTree(LayerVector::StateSet::Current);
-    std::sort(layersInTree.begin(), layersInTree.end());
-
-    REQUIRE_MUTEX(mFlinger->mStateLock);
-    traverse(LayerVector::StateSet::Current,
-             [&](Layer* layer) REQUIRES(layer->mFlinger->mStateLock) {
-                 layer->removeFromCurrentState();
-                 layer->removeRelativeZ(layersInTree);
-             });
-}
-
-void Layer::addToCurrentState() {
-    if (mRemovedFromDrawingState) {
-        mRemovedFromDrawingState = false;
-        mFlinger->mScheduler->registerLayer(this);
-        mFlinger->removeFromOffscreenLayers(this);
-    }
-
-    for (const auto& child : mCurrentChildren) {
-        child->addToCurrentState();
     }
 }
 
@@ -593,7 +542,6 @@ void Layer::prepareBasicGeometryCompositionState() {
     snapshot->alpha = alpha;
     snapshot->backgroundBlurRadius = getBackgroundBlurRadius();
     snapshot->blurRegions = getBlurRegions();
-    snapshot->stretchEffect = getStretchEffect();
 }
 
 void Layer::prepareGeometryCompositionState() {
@@ -827,33 +775,6 @@ void Layer::setTransactionFlags(uint32_t mask) {
     mTransactionFlags |= mask;
 }
 
-bool Layer::setChildLayer(const sp<Layer>& childLayer, int32_t z) {
-    ssize_t idx = mCurrentChildren.indexOf(childLayer);
-    if (idx < 0) {
-        return false;
-    }
-    if (childLayer->setLayer(z)) {
-        mCurrentChildren.removeAt(idx);
-        mCurrentChildren.add(childLayer);
-        return true;
-    }
-    return false;
-}
-
-bool Layer::setChildRelativeLayer(const sp<Layer>& childLayer,
-        const sp<IBinder>& relativeToHandle, int32_t relativeZ) {
-    ssize_t idx = mCurrentChildren.indexOf(childLayer);
-    if (idx < 0) {
-        return false;
-    }
-    if (childLayer->setRelativeLayer(relativeToHandle, relativeZ)) {
-        mCurrentChildren.removeAt(idx);
-        mCurrentChildren.add(childLayer);
-        return true;
-    }
-    return false;
-}
-
 bool Layer::setLayer(int32_t z) {
     if (mDrawingState.z == z && !usingRelativeZ(LayerVector::StateSet::Current)) return false;
     mDrawingState.sequence++;
@@ -960,46 +881,6 @@ bool Layer::setAlpha(float alpha) {
     return true;
 }
 
-bool Layer::setBackgroundColor(const half3& color, float alpha, ui::Dataspace dataspace) {
-    if (!mDrawingState.bgColorLayer && alpha == 0) {
-        return false;
-    }
-    mDrawingState.sequence++;
-    mDrawingState.modified = true;
-    setTransactionFlags(eTransactionNeeded);
-
-    if (!mDrawingState.bgColorLayer && alpha != 0) {
-        // create background color layer if one does not yet exist
-        uint32_t flags = ISurfaceComposerClient::eFXSurfaceEffect;
-        std::string name = mName + "BackgroundColorLayer";
-        mDrawingState.bgColorLayer = mFlinger->getFactory().createEffectLayer(
-                surfaceflinger::LayerCreationArgs(mFlinger.get(), nullptr, std::move(name), flags,
-                                                  LayerMetadata()));
-
-        // add to child list
-        addChild(mDrawingState.bgColorLayer);
-        mFlinger->mLayersAdded = true;
-        // set up SF to handle added color layer
-        if (isRemovedFromCurrentState()) {
-            MUTEX_ALIAS(mFlinger->mStateLock, mDrawingState.bgColorLayer->mFlinger->mStateLock);
-            mDrawingState.bgColorLayer->onRemovedFromCurrentState();
-        }
-        mFlinger->setTransactionFlags(eTransactionNeeded);
-    } else if (mDrawingState.bgColorLayer && alpha == 0) {
-        MUTEX_ALIAS(mFlinger->mStateLock, mDrawingState.bgColorLayer->mFlinger->mStateLock);
-        mDrawingState.bgColorLayer->reparent(nullptr);
-        mDrawingState.bgColorLayer = nullptr;
-        return true;
-    }
-
-    mDrawingState.bgColorLayer->setColor(color);
-    mDrawingState.bgColorLayer->setLayer(std::numeric_limits<int32_t>::min());
-    mDrawingState.bgColorLayer->setAlpha(alpha);
-    mDrawingState.bgColorLayer->setDataspace(dataspace);
-
-    return true;
-}
-
 bool Layer::setCornerRadius(float cornerRadius) {
     if (mDrawingState.cornerRadius == cornerRadius) return false;
 
@@ -1100,42 +981,6 @@ bool Layer::setDimmingEnabled(const bool dimmingEnabled) {
     return true;
 }
 
-bool Layer::setFrameRateSelectionPriority(int32_t priority) {
-    if (mDrawingState.frameRateSelectionPriority == priority) return false;
-    mDrawingState.frameRateSelectionPriority = priority;
-    mDrawingState.sequence++;
-    mDrawingState.modified = true;
-    setTransactionFlags(eTransactionNeeded);
-    return true;
-}
-
-int32_t Layer::getFrameRateSelectionPriority() const {
-    // Check if layer has priority set.
-    if (mDrawingState.frameRateSelectionPriority != PRIORITY_UNSET) {
-        return mDrawingState.frameRateSelectionPriority;
-    }
-    // If not, search whether its parents have it set.
-    sp<Layer> parent = getParent();
-    if (parent != nullptr) {
-        return parent->getFrameRateSelectionPriority();
-    }
-
-    return Layer::PRIORITY_UNSET;
-}
-
-bool Layer::setDefaultFrameRateCompatibility(FrameRateCompatibility compatibility) {
-    if (mDrawingState.defaultFrameRateCompatibility == compatibility) return false;
-    mDrawingState.defaultFrameRateCompatibility = compatibility;
-    mDrawingState.modified = true;
-    mFlinger->mScheduler->setDefaultFrameRateCompatibility(sequence, compatibility);
-    setTransactionFlags(eTransactionNeeded);
-    return true;
-}
-
-scheduler::FrameRateCompatibility Layer::getDefaultFrameRateCompatibility() const {
-    return mDrawingState.defaultFrameRateCompatibility;
-}
-
 bool Layer::isLayerFocusedBasedOnPriority(int32_t priority) {
     return priority == PRIORITY_FOCUSED_WITH_MODE || priority == PRIORITY_FOCUSED_WITHOUT_MODE;
 };
@@ -1182,133 +1027,6 @@ bool Layer::setStretchEffect(const StretchEffect& effect) {
     mDrawingState.sequence++;
     mDrawingState.stretchEffect = temp;
     mDrawingState.modified = true;
-    setTransactionFlags(eTransactionNeeded);
-    return true;
-}
-
-StretchEffect Layer::getStretchEffect() const {
-    if (mDrawingState.stretchEffect.hasEffect()) {
-        return mDrawingState.stretchEffect;
-    }
-
-    sp<Layer> parent = getParent();
-    if (parent != nullptr) {
-        auto effect = parent->getStretchEffect();
-        if (effect.hasEffect()) {
-            // TODO(b/179047472): Map it? Or do we make the effect be in global space?
-            return effect;
-        }
-    }
-    return StretchEffect{};
-}
-
-bool Layer::propagateFrameRateForLayerTree(FrameRate parentFrameRate, bool overrideChildren,
-                                           bool* transactionNeeded) {
-    // Gets the frame rate to propagate to children.
-    const auto frameRate = [&] {
-        if (overrideChildren && parentFrameRate.isValid()) {
-            return parentFrameRate;
-        }
-
-        if (mDrawingState.frameRate.isValid()) {
-            return mDrawingState.frameRate;
-        }
-
-        return parentFrameRate;
-    }();
-
-    auto now = systemTime();
-    *transactionNeeded |= setFrameRateForLayerTreeLegacy(frameRate, now);
-
-    // The frame rate is propagated to the children by default, but some properties may override it.
-    bool childrenHaveFrameRate = false;
-    const bool overrideChildrenFrameRate = overrideChildren || shouldOverrideChildrenFrameRate();
-    const bool canPropagateFrameRate = shouldPropagateFrameRate() || overrideChildrenFrameRate;
-    for (const sp<Layer>& child : mCurrentChildren) {
-        childrenHaveFrameRate |=
-                child->propagateFrameRateForLayerTree(canPropagateFrameRate ? frameRate
-                                                                            : FrameRate(),
-                                                      overrideChildrenFrameRate, transactionNeeded);
-    }
-
-    // If we don't have a valid frame rate specification, but the children do, we set this
-    // layer as NoVote to allow the children to control the refresh rate
-    if (!frameRate.isValid() && childrenHaveFrameRate) {
-        *transactionNeeded |=
-                setFrameRateForLayerTreeLegacy(FrameRate(Fps(), FrameRateCompatibility::NoVote),
-                                               now);
-    }
-
-    // We return whether this layer or its children has a vote. We ignore ExactOrMultiple votes for
-    // the same reason we are allowing touch boost for those layers. See
-    // RefreshRateSelector::rankFrameRates for details.
-    const auto layerVotedWithDefaultCompatibility =
-            frameRate.vote.rate.isValid() && frameRate.vote.type == FrameRateCompatibility::Default;
-    const auto layerVotedWithNoVote = frameRate.vote.type == FrameRateCompatibility::NoVote;
-    const auto layerVotedWithCategory = frameRate.category != FrameRateCategory::Default;
-    const auto layerVotedWithExactCompatibility =
-            frameRate.vote.rate.isValid() && frameRate.vote.type == FrameRateCompatibility::Exact;
-    return layerVotedWithDefaultCompatibility || layerVotedWithNoVote || layerVotedWithCategory ||
-            layerVotedWithExactCompatibility || childrenHaveFrameRate;
-}
-
-void Layer::updateTreeHasFrameRateVote() {
-    const auto root = [&]() -> sp<Layer> {
-        sp<Layer> layer = sp<Layer>::fromExisting(this);
-        while (auto parent = layer->getParent()) {
-            layer = parent;
-        }
-        return layer;
-    }();
-
-    bool transactionNeeded = false;
-    root->propagateFrameRateForLayerTree({}, false, &transactionNeeded);
-
-    // TODO(b/195668952): we probably don't need eTraversalNeeded here
-    if (transactionNeeded) {
-        mFlinger->setTransactionFlags(eTraversalNeeded);
-    }
-}
-
-bool Layer::setFrameRate(FrameRate::FrameRateVote frameRateVote) {
-    if (mDrawingState.frameRate.vote == frameRateVote) {
-        return false;
-    }
-
-    mDrawingState.sequence++;
-    mDrawingState.frameRate.vote = frameRateVote;
-    mDrawingState.modified = true;
-
-    updateTreeHasFrameRateVote();
-
-    setTransactionFlags(eTransactionNeeded);
-    return true;
-}
-
-bool Layer::setFrameRateCategory(FrameRateCategory category, bool smoothSwitchOnly) {
-    if (mDrawingState.frameRate.category == category &&
-        mDrawingState.frameRate.categorySmoothSwitchOnly == smoothSwitchOnly) {
-        return false;
-    }
-
-    mDrawingState.sequence++;
-    mDrawingState.frameRate.category = category;
-    mDrawingState.frameRate.categorySmoothSwitchOnly = smoothSwitchOnly;
-    mDrawingState.modified = true;
-
-    updateTreeHasFrameRateVote();
-
-    setTransactionFlags(eTransactionNeeded);
-    return true;
-}
-
-bool Layer::setFrameRateSelectionStrategy(FrameRateSelectionStrategy strategy) {
-    if (mDrawingState.frameRateSelectionStrategy == strategy) return false;
-    mDrawingState.frameRateSelectionStrategy = strategy;
-    mDrawingState.sequence++;
-    mDrawingState.modified = true;
-
-    updateTreeHasFrameRateVote();
     setTransactionFlags(eTransactionNeeded);
     return true;
 }
@@ -1446,25 +1164,6 @@ void Layer::setFrameTimelineVsyncForSkippedFrames(const FrameTimelineInfo& info,
     addSurfaceFrameDroppedForBuffer(surfaceFrame, postTime);
 }
 
-bool Layer::setFrameRateForLayerTreeLegacy(FrameRate frameRate, nsecs_t now) {
-    if (mDrawingState.frameRateForLayerTree == frameRate) {
-        return false;
-    }
-
-    mDrawingState.frameRateForLayerTree = frameRate;
-
-    // TODO(b/195668952): we probably don't need to dirty visible regions here
-    // or even store frameRateForLayerTree in mDrawingState
-    mDrawingState.sequence++;
-    mDrawingState.modified = true;
-    setTransactionFlags(eTransactionNeeded);
-
-    mFlinger->mScheduler
-            ->recordLayerHistory(sequence, getLayerProps(), now, now,
-                                 scheduler::LayerHistory::LayerUpdateType::SetFrameRate);
-    return true;
-}
-
 bool Layer::setFrameRateForLayerTree(FrameRate frameRate, const scheduler::LayerProps& layerProps,
                                      nsecs_t now) {
     if (mDrawingState.frameRateForLayerTree == frameRate) {
@@ -1516,14 +1215,6 @@ uint32_t Layer::getEffectiveUsage(uint32_t usage) const {
     return usage;
 }
 
-void Layer::updateTransformHint(ui::Transform::RotationFlags transformHint) {
-    if (mFlinger->mDebugDisableTransformHint || transformHint & ui::Transform::ROT_INVALID) {
-        transformHint = ui::Transform::ROT_0;
-    }
-
-    setTransformHintLegacy(transformHint);
-}
-
 // ----------------------------------------------------------------------------
 // debugging
 // ----------------------------------------------------------------------------
@@ -1539,57 +1230,6 @@ void Layer::miniDumpHeader(std::string& result) {
     result.append("  Disp Frame (LTRB) | ");
     result.append("         Source Crop (LTRB) | ");
     result.append("    Frame Rate (Explicit) (Seamlessness) [Focused]\n");
-    result.append(kDumpTableRowLength, '-');
-    result.append("\n");
-}
-
-void Layer::miniDumpLegacy(std::string& result, const DisplayDevice& display) const {
-    const auto outputLayer = findOutputLayerForDisplay(&display);
-    if (!outputLayer) {
-        return;
-    }
-
-    std::string name;
-    if (mName.length() > 77) {
-        std::string shortened;
-        shortened.append(mName, 0, 36);
-        shortened.append("[...]");
-        shortened.append(mName, mName.length() - 36);
-        name = std::move(shortened);
-    } else {
-        name = mName;
-    }
-
-    StringAppendF(&result, " %s\n", name.c_str());
-
-    const State& layerState(getDrawingState());
-    const auto& outputLayerState = outputLayer->getState();
-
-    if (layerState.zOrderRelativeOf != nullptr || mDrawingParent != nullptr) {
-        StringAppendF(&result, "  rel %6d | ", layerState.z);
-    } else {
-        StringAppendF(&result, "  %10d | ", layerState.z);
-    }
-    StringAppendF(&result, "  %10d | ", mWindowType);
-    StringAppendF(&result, "%10s | ", toString(getCompositionType(display)).c_str());
-    StringAppendF(&result, "%10s | ", toString(outputLayerState.bufferTransform).c_str());
-    const Rect& frame = outputLayerState.displayFrame;
-    StringAppendF(&result, "%4d %4d %4d %4d | ", frame.left, frame.top, frame.right, frame.bottom);
-    const FloatRect& crop = outputLayerState.sourceCrop;
-    StringAppendF(&result, "%6.1f %6.1f %6.1f %6.1f | ", crop.left, crop.top, crop.right,
-                  crop.bottom);
-    const auto frameRate = getFrameRateForLayerTree();
-    if (frameRate.vote.rate.isValid() || frameRate.vote.type != FrameRateCompatibility::Default) {
-        StringAppendF(&result, "%s %15s %17s", to_string(frameRate.vote.rate).c_str(),
-                      ftl::enum_string(frameRate.vote.type).c_str(),
-                      ftl::enum_string(frameRate.vote.seamlessness).c_str());
-    } else {
-        result.append(41, ' ');
-    }
-
-    const auto focused = isLayerFocusedBasedOnPriority(getFrameRateSelectionPriority());
-    StringAppendF(&result, "    [%s]\n", focused ? "*" : " ");
-
     result.append(kDumpTableRowLength, '-');
     result.append("\n");
 }
@@ -1665,36 +1305,6 @@ void Layer::onDisconnect() {
     mFlinger->mFrameTracer->onDestroy(layerId);
 }
 
-size_t Layer::getDescendantCount() const {
-    size_t count = 0;
-    for (const sp<Layer>& child : mDrawingChildren) {
-        count += 1 + child->getChildrenCount();
-    }
-    return count;
-}
-
-void Layer::addChild(const sp<Layer>& layer) {
-    mFlinger->mSomeChildrenChanged = true;
-    setTransactionFlags(eTransactionNeeded);
-
-    mCurrentChildren.add(layer);
-    layer->setParent(sp<Layer>::fromExisting(this));
-    updateTreeHasFrameRateVote();
-}
-
-ssize_t Layer::removeChild(const sp<Layer>& layer) {
-    mFlinger->mSomeChildrenChanged = true;
-    setTransactionFlags(eTransactionNeeded);
-
-    layer->setParent(nullptr);
-    const auto removeResult = mCurrentChildren.remove(layer);
-
-    updateTreeHasFrameRateVote();
-    layer->updateTreeHasFrameRateVote();
-
-    return removeResult;
-}
-
 void Layer::setChildrenDrawingParent(const sp<Layer>& newParent) {
     for (const sp<Layer>& child : mDrawingChildren) {
         child->mDrawingParent = newParent;
@@ -1703,39 +1313,6 @@ void Layer::setChildrenDrawingParent(const sp<Layer>& newParent) {
         child->computeBounds(newParent->mBounds, newParent->mEffectiveTransform,
                              parentShadowRadius);
     }
-}
-
-bool Layer::reparent(const sp<IBinder>& newParentHandle) {
-    sp<Layer> newParent;
-    if (newParentHandle != nullptr) {
-        newParent = LayerHandle::getLayer(newParentHandle);
-        if (newParent == nullptr) {
-            ALOGE("Unable to promote Layer handle");
-            return false;
-        }
-        if (newParent == this) {
-            ALOGE("Invalid attempt to reparent Layer (%s) to itself", getName().c_str());
-            return false;
-        }
-    }
-
-    sp<Layer> parent = getParent();
-    if (parent != nullptr) {
-        parent->removeChild(sp<Layer>::fromExisting(this));
-    }
-
-    if (newParentHandle != nullptr) {
-        newParent->addChild(sp<Layer>::fromExisting(this));
-        if (!newParent->isRemovedFromCurrentState()) {
-            addToCurrentState();
-        } else {
-            onRemovedFromCurrentState();
-        }
-    } else {
-        onRemovedFromCurrentState();
-    }
-
-    return true;
 }
 
 bool Layer::setColorTransform(const mat4& matrix) {
@@ -1818,167 +1395,6 @@ __attribute__((no_sanitize("unsigned-integer-overflow"))) LayerVector Layer::mak
     }
 
     return traverse;
-}
-
-/**
- * Negatively signed relatives are before 'this' in Z-order.
- */
-void Layer::traverseInZOrder(LayerVector::StateSet stateSet, const LayerVector::Visitor& visitor) {
-    // In the case we have other layers who are using a relative Z to us, makeTraversalList will
-    // produce a new list for traversing, including our relatives, and not including our children
-    // who are relatives of another surface. In the case that there are no relative Z,
-    // makeTraversalList returns our children directly to avoid significant overhead.
-    // However in this case we need to take the responsibility for filtering children which
-    // are relatives of another surface here.
-    bool skipRelativeZUsers = false;
-    const LayerVector list = makeTraversalList(stateSet, &skipRelativeZUsers);
-
-    size_t i = 0;
-    for (; i < list.size(); i++) {
-        const auto& relative = list[i];
-        if (skipRelativeZUsers && relative->usingRelativeZ(stateSet)) {
-            continue;
-        }
-
-        if (relative->getZ(stateSet) >= 0) {
-            break;
-        }
-        relative->traverseInZOrder(stateSet, visitor);
-    }
-
-    visitor(this);
-    for (; i < list.size(); i++) {
-        const auto& relative = list[i];
-
-        if (skipRelativeZUsers && relative->usingRelativeZ(stateSet)) {
-            continue;
-        }
-        relative->traverseInZOrder(stateSet, visitor);
-    }
-}
-
-/**
- * Positively signed relatives are before 'this' in reverse Z-order.
- */
-void Layer::traverseInReverseZOrder(LayerVector::StateSet stateSet,
-                                    const LayerVector::Visitor& visitor) {
-    // See traverseInZOrder for documentation.
-    bool skipRelativeZUsers = false;
-    LayerVector list = makeTraversalList(stateSet, &skipRelativeZUsers);
-
-    int32_t i = 0;
-    for (i = int32_t(list.size()) - 1; i >= 0; i--) {
-        const auto& relative = list[i];
-
-        if (skipRelativeZUsers && relative->usingRelativeZ(stateSet)) {
-            continue;
-        }
-
-        if (relative->getZ(stateSet) < 0) {
-            break;
-        }
-        relative->traverseInReverseZOrder(stateSet, visitor);
-    }
-    visitor(this);
-    for (; i >= 0; i--) {
-        const auto& relative = list[i];
-
-        if (skipRelativeZUsers && relative->usingRelativeZ(stateSet)) {
-            continue;
-        }
-
-        relative->traverseInReverseZOrder(stateSet, visitor);
-    }
-}
-
-void Layer::traverse(LayerVector::StateSet state, const LayerVector::Visitor& visitor) {
-    visitor(this);
-    const LayerVector& children =
-          state == LayerVector::StateSet::Drawing ? mDrawingChildren : mCurrentChildren;
-    for (const sp<Layer>& child : children) {
-        child->traverse(state, visitor);
-    }
-}
-
-void Layer::traverseChildren(const LayerVector::Visitor& visitor) {
-    for (const sp<Layer>& child : mDrawingChildren) {
-        visitor(child.get());
-    }
-}
-
-LayerVector Layer::makeChildrenTraversalList(LayerVector::StateSet stateSet,
-                                             const std::vector<Layer*>& layersInTree) {
-    LOG_ALWAYS_FATAL_IF(stateSet == LayerVector::StateSet::Invalid,
-                        "makeTraversalList received invalid stateSet");
-    const bool useDrawing = stateSet == LayerVector::StateSet::Drawing;
-    const LayerVector& children = useDrawing ? mDrawingChildren : mCurrentChildren;
-    const State& state = useDrawing ? mDrawingState : mDrawingState;
-
-    LayerVector traverse(stateSet);
-    for (const wp<Layer>& weakRelative : state.zOrderRelatives) {
-        sp<Layer> strongRelative = weakRelative.promote();
-        // Only add relative layers that are also descendents of the top most parent of the tree.
-        // If a relative layer is not a descendent, then it should be ignored.
-        if (std::binary_search(layersInTree.begin(), layersInTree.end(), strongRelative.get())) {
-            traverse.add(strongRelative);
-        }
-    }
-
-    for (const sp<Layer>& child : children) {
-        const State& childState = useDrawing ? child->mDrawingState : child->mDrawingState;
-        // If a layer has a relativeOf layer, only ignore if the layer it's relative to is a
-        // descendent of the top most parent of the tree. If it's not a descendent, then just add
-        // the child here since it won't be added later as a relative.
-        if (std::binary_search(layersInTree.begin(), layersInTree.end(),
-                               childState.zOrderRelativeOf.promote().get())) {
-            continue;
-        }
-        traverse.add(child);
-    }
-
-    return traverse;
-}
-
-void Layer::traverseChildrenInZOrderInner(const std::vector<Layer*>& layersInTree,
-                                          LayerVector::StateSet stateSet,
-                                          const LayerVector::Visitor& visitor) {
-    const LayerVector list = makeChildrenTraversalList(stateSet, layersInTree);
-
-    size_t i = 0;
-    for (; i < list.size(); i++) {
-        const auto& relative = list[i];
-        if (relative->getZ(stateSet) >= 0) {
-            break;
-        }
-        relative->traverseChildrenInZOrderInner(layersInTree, stateSet, visitor);
-    }
-
-    visitor(this);
-    for (; i < list.size(); i++) {
-        const auto& relative = list[i];
-        relative->traverseChildrenInZOrderInner(layersInTree, stateSet, visitor);
-    }
-}
-
-std::vector<Layer*> Layer::getLayersInTree(LayerVector::StateSet stateSet) {
-    const bool useDrawing = stateSet == LayerVector::StateSet::Drawing;
-    const LayerVector& children = useDrawing ? mDrawingChildren : mCurrentChildren;
-
-    std::vector<Layer*> layersInTree = {this};
-    for (size_t i = 0; i < children.size(); i++) {
-        const auto& child = children[i];
-        std::vector<Layer*> childLayers = child->getLayersInTree(stateSet);
-        layersInTree.insert(layersInTree.end(), childLayers.cbegin(), childLayers.cend());
-    }
-
-    return layersInTree;
-}
-
-void Layer::traverseChildrenInZOrder(LayerVector::StateSet stateSet,
-                                     const LayerVector::Visitor& visitor) {
-    std::vector<Layer*> layersInTree = getLayersInTree(stateSet);
-    std::sort(layersInTree.begin(), layersInTree.end());
-    traverseChildrenInZOrderInner(layersInTree, stateSet, visitor);
 }
 
 ui::Transform Layer::getTransform() const {
@@ -2090,27 +1506,6 @@ bool Layer::findInHierarchy(const sp<Layer>& l) {
     }
     return false;
 }
-
-void Layer::commitChildList() {
-    for (size_t i = 0; i < mCurrentChildren.size(); i++) {
-        const auto& child = mCurrentChildren[i];
-        child->commitChildList();
-    }
-    mDrawingChildren = mCurrentChildren;
-    mDrawingParent = mCurrentParent;
-    if (CC_UNLIKELY(usingRelativeZ(LayerVector::StateSet::Drawing))) {
-        auto zOrderRelativeOf = mDrawingState.zOrderRelativeOf.promote();
-        if (zOrderRelativeOf == nullptr) return;
-        if (findInHierarchy(zOrderRelativeOf)) {
-            ALOGE("Detected Z ordering loop between %s and %s", mName.c_str(),
-                  zOrderRelativeOf->mName.c_str());
-            ALOGE("Severing rel Z loop, potentially dangerous");
-            mDrawingState.isRelativeOf = false;
-            zOrderRelativeOf->removeZOrderRelative(wp<Layer>::fromExisting(this));
-        }
-    }
-}
-
 
 void Layer::setInputInfo(const WindowInfo& info) {
     mDrawingState.inputInfo = info;
@@ -2276,10 +1671,6 @@ void Layer::writeToProtoCommonState(perfetto::protos::LayerProto* layerInfo,
 
     LayerProtoHelper::writeToProto(state.destinationFrame,
                                    [&]() { return layerInfo->mutable_destination_frame(); });
-}
-
-bool Layer::isRemovedFromCurrentState() const  {
-    return mRemovedFromDrawingState;
 }
 
 // Applies the given transform to the region, while protecting against overflows caused by any
@@ -2473,16 +1864,6 @@ WindowInfo Layer::fillInputInfo(const InputDisplayArgs& displayArgs) {
         info.inputConfig |= WindowInfo::InputConfig::TRUSTED_OVERLAY;
     }
 
-    // If the layer is a clone, we need to crop the input region to cloned root to prevent
-    // touches from going outside the cloned area.
-    if (isClone()) {
-        info.inputConfig |= WindowInfo::InputConfig::CLONE;
-        if (const sp<Layer> clonedRoot = getClonedRoot()) {
-            const Rect rect = displayTransform.transform(Rect{clonedRoot->mScreenBounds});
-            info.touchableRegion = info.touchableRegion.intersect(rect);
-        }
-    }
-
     Rect bufferSize = getBufferSize(getDrawingState());
     info.contentSize = Size(bufferSize.width(), bufferSize.height());
 
@@ -2508,16 +1889,6 @@ Rect Layer::getInputBoundsInDisplaySpace(const FloatRect& inputBounds,
     const ui::Transform layerToScreen = getInputTransform();
     const ui::Transform layerToDisplay = screenToDisplay * layerToScreen;
     return Rect{layerToDisplay.transform(croppedInputBounds)};
-}
-
-sp<Layer> Layer::getClonedRoot() {
-    if (mClonedChild != nullptr) {
-        return sp<Layer>::fromExisting(this);
-    }
-    if (mDrawingParent == nullptr || mDrawingParent.promote() == nullptr) {
-        return nullptr;
-    }
-    return mDrawingParent.promote()->getClonedRoot();
 }
 
 bool Layer::hasInputInfo() const {
@@ -2559,170 +1930,6 @@ Region Layer::getVisibleRegion(const DisplayDevice* display) const {
     return outputLayer ? outputLayer->getState().visibleRegion : Region();
 }
 
-void Layer::updateCloneBufferInfo() {
-    if (!isClone() || !isClonedFromAlive()) {
-        return;
-    }
-
-    sp<Layer> clonedFrom = getClonedFrom();
-    mBufferInfo = clonedFrom->mBufferInfo;
-    mSidebandStream = clonedFrom->mSidebandStream;
-    surfaceDamageRegion = clonedFrom->surfaceDamageRegion;
-    mCurrentFrameNumber = clonedFrom->mCurrentFrameNumber.load();
-    mPreviousFrameNumber = clonedFrom->mPreviousFrameNumber;
-
-    // After buffer info is updated, the drawingState from the real layer needs to be copied into
-    // the cloned. This is because some properties of drawingState can change when latchBuffer is
-    // called. However, copying the drawingState would also overwrite the cloned layer's relatives
-    // and touchableRegionCrop. Therefore, temporarily store the relatives so they can be set in
-    // the cloned drawingState again.
-    wp<Layer> tmpZOrderRelativeOf = mDrawingState.zOrderRelativeOf;
-    SortedVector<wp<Layer>> tmpZOrderRelatives = mDrawingState.zOrderRelatives;
-    wp<Layer> tmpTouchableRegionCrop = mDrawingState.touchableRegionCrop;
-    WindowInfo tmpInputInfo = mDrawingState.inputInfo;
-
-    cloneDrawingState(clonedFrom.get());
-
-    mDrawingState.touchableRegionCrop = tmpTouchableRegionCrop;
-    mDrawingState.zOrderRelativeOf = tmpZOrderRelativeOf;
-    mDrawingState.zOrderRelatives = tmpZOrderRelatives;
-    mDrawingState.inputInfo = tmpInputInfo;
-}
-
-bool Layer::updateMirrorInfo(const std::deque<Layer*>& cloneRootsPendingUpdates) {
-    if (mClonedChild == nullptr || !mClonedChild->isClonedFromAlive()) {
-        // If mClonedChild is null, there is nothing to mirror. If isClonedFromAlive returns false,
-        // it means that there is a clone, but the layer it was cloned from has been destroyed. In
-        // that case, we want to delete the reference to the clone since we want it to get
-        // destroyed. The root, this layer, will still be around since the client can continue
-        // to hold a reference, but no cloned layers will be displayed.
-        mClonedChild = nullptr;
-        return true;
-    }
-
-    std::map<sp<Layer>, sp<Layer>> clonedLayersMap;
-    // If the real layer exists and is in current state, add the clone as a child of the root.
-    // There's no need to remove from drawingState when the layer is offscreen since currentState is
-    // copied to drawingState for the root layer. So the clonedChild is always removed from
-    // drawingState and then needs to be added back each traversal.
-    if (!mClonedChild->getClonedFrom()->isRemovedFromCurrentState()) {
-        addChildToDrawing(mClonedChild);
-    }
-
-    mClonedChild->updateClonedDrawingState(clonedLayersMap);
-    mClonedChild->updateClonedChildren(sp<Layer>::fromExisting(this), clonedLayersMap);
-    mClonedChild->updateClonedRelatives(clonedLayersMap);
-
-    for (Layer* root : cloneRootsPendingUpdates) {
-        if (clonedLayersMap.find(sp<Layer>::fromExisting(root)) != clonedLayersMap.end()) {
-            return false;
-        }
-    }
-    return true;
-}
-
-void Layer::updateClonedDrawingState(std::map<sp<Layer>, sp<Layer>>& clonedLayersMap) {
-    // If the layer the clone was cloned from is alive, copy the content of the drawingState
-    // to the clone. If the real layer is no longer alive, continue traversing the children
-    // since we may be able to pull out other children that are still alive.
-    if (isClonedFromAlive()) {
-        sp<Layer> clonedFrom = getClonedFrom();
-        cloneDrawingState(clonedFrom.get());
-        clonedLayersMap.emplace(clonedFrom, sp<Layer>::fromExisting(this));
-    }
-
-    // The clone layer may have children in drawingState since they may have been created and
-    // added from a previous request to updateMirorInfo. This is to ensure we don't recreate clones
-    // that already exist, since we can just re-use them.
-    // The drawingChildren will not get overwritten by the currentChildren since the clones are
-    // not updated in the regular traversal. They are skipped since the root will lose the
-    // reference to them when it copies its currentChildren to drawing.
-    for (sp<Layer>& child : mDrawingChildren) {
-        child->updateClonedDrawingState(clonedLayersMap);
-    }
-}
-
-void Layer::updateClonedChildren(const sp<Layer>& mirrorRoot,
-                                 std::map<sp<Layer>, sp<Layer>>& clonedLayersMap) {
-    mDrawingChildren.clear();
-
-    if (!isClonedFromAlive()) {
-        return;
-    }
-
-    sp<Layer> clonedFrom = getClonedFrom();
-    for (sp<Layer>& child : clonedFrom->mDrawingChildren) {
-        if (child == mirrorRoot) {
-            // This is to avoid cyclical mirroring.
-            continue;
-        }
-        sp<Layer> clonedChild = clonedLayersMap[child];
-        if (clonedChild == nullptr) {
-            clonedChild = child->createClone();
-            clonedLayersMap[child] = clonedChild;
-        }
-        addChildToDrawing(clonedChild);
-        clonedChild->updateClonedChildren(mirrorRoot, clonedLayersMap);
-    }
-}
-
-void Layer::updateClonedInputInfo(const std::map<sp<Layer>, sp<Layer>>& clonedLayersMap) {
-    auto cropLayer = mDrawingState.touchableRegionCrop.promote();
-    if (cropLayer != nullptr) {
-        if (clonedLayersMap.count(cropLayer) == 0) {
-            // Real layer had a crop layer but it's not in the cloned hierarchy. Just set to
-            // self as crop layer to avoid going outside bounds.
-            mDrawingState.touchableRegionCrop = wp<Layer>::fromExisting(this);
-        } else {
-            const sp<Layer>& clonedCropLayer = clonedLayersMap.at(cropLayer);
-            mDrawingState.touchableRegionCrop = clonedCropLayer;
-        }
-    }
-    // Cloned layers shouldn't handle watch outside since their z order is not determined by
-    // WM or the client.
-    mDrawingState.inputInfo.setInputConfig(WindowInfo::InputConfig::WATCH_OUTSIDE_TOUCH, false);
-}
-
-void Layer::updateClonedRelatives(const std::map<sp<Layer>, sp<Layer>>& clonedLayersMap) {
-    mDrawingState.zOrderRelativeOf = wp<Layer>();
-    mDrawingState.zOrderRelatives.clear();
-
-    if (!isClonedFromAlive()) {
-        return;
-    }
-
-    const sp<Layer>& clonedFrom = getClonedFrom();
-    for (wp<Layer>& relativeWeak : clonedFrom->mDrawingState.zOrderRelatives) {
-        const sp<Layer>& relative = relativeWeak.promote();
-        if (clonedLayersMap.count(relative) > 0) {
-            auto& clonedRelative = clonedLayersMap.at(relative);
-            mDrawingState.zOrderRelatives.add(clonedRelative);
-        }
-    }
-
-    // Check if the relativeLayer for the real layer is part of the cloned hierarchy.
-    // It's possible that the layer it's relative to is outside the requested cloned hierarchy.
-    // In that case, we treat the layer as if the relativeOf has been removed. This way, it will
-    // still traverse the children, but the layer with the missing relativeOf will not be shown
-    // on screen.
-    const sp<Layer>& relativeOf = clonedFrom->mDrawingState.zOrderRelativeOf.promote();
-    if (clonedLayersMap.count(relativeOf) > 0) {
-        const sp<Layer>& clonedRelativeOf = clonedLayersMap.at(relativeOf);
-        mDrawingState.zOrderRelativeOf = clonedRelativeOf;
-    }
-
-    updateClonedInputInfo(clonedLayersMap);
-
-    for (sp<Layer>& child : mDrawingChildren) {
-        child->updateClonedRelatives(clonedLayersMap);
-    }
-}
-
-void Layer::addChildToDrawing(const sp<Layer>& layer) {
-    mDrawingChildren.add(layer);
-    layer->mDrawingParent = sp<Layer>::fromExisting(this);
-}
-
 bool Layer::isInternalDisplayOverlay() const {
     const State& s(mDrawingState);
     if (s.flags & layer_state_t::eLayerSkipScreenshot) {
@@ -2733,12 +1940,6 @@ bool Layer::isInternalDisplayOverlay() const {
     return parent && parent->isInternalDisplayOverlay();
 }
 
-void Layer::setClonedChild(const sp<Layer>& clonedChild) {
-    mClonedChild = clonedChild;
-    mHadClonedChild = true;
-    mFlinger->mLayerMirrorRoots.push_back(this);
-}
-
 bool Layer::setDropInputMode(gui::DropInputMode mode) {
     if (mDrawingState.dropInputMode == mode) {
         return false;
@@ -2747,27 +1948,27 @@ bool Layer::setDropInputMode(gui::DropInputMode mode) {
     return true;
 }
 
-void Layer::cloneDrawingState(const Layer* from) {
-    mDrawingState = from->mDrawingState;
-    // Skip callback info since they are not applicable for cloned layers.
-    mDrawingState.releaseBufferListener = nullptr;
-    // TODO (b/238781169) currently broken for mirror layers because we do not
-    // track release fences for mirror layers composed on other displays
-    mDrawingState.callbackHandles = {};
-}
-
 void Layer::callReleaseBufferCallback(const sp<ITransactionCompletedListener>& listener,
                                       const sp<GraphicBuffer>& buffer, uint64_t framenumber,
                                       const sp<Fence>& releaseFence) {
-    if (!listener) {
+    if (!listener && !mBufferReleaseChannel) {
         return;
     }
+
     SFTRACE_FORMAT_INSTANT("callReleaseBufferCallback %s - %" PRIu64, getDebugName(), framenumber);
+
+    ReleaseCallbackId callbackId{buffer->getId(), framenumber};
+    const sp<Fence>& fence = releaseFence ? releaseFence : Fence::NO_FENCE;
     uint32_t currentMaxAcquiredBufferCount =
             mFlinger->getMaxAcquiredBufferCountForCurrentRefreshRate(mOwnerUid);
-    listener->onReleaseBuffer({buffer->getId(), framenumber},
-                              releaseFence ? releaseFence : Fence::NO_FENCE,
-                              currentMaxAcquiredBufferCount);
+
+    if (listener) {
+        listener->onReleaseBuffer(callbackId, fence, currentMaxAcquiredBufferCount);
+    }
+
+    if (mBufferReleaseChannel) {
+        mBufferReleaseChannel->writeReleaseFence(callbackId, fence, currentMaxAcquiredBufferCount);
+    }
 }
 
 sp<CallbackHandle> Layer::findCallbackHandle() {
@@ -2885,6 +2086,7 @@ void Layer::onLayerDisplayed(ftl::SharedFuture<FenceResult> futureFenceResult,
 
 void Layer::releasePendingBuffer(nsecs_t dequeueReadyTime) {
     for (const auto& handle : mDrawingState.callbackHandles) {
+        handle->bufferReleaseChannel = mBufferReleaseChannel;
         handle->transformHint = mTransformHint;
         handle->dequeueReadyTime = dequeueReadyTime;
         handle->currentMaxAcquiredBufferCount =
@@ -3602,13 +2804,6 @@ Rect Layer::computeBufferCrop(const State& s) {
     }
 }
 
-sp<Layer> Layer::createClone() {
-    surfaceflinger::LayerCreationArgs args(mFlinger.get(), nullptr, mName + " (Mirror)", 0,
-                                           LayerMetadata());
-    sp<Layer> layer = mFlinger->getFactory().createBufferStateLayer(args);
-    return layer;
-}
-
 void Layer::decrementPendingBufferCount() {
     int32_t pendingBuffers = --mPendingBufferTransactions;
     tracePendingBufferCount(pendingBuffers);
@@ -4013,7 +3208,8 @@ void Layer::onCompositionPresented(const DisplayDevice* display,
     }
 
     if (display) {
-        const Fps refreshRate = display->refreshRateSelector().getActiveMode().fps;
+        const auto activeMode = display->refreshRateSelector().getActiveMode();
+        const Fps refreshRate = activeMode.fps;
         const std::optional<Fps> renderRate =
                 mFlinger->mScheduler->getFrameRateOverride(getOwnerUid());
 
@@ -4033,7 +3229,12 @@ void Layer::onCompositionPresented(const DisplayDevice* display,
                     mFlinger->getHwComposer().getPresentTimestamp(*displayId);
 
             const nsecs_t now = systemTime(CLOCK_MONOTONIC);
-            const nsecs_t vsyncPeriod = display->getVsyncPeriodFromHWC();
+            const nsecs_t vsyncPeriod =
+                    mFlinger->getHwComposer()
+                            .getDisplayVsyncPeriod(*displayId)
+                            .value_opt()
+                            .value_or(activeMode.modePtr->getVsyncRate().getPeriodNsecs());
+
             const nsecs_t actualPresentTime = now - ((now - presentTimestamp) % vsyncPeriod);
 
             mFlinger->mTimeStats->setPresentTime(layerId, mCurrentFrameNumber, actualPresentTime,
@@ -4216,13 +3417,6 @@ sp<GraphicBuffer> Layer::getBuffer() const {
     return mBufferInfo.mBuffer ? mBufferInfo.mBuffer->getBuffer() : nullptr;
 }
 
-void Layer::setTransformHintLegacy(ui::Transform::RotationFlags displayTransformHint) {
-    mTransformHintLegacy = getFixedTransformHint();
-    if (mTransformHintLegacy == ui::Transform::ROT_INVALID) {
-        mTransformHintLegacy = displayTransformHint;
-    }
-}
-
 const std::shared_ptr<renderengine::ExternalTexture>& Layer::getExternalTexture() const {
     return mBufferInfo.mBuffer;
 }
@@ -4322,6 +3516,11 @@ bool Layer::setTrustedPresentationInfo(TrustedPresentationThresholds const& thre
     // path to ensure it recomutes the current state and invokes the TrustedPresentationListener if
     // we're already in the requested state.
     return haveTrustedPresentationListener;
+}
+
+void Layer::setBufferReleaseChannel(
+        const std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint>& channel) {
+    mBufferReleaseChannel = channel;
 }
 
 void Layer::updateLastLatchTime(nsecs_t latchTime) {

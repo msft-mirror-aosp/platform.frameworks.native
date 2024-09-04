@@ -56,6 +56,7 @@ public:
     /// Trunk stable readonly flags ///
     bool connected_display() const;
     bool frame_rate_category_mrr() const;
+    bool view_set_requested_frame_rate_mrr() const;
     bool enable_small_area_detection() const;
     bool misc1() const;
     bool vrr_config() const;
@@ -92,6 +93,7 @@ public:
     bool force_compile_graphite_renderengine() const;
     bool single_hop_screenshot() const;
     bool trace_frame_rate_override() const;
+    bool true_hdr_screenshots() const;
 
 protected:
     // overridden for unit tests
