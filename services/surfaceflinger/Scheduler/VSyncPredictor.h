@@ -127,7 +127,7 @@ private:
 
     VSyncPredictor(VSyncPredictor const&) = delete;
     VSyncPredictor& operator=(VSyncPredictor const&) = delete;
-    void clearTimestamps() REQUIRES(mMutex);
+    void clearTimestamps(bool clearTimelines) REQUIRES(mMutex);
 
     const std::unique_ptr<Clock> mClock;
     const PhysicalDisplayId mId;
