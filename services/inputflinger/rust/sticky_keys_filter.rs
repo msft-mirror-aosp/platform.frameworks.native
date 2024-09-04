@@ -134,6 +134,14 @@ impl Filter for StickyKeysFilter {
     fn destroy(&mut self) {
         self.next.destroy();
     }
+
+    fn dump(&mut self, dump_str: String) -> String {
+        let mut result = "Sticky Keys filter: \n".to_string();
+        result += &format!("\tmodifier_state = {:?}\n", self.modifier_state);
+        result += &format!("\tlocked_modifier_state = {:?}\n", self.locked_modifier_state);
+        result += &format!("\tcontributing_devices = {:?}\n", self.contributing_devices);
+        self.next.dump(dump_str + &result)
+    }
 }
 
 fn is_modifier_key(keycode: i32) -> bool {

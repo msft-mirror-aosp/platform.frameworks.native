@@ -146,6 +146,12 @@ void InputFilter::notifyConfigurationChangedLocked() {
 
 void InputFilter::dump(std::string& dump) {
     dump += "InputFilter:\n";
+    if (isFilterEnabled()) {
+        std::string result;
+        LOG_ALWAYS_FATAL_IF(!mInputFilterRust->dumpFilter(&result).isOk());
+        dump += result;
+        dump += "\n";
+    }
 }
 
 } // namespace android
