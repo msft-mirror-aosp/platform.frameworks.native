@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "gui/view/Surface.h"
 #include "Constants.h"
 #include "MockConsumer.h"
 
@@ -27,7 +28,7 @@
 #include <binder/ProcessState.h>
 #include <com_android_graphics_libgui_flags.h>
 #include <configstore/Utils.h>
-#include <gui/AidlStatusUtil.h>
+#include <gui/AidlUtil.h>
 #include <gui/BufferItemConsumer.h>
 #include <gui/BufferQueue.h>
 #include <gui/CpuConsumer.h>
@@ -49,9 +50,14 @@
 #include <utils/Errors.h>
 #include <utils/String8.h>
 
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <future>
 #include <limits>
 #include <thread>
+
+#include "testserver/TestServerClient.h"
 
 namespace android {
 
@@ -103,6 +109,18 @@ private:
     bool mEnableReleaseCb;
     int32_t mBuffersReleased;
     std::vector<sp<GraphicBuffer>> mDiscardedBuffers;
+};
+
+class DeathWatcherListener : public StubSurfaceListener {
+public:
+    virtual void onRemoteDied() { mDiedPromise.set_value(true); }
+
+    virtual bool needsDeathNotify() { return true; }
+
+    std::future<bool> getDiedFuture() { return mDiedPromise.get_future(); }
+
+private:
+    std::promise<bool> mDiedPromise;
 };
 
 class SurfaceTest : public ::testing::Test {
@@ -272,13 +290,9 @@ TEST_F(SurfaceTest, LayerCountIsOne) {
 TEST_F(SurfaceTest, QueryConsumerUsage) {
     const int TEST_USAGE_FLAGS =
             GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_HW_RENDER;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-    sp<BufferItemConsumer> c = new BufferItemConsumer(consumer,
-            TEST_USAGE_FLAGS);
-    sp<Surface> s = new Surface(producer);
+    sp<BufferItemConsumer> c = new BufferItemConsumer(TEST_USAGE_FLAGS);
 
+    sp<Surface> s = c->getSurface();
     sp<ANativeWindow> anw(s);
 
     int flags = -1;
@@ -290,15 +304,11 @@ TEST_F(SurfaceTest, QueryConsumerUsage) {
 
 TEST_F(SurfaceTest, QueryDefaultBuffersDataSpace) {
     const android_dataspace TEST_DATASPACE = HAL_DATASPACE_V0_SRGB;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
 
+    sp<CpuConsumer> cpuConsumer = new CpuConsumer(1);
     cpuConsumer->setDefaultBufferDataSpace(TEST_DATASPACE);
 
-    sp<Surface> s = new Surface(producer);
-
+    sp<Surface> s = cpuConsumer->getSurface();
     sp<ANativeWindow> anw(s);
 
     android_dataspace dataSpace;
@@ -311,11 +321,8 @@ TEST_F(SurfaceTest, QueryDefaultBuffersDataSpace) {
 }
 
 TEST_F(SurfaceTest, SettingGenerationNumber) {
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
-    sp<Surface> surface = new Surface(producer);
+    sp<CpuConsumer> cpuConsumer = new CpuConsumer(1);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<ANativeWindow> window(surface);
 
     // Allocate a buffer with a generation number of 0
@@ -2155,12 +2162,9 @@ TEST_F(SurfaceTest, DefaultMaxBufferCountSetAndUpdated) {
 TEST_F(SurfaceTest, BatchOperations) {
     const int BUFFER_COUNT = 16;
     const int BATCH_SIZE = 8;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
-    sp<Surface> surface = new Surface(producer);
+    sp<CpuConsumer> cpuConsumer = new CpuConsumer(1);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<ANativeWindow> window(surface);
     sp<StubSurfaceListener> listener = new StubSurfaceListener();
 
@@ -2207,12 +2211,9 @@ TEST_F(SurfaceTest, BatchOperations) {
 TEST_F(SurfaceTest, BatchIllegalOperations) {
     const int BUFFER_COUNT = 16;
     const int BATCH_SIZE = 8;
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
 
-    sp<CpuConsumer> cpuConsumer = new CpuConsumer(consumer, 1);
-    sp<Surface> surface = new Surface(producer);
+    sp<CpuConsumer> cpuConsumer = new CpuConsumer(1);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<ANativeWindow> window(surface);
     sp<StubSurfaceListener> listener = new StubSurfaceListener();
 
@@ -2237,12 +2238,8 @@ TEST_F(SurfaceTest, BatchIllegalOperations) {
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 
 TEST_F(SurfaceTest, PlatformBufferMethods) {
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-
-    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(consumer, 1);
-    sp<Surface> surface = sp<Surface>::make(producer);
+    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(1);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<StubSurfaceListener> listener = sp<StubSurfaceListener>::make();
     sp<GraphicBuffer> buffer;
     sp<Fence> fence;
@@ -2294,13 +2291,9 @@ TEST_F(SurfaceTest, PlatformBufferMethods) {
 }
 
 TEST_F(SurfaceTest, AllowAllocation) {
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-
     // controlledByApp must be true to disable blocking
-    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(consumer, 1, /*controlledByApp*/ true);
-    sp<Surface> surface = sp<Surface>::make(producer, /*controlledByApp*/ true);
+    sp<CpuConsumer> cpuConsumer = sp<CpuConsumer>::make(1, /*controlledByApp*/ true);
+    sp<Surface> surface = cpuConsumer->getSurface();
     sp<StubSurfaceListener> listener = sp<StubSurfaceListener>::make();
     sp<GraphicBuffer> buffer;
     sp<Fence> fence;
@@ -2387,6 +2380,142 @@ TEST_F(SurfaceTest, QueueAcquireReleaseDequeue_CalledInStack_DoesNotDeadlock) {
     EXPECT_NE(nullptr, surfaceListener->mBuffer);
 
     EXPECT_EQ(OK, surface->disconnect(NATIVE_WINDOW_API_CPU));
+}
+
+TEST_F(SurfaceTest, ViewSurface_toString) {
+    view::Surface surface{};
+    EXPECT_EQ("", surface.toString());
+
+    surface.name = String16("name");
+    EXPECT_EQ("name", surface.toString());
+}
+
+TEST_F(SurfaceTest, TestRemoteSurfaceDied_CallbackCalled) {
+    sp<TestServerClient> testServer = TestServerClient::Create();
+    sp<IGraphicBufferProducer> producer = testServer->CreateProducer();
+    EXPECT_NE(nullptr, producer);
+
+    sp<Surface> surface = sp<Surface>::make(producer);
+    sp<DeathWatcherListener> deathWatcher = sp<DeathWatcherListener>::make();
+    EXPECT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, deathWatcher));
+
+    auto diedFuture = deathWatcher->getDiedFuture();
+    EXPECT_EQ(OK, testServer->Kill());
+
+    diedFuture.wait();
+    EXPECT_TRUE(diedFuture.get());
+}
+
+TEST_F(SurfaceTest, TestRemoteSurfaceDied_Disconnect_CallbackNotCalled) {
+    sp<TestServerClient> testServer = TestServerClient::Create();
+    sp<IGraphicBufferProducer> producer = testServer->CreateProducer();
+    EXPECT_NE(nullptr, producer);
+
+    sp<Surface> surface = sp<Surface>::make(producer);
+    sp<DeathWatcherListener> deathWatcher = sp<DeathWatcherListener>::make();
+    EXPECT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, deathWatcher));
+    EXPECT_EQ(OK, surface->disconnect(NATIVE_WINDOW_API_CPU));
+
+    auto watcherDiedFuture = deathWatcher->getDiedFuture();
+    EXPECT_EQ(OK, testServer->Kill());
+
+    std::future_status status = watcherDiedFuture.wait_for(std::chrono::seconds(1));
+    EXPECT_EQ(std::future_status::timeout, status);
+}
+
+TEST_F(SurfaceTest, QueueBufferOutput_TracksReplacements) {
+    sp<BufferItemConsumer> consumer = sp<BufferItemConsumer>::make(GRALLOC_USAGE_SW_READ_OFTEN);
+    ASSERT_EQ(OK, consumer->setMaxBufferCount(3));
+    ASSERT_EQ(OK, consumer->setMaxAcquiredBufferCount(1));
+
+    sp<Surface> surface = consumer->getSurface();
+    sp<StubSurfaceListener> listener = sp<StubSurfaceListener>::make();
+
+    // Async mode sets up an extra buffer so the surface can queue it without waiting.
+    ASSERT_EQ(OK, surface->setMaxDequeuedBufferCount(1));
+    ASSERT_EQ(OK, surface->setAsyncMode(true));
+    ASSERT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, listener));
+
+    sp<GraphicBuffer> buffer;
+    sp<Fence> fence;
+    SurfaceQueueBufferOutput output;
+    BufferItem item;
+
+    // We can queue directly, without an output arg.
+    EXPECT_EQ(OK, surface->dequeueBuffer(&buffer, &fence));
+    EXPECT_EQ(OK, surface->queueBuffer(buffer, fence));
+    EXPECT_EQ(OK, consumer->acquireBuffer(&item, 0));
+    EXPECT_EQ(OK, consumer->releaseBuffer(item));
+
+    // We can queue with an output arg, and that we don't expect to see a replacement.
+    EXPECT_EQ(OK, surface->dequeueBuffer(&buffer, &fence));
+    EXPECT_EQ(OK, surface->queueBuffer(buffer, fence, &output));
+    EXPECT_FALSE(output.bufferReplaced);
+
+    // We expect see a replacement when we queue a second buffer in async mode, and the consumer
+    // hasn't acquired the first one yet.
+    EXPECT_EQ(OK, surface->dequeueBuffer(&buffer, &fence));
+    EXPECT_EQ(OK, surface->queueBuffer(buffer, fence, &output));
+    EXPECT_TRUE(output.bufferReplaced);
+}
+
+TEST_F(SurfaceTest, QueueBufferOutput_TracksReplacements_Plural) {
+    sp<BufferItemConsumer> consumer = sp<BufferItemConsumer>::make(GRALLOC_USAGE_SW_READ_OFTEN);
+    ASSERT_EQ(OK, consumer->setMaxBufferCount(4));
+    ASSERT_EQ(OK, consumer->setMaxAcquiredBufferCount(1));
+
+    sp<Surface> surface = consumer->getSurface();
+    consumer->setName(String8("TRPTest"));
+    sp<StubSurfaceListener> listener = sp<StubSurfaceListener>::make();
+
+    // Async mode sets up an extra buffer so the surface can queue it without waiting.
+    ASSERT_EQ(OK, surface->setMaxDequeuedBufferCount(2));
+    ASSERT_EQ(OK, surface->setAsyncMode(true));
+    ASSERT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, listener));
+
+    // dequeueBuffers requires a vector of a certain size:
+    std::vector<Surface::BatchBuffer> buffers(2);
+    std::vector<Surface::BatchQueuedBuffer> queuedBuffers;
+    std::vector<SurfaceQueueBufferOutput> outputs;
+    BufferItem item;
+
+    auto moveBuffersToQueuedBuffers = [&]() {
+        EXPECT_EQ(2u, buffers.size());
+        EXPECT_NE(nullptr, buffers[0].buffer);
+        EXPECT_NE(nullptr, buffers[1].buffer);
+
+        queuedBuffers.clear();
+        for (auto& buffer : buffers) {
+            auto& queuedBuffer = queuedBuffers.emplace_back();
+            queuedBuffer.buffer = buffer.buffer;
+            queuedBuffer.fenceFd = buffer.fenceFd;
+            queuedBuffer.timestamp = NATIVE_WINDOW_TIMESTAMP_AUTO;
+        }
+        buffers = {{}, {}};
+    };
+
+    // We can queue directly, without an output arg.
+    EXPECT_EQ(OK, surface->dequeueBuffers(&buffers));
+    moveBuffersToQueuedBuffers();
+    EXPECT_EQ(OK, surface->queueBuffers(queuedBuffers));
+    EXPECT_EQ(OK, consumer->acquireBuffer(&item, 0));
+    EXPECT_EQ(OK, consumer->releaseBuffer(item));
+
+    // We can queue with an output arg. Only the second one should be replaced.
+    EXPECT_EQ(OK, surface->dequeueBuffers(&buffers));
+    moveBuffersToQueuedBuffers();
+    EXPECT_EQ(OK, surface->queueBuffers(queuedBuffers, &outputs));
+    EXPECT_EQ(2u, outputs.size());
+    EXPECT_FALSE(outputs[0].bufferReplaced);
+    EXPECT_TRUE(outputs[1].bufferReplaced);
+
+    // Since we haven't acquired anything, both queued buffers will replace the original one.
+    EXPECT_EQ(OK, surface->dequeueBuffers(&buffers));
+    moveBuffersToQueuedBuffers();
+    EXPECT_EQ(OK, surface->queueBuffers(queuedBuffers, &outputs));
+    EXPECT_EQ(2u, outputs.size());
+    EXPECT_TRUE(outputs[0].bufferReplaced);
+    EXPECT_TRUE(outputs[1].bufferReplaced);
 }
 #endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
 

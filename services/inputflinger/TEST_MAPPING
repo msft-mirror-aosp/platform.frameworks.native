@@ -293,6 +293,9 @@
     },
     {
       "name": "monkey_test"
+    },
+    {
+      "name": "CtsInputRootTestCases"
     }
   ],
   "staged-platinum-postsubmit": [
