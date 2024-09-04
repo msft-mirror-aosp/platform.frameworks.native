@@ -186,6 +186,16 @@ impl Filter for SlowKeysFilter {
         slow_filter.input_filter_thread.unregister_thread_callback(Box::new(self.clone()));
         slow_filter.next.destroy();
     }
+
+    fn dump(&mut self, dump_str: String) -> String {
+        let mut slow_filter = self.write_inner();
+        let mut result = "Slow Keys filter: \n".to_string();
+        result += &format!("\tthreshold = {:?}ns\n", slow_filter.slow_key_threshold_ns);
+        result += &format!("\tongoing_down_events = {:?}\n", slow_filter.ongoing_down_events);
+        result += &format!("\tpending_down_events = {:?}\n", slow_filter.pending_down_events);
+        result += &format!("\tsupported_devices = {:?}\n", slow_filter.supported_devices);
+        slow_filter.next.dump(dump_str + &result)
+    }
 }
 
 impl ThreadCallback for SlowKeysFilter {

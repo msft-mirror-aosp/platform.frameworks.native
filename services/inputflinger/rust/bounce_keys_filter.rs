@@ -130,6 +130,15 @@ impl Filter for BounceKeysFilter {
     fn destroy(&mut self) {
         self.next.destroy();
     }
+
+    fn dump(&mut self, dump_str: String) -> String {
+        let mut result = "Bounce Keys filter: \n".to_string();
+        result += &format!("\tthreshold = {:?}ns\n", self.bounce_key_threshold_ns);
+        result += &format!("\tkey_event_map = {:?}\n", self.key_event_map);
+        result += &format!("\tblocked_events = {:?}\n", self.blocked_events);
+        result += &format!("\tsupported_devices = {:?}\n", self.supported_devices);
+        self.next.dump(dump_str + &result)
+    }
 }
 
 #[cfg(test)]
