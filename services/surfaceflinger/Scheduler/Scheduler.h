@@ -187,8 +187,7 @@ public:
         }
     }
 
-    void updatePhaseConfiguration(Fps);
-    void resetPhaseConfiguration(Fps) REQUIRES(kMainThreadContext);
+    void updatePhaseConfiguration(PhysicalDisplayId, Fps);
 
     const VsyncConfiguration& getVsyncConfiguration() const { return *mVsyncConfiguration; }
 
