@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 The Android Open Source Project
+ * Copyright (C) 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,14 +14,16 @@
  * limitations under the License.
  */
 
-package com.android.server.inputflinger;
+#pragma once
+
+#include <android/os/IServiceManager.h>
+#include "IServiceManager.h"
+namespace android {
 
 /**
- * Analogous to Android's InputDeviceInfo
- * Stores the basic information connected input devices.
+ * Encapsulate an AidlServiceManager in a CppBackendShim. Only used for testing.
  */
-parcelable DeviceInfo {
-    int deviceId;
-    boolean external;
-    int keyboardType;
-}
+LIBBINDER_EXPORTED sp<IServiceManager> getServiceManagerShimFromAidlServiceManagerForTests(
+        const sp<os::IServiceManager>& sm);
+
+} // namespace android
