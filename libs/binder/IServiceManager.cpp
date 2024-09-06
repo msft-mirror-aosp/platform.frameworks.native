@@ -18,6 +18,7 @@
 #define LOG_TAG "ServiceManagerCppClient"
 
 #include <binder/IServiceManager.h>
+#include <binder/IServiceManagerUnitTestHelper.h>
 #include "BackendUnifiedServiceManager.h"
 
 #include <inttypes.h>
@@ -309,6 +310,11 @@ void setDefaultServiceManager(const sp<IServiceManager>& sm) {
     if (!called) {
         LOG_ALWAYS_FATAL("setDefaultServiceManager() called after defaultServiceManager().");
     }
+}
+
+sp<IServiceManager> getServiceManagerShimFromAidlServiceManagerForTests(
+        const sp<AidlServiceManager>& sm) {
+    return sp<CppBackendShim>::make(sp<BackendUnifiedServiceManager>::make(sm));
 }
 
 std::weak_ptr<AccessorProvider> addAccessorProvider(RpcAccessorProvider&& providerCallback) {
