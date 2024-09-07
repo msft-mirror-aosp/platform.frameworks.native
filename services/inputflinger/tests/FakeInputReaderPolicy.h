@@ -88,8 +88,7 @@ private:
     std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(
             const InputDeviceIdentifier&, const std::optional<KeyboardLayoutInfo>) override;
     std::string getDeviceAlias(const InputDeviceIdentifier&) override;
-    void waitForInputDevices(std::function<void(bool)> processDevicesChanged,
-                             std::chrono::milliseconds timeout);
+    void waitForInputDevices(std::function<void(bool)> processDevicesChanged);
     void notifyStylusGestureStarted(int32_t deviceId, nsecs_t eventTime) override;
 
     mutable std::mutex mLock;

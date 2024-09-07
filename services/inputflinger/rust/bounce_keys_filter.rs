@@ -65,10 +65,7 @@ impl BounceKeysFilter {
 
 impl Filter for BounceKeysFilter {
     fn notify_key(&mut self, event: &KeyEvent) {
-        // Check if it is a supported device and event source contains Source::KEYBOARD
-        if !(self.supported_devices.contains(&event.deviceId)
-            && event.source.0 & Source::KEYBOARD.0 != 0)
-        {
+        if !(self.supported_devices.contains(&event.deviceId) && event.source == Source::KEYBOARD) {
             self.next.notify_key(event);
             return;
         }
@@ -198,41 +195,6 @@ mod tests {
         assert!(next.last_event().is_none());
 
         let event = KeyEvent { eventTime: 200, action: KeyEventAction::DOWN, ..BASE_KEY_EVENT };
-        filter.notify_key(&event);
-        assert_eq!(next.last_event().unwrap(), event);
-    }
-
-    #[test]
-    fn test_is_notify_key_for_tv_remote() {
-        let mut next = TestFilter::new();
-        let mut filter = setup_filter_with_external_device(
-            Box::new(next.clone()),
-            1,   /* device_id */
-            100, /* threshold */
-            KeyboardType::NonAlphabetic,
-        );
-
-        let source = Source(Source::KEYBOARD.0 | Source::DPAD.0);
-        let event = KeyEvent { action: KeyEventAction::DOWN, source, ..BASE_KEY_EVENT };
-        filter.notify_key(&event);
-        assert_eq!(next.last_event().unwrap(), event);
-
-        let event = KeyEvent { action: KeyEventAction::UP, source, ..BASE_KEY_EVENT };
-        filter.notify_key(&event);
-        assert_eq!(next.last_event().unwrap(), event);
-
-        next.clear();
-        let event = KeyEvent { action: KeyEventAction::DOWN, source, ..BASE_KEY_EVENT };
-        filter.notify_key(&event);
-        assert!(next.last_event().is_none());
-
-        let event =
-            KeyEvent { eventTime: 100, action: KeyEventAction::UP, source, ..BASE_KEY_EVENT };
-        filter.notify_key(&event);
-        assert!(next.last_event().is_none());
-
-        let event =
-            KeyEvent { eventTime: 200, action: KeyEventAction::DOWN, source, ..BASE_KEY_EVENT };
         filter.notify_key(&event);
         assert_eq!(next.last_event().unwrap(), event);
     }

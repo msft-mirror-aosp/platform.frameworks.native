@@ -1583,11 +1583,7 @@ sp<ISensorEventConnection> SensorService::createSensorEventConnection(const Stri
     // Only 4 modes supported for a SensorEventConnection ... NORMAL, DATA_INJECTION,
     // REPLAY_DATA_INJECTION and HAL_BYPASS_REPLAY_DATA_INJECTION
     if (requestedMode != NORMAL && !isInjectionMode(requestedMode)) {
-      ALOGE(
-          "Failed to create sensor event connection: invalid request mode. "
-          "requestMode: %d",
-          requestedMode);
-      return nullptr;
+        return nullptr;
     }
     resetTargetSdkVersionCache(opPackageName);
 
@@ -1595,19 +1591,8 @@ sp<ISensorEventConnection> SensorService::createSensorEventConnection(const Stri
     // To create a client in DATA_INJECTION mode to inject data, SensorService should already be
     // operating in DI mode.
     if (requestedMode == DATA_INJECTION) {
-      if (mCurrentOperatingMode != DATA_INJECTION) {
-        ALOGE(
-            "Failed to create sensor event connection: sensor service not in "
-            "DI mode when creating a client in DATA_INJECTION mode");
-        return nullptr;
-      }
-      if (!isAllowListedPackage(packageName)) {
-        ALOGE(
-            "Failed to create sensor event connection: package %s not in "
-            "allowed list for DATA_INJECTION mode",
-            packageName.c_str());
-        return nullptr;
-      }
+        if (mCurrentOperatingMode != DATA_INJECTION) return nullptr;
+        if (!isAllowListedPackage(packageName)) return nullptr;
     }
 
     uid_t uid = IPCThreadState::self()->getCallingUid();

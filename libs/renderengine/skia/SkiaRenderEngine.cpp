@@ -20,6 +20,9 @@
 
 #include "SkiaRenderEngine.h"
 
+#include <GrBackendSemaphore.h>
+#include <GrContextOptions.h>
+#include <GrTypes.h>
 #include <SkBlendMode.h>
 #include <SkCanvas.h>
 #include <SkColor.h>
@@ -53,9 +56,6 @@
 #include <common/FlagManager.h>
 #include <common/trace.h>
 #include <gui/FenceMonitor.h>
-#include <include/gpu/ganesh/GrBackendSemaphore.h>
-#include <include/gpu/ganesh/GrContextOptions.h>
-#include <include/gpu/ganesh/GrTypes.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
 #include <pthread.h>
 #include <src/core/SkTraceEventCommon.h>

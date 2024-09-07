@@ -133,9 +133,6 @@
     {
       "name": "binder_sdk_test",
       "host": true
-    },
-    {
-      "name": "binderCacheUnitTest"
     }
   ],
   "imports": [
