@@ -178,3 +178,10 @@ flag {
   description: "Capture input latency metrics on a per device granular level using histograms."
   bug: "270049345"
 }
+
+flag {
+  name: "collect_palm_rejection_quality_metrics"
+  namespace: "input"
+  description: "Collect quality metrics on framework palm rejection."
+  bug: "341717757"
+}
