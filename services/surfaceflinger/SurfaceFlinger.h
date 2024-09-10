@@ -1261,7 +1261,6 @@ private:
     };
 
     bool mIsHdcpViaNegVsync = false;
-    bool mIsHotplugErrViaNegVsync = false;
 
     std::mutex mHotplugMutex;
     std::vector<HotplugEvent> mPendingHotplugEvents GUARDED_BY(mHotplugMutex);
