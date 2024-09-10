@@ -43,7 +43,7 @@ class InputDevice {
 public:
     InputDevice(InputReaderContext* context, int32_t id, int32_t generation,
                 const InputDeviceIdentifier& identifier);
-    ~InputDevice();
+    virtual ~InputDevice();
 
     inline InputReaderContext* getContext() { return mContext; }
     inline int32_t getId() const { return mId; }
@@ -56,15 +56,18 @@ public:
     }
     inline const std::string getLocation() const { return mIdentifier.location; }
     inline ftl::Flags<InputDeviceClass> getClasses() const { return mClasses; }
-    inline uint32_t getSources() const { return mSources; }
+    inline virtual uint32_t getSources() const { return mSources; }
     inline bool hasEventHubDevices() const { return !mDevices.empty(); }
 
     inline bool isExternal() { return mIsExternal; }
     inline std::optional<uint8_t> getAssociatedDisplayPort() const {
         return mAssociatedDisplayPort;
     }
-    inline std::optional<std::string> getAssociatedDisplayUniqueId() const {
-        return mAssociatedDisplayUniqueId;
+    inline std::optional<std::string> getAssociatedDisplayUniqueIdByPort() const {
+        return mAssociatedDisplayUniqueIdByPort;
+    }
+    inline std::optional<std::string> getAssociatedDisplayUniqueIdByDescriptor() const {
+        return mAssociatedDisplayUniqueIdByDescriptor;
     }
     inline std::optional<std::string> getDeviceTypeAssociation() const {
         return mAssociatedDeviceType;
@@ -75,6 +78,8 @@ public:
     inline bool hasMic() const { return mHasMic; }
 
     inline bool isIgnored() { return !getMapperCount() && !mController; }
+
+    inline KeyboardType getKeyboardType() const { return mKeyboardType; }
 
     bool isEnabled();
 
@@ -121,14 +126,16 @@ public:
 
     void addKeyRemapping(int32_t fromKeyCode, int32_t toKeyCode);
 
+    void setKeyboardType(KeyboardType keyboardType);
+
     void bumpGeneration();
 
     [[nodiscard]] NotifyDeviceResetArgs notifyReset(nsecs_t when);
 
-    inline const PropertyMap& getConfiguration() { return mConfiguration; }
+    inline virtual const PropertyMap& getConfiguration() const { return mConfiguration; }
     inline EventHubInterface* getEventHub() { return mContext->getEventHub(); }
 
-    std::optional<int32_t> getAssociatedDisplayId();
+    std::optional<ui::LogicalDisplayId> getAssociatedDisplayId();
 
     void updateLedState(bool reset);
 
@@ -193,8 +200,10 @@ private:
     uint32_t mSources;
     bool mIsWaking;
     bool mIsExternal;
+    KeyboardType mKeyboardType = KeyboardType::NONE;
     std::optional<uint8_t> mAssociatedDisplayPort;
-    std::optional<std::string> mAssociatedDisplayUniqueId;
+    std::optional<std::string> mAssociatedDisplayUniqueIdByPort;
+    std::optional<std::string> mAssociatedDisplayUniqueIdByDescriptor;
     std::optional<std::string> mAssociatedDeviceType;
     std::optional<DisplayViewport> mAssociatedViewport;
     bool mHasMic;
@@ -290,6 +299,7 @@ public:
     inline ftl::Flags<InputDeviceClass> getDeviceClasses() const {
         return mEventHub->getDeviceClasses(mId);
     }
+    inline uint32_t getDeviceSources() const { return mDevice.getSources(); }
     inline InputDeviceIdentifier getDeviceIdentifier() const {
         return mEventHub->getDeviceIdentifier(mId);
     }
@@ -449,8 +459,11 @@ public:
     inline std::optional<uint8_t> getAssociatedDisplayPort() const {
         return mDevice.getAssociatedDisplayPort();
     }
-    inline std::optional<std::string> getAssociatedDisplayUniqueId() const {
-        return mDevice.getAssociatedDisplayUniqueId();
+    inline std::optional<std::string> getAssociatedDisplayUniqueIdByPort() const {
+        return mDevice.getAssociatedDisplayUniqueIdByPort();
+    }
+    inline std::optional<std::string> getAssociatedDisplayUniqueIdByDescriptor() const {
+        return mDevice.getAssociatedDisplayUniqueIdByDescriptor();
     }
     inline std::optional<std::string> getDeviceTypeAssociation() const {
         return mDevice.getDeviceTypeAssociation();
@@ -463,6 +476,10 @@ public:
     }
     inline void bumpGeneration() { mDevice.bumpGeneration(); }
     inline const PropertyMap& getConfiguration() const { return mDevice.getConfiguration(); }
+    inline KeyboardType getKeyboardType() const { return mDevice.getKeyboardType(); }
+    inline void setKeyboardType(KeyboardType keyboardType) {
+        return mDevice.setKeyboardType(keyboardType);
+    }
 
 private:
     InputDevice& mDevice;
