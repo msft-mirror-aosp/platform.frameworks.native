@@ -47,6 +47,7 @@ cc_defaults {
         "libtimestats_deps",
         "libsurfaceflinger_common_deps",
         "surfaceflinger_defaults",
+        "libsurfaceflinger_proto_deps",
     ],
     cflags: [
         "-DLOG_TAG=\"SurfaceFlinger\"",
@@ -93,7 +94,6 @@ cc_defaults {
         "libcompositionengine",
         "libframetimeline",
         "libgui_aidl_static",
-        "liblayers_proto",
         "libperfetto_client_experimental",
         "librenderengine",
         "libscheduler",

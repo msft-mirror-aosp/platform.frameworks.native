@@ -22,6 +22,7 @@
 #include <variant>
 
 #include <android-base/logging.h>
+#include <android_companion_virtualdevice_flags.h>
 #include <gtest/gtest.h>
 #include <input/DisplayViewport.h>
 #include <linux/input-event-codes.h>
@@ -77,37 +78,9 @@ DisplayViewport createSecondaryViewport() {
     return v;
 }
 
-/**
- * A fake InputDeviceContext that allows the associated viewport to be specified for the mapper.
- *
- * This is currently necessary because InputMapperUnitTest doesn't register the mappers it creates
- * with the InputDevice object, meaning that InputDevice::isIgnored becomes true, and the input
- * device doesn't set its associated viewport when it's configured.
- *
- * TODO(b/319217713): work out a way to avoid this fake.
- */
-class ViewportFakingInputDeviceContext : public InputDeviceContext {
-public:
-    ViewportFakingInputDeviceContext(InputDevice& device, int32_t eventHubId,
-                                     std::optional<DisplayViewport> viewport)
-          : InputDeviceContext(device, eventHubId), mAssociatedViewport(viewport) {}
-
-    ViewportFakingInputDeviceContext(InputDevice& device, int32_t eventHubId)
-          : ViewportFakingInputDeviceContext(device, eventHubId, createPrimaryViewport()) {}
-
-    std::optional<DisplayViewport> getAssociatedViewport() const override {
-        return mAssociatedViewport;
-    }
-
-    void setViewport(const std::optional<DisplayViewport>& viewport) {
-        mAssociatedViewport = viewport;
-    }
-
-private:
-    std::optional<DisplayViewport> mAssociatedViewport;
-};
-
 } // namespace
+
+namespace vd_flags = android::companion::virtualdevice::flags;
 
 /**
  * Unit tests for RotaryEncoderInputMapper.
@@ -135,9 +108,8 @@ TEST_F(RotaryEncoderInputMapperTest, ConfigureDisplayIdWithAssociatedViewport) {
     mReaderConfiguration.setDisplayViewports({primaryViewport, secondaryViewport});
 
     // Set up the secondary display as the associated viewport of the mapper.
-    createDevice();
-    ViewportFakingInputDeviceContext deviceContext(*mDevice, EVENTHUB_ID, secondaryViewport);
-    mMapper = createInputMapper<RotaryEncoderInputMapper>(deviceContext, mReaderConfiguration);
+    EXPECT_CALL((*mDevice), getAssociatedViewport).WillRepeatedly(Return(secondaryViewport));
+    mMapper = createInputMapper<RotaryEncoderInputMapper>(*mDeviceContext, mReaderConfiguration);
 
     std::list<NotifyArgs> args;
     // Ensure input events are generated for the secondary display.
@@ -156,7 +128,6 @@ TEST_F(RotaryEncoderInputMapperTest, ConfigureDisplayIdNoAssociatedViewport) {
     mFakePolicy->addDisplayViewport(createPrimaryViewport());
 
     // Set up the mapper with no associated viewport.
-    createDevice();
     mMapper = createInputMapper<RotaryEncoderInputMapper>(*mDeviceContext, mReaderConfiguration);
 
     // Ensure input events are generated without display ID
@@ -168,6 +139,52 @@ TEST_F(RotaryEncoderInputMapperTest, ConfigureDisplayIdNoAssociatedViewport) {
                         AllOf(WithMotionAction(AMOTION_EVENT_ACTION_SCROLL),
                               WithSource(AINPUT_SOURCE_ROTARY_ENCODER),
                               WithDisplayId(ui::LogicalDisplayId::INVALID)))));
+}
+
+TEST_F(RotaryEncoderInputMapperTest, ProcessRegularScroll) {
+    mMapper = createInputMapper<RotaryEncoderInputMapper>(*mDeviceContext, mReaderConfiguration);
+
+    std::list<NotifyArgs> args;
+    args += process(ARBITRARY_TIME, EV_REL, REL_WHEEL, 1);
+    args += process(ARBITRARY_TIME, EV_SYN, SYN_REPORT, 0);
+
+    EXPECT_THAT(args,
+                ElementsAre(VariantWith<NotifyMotionArgs>(
+                        AllOf(WithSource(AINPUT_SOURCE_ROTARY_ENCODER),
+                              WithMotionAction(AMOTION_EVENT_ACTION_SCROLL), WithScroll(1.0f)))));
+}
+
+TEST_F(RotaryEncoderInputMapperTest, ProcessHighResScroll) {
+    vd_flags::high_resolution_scroll(true);
+    EXPECT_CALL(mMockEventHub, hasRelativeAxis(EVENTHUB_ID, REL_WHEEL_HI_RES))
+            .WillRepeatedly(Return(true));
+    mMapper = createInputMapper<RotaryEncoderInputMapper>(*mDeviceContext, mReaderConfiguration);
+
+    std::list<NotifyArgs> args;
+    args += process(ARBITRARY_TIME, EV_REL, REL_WHEEL_HI_RES, 60);
+    args += process(ARBITRARY_TIME, EV_SYN, SYN_REPORT, 0);
+
+    EXPECT_THAT(args,
+                ElementsAre(VariantWith<NotifyMotionArgs>(
+                        AllOf(WithSource(AINPUT_SOURCE_ROTARY_ENCODER),
+                              WithMotionAction(AMOTION_EVENT_ACTION_SCROLL), WithScroll(0.5f)))));
+}
+
+TEST_F(RotaryEncoderInputMapperTest, HighResScrollIgnoresRegularScroll) {
+    vd_flags::high_resolution_scroll(true);
+    EXPECT_CALL(mMockEventHub, hasRelativeAxis(EVENTHUB_ID, REL_WHEEL_HI_RES))
+            .WillRepeatedly(Return(true));
+    mMapper = createInputMapper<RotaryEncoderInputMapper>(*mDeviceContext, mReaderConfiguration);
+
+    std::list<NotifyArgs> args;
+    args += process(ARBITRARY_TIME, EV_REL, REL_WHEEL_HI_RES, 60);
+    args += process(ARBITRARY_TIME, EV_REL, REL_WHEEL, 1);
+    args += process(ARBITRARY_TIME, EV_SYN, SYN_REPORT, 0);
+
+    EXPECT_THAT(args,
+                ElementsAre(VariantWith<NotifyMotionArgs>(
+                        AllOf(WithSource(AINPUT_SOURCE_ROTARY_ENCODER),
+                              WithMotionAction(AMOTION_EVENT_ACTION_SCROLL), WithScroll(0.5f)))));
 }
 
 } // namespace android

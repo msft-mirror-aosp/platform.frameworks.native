@@ -43,7 +43,7 @@ class InputDevice {
 public:
     InputDevice(InputReaderContext* context, int32_t id, int32_t generation,
                 const InputDeviceIdentifier& identifier);
-    ~InputDevice();
+    virtual ~InputDevice();
 
     inline InputReaderContext* getContext() { return mContext; }
     inline int32_t getId() const { return mId; }
@@ -56,7 +56,7 @@ public:
     }
     inline const std::string getLocation() const { return mIdentifier.location; }
     inline ftl::Flags<InputDeviceClass> getClasses() const { return mClasses; }
-    inline uint32_t getSources() const { return mSources; }
+    inline virtual uint32_t getSources() const { return mSources; }
     inline bool hasEventHubDevices() const { return !mDevices.empty(); }
 
     inline bool isExternal() { return mIsExternal; }
@@ -72,7 +72,7 @@ public:
     inline std::optional<std::string> getDeviceTypeAssociation() const {
         return mAssociatedDeviceType;
     }
-    inline std::optional<DisplayViewport> getAssociatedViewport() const {
+    inline virtual std::optional<DisplayViewport> getAssociatedViewport() const {
         return mAssociatedViewport;
     }
     inline bool hasMic() const { return mHasMic; }
@@ -132,7 +132,7 @@ public:
 
     [[nodiscard]] NotifyDeviceResetArgs notifyReset(nsecs_t when);
 
-    inline const PropertyMap& getConfiguration() { return mConfiguration; }
+    inline virtual const PropertyMap& getConfiguration() const { return mConfiguration; }
     inline EventHubInterface* getEventHub() { return mContext->getEventHub(); }
 
     std::optional<ui::LogicalDisplayId> getAssociatedDisplayId();
@@ -140,6 +140,8 @@ public:
     void updateLedState(bool reset);
 
     size_t getMapperCount();
+
+    std::optional<HardwareProperties> getTouchpadHardwareProperties();
 
     // construct and add a mapper to the input device
     template <class T, typename... Args>
@@ -299,6 +301,7 @@ public:
     inline ftl::Flags<InputDeviceClass> getDeviceClasses() const {
         return mEventHub->getDeviceClasses(mId);
     }
+    inline uint32_t getDeviceSources() const { return mDevice.getSources(); }
     inline InputDeviceIdentifier getDeviceIdentifier() const {
         return mEventHub->getDeviceIdentifier(mId);
     }

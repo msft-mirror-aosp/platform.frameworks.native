@@ -15,28 +15,229 @@
  */
 #include "BackendUnifiedServiceManager.h"
 
+#include <android/os/IAccessor.h>
+#include <binder/RpcSession.h>
+
 #if defined(__BIONIC__) && !defined(__ANDROID_VNDK__)
 #include <android-base/properties.h>
 #endif
 
 namespace android {
 
+#ifdef LIBBINDER_CLIENT_CACHE
+constexpr bool kUseCache = true;
+#else
+constexpr bool kUseCache = false;
+#endif
+
 using AidlServiceManager = android::os::IServiceManager;
+using IAccessor = android::os::IAccessor;
+
+static const char* kStaticCachableList[] = {
+        "activity",
+        "android.hardware.thermal.IThermal/default",
+        "android.hardware.power.IPower/default",
+        "android.frameworks.stats.IStats/default",
+        "android.system.suspend.ISystemSuspend/default",
+        "appops",
+        "audio",
+        "batterystats",
+        "carrier_config",
+        "connectivity",
+        "content_capture",
+        "device_policy",
+        "display",
+        "dropbox",
+        "econtroller",
+        "isub",
+        "legacy_permission",
+        "location",
+        "media.extractor",
+        "media.metrics",
+        "media.player",
+        "media.resource_manager",
+        "netd_listener",
+        "netstats",
+        "network_management",
+        "nfc",
+        "package_native",
+        "performance_hint",
+        "permission",
+        "permissionmgr",
+        "permission_checker",
+        "phone",
+        "platform_compat",
+        "power",
+        "role",
+        "sensorservice",
+        "statscompanion",
+        "telephony.registry",
+        "thermalservice",
+        "time_detector",
+        "trust",
+        "uimode",
+        "virtualdevice",
+        "virtualdevice_native",
+        "webviewupdate",
+};
+
+bool BinderCacheWithInvalidation::isClientSideCachingEnabled(const std::string& serviceName) {
+    if (ProcessState::self()->getThreadPoolMaxTotalThreadCount() <= 0) {
+        ALOGW("Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be "
+              "implemented. serviceName: %s",
+              serviceName.c_str());
+        return false;
+    }
+    for (const char* name : kStaticCachableList) {
+        if (name == serviceName) {
+            return true;
+        }
+    }
+    return false;
+}
+
+binder::Status BackendUnifiedServiceManager::updateCache(const std::string& serviceName,
+                                                         const os::Service& service) {
+    if (!kUseCache) {
+        return binder::Status::ok();
+    }
+    if (service.getTag() == os::Service::Tag::binder) {
+        sp<IBinder> binder = service.get<os::Service::Tag::binder>();
+        if (binder && mCacheForGetService->isClientSideCachingEnabled(serviceName) &&
+            binder->isBinderAlive()) {
+            return mCacheForGetService->setItem(serviceName, binder);
+        }
+    }
+    return binder::Status::ok();
+}
+
+bool BackendUnifiedServiceManager::returnIfCached(const std::string& serviceName,
+                                                  os::Service* _out) {
+    if (!kUseCache) {
+        return false;
+    }
+    sp<IBinder> item = mCacheForGetService->getItem(serviceName);
+    // TODO(b/363177618): Enable caching for binders which are always null.
+    if (item != nullptr && item->isBinderAlive()) {
+        *_out = os::Service::make<os::Service::Tag::binder>(item);
+        return true;
+    }
+    return false;
+}
 
 BackendUnifiedServiceManager::BackendUnifiedServiceManager(const sp<AidlServiceManager>& impl)
-      : mTheRealServiceManager(impl) {}
+      : mTheRealServiceManager(impl) {
+    mCacheForGetService = std::make_shared<BinderCacheWithInvalidation>();
+}
 
 sp<AidlServiceManager> BackendUnifiedServiceManager::getImpl() {
     return mTheRealServiceManager;
 }
+
 binder::Status BackendUnifiedServiceManager::getService(const ::std::string& name,
                                                         sp<IBinder>* _aidl_return) {
-    return mTheRealServiceManager->getService(name, _aidl_return);
+    os::Service service;
+    binder::Status status = getService2(name, &service);
+    *_aidl_return = service.get<os::Service::Tag::binder>();
+    return status;
 }
+
+binder::Status BackendUnifiedServiceManager::getService2(const ::std::string& name,
+                                                         os::Service* _out) {
+    if (returnIfCached(name, _out)) {
+        return binder::Status::ok();
+    }
+    os::Service service;
+    binder::Status status = mTheRealServiceManager->getService2(name, &service);
+
+    if (status.isOk()) {
+        status = toBinderService(name, service, _out);
+        if (status.isOk()) {
+            return updateCache(name, service);
+        }
+    }
+    return status;
+}
+
 binder::Status BackendUnifiedServiceManager::checkService(const ::std::string& name,
-                                                          sp<IBinder>* _aidl_return) {
-    return mTheRealServiceManager->checkService(name, _aidl_return);
+                                                          os::Service* _out) {
+    os::Service service;
+    if (returnIfCached(name, _out)) {
+        return binder::Status::ok();
+    }
+
+    binder::Status status = mTheRealServiceManager->checkService(name, &service);
+    if (status.isOk()) {
+        status = toBinderService(name, service, _out);
+        if (status.isOk()) {
+            return updateCache(name, service);
+        }
+    }
+    return status;
 }
+
+binder::Status BackendUnifiedServiceManager::toBinderService(const ::std::string& name,
+                                                             const os::Service& in,
+                                                             os::Service* _out) {
+    switch (in.getTag()) {
+        case os::Service::Tag::binder: {
+            if (in.get<os::Service::Tag::binder>() == nullptr) {
+                // failed to find a service. Check to see if we have any local
+                // injected Accessors for this service.
+                os::Service accessor;
+                binder::Status status = getInjectedAccessor(name, &accessor);
+                if (!status.isOk()) {
+                    *_out = os::Service::make<os::Service::Tag::binder>(nullptr);
+                    return status;
+                }
+                if (accessor.getTag() == os::Service::Tag::accessor &&
+                    accessor.get<os::Service::Tag::accessor>() != nullptr) {
+                    ALOGI("Found local injected service for %s, will attempt to create connection",
+                          name.c_str());
+                    // Call this again using the accessor Service to get the real
+                    // service's binder into _out
+                    return toBinderService(name, accessor, _out);
+                }
+            }
+
+            *_out = in;
+            return binder::Status::ok();
+        }
+        case os::Service::Tag::accessor: {
+            sp<IBinder> accessorBinder = in.get<os::Service::Tag::accessor>();
+            sp<IAccessor> accessor = interface_cast<IAccessor>(accessorBinder);
+            if (accessor == nullptr) {
+                ALOGE("Service#accessor doesn't have accessor. VM is maybe starting...");
+                *_out = os::Service::make<os::Service::Tag::binder>(nullptr);
+                return binder::Status::ok();
+            }
+            auto request = [=] {
+                os::ParcelFileDescriptor fd;
+                binder::Status ret = accessor->addConnection(&fd);
+                if (ret.isOk()) {
+                    return base::unique_fd(fd.release());
+                } else {
+                    ALOGE("Failed to connect to RpcSession: %s", ret.toString8().c_str());
+                    return base::unique_fd(-1);
+                }
+            };
+            auto session = RpcSession::make();
+            status_t status = session->setupPreconnectedClient(base::unique_fd{}, request);
+            if (status != OK) {
+                ALOGE("Failed to set up preconnected binder RPC client: %s",
+                      statusToString(status).c_str());
+                return binder::Status::fromStatusT(status);
+            }
+            session->setSessionSpecificRoot(accessorBinder);
+            *_out = os::Service::make<os::Service::Tag::binder>(session->getRootObject());
+            return binder::Status::ok();
+        }
+        default: {
+            LOG_ALWAYS_FATAL("Unknown service type: %d", in.getTag());
+        }
+    }
+}
+
 binder::Status BackendUnifiedServiceManager::addService(const ::std::string& name,
                                                         const sp<IBinder>& service,
                                                         bool allowIsolated, int32_t dumpPriority) {

@@ -196,13 +196,12 @@ public:
     bool isRefreshRateOverlayEnabled() const { return mRefreshRateOverlay != nullptr; }
     void animateOverlay();
     bool onKernelTimerChanged(std::optional<DisplayModeId>, bool timerExpired);
+    void onVrrIdle(bool idle);
 
     // Enables an overlay to be display with the hdr/sdr ratio
     void enableHdrSdrRatioOverlay(bool enable) REQUIRES(kMainThreadContext);
     void updateHdrSdrRatioOverlayRatio(float currentHdrSdrRatio);
     bool isHdrSdrRatioOverlayEnabled() const { return mHdrSdrRatioOverlay != nullptr; }
-
-    nsecs_t getVsyncPeriodFromHWC() const;
 
     Fps getAdjustedRefreshRate() const { return mAdjustedRefreshRate; }
 

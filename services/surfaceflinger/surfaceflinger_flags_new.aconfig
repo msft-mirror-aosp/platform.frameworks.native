@@ -114,6 +114,14 @@ flag {
   }
  } # single_hop_screenshot
 
+flag {
+    name: "true_hdr_screenshots"
+    namespace: "core_graphics"
+    description: "Enables screenshotting display content in HDR, sans tone mapping"
+    bug: "329470026"
+    is_fixed_read_only: true
+} # true_hdr_screenshots
+
  flag {
   name: "override_trusted_overlay"
   namespace: "window_surfaces"
@@ -124,6 +132,14 @@ flag {
     purpose: PURPOSE_BUGFIX
   }
 } # override_trusted_overlay
+
+flag {
+    name: "view_set_requested_frame_rate_mrr"
+    namespace: "core_graphics"
+    description: "Enable to use frame rate category NoPreference with fixed frame rate vote on MRR devices"
+    bug: "352206100"
+    is_fixed_read_only: true
+} # view_set_requested_frame_rate_mrr
 
 flag {
   name: "vrr_bugfix_24q4"

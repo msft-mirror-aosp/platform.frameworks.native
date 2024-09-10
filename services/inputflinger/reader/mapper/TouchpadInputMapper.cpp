@@ -36,6 +36,7 @@
 #include <log/log_main.h>
 #include <stats_pull_atom_callback.h>
 #include <statslog.h>
+#include "InputReaderBase.h"
 #include "TouchCursorInputMapperCommon.h"
 #include "TouchpadInputMapper.h"
 #include "gestures/HardwareProperties.h"
@@ -251,18 +252,17 @@ TouchpadInputMapper::TouchpadInputMapper(InputDeviceContext& deviceContext,
     }
 
     mGestureInterpreter->Initialize(GESTURES_DEVCLASS_TOUCHPAD);
-    mGestureInterpreter->SetHardwareProperties(createHardwareProperties(deviceContext));
+    mHardwareProperties = createHardwareProperties(deviceContext);
+    mGestureInterpreter->SetHardwareProperties(mHardwareProperties);
     // Even though we don't explicitly delete copy/move semantics, it's safe to
     // give away pointers to TouchpadInputMapper and its members here because
     // 1) mGestureInterpreter's lifecycle is determined by TouchpadInputMapper, and
     // 2) TouchpadInputMapper is stored as a unique_ptr and not moved.
     mGestureInterpreter->SetPropProvider(const_cast<GesturesPropProvider*>(&gesturePropProvider),
                                          &mPropertyProvider);
-    if (input_flags::enable_gestures_library_timer_provider()) {
-        mGestureInterpreter->SetTimerProvider(const_cast<GesturesTimerProvider*>(
-                                                      &kGestureTimerProvider),
-                                              &mTimerProvider);
-    }
+    mGestureInterpreter->SetTimerProvider(const_cast<GesturesTimerProvider*>(
+                                                  &kGestureTimerProvider),
+                                          &mTimerProvider);
     mGestureInterpreter->SetCallback(gestureInterpreterCallback, this);
 }
 
@@ -300,12 +300,8 @@ void TouchpadInputMapper::dump(std::string& dump) {
     dump += addLinePrefix(mGestureConverter.dump(), INDENT4);
     dump += INDENT3 "Gesture properties:\n";
     dump += addLinePrefix(mPropertyProvider.dump(), INDENT4);
-    if (input_flags::enable_gestures_library_timer_provider()) {
-        dump += INDENT3 "Timer provider:\n";
-        dump += addLinePrefix(mTimerProvider.dump(), INDENT4);
-    } else {
-        dump += INDENT3 "Timer provider: disabled by flag\n";
-    }
+    dump += INDENT3 "Timer provider:\n";
+    dump += addLinePrefix(mTimerProvider.dump(), INDENT4);
     dump += INDENT3 "Captured event converter:\n";
     dump += addLinePrefix(mCapturedEventConverter.dump(), INDENT4);
     dump += StringPrintf(INDENT3 "DisplayId: %s\n",
@@ -378,6 +374,7 @@ std::list<NotifyArgs> TouchpadInputMapper::reconfigure(nsecs_t when,
                 .setBoolValues({config.touchpadTapDraggingEnabled});
         mPropertyProvider.getProperty("Button Right Click Zone Enable")
                 .setBoolValues({config.touchpadRightClickZoneEnabled});
+        mTouchpadHardwareStateNotificationsEnabled = config.shouldNotifyTouchpadHardwareState;
     }
     std::list<NotifyArgs> out;
     if ((!changes.any() && config.pointerCaptureRequest.isEnable()) ||
@@ -427,6 +424,9 @@ std::list<NotifyArgs> TouchpadInputMapper::process(const RawEvent& rawEvent) {
     }
     std::optional<SelfContainedHardwareState> state = mStateConverter.processRawEvent(rawEvent);
     if (state) {
+        if (mTouchpadHardwareStateNotificationsEnabled) {
+            getPolicy()->notifyTouchpadHardwareState(*state, getDeviceId());
+        }
         updatePalmDetectionMetrics();
         return sendHardwareState(rawEvent.when, rawEvent.readTime, *state);
     } else {
@@ -468,9 +468,6 @@ std::list<NotifyArgs> TouchpadInputMapper::sendHardwareState(nsecs_t when, nsecs
 }
 
 std::list<NotifyArgs> TouchpadInputMapper::timeoutExpired(nsecs_t when) {
-    if (!input_flags::enable_gestures_library_timer_provider()) {
-        return {};
-    }
     mTimerProvider.triggerCallbacks(when);
     return processGestures(when, when);
 }
@@ -500,6 +497,10 @@ std::list<NotifyArgs> TouchpadInputMapper::processGestures(nsecs_t when, nsecs_t
 
 std::optional<ui::LogicalDisplayId> TouchpadInputMapper::getAssociatedDisplayId() {
     return mDisplayId;
+}
+
+std::optional<HardwareProperties> TouchpadInputMapper::getTouchpadHardwareProperties() {
+    return mHardwareProperties;
 }
 
 } // namespace android

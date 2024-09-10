@@ -32,8 +32,7 @@ constexpr size_t kValidTypes[] = {EV_SW,
                                   EV_MSC,
                                   EV_REL,
                                   android::EventHubInterface::DEVICE_ADDED,
-                                  android::EventHubInterface::DEVICE_REMOVED,
-                                  android::EventHubInterface::FINISHED_DEVICE_SCAN};
+                                  android::EventHubInterface::DEVICE_REMOVED};
 
 constexpr size_t kValidCodes[] = {
         SYN_REPORT,
@@ -282,6 +281,8 @@ public:
     FuzzInputReaderPolicy(std::shared_ptr<ThreadSafeFuzzedDataProvider> mFdp) : mFdp(mFdp) {}
     void getReaderConfiguration(InputReaderConfiguration* outConfig) override {}
     void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>& inputDevices) override {}
+    void notifyTouchpadHardwareState(const SelfContainedHardwareState& schs,
+                                     int32_t deviceId) override {}
     std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(
             const InputDeviceIdentifier& identifier,
             const std::optional<KeyboardLayoutInfo> layoutInfo) override {
@@ -306,7 +307,6 @@ public:
 class FuzzInputListener : public virtual InputListenerInterface {
 public:
     void notifyInputDevicesChanged(const NotifyInputDevicesChangedArgs& args) override {}
-    void notifyConfigurationChanged(const NotifyConfigurationChangedArgs& args) override {}
     void notifyKey(const NotifyKeyArgs& args) override {}
     void notifyMotion(const NotifyMotionArgs& args) override {}
     void notifySwitch(const NotifySwitchArgs& args) override {}
@@ -346,8 +346,8 @@ public:
     int32_t getLedMetaState() override { return mFdp->ConsumeIntegral<int32_t>(); };
     void notifyStylusGestureStarted(int32_t, nsecs_t) {}
 
-    void setPreventingTouchpadTaps(bool prevent) {}
-    bool isPreventingTouchpadTaps() { return mFdp->ConsumeBool(); };
+    void setPreventingTouchpadTaps(bool prevent) override {}
+    bool isPreventingTouchpadTaps() override { return mFdp->ConsumeBool(); };
 
     void setLastKeyDownTimestamp(nsecs_t when) { mLastKeyDownTimestamp = when; };
     nsecs_t getLastKeyDownTimestamp() { return mLastKeyDownTimestamp; };

@@ -634,11 +634,12 @@ auto RefreshRateSelector::getRankedFrameRatesLocked(const std::vector<LayerRequi
     // If all layers are category NoPreference, use the current config.
     if (noPreferenceLayers + noVoteLayers == layers.size()) {
         ALOGV("All layers NoPreference");
-        const auto ascendingWithPreferred =
-                rankFrameRates(anchorGroup, RefreshRateOrder::Ascending, activeMode.getId());
+        constexpr float kScore = std::numeric_limits<float>::max();
+        FrameRateRanking currentMode;
+        currentMode.emplace_back(ScoredFrameRate{getActiveModeLocked(), kScore});
         SFTRACE_FORMAT_INSTANT("%s (All layers NoPreference)",
-                               to_string(ascendingWithPreferred.front().frameRateMode.fps).c_str());
-        return {ascendingWithPreferred, kNoSignals};
+                              to_string(currentMode.front().frameRateMode.fps).c_str());
+        return {currentMode, kNoSignals};
     }
 
     const bool smoothSwitchOnly = categorySmoothSwitchOnlyLayers > 0;
@@ -840,7 +841,8 @@ auto RefreshRateSelector::getRankedFrameRatesLocked(const std::vector<LayerRequi
         return score.overallScore == 0;
     });
 
-    if (policy->primaryRangeIsSingleRate()) {
+    // TODO(b/364651864): Evaluate correctness of primaryRangeIsSingleRate.
+    if (!mIsVrrDevice.load() && policy->primaryRangeIsSingleRate()) {
         // If we never scored any layers, then choose the rate from the primary
         // range instead of picking a random score from the app range.
         if (noLayerScore) {
@@ -886,8 +888,8 @@ auto RefreshRateSelector::getRankedFrameRatesLocked(const std::vector<LayerRequi
         const auto touchRefreshRates = rankFrameRates(anchorGroup, RefreshRateOrder::Descending);
         using fps_approx_ops::operator<;
 
-        if (scores.front().frameRateMode.fps < touchRefreshRates.front().frameRateMode.fps) {
-            ALOGV("Touch Boost");
+        if (scores.front().frameRateMode.fps <= touchRefreshRates.front().frameRateMode.fps) {
+            ALOGV("Touch Boost [late]");
             SFTRACE_FORMAT_INSTANT("%s (Touch Boost [late])",
                                    to_string(touchRefreshRates.front().frameRateMode.fps).c_str());
             return {touchRefreshRates, GlobalSignals{.touch = true}};
@@ -1065,7 +1067,7 @@ auto RefreshRateSelector::getFrameRateOverrides(const std::vector<LayerRequireme
         ALOGV("%s: overriding to %s for uid=%d", __func__, to_string(overrideFps).c_str(), uid);
         SFTRACE_FORMAT_INSTANT("%s: overriding to %s for uid=%d", __func__,
                                to_string(overrideFps).c_str(), uid);
-        if (ATRACE_ENABLED() && FlagManager::getInstance().trace_frame_rate_override()) {
+        if (SFTRACE_ENABLED() && FlagManager::getInstance().trace_frame_rate_override()) {
             std::stringstream ss;
             ss << "FrameRateOverride " << uid;
             SFTRACE_INT(ss.str().c_str(), overrideFps.getIntValue());
@@ -1500,7 +1502,7 @@ void RefreshRateSelector::constructAvailableRefreshRates() {
             return str;
         };
         ALOGV("%s render rates: %s, isVrrDevice? %d", rangeName, stringifyModes().c_str(),
-              mIsVrrDevice);
+              mIsVrrDevice.load());
 
         return frameRateModes;
     };
@@ -1510,7 +1512,6 @@ void RefreshRateSelector::constructAvailableRefreshRates() {
 }
 
 bool RefreshRateSelector::isVrrDevice() const {
-    std::lock_guard lock(mLock);
     return mIsVrrDevice;
 }
 

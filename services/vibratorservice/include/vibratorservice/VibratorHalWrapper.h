@@ -349,10 +349,13 @@ class HalWrapper {
 public:
     using Effect = aidl::android::hardware::vibrator::Effect;
     using EffectStrength = aidl::android::hardware::vibrator::EffectStrength;
+    using VendorEffect = aidl::android::hardware::vibrator::VendorEffect;
     using CompositePrimitive = aidl::android::hardware::vibrator::CompositePrimitive;
     using CompositeEffect = aidl::android::hardware::vibrator::CompositeEffect;
     using Braking = aidl::android::hardware::vibrator::Braking;
     using PrimitivePwle = aidl::android::hardware::vibrator::PrimitivePwle;
+    using PwleV2Primitive = aidl::android::hardware::vibrator::PwleV2Primitive;
+    using PwleV2OutputMapEntry = aidl::android::hardware::vibrator::PwleV2OutputMapEntry;
 
     explicit HalWrapper(std::shared_ptr<CallbackScheduler> scheduler)
           : mCallbackScheduler(std::move(scheduler)) {}
@@ -380,12 +383,18 @@ public:
             Effect effect, EffectStrength strength,
             const std::function<void()>& completionCallback) = 0;
 
+    virtual HalResult<void> performVendorEffect(const VendorEffect& effect,
+                                                const std::function<void()>& completionCallback);
+
     virtual HalResult<std::chrono::milliseconds> performComposedEffect(
             const std::vector<CompositeEffect>& primitives,
             const std::function<void()>& completionCallback);
 
     virtual HalResult<void> performPwleEffect(const std::vector<PrimitivePwle>& primitives,
                                               const std::function<void()>& completionCallback);
+
+    virtual HalResult<void> composePwleV2(const std::vector<PwleV2Primitive>& composite,
+                                          const std::function<void()>& completionCallback);
 
 protected:
     // Shared pointer to allow CallbackScheduler to outlive this wrapper.
@@ -455,6 +464,10 @@ public:
             Effect effect, EffectStrength strength,
             const std::function<void()>& completionCallback) override final;
 
+    HalResult<void> performVendorEffect(
+            const VendorEffect& effect,
+            const std::function<void()>& completionCallback) override final;
+
     HalResult<std::chrono::milliseconds> performComposedEffect(
             const std::vector<CompositeEffect>& primitives,
             const std::function<void()>& completionCallback) override final;
@@ -462,6 +475,9 @@ public:
     HalResult<void> performPwleEffect(
             const std::vector<PrimitivePwle>& primitives,
             const std::function<void()>& completionCallback) override final;
+
+    HalResult<void> composePwleV2(const std::vector<PwleV2Primitive>& composite,
+                                  const std::function<void()>& completionCallback) override final;
 
 protected:
     HalResult<Capabilities> getCapabilitiesInternal() override final;

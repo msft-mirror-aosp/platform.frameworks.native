@@ -165,10 +165,6 @@ void PointerChoreographer::notifyInputDevicesChanged(const NotifyInputDevicesCha
     mNextListener.notify(args);
 }
 
-void PointerChoreographer::notifyConfigurationChanged(const NotifyConfigurationChangedArgs& args) {
-    mNextListener.notify(args);
-}
-
 void PointerChoreographer::notifyKey(const NotifyKeyArgs& args) {
     fadeMouseCursorOnKeyPress(args);
     mNextListener.notify(args);
@@ -202,6 +198,7 @@ void PointerChoreographer::fadeMouseCursorOnKeyPress(const android::NotifyKeyArg
     }
     auto it = mMousePointersByDisplay.find(targetDisplay);
     if (it != mMousePointersByDisplay.end()) {
+        mPolicy.notifyMouseCursorFadedOnTyping();
         it->second->fade(PointerControllerInterface::Transition::GRADUAL);
     }
 }
@@ -367,7 +364,8 @@ void PointerChoreographer::processTouchscreenAndStylusEventLocked(const NotifyMo
     const uint8_t actionIndex = MotionEvent::getActionIndex(args.action);
     std::array<uint32_t, MAX_POINTER_ID + 1> idToIndex;
     BitSet32 idBits;
-    if (maskedAction != AMOTION_EVENT_ACTION_UP && maskedAction != AMOTION_EVENT_ACTION_CANCEL) {
+    if (maskedAction != AMOTION_EVENT_ACTION_UP && maskedAction != AMOTION_EVENT_ACTION_CANCEL &&
+        maskedAction != AMOTION_EVENT_ACTION_HOVER_EXIT) {
         for (size_t i = 0; i < args.getPointerCount(); i++) {
             if (maskedAction == AMOTION_EVENT_ACTION_POINTER_UP && actionIndex == i) {
                 continue;
@@ -513,8 +511,9 @@ void PointerChoreographer::dump(std::string& dump) {
     std::scoped_lock _l(mLock);
 
     dump += "PointerChoreographer:\n";
-    dump += StringPrintf("show touches: %s\n", mShowTouchesEnabled ? "true" : "false");
-    dump += StringPrintf("stylus pointer icon enabled: %s\n",
+    dump += StringPrintf(INDENT "Show Touches Enabled: %s\n",
+                         mShowTouchesEnabled ? "true" : "false");
+    dump += StringPrintf(INDENT "Stylus PointerIcon Enabled: %s\n",
                          mStylusPointerIconEnabled ? "true" : "false");
 
     dump += INDENT "MousePointerControllers:\n";

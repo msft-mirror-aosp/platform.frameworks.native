@@ -109,7 +109,6 @@ protected:
                 .WillRepeatedly([]() -> base::Result<std::vector<int32_t>> {
                     return base::ResultError("Axis not supported", NAME_NOT_FOUND);
                 });
-        createDevice();
         mMapper = createInputMapper<TouchpadInputMapper>(*mDeviceContext, mReaderConfiguration);
     }
 };
@@ -171,6 +170,24 @@ TEST_F(TouchpadInputMapperTest, HoverAndLeftButtonPress) {
     args += process(EV_KEY, BTN_TOOL_FINGER, 0);
     args += process(EV_SYN, SYN_REPORT, 0);
     ASSERT_THAT(args, testing::IsEmpty());
+}
+
+TEST_F(TouchpadInputMapperTest, TouchpadHardwareState) {
+    mReaderConfiguration.shouldNotifyTouchpadHardwareState = true;
+    std::list<NotifyArgs> args =
+            mMapper->reconfigure(ARBITRARY_TIME, mReaderConfiguration,
+                                 InputReaderConfiguration::Change::TOUCHPAD_SETTINGS);
+
+    args += process(EV_ABS, ABS_MT_TRACKING_ID, 1);
+    args += process(EV_KEY, BTN_TOUCH, 1);
+    setScanCodeState(KeyState::DOWN, {BTN_TOOL_FINGER});
+    args += process(EV_KEY, BTN_TOOL_FINGER, 1);
+    args += process(EV_ABS, ABS_MT_POSITION_X, 50);
+    args += process(EV_ABS, ABS_MT_POSITION_Y, 50);
+    args += process(EV_ABS, ABS_MT_PRESSURE, 1);
+    args += process(EV_SYN, SYN_REPORT, 0);
+
+    mFakePolicy->assertTouchpadHardwareStateNotified();
 }
 
 } // namespace android
