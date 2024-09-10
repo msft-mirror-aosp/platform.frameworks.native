@@ -20,9 +20,6 @@
 
 #include "SkiaRenderEngine.h"
 
-#include <GrBackendSemaphore.h>
-#include <GrContextOptions.h>
-#include <GrTypes.h>
 #include <SkBlendMode.h>
 #include <SkCanvas.h>
 #include <SkColor.h>
@@ -56,6 +53,9 @@
 #include <common/FlagManager.h>
 #include <common/trace.h>
 #include <gui/FenceMonitor.h>
+#include <include/gpu/ganesh/GrBackendSemaphore.h>
+#include <include/gpu/ganesh/GrContextOptions.h>
+#include <include/gpu/ganesh/GrTypes.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
 #include <pthread.h>
 #include <src/core/SkTraceEventCommon.h>
@@ -76,6 +76,7 @@
 #include "compat/SkiaGpuContext.h"
 #include "filters/BlurFilter.h"
 #include "filters/GaussianBlurFilter.h"
+#include "filters/KawaseBlurDualFilter.h"
 #include "filters/KawaseBlurFilter.h"
 #include "filters/LinearEffect.h"
 #include "filters/MouriMap.h"
@@ -283,6 +284,11 @@ SkiaRenderEngine::SkiaRenderEngine(Threaded threaded, PixelFormat pixelFormat,
         case BlurAlgorithm::KAWASE: {
             ALOGD("Background Blurs Enabled (Kawase algorithm)");
             mBlurFilter = new KawaseBlurFilter();
+            break;
+        }
+        case BlurAlgorithm::KAWASE_DUAL_FILTER: {
+            ALOGD("Background Blurs Enabled (Kawase dual-filtering algorithm)");
+            mBlurFilter = new KawaseBlurDualFilter();
             break;
         }
         default: {

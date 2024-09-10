@@ -595,6 +595,11 @@ bool LayerInfo::FrameRate::isVoteValidForMrr(bool isVrrDevice) const {
         return true;
     }
 
+    if (category == FrameRateCategory::NoPreference && vote.rate.isValid() &&
+        vote.type == FrameRateCompatibility::ExactOrMultiple) {
+        return true;
+    }
+
     return false;
 }
 
