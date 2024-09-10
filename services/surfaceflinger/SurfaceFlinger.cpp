@@ -2175,7 +2175,8 @@ void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t t
         // use ~0 instead of -1 as AidlComposerHal.cpp passes the param as unsigned int32
         if (mIsHotplugErrViaNegVsync && vsyncPeriod.value() == ~0) {
             const auto errorCode = static_cast<int32_t>(-timestamp);
-            ALOGD("%s: Hotplug error %d for display %" PRIu64, __func__, errorCode, hwcDisplayId);
+            ALOGD("%s: Hotplug error %d for hwcDisplayId %" PRIu64, __func__, errorCode,
+                  hwcDisplayId);
             mScheduler->dispatchHotplugError(errorCode);
             return;
         }
@@ -2185,8 +2186,8 @@ void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t t
             // one byte is good enough to encode android.hardware.drm.HdcpLevel
             const int32_t maxLevel = (value >> 8) & 0xFF;
             const int32_t connectedLevel = value & 0xFF;
-            ALOGD("%s: HDCP levels changed (connected=%d, max=%d) for display %" PRIu64, __func__,
-                  connectedLevel, maxLevel, hwcDisplayId);
+            ALOGD("%s: HDCP levels changed (connected=%d, max=%d) for hwcDisplayId %" PRIu64,
+                  __func__, connectedLevel, maxLevel, hwcDisplayId);
             updateHdcpLevels(hwcDisplayId, connectedLevel, maxLevel);
             return;
         }
@@ -2226,7 +2227,7 @@ void SurfaceFlinger::onComposerHalHotplugEvent(hal::HWDisplayId hwcDisplayId,
     if (FlagManager::getInstance().hotplug2()) {
         // TODO(b/311403559): use enum type instead of int
         const auto errorCode = static_cast<int32_t>(event);
-        ALOGD("%s: Hotplug error %d for display %" PRIu64, __func__, errorCode, hwcDisplayId);
+        ALOGD("%s: Hotplug error %d for hwcDisplayId %" PRIu64, __func__, errorCode, hwcDisplayId);
         mScheduler->dispatchHotplugError(errorCode);
     }
 }
@@ -2274,6 +2275,18 @@ void SurfaceFlinger::onRefreshRateChangedDebug(const RefreshRateChangedDebugData
             }
         }
     }));
+}
+
+void SurfaceFlinger::onComposerHalHdcpLevelsChanged(hal::HWDisplayId hwcDisplayId,
+                                                    const HdcpLevels& levels) {
+    if (FlagManager::getInstance().hdcp_level_hal()) {
+        // TODO(b/362270040): propagate enum constants
+        const int32_t maxLevel = static_cast<int32_t>(levels.maxLevel);
+        const int32_t connectedLevel = static_cast<int32_t>(levels.connectedLevel);
+        ALOGD("%s: HDCP levels changed (connected=%d, max=%d) for hwcDisplayId %" PRIu64, __func__,
+              connectedLevel, maxLevel, hwcDisplayId);
+        updateHdcpLevels(hwcDisplayId, connectedLevel, maxLevel);
+    }
 }
 
 void SurfaceFlinger::configure() {
