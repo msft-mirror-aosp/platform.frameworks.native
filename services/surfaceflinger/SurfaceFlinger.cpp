@@ -532,9 +532,6 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
     mIgnoreHdrCameraLayers = ignore_hdr_camera_layers(false);
 
     // These are set by the HWC implementation to indicate that they will use the workarounds.
-    mIsHotplugErrViaNegVsync =
-            base::GetBoolProperty("debug.sf.hwc_hotplug_error_via_neg_vsync"s, false);
-
     mIsHdcpViaNegVsync = base::GetBoolProperty("debug.sf.hwc_hdcp_via_neg_vsync"s, false);
 }
 
@@ -2172,21 +2169,13 @@ void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t t
                                         std::optional<hal::VsyncPeriodNanos> vsyncPeriod) {
     if (FlagManager::getInstance().connected_display() && timestamp < 0 &&
         vsyncPeriod.has_value()) {
-        // use ~0 instead of -1 as AidlComposerHal.cpp passes the param as unsigned int32
-        if (mIsHotplugErrViaNegVsync && vsyncPeriod.value() == ~0) {
-            const auto errorCode = static_cast<int32_t>(-timestamp);
-            ALOGD("%s: Hotplug error %d for display %" PRIu64, __func__, errorCode, hwcDisplayId);
-            mScheduler->dispatchHotplugError(errorCode);
-            return;
-        }
-
         if (mIsHdcpViaNegVsync && vsyncPeriod.value() == ~1) {
             const int32_t value = static_cast<int32_t>(-timestamp);
             // one byte is good enough to encode android.hardware.drm.HdcpLevel
             const int32_t maxLevel = (value >> 8) & 0xFF;
             const int32_t connectedLevel = value & 0xFF;
-            ALOGD("%s: HDCP levels changed (connected=%d, max=%d) for display %" PRIu64, __func__,
-                  connectedLevel, maxLevel, hwcDisplayId);
+            ALOGD("%s: HDCP levels changed (connected=%d, max=%d) for hwcDisplayId %" PRIu64,
+                  __func__, connectedLevel, maxLevel, hwcDisplayId);
             updateHdcpLevels(hwcDisplayId, connectedLevel, maxLevel);
             return;
         }
@@ -2226,7 +2215,7 @@ void SurfaceFlinger::onComposerHalHotplugEvent(hal::HWDisplayId hwcDisplayId,
     if (FlagManager::getInstance().hotplug2()) {
         // TODO(b/311403559): use enum type instead of int
         const auto errorCode = static_cast<int32_t>(event);
-        ALOGD("%s: Hotplug error %d for display %" PRIu64, __func__, errorCode, hwcDisplayId);
+        ALOGD("%s: Hotplug error %d for hwcDisplayId %" PRIu64, __func__, errorCode, hwcDisplayId);
         mScheduler->dispatchHotplugError(errorCode);
     }
 }
@@ -2274,6 +2263,18 @@ void SurfaceFlinger::onRefreshRateChangedDebug(const RefreshRateChangedDebugData
             }
         }
     }));
+}
+
+void SurfaceFlinger::onComposerHalHdcpLevelsChanged(hal::HWDisplayId hwcDisplayId,
+                                                    const HdcpLevels& levels) {
+    if (FlagManager::getInstance().hdcp_level_hal()) {
+        // TODO(b/362270040): propagate enum constants
+        const int32_t maxLevel = static_cast<int32_t>(levels.maxLevel);
+        const int32_t connectedLevel = static_cast<int32_t>(levels.connectedLevel);
+        ALOGD("%s: HDCP levels changed (connected=%d, max=%d) for hwcDisplayId %" PRIu64, __func__,
+              connectedLevel, maxLevel, hwcDisplayId);
+        updateHdcpLevels(hwcDisplayId, connectedLevel, maxLevel);
+    }
 }
 
 void SurfaceFlinger::configure() {
@@ -2738,7 +2739,8 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     if (!FlagManager::getInstance().ce_fence_promise()) {
         refreshArgs.layersWithQueuedFrames.reserve(mLayersWithQueuedFrames.size());
         for (auto& [layer, _] : mLayersWithQueuedFrames) {
-            if (const auto& layerFE = layer->getCompositionEngineLayerFE())
+            if (const auto& layerFE = layer->getCompositionEngineLayerFE(
+                        {static_cast<uint32_t>(layer->sequence)}))
                 refreshArgs.layersWithQueuedFrames.push_back(layerFE);
         }
     }
@@ -2814,7 +2816,8 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
 
         refreshArgs.layersWithQueuedFrames.reserve(mLayersWithQueuedFrames.size());
         for (auto& [layer, _] : mLayersWithQueuedFrames) {
-            if (const auto& layerFE = layer->getCompositionEngineLayerFE()) {
+            if (const auto& layerFE = layer->getCompositionEngineLayerFE(
+                        {static_cast<uint32_t>(layer->sequence)})) {
                 refreshArgs.layersWithQueuedFrames.push_back(layerFE);
                 // Some layers are not displayed and do not yet have a future release fence
                 if (layerFE->getReleaseFencePromiseStatus() ==
@@ -3910,7 +3913,6 @@ void SurfaceFlinger::commitTransactionsLocked(uint32_t transactionFlags) {
     // Commit display transactions.
     const bool displayTransactionNeeded = transactionFlags & eDisplayTransactionNeeded;
     mFrontEndDisplayInfosChanged = displayTransactionNeeded;
-    mForceTransactionDisplayChange = displayTransactionNeeded;
 
     if (mSomeChildrenChanged) {
         mVisibleRegionsDirty = true;

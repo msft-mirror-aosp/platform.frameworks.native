@@ -67,6 +67,7 @@ class Layer;
 
 namespace hal = android::hardware::graphics::composer::hal;
 
+using aidl::android::hardware::drm::HdcpLevels;
 using aidl::android::hardware::graphics::common::DisplayHotplugEvent;
 using aidl::android::hardware::graphics::composer3::RefreshRateChangedDebugData;
 
@@ -85,6 +86,7 @@ struct ComposerCallback {
     virtual void onComposerHalSeamlessPossible(hal::HWDisplayId) = 0;
     virtual void onComposerHalVsyncIdle(hal::HWDisplayId) = 0;
     virtual void onRefreshRateChangedDebug(const RefreshRateChangedDebugData&) = 0;
+    virtual void onComposerHalHdcpLevelsChanged(hal::HWDisplayId, const HdcpLevels& levels) = 0;
 
 protected:
     ~ComposerCallback() = default;
