@@ -335,13 +335,6 @@ public:
         return mFlinger->mLegacyLayers[layerId]->findOutputLayerForDisplay(display.get());
     }
 
-    static void setLayerSidebandStream(const sp<Layer>& layer,
-                                       const sp<NativeHandle>& sidebandStream) {
-        layer->mDrawingState.sidebandStream = sidebandStream;
-        layer->mSidebandStream = sidebandStream;
-        layer->editLayerSnapshot()->sidebandStream = sidebandStream;
-    }
-
     void setLayerCompositionType(const sp<Layer>& layer,
                                  aidl::android::hardware::graphics::composer3::Composition type) {
         auto outputLayer = findOutputLayerForDisplay(static_cast<uint32_t>(layer->sequence),
@@ -350,10 +343,6 @@ public:
         auto& state = outputLayer->editState();
         LOG_ALWAYS_FATAL_IF(!outputLayer->getState().hwc);
         (*state.hwc).hwcCompositionType = type;
-    }
-
-    static void setLayerDrawingParent(const sp<Layer>& layer, const sp<Layer>& drawingParent) {
-        layer->mDrawingParent = drawingParent;
     }
 
     /* ------------------------------------------------------------------------
