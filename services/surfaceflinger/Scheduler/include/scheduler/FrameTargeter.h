@@ -106,7 +106,8 @@ protected:
         FenceTimePtr fenceTime = FenceTime::NO_FENCE;
         TimePoint expectedPresentTime = TimePoint();
     };
-    std::array<FenceWithFenceTime, 2> mPresentFences;
+    // size should be longest sf-duration / shortest vsync period and round up
+    std::array<FenceWithFenceTime, 5> mPresentFences; // currently consider 166hz.
     utils::RingBuffer<FenceWithFenceTime, 5> mFenceWithFenceTimes;
 
     TimePoint mLastSignaledFrameTime;
@@ -130,6 +131,18 @@ private:
             pastFenceTimePtr = fenceTimePtr;
         }
         return pastFenceTimePtr;
+    }
+
+    size_t getPresentFenceShift(Period minFramePeriod) const {
+        const bool isTwoVsyncsAhead = targetsVsyncsAhead<2>(minFramePeriod);
+        size_t shift = 0;
+        if (isTwoVsyncsAhead) {
+            shift = static_cast<size_t>(expectedFrameDuration().ns() / minFramePeriod.ns());
+            if (shift >= mPresentFences.size()) {
+                shift = mPresentFences.size() - 1;
+            }
+        }
+        return shift;
     }
 };
 

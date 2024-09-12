@@ -92,8 +92,8 @@ public:
 
     void startTimers();
 
-    // TODO: b/241285191 - Remove this API by promoting pacesetter in onScreen{Acquired,Released}.
-    void setPacesetterDisplay(PhysicalDisplayId) REQUIRES(kMainThreadContext)
+    // TODO(b/241285191): Remove this API by promoting pacesetter in onScreen{Acquired,Released}.
+    void setPacesetterDisplay(std::optional<PhysicalDisplayId>) REQUIRES(kMainThreadContext)
             EXCLUDES(mDisplayLock);
 
     using RefreshRateSelectorPtr = std::shared_ptr<RefreshRateSelector>;
@@ -101,16 +101,9 @@ public:
     using ConstVsyncSchedulePtr = std::shared_ptr<const VsyncSchedule>;
     using VsyncSchedulePtr = std::shared_ptr<VsyncSchedule>;
 
-    // After registration/unregistration, `activeDisplayId` is promoted to pacesetter. Note that the
-    // active display is never unregistered, since hotplug disconnect never happens for activatable
-    // displays, i.e. a foldable's internal displays or otherwise the (internal or external) primary
-    // display.
-    // TODO: b/255635821 - Remove active display parameters.
-    void registerDisplay(PhysicalDisplayId, RefreshRateSelectorPtr,
-                         PhysicalDisplayId activeDisplayId) REQUIRES(kMainThreadContext)
+    void registerDisplay(PhysicalDisplayId, RefreshRateSelectorPtr) REQUIRES(kMainThreadContext)
             EXCLUDES(mDisplayLock);
-    void unregisterDisplay(PhysicalDisplayId, PhysicalDisplayId activeDisplayId)
-            REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock);
+    void unregisterDisplay(PhysicalDisplayId) REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock);
 
     void run();
 
@@ -377,16 +370,9 @@ private:
     void resyncAllToHardwareVsync(bool allowToEnable) EXCLUDES(mDisplayLock);
     void setVsyncConfig(const VsyncConfig&, Period vsyncPeriod);
 
-    // TODO: b/241286431 - Remove this option, which assumes that the pacesetter does not change
-    // when a (secondary) display is registered or unregistered. In the short term, this avoids
-    // a deadlock where the main thread joins with the timer thread as the timer thread waits to
-    // lock a mutex held by the main thread.
-    struct PromotionParams {
-        // Whether to stop and start the idle timer. Ignored unless connected_display flag is set.
-        bool toggleIdleTimer;
-    };
-
-    void promotePacesetterDisplay(PhysicalDisplayId pacesetterId, PromotionParams)
+    // Chooses a pacesetter among the registered displays, unless `pacesetterIdOpt` is specified.
+    // The new `mPacesetterDisplayId` is never `std::nullopt`.
+    void promotePacesetterDisplay(std::optional<PhysicalDisplayId> pacesetterIdOpt = std::nullopt)
             REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock);
 
     // Changes to the displays (e.g. registering and unregistering) must be made
@@ -395,20 +381,17 @@ private:
     // MessageQueue and EventThread need to use the new pacesetter's
     // VsyncSchedule, and this must happen while mDisplayLock is *not* locked,
     // or else we may deadlock with EventThread.
-    std::shared_ptr<VsyncSchedule> promotePacesetterDisplayLocked(PhysicalDisplayId pacesetterId,
-                                                                  PromotionParams)
+    std::shared_ptr<VsyncSchedule> promotePacesetterDisplayLocked(
+            std::optional<PhysicalDisplayId> pacesetterIdOpt = std::nullopt)
             REQUIRES(kMainThreadContext, mDisplayLock);
     void applyNewVsyncSchedule(std::shared_ptr<VsyncSchedule>) EXCLUDES(mDisplayLock);
 
-    // If toggleIdleTimer is true, the calling thread blocks until the pacesetter's idle timer
-    // thread exits, in which case mDisplayLock must not be locked by the caller to avoid deadlock,
-    // since the timer thread locks it before exit.
-    void demotePacesetterDisplay(PromotionParams) REQUIRES(kMainThreadContext)
-            EXCLUDES(mDisplayLock, mPolicyLock);
+    // Blocks until the pacesetter's idle timer thread exits. `mDisplayLock` must not be locked by
+    // the caller on the main thread to avoid deadlock, since the timer thread locks it before exit.
+    void demotePacesetterDisplay() REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock, mPolicyLock);
 
-    void registerDisplayInternal(PhysicalDisplayId, RefreshRateSelectorPtr, VsyncSchedulePtr,
-                                 PhysicalDisplayId activeDisplayId) REQUIRES(kMainThreadContext)
-            EXCLUDES(mDisplayLock);
+    void registerDisplayInternal(PhysicalDisplayId, RefreshRateSelectorPtr, VsyncSchedulePtr)
+            REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock);
 
     struct Policy;
 

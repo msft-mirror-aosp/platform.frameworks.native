@@ -4179,6 +4179,51 @@ TEST_F(KeyboardInputMapperTest, Process_GesureEventToSetFlagKeepTouchMode) {
     ASSERT_EQ(AKEY_EVENT_FLAG_FROM_SYSTEM | AKEY_EVENT_FLAG_KEEP_TOUCH_MODE, args.flags);
 }
 
+/**
+ * When there is more than one KeyboardInputMapper for an InputDevice, each mapper should produce
+ * events that use the shared keyboard source across all mappers. This is to ensure that each
+ * input device generates key events in a consistent manner, regardless of which mapper produces
+ * the event.
+ */
+TEST_F(KeyboardInputMapperTest, UsesSharedKeyboardSource) {
+    mFakeEventHub->addKey(EVENTHUB_ID, KEY_HOME, 0, AKEYCODE_HOME, POLICY_FLAG_WAKE);
+
+    // Add a mapper with SOURCE_KEYBOARD
+    KeyboardInputMapper& keyboardMapper =
+            constructAndAddMapper<KeyboardInputMapper>(AINPUT_SOURCE_KEYBOARD);
+
+    process(keyboardMapper, ARBITRARY_TIME, 0, EV_KEY, KEY_HOME, 1);
+    ASSERT_NO_FATAL_FAILURE(
+            mFakeListener->assertNotifyKeyWasCalled(WithSource(AINPUT_SOURCE_KEYBOARD)));
+    process(keyboardMapper, ARBITRARY_TIME, 0, EV_KEY, KEY_HOME, 0);
+    ASSERT_NO_FATAL_FAILURE(
+            mFakeListener->assertNotifyKeyWasCalled(WithSource(AINPUT_SOURCE_KEYBOARD)));
+
+    // Add a mapper with SOURCE_DPAD
+    KeyboardInputMapper& dpadMapper =
+            constructAndAddMapper<KeyboardInputMapper>(AINPUT_SOURCE_DPAD);
+    for (auto* mapper : {&keyboardMapper, &dpadMapper}) {
+        process(*mapper, ARBITRARY_TIME, 0, EV_KEY, KEY_HOME, 1);
+        ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(
+                WithSource(AINPUT_SOURCE_KEYBOARD | AINPUT_SOURCE_DPAD)));
+        process(*mapper, ARBITRARY_TIME, 0, EV_KEY, KEY_HOME, 0);
+        ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(
+                WithSource(AINPUT_SOURCE_KEYBOARD | AINPUT_SOURCE_DPAD)));
+    }
+
+    // Add a mapper with SOURCE_GAMEPAD
+    KeyboardInputMapper& gamepadMapper =
+            constructAndAddMapper<KeyboardInputMapper>(AINPUT_SOURCE_GAMEPAD);
+    for (auto* mapper : {&keyboardMapper, &dpadMapper, &gamepadMapper}) {
+        process(*mapper, ARBITRARY_TIME, 0, EV_KEY, KEY_HOME, 1);
+        ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(
+                WithSource(AINPUT_SOURCE_KEYBOARD | AINPUT_SOURCE_DPAD | AINPUT_SOURCE_GAMEPAD)));
+        process(*mapper, ARBITRARY_TIME, 0, EV_KEY, KEY_HOME, 0);
+        ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(
+                WithSource(AINPUT_SOURCE_KEYBOARD | AINPUT_SOURCE_DPAD | AINPUT_SOURCE_GAMEPAD)));
+    }
+}
+
 // --- KeyboardInputMapperTest_ExternalAlphabeticDevice ---
 
 class KeyboardInputMapperTest_ExternalAlphabeticDevice : public InputMapperTest {

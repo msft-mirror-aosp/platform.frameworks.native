@@ -21,23 +21,16 @@ class DisplayDevice;
 class RenderArea {
 public:
     enum class CaptureFill {CLEAR, OPAQUE};
-    enum class Options {
-        // If not set, the secure layer would be blacked out or skipped
-        // when rendered to an insecure render area
-        CAPTURE_SECURE_LAYERS = 1 << 0,
 
-        // If set, the render result may be used for system animations
-        // that must preserve the exact colors of the display
-        HINT_FOR_SEAMLESS_TRANSITION = 1 << 1,
-    };
     static float getCaptureFillValue(CaptureFill captureFill);
 
     RenderArea(ui::Size reqSize, CaptureFill captureFill, ui::Dataspace reqDataSpace,
-               ftl::Flags<Options> options)
-          : mOptions(options),
+               bool hintForSeamlessTransition, bool allowSecureLayers = false)
+          : mAllowSecureLayers(allowSecureLayers),
             mReqSize(reqSize),
             mReqDataSpace(reqDataSpace),
-            mCaptureFill(captureFill) {}
+            mCaptureFill(captureFill),
+            mHintForSeamlessTransition(hintForSeamlessTransition) {}
 
     static std::function<std::vector<std::pair<Layer*, sp<LayerFE>>>()> fromTraverseLayersLambda(
             std::function<void(const LayerVector::Visitor&)> traverseLayers) {
@@ -97,17 +90,16 @@ public:
 
     // Returns whether the render result may be used for system animations that
     // must preserve the exact colors of the display.
-    bool getHintForSeamlessTransition() const {
-        return mOptions.test(Options::HINT_FOR_SEAMLESS_TRANSITION);
-    }
+    bool getHintForSeamlessTransition() const { return mHintForSeamlessTransition; }
 
 protected:
-    ftl::Flags<Options> mOptions;
+    const bool mAllowSecureLayers;
 
 private:
     const ui::Size mReqSize;
     const ui::Dataspace mReqDataSpace;
     const CaptureFill mCaptureFill;
+    const bool mHintForSeamlessTransition;
 };
 
 } // namespace android
