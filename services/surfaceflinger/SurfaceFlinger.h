@@ -703,7 +703,6 @@ private:
                                      Fps renderRate) override;
     void onCommitNotComposited(PhysicalDisplayId pacesetterDisplayId) override
             REQUIRES(kMainThreadContext);
-    void vrrDisplayIdle(bool idle) override;
 
     // ICEPowerCallback overrides:
     void notifyCpuLoadUp() override;
@@ -738,9 +737,9 @@ private:
     status_t setActiveModeFromBackdoor(const sp<display::DisplayToken>&, DisplayModeId, Fps minFps,
                                        Fps maxFps);
 
-    void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) REQUIRES(mStateLock);
+    void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) EXCLUDES(mStateLock);
     void finalizeDisplayModeChange(PhysicalDisplayId) REQUIRES(kMainThreadContext)
-            REQUIRES(mStateLock);
+            EXCLUDES(mStateLock);
 
     void dropModeRequest(PhysicalDisplayId) REQUIRES(kMainThreadContext);
     void applyActiveMode(PhysicalDisplayId) REQUIRES(kMainThreadContext);

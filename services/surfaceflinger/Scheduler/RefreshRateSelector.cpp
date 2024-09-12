@@ -1501,7 +1501,7 @@ void RefreshRateSelector::constructAvailableRefreshRates() {
             return str;
         };
         ALOGV("%s render rates: %s, isVrrDevice? %d", rangeName, stringifyModes().c_str(),
-              mIsVrrDevice.load());
+              mIsVrrDevice);
 
         return frameRateModes;
     };
@@ -1511,6 +1511,7 @@ void RefreshRateSelector::constructAvailableRefreshRates() {
 }
 
 bool RefreshRateSelector::isVrrDevice() const {
+    std::lock_guard lock(mLock);
     return mIsVrrDevice;
 }
 

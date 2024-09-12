@@ -30,7 +30,7 @@ FrameTarget::FrameTarget(const std::string& displayLabel)
 
 TimePoint FrameTarget::pastVsyncTime(Period minFramePeriod) const {
     // TODO(b/267315508): Generalize to N VSYNCs.
-    const int shift = static_cast<int>(targetsVsyncsAhead<2>(minFramePeriod));
+    const size_t shift = getPresentFenceShift(minFramePeriod);
     return mExpectedPresentTime - Period::fromNs(minFramePeriod.ns() << shift);
 }
 
@@ -38,8 +38,10 @@ FenceTimePtr FrameTarget::presentFenceForPastVsync(Period minFramePeriod) const 
     if (FlagManager::getInstance().allow_n_vsyncs_in_targeter()) {
         return pastVsyncTimePtr();
     }
-    const size_t i = static_cast<size_t>(targetsVsyncsAhead<2>(minFramePeriod));
-    return mPresentFences[i].fenceTime;
+
+    const size_t shift = getPresentFenceShift(minFramePeriod);
+    ATRACE_FORMAT("mPresentFences shift=%zu", shift);
+    return mPresentFences[shift].fenceTime;
 }
 
 bool FrameTarget::wouldPresentEarly(Period minFramePeriod) const {
@@ -151,7 +153,9 @@ FenceTimePtr FrameTargeter::setPresentFence(sp<Fence> presentFence, FenceTimePtr
     if (FlagManager::getInstance().allow_n_vsyncs_in_targeter()) {
         addFence(std::move(presentFence), presentFenceTime, mExpectedPresentTime);
     } else {
-        mPresentFences[1] = mPresentFences[0];
+        for (size_t i = mPresentFences.size()-1; i >= 1; i--) {
+            mPresentFences[i] = mPresentFences[i-1];
+        }
         mPresentFences[0] = {std::move(presentFence), presentFenceTime, mExpectedPresentTime};
     }
     return presentFenceTime;

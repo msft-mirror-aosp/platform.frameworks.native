@@ -157,7 +157,6 @@ protected:
     }
 
     void createMapper() {
-        createDevice();
         mMapper = createInputMapper<CursorInputMapper>(*mDeviceContext, mReaderConfiguration);
     }
 
@@ -535,7 +534,6 @@ TEST_F(CursorInputMapperUnitTest, ProcessShouldNotRotateMotionsWhenOrientationAw
     // need to be rotated.
     mPropertyMap.addProperty("cursor.mode", "navigation");
     mPropertyMap.addProperty("cursor.orientationAware", "1");
-    createDevice();
     ViewportFakingInputDeviceContext deviceContext(*mDevice, EVENTHUB_ID, ui::Rotation::Rotation90);
     mMapper = createInputMapper<CursorInputMapper>(deviceContext, mReaderConfiguration);
 
@@ -553,7 +551,6 @@ TEST_F(CursorInputMapperUnitTest, ProcessShouldRotateMotionsWhenNotOrientationAw
     // Since InputReader works in the un-rotated coordinate space, only devices that are not
     // orientation-aware are affected by display rotation.
     mPropertyMap.addProperty("cursor.mode", "navigation");
-    createDevice();
     ViewportFakingInputDeviceContext deviceContext(*mDevice, EVENTHUB_ID, ui::Rotation::Rotation0);
     mMapper = createInputMapper<CursorInputMapper>(deviceContext, mReaderConfiguration);
 
@@ -645,7 +642,6 @@ TEST_F(CursorInputMapperUnitTest, ConfigureDisplayIdWithAssociatedViewport) {
     mReaderConfiguration.setDisplayViewports({primaryViewport, secondaryViewport});
     // Set up the secondary display as the display on which the pointer should be shown.
     // The InputDevice is not associated with any display.
-    createDevice();
     ViewportFakingInputDeviceContext deviceContext(*mDevice, EVENTHUB_ID, secondaryViewport);
     mMapper = createInputMapper<CursorInputMapper>(deviceContext, mReaderConfiguration);
 
@@ -666,7 +662,6 @@ TEST_F(CursorInputMapperUnitTest,
     DisplayViewport secondaryViewport = createSecondaryViewport();
     mReaderConfiguration.setDisplayViewports({primaryViewport, secondaryViewport});
     // Set up the primary display as the display on which the pointer should be shown.
-    createDevice();
     // Associate the InputDevice with the secondary display.
     ViewportFakingInputDeviceContext deviceContext(*mDevice, EVENTHUB_ID, secondaryViewport);
     mMapper = createInputMapper<CursorInputMapper>(deviceContext, mReaderConfiguration);
@@ -959,7 +954,6 @@ TEST_F(CursorInputMapperUnitTestWithNewBallistics, ConfigureAccelerationWithAsso
     mPropertyMap.addProperty("cursor.mode", "pointer");
     DisplayViewport primaryViewport = createPrimaryViewport(ui::Rotation::Rotation0);
     mReaderConfiguration.setDisplayViewports({primaryViewport});
-    createDevice();
     ViewportFakingInputDeviceContext deviceContext(*mDevice, EVENTHUB_ID, primaryViewport);
     mMapper = createInputMapper<CursorInputMapper>(deviceContext, mReaderConfiguration);
 
@@ -997,7 +991,6 @@ TEST_F(CursorInputMapperUnitTestWithNewBallistics, ConfigureAccelerationOnDispla
     mReaderConfiguration.setDisplayViewports({primaryViewport});
     // Disable acceleration for the display.
     mReaderConfiguration.displaysWithMousePointerAccelerationDisabled.emplace(DISPLAY_ID);
-    createDevice();
 
     // Don't associate the device with the display yet.
     ViewportFakingInputDeviceContext deviceContext(*mDevice, EVENTHUB_ID,

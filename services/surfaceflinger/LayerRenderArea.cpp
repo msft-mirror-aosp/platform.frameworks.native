@@ -27,9 +27,10 @@ namespace android {
 
 LayerRenderArea::LayerRenderArea(sp<Layer> layer, frontend::LayerSnapshot layerSnapshot,
                                  const Rect& crop, ui::Size reqSize, ui::Dataspace reqDataSpace,
-                                 const ui::Transform& layerTransform, const Rect& layerBufferSize,
-                                 ftl::Flags<RenderArea::Options> options)
-      : RenderArea(reqSize, CaptureFill::CLEAR, reqDataSpace, options),
+                                 bool allowSecureLayers, const ui::Transform& layerTransform,
+                                 const Rect& layerBufferSize, bool hintForSeamlessTransition)
+      : RenderArea(reqSize, CaptureFill::CLEAR, reqDataSpace, hintForSeamlessTransition,
+                   allowSecureLayers),
         mLayer(std::move(layer)),
         mLayerSnapshot(std::move(layerSnapshot)),
         mLayerBufferSize(layerBufferSize),
@@ -41,7 +42,7 @@ const ui::Transform& LayerRenderArea::getTransform() const {
 }
 
 bool LayerRenderArea::isSecure() const {
-    return mOptions.test(Options::CAPTURE_SECURE_LAYERS);
+    return mAllowSecureLayers;
 }
 
 sp<const DisplayDevice> LayerRenderArea::getDisplayDevice() const {

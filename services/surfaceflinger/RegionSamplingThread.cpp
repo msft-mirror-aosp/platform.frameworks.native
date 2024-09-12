@@ -277,6 +277,7 @@ void RegionSamplingThread::captureSample() {
     }
 
     const Rect sampledBounds = sampleRegion.bounds();
+    constexpr bool kHintForSeamlessTransition = false;
 
     std::unordered_set<sp<IRegionSamplingListener>, SpHash<IRegionSamplingListener>> listeners;
 
@@ -349,8 +350,9 @@ void RegionSamplingThread::captureSample() {
 
     SurfaceFlinger::RenderAreaBuilderVariant
             renderAreaBuilder(std::in_place_type<DisplayRenderAreaBuilder>, sampledBounds,
-                              sampledBounds.getSize(), ui::Dataspace::V0_SRGB, displayWeak,
-                              RenderArea::Options::CAPTURE_SECURE_LAYERS);
+                              sampledBounds.getSize(), ui::Dataspace::V0_SRGB,
+                              kHintForSeamlessTransition, true /* captureSecureLayers */,
+                              displayWeak);
 
     FenceResult fenceResult;
     if (FlagManager::getInstance().single_hop_screenshot() &&

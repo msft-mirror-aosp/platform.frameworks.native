@@ -3121,6 +3121,8 @@ void Layer::releasePreviousBuffer() {
         callReleaseBufferCallback(mDrawingState.releaseBufferListener,
                                   mDrawingState.buffer->getBuffer(), mDrawingState.frameNumber,
                                   mDrawingState.acquireFence);
+        const int32_t layerId = getSequence();
+        mFlinger->mTimeStats->removeTimeRecord(layerId, mDrawingState.frameNumber);
         decrementPendingBufferCount();
         if (mDrawingState.bufferSurfaceFrameTX != nullptr &&
             mDrawingState.bufferSurfaceFrameTX->getPresentState() != PresentState::Presented) {

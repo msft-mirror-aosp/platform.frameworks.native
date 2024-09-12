@@ -57,7 +57,6 @@ public:
     void changeRenderRate(Fps);
     void animate();
     bool isSetByHwc() const { return mFeatures.test(RefreshRateOverlay::Features::SetByHwc); }
-    void onVrrIdle(bool idle);
 
     RefreshRateOverlay(ConstructorTag, FpsRange, ftl::Flags<Features>);
 
@@ -66,12 +65,11 @@ private:
 
     using Buffers = std::vector<sp<GraphicBuffer>>;
 
-    static Buffers draw(int refreshRate, int renderFps, bool idle, SkColor,
-                        ui::Transform::RotationFlags, ftl::Flags<Features>);
+    static Buffers draw(int refreshRate, int renderFps, SkColor, ui::Transform::RotationFlags,
+                        ftl::Flags<Features>);
     static void drawNumber(int number, int left, SkColor, SkCanvas&);
-    static void drawDash(int left, SkCanvas&);
 
-    const Buffers& getOrCreateBuffers(Fps, Fps, bool);
+    const Buffers& getOrCreateBuffers(Fps, Fps);
 
     SurfaceComposerClient::Transaction createTransaction() const;
 
@@ -79,11 +77,10 @@ private:
         int refreshRate;
         int renderFps;
         ui::Transform::RotationFlags flags;
-        bool idle;
 
         bool operator==(Key other) const {
             return refreshRate == other.refreshRate && renderFps == other.renderFps &&
-                    flags == other.flags && idle == other.idle;
+                    flags == other.flags;
         }
     };
 
@@ -92,7 +89,6 @@ private:
 
     std::optional<Fps> mRefreshRate;
     std::optional<Fps> mRenderFps;
-    bool mIsVrrIdle = false;
     size_t mFrame = 0;
 
     const FpsRange mFpsRange; // For color interpolation.
