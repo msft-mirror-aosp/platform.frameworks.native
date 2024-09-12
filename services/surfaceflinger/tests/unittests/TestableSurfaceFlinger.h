@@ -536,7 +536,7 @@ public:
     }
 
     auto flushTransactionQueues() {
-        return FTL_FAKE_GUARD(kMainThreadContext, mFlinger->flushTransactionQueues(kVsyncId));
+        return FTL_FAKE_GUARD(kMainThreadContext, mFlinger->flushTransactionQueues());
     }
 
     auto onTransact(uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags) {

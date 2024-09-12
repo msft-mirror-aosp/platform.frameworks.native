@@ -1395,13 +1395,14 @@ auto RefreshRateSelector::setPolicy(const PolicyVariant& policy) -> SetPolicyRes
         const auto& idleScreenConfigOpt = getCurrentPolicyLocked()->idleScreenConfigOpt;
         if (idleScreenConfigOpt != oldPolicy.idleScreenConfigOpt) {
             if (!idleScreenConfigOpt.has_value()) {
-                // fallback to legacy timer if existed, otherwise pause the old timer
-                LOG_ALWAYS_FATAL_IF(!mIdleTimer);
-                if (mConfig.legacyIdleTimerTimeout > 0ms) {
-                    mIdleTimer->setInterval(mConfig.legacyIdleTimerTimeout);
-                    mIdleTimer->resume();
-                } else {
-                    mIdleTimer->pause();
+                if (mIdleTimer) {
+                    // fallback to legacy timer if existed, otherwise pause the old timer
+                    if (mConfig.legacyIdleTimerTimeout > 0ms) {
+                        mIdleTimer->setInterval(mConfig.legacyIdleTimerTimeout);
+                        mIdleTimer->resume();
+                    } else {
+                        mIdleTimer->pause();
+                    }
                 }
             } else if (idleScreenConfigOpt->timeoutMillis > 0) {
                 // create a new timer or reconfigure
