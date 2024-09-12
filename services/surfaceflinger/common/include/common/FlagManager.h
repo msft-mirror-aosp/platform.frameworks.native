@@ -86,6 +86,7 @@ public:
     bool allow_n_vsyncs_in_targeter() const;
     bool detached_mirror() const;
     bool commit_not_composited() const;
+    bool correct_dpi_with_display_size() const;
     bool local_tonemap_screenshots() const;
     bool override_trusted_overlay() const;
     bool flush_buffer_slots_to_uncache() const;
