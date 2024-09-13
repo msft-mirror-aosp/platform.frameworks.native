@@ -105,6 +105,7 @@ public:
     virtual bool isVsyncPeriodSwitchSupported() const = 0;
     virtual bool hasDisplayIdleTimerCapability() const = 0;
     virtual void onLayerDestroyed(hal::HWLayerId layerId) = 0;
+    virtual std::optional<ui::Size> getPhysicalSizeInMm() const = 0;
 
     [[nodiscard]] virtual hal::Error acceptChanges() = 0;
     [[nodiscard]] virtual base::expected<std::shared_ptr<HWC2::Layer>, hal::Error>
@@ -285,6 +286,8 @@ public:
     bool hasDisplayIdleTimerCapability() const override;
     void onLayerDestroyed(hal::HWLayerId layerId) override;
     hal::Error getPhysicalDisplayOrientation(Hwc2::AidlTransform* outTransform) const override;
+    void setPhysicalSizeInMm(std::optional<ui::Size> size);
+    std::optional<ui::Size> getPhysicalSizeInMm() const override { return mPhysicalSize; }
 
 private:
     void loadDisplayCapabilities();
@@ -318,6 +321,8 @@ private:
     std::optional<
             std::unordered_set<aidl::android::hardware::graphics::composer3::DisplayCapability>>
             mDisplayCapabilities GUARDED_BY(mDisplayCapabilitiesMutex);
+    // Physical size in mm.
+    std::optional<ui::Size> mPhysicalSize;
 };
 
 } // namespace impl

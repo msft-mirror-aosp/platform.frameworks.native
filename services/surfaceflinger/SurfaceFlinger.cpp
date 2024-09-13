@@ -3817,7 +3817,8 @@ void SurfaceFlinger::processDisplayChanged(const wp<IBinder>& displayToken,
         mDisplays.erase(displayToken);
 
         if (const auto& physical = currentState.physical) {
-            getHwComposer().allocatePhysicalDisplay(physical->hwcDisplayId, physical->id);
+            getHwComposer().allocatePhysicalDisplay(physical->hwcDisplayId, physical->id,
+                                                    /*physicalSize=*/std::nullopt);
         }
 
         processDisplayAdded(displayToken, currentState);

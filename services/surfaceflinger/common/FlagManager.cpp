@@ -148,6 +148,7 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(allow_n_vsyncs_in_targeter);
     DUMP_READ_ONLY_FLAG(detached_mirror);
     DUMP_READ_ONLY_FLAG(commit_not_composited);
+    DUMP_READ_ONLY_FLAG(correct_dpi_with_display_size);
     DUMP_READ_ONLY_FLAG(local_tonemap_screenshots);
     DUMP_READ_ONLY_FLAG(override_trusted_overlay);
     DUMP_READ_ONLY_FLAG(flush_buffer_slots_to_uncache);
@@ -252,6 +253,7 @@ FLAG_MANAGER_READ_ONLY_FLAG(deprecate_vsync_sf, "");
 FLAG_MANAGER_READ_ONLY_FLAG(allow_n_vsyncs_in_targeter, "");
 FLAG_MANAGER_READ_ONLY_FLAG(detached_mirror, "");
 FLAG_MANAGER_READ_ONLY_FLAG(commit_not_composited, "");
+FLAG_MANAGER_READ_ONLY_FLAG(correct_dpi_with_display_size, "");
 FLAG_MANAGER_READ_ONLY_FLAG(local_tonemap_screenshots, "debug.sf.local_tonemap_screenshots");
 FLAG_MANAGER_READ_ONLY_FLAG(override_trusted_overlay, "");
 FLAG_MANAGER_READ_ONLY_FLAG(flush_buffer_slots_to_uncache, "");
