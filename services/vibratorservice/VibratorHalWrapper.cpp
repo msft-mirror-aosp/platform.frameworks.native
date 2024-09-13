@@ -32,6 +32,9 @@ using aidl::android::hardware::vibrator::CompositePrimitive;
 using aidl::android::hardware::vibrator::Effect;
 using aidl::android::hardware::vibrator::EffectStrength;
 using aidl::android::hardware::vibrator::PrimitivePwle;
+using aidl::android::hardware::vibrator::PwleV2OutputMapEntry;
+using aidl::android::hardware::vibrator::PwleV2Primitive;
+using aidl::android::hardware::vibrator::VendorEffect;
 
 using std::chrono::milliseconds;
 
@@ -93,7 +96,23 @@ Info HalWrapper::getInfo() {
     if (mInfoCache.mMaxAmplitudes.isFailed()) {
         mInfoCache.mMaxAmplitudes = getMaxAmplitudesInternal();
     }
+    if (mInfoCache.mMaxEnvelopeEffectSize.isFailed()) {
+        mInfoCache.mMaxEnvelopeEffectSize = getMaxEnvelopeEffectSizeInternal();
+    }
+    if (mInfoCache.mMinEnvelopeEffectControlPointDuration.isFailed()) {
+        mInfoCache.mMinEnvelopeEffectControlPointDuration =
+                getMinEnvelopeEffectControlPointDurationInternal();
+    }
+    if (mInfoCache.mMaxEnvelopeEffectControlPointDuration.isFailed()) {
+        mInfoCache.mMaxEnvelopeEffectControlPointDuration =
+                getMaxEnvelopeEffectControlPointDurationInternal();
+    }
     return mInfoCache.get();
+}
+
+HalResult<void> HalWrapper::performVendorEffect(const VendorEffect&, const std::function<void()>&) {
+    ALOGV("Skipped performVendorEffect because it's not available in Vibrator HAL");
+    return HalResult<void>::unsupported();
 }
 
 HalResult<milliseconds> HalWrapper::performComposedEffect(const std::vector<CompositeEffect>&,
@@ -105,6 +124,12 @@ HalResult<milliseconds> HalWrapper::performComposedEffect(const std::vector<Comp
 HalResult<void> HalWrapper::performPwleEffect(const std::vector<PrimitivePwle>&,
                                               const std::function<void()>&) {
     ALOGV("Skipped performPwleEffect because it's not available in Vibrator HAL");
+    return HalResult<void>::unsupported();
+}
+
+HalResult<void> HalWrapper::composePwleV2(const std::vector<PwleV2Primitive>&,
+                                          const std::function<void()>&) {
+    ALOGV("Skipped composePwleV2 because it's not available in Vibrator HAL");
     return HalResult<void>::unsupported();
 }
 
@@ -196,6 +221,23 @@ HalResult<std::vector<float>> HalWrapper::getMaxAmplitudesInternal() {
     ALOGV("Skipped getMaxAmplitudes because it's not available in Vibrator HAL");
     return HalResult<std::vector<float>>::unsupported();
 }
+HalResult<int32_t> HalWrapper::getMaxEnvelopeEffectSizeInternal() {
+    ALOGV("Skipped getMaxEnvelopeEffectSizeInternal because it's not available "
+          "in Vibrator HAL");
+    return HalResult<int32_t>::unsupported();
+}
+
+HalResult<milliseconds> HalWrapper::getMinEnvelopeEffectControlPointDurationInternal() {
+    ALOGV("Skipped getMinEnvelopeEffectControlPointDurationInternal because it's not "
+          "available in Vibrator HAL");
+    return HalResult<milliseconds>::unsupported();
+}
+
+HalResult<milliseconds> HalWrapper::getMaxEnvelopeEffectControlPointDurationInternal() {
+    ALOGV("Skipped getMaxEnvelopeEffectControlPointDurationInternal because it's not "
+          "available in Vibrator HAL");
+    return HalResult<milliseconds>::unsupported();
+}
 
 // -------------------------------------------------------------------------------------------------
 
@@ -271,6 +313,13 @@ HalResult<milliseconds> AidlHalWrapper::performEffect(
     return ret;
 }
 
+HalResult<void> AidlHalWrapper::performVendorEffect(
+        const VendorEffect& effect, const std::function<void()>& completionCallback) {
+    // This method should always support callbacks, so no need to double check.
+    auto cb = ndk::SharedRefBase::make<HalCallbackWrapper>(completionCallback);
+    return HalResultFactory::fromStatus(getHal()->performVendorEffect(effect, cb));
+}
+
 HalResult<milliseconds> AidlHalWrapper::performComposedEffect(
         const std::vector<CompositeEffect>& primitives,
         const std::function<void()>& completionCallback) {
@@ -298,6 +347,13 @@ HalResult<void> AidlHalWrapper::performPwleEffect(const std::vector<PrimitivePwl
     // This method should always support callbacks, so no need to double check.
     auto cb = ndk::SharedRefBase::make<HalCallbackWrapper>(completionCallback);
     return HalResultFactory::fromStatus(getHal()->composePwle(primitives, cb));
+}
+
+HalResult<void> AidlHalWrapper::composePwleV2(const std::vector<PwleV2Primitive>& composite,
+                                              const std::function<void()>& completionCallback) {
+    // This method should always support callbacks, so no need to double check.
+    auto cb = ndk::SharedRefBase::make<HalCallbackWrapper>(completionCallback);
+    return HalResultFactory::fromStatus(getHal()->composePwleV2(composite, cb));
 }
 
 HalResult<Capabilities> AidlHalWrapper::getCapabilitiesInternal() {
@@ -351,7 +407,7 @@ HalResult<std::vector<milliseconds>> AidlHalWrapper::getPrimitiveDurationsIntern
         }
         if (halResult.isFailed()) {
             // Fail entire request if one request has failed.
-            return HalResult<std::vector<milliseconds>>::failed(status.getMessage());
+            return HalResult<std::vector<milliseconds>>::failed(halResult.errorMessage());
         }
         durations[primitiveIdx] = milliseconds(duration);
     }
@@ -411,6 +467,24 @@ HalResult<std::vector<float>> AidlHalWrapper::getMaxAmplitudesInternal() {
     std::vector<float> amplitudes;
     auto status = getHal()->getBandwidthAmplitudeMap(&amplitudes);
     return HalResultFactory::fromStatus<std::vector<float>>(std::move(status), amplitudes);
+}
+
+HalResult<int32_t> AidlHalWrapper::getMaxEnvelopeEffectSizeInternal() {
+    int32_t size = 0;
+    auto status = getHal()->getPwleV2CompositionSizeMax(&size);
+    return HalResultFactory::fromStatus<int32_t>(std::move(status), size);
+}
+
+HalResult<milliseconds> AidlHalWrapper::getMinEnvelopeEffectControlPointDurationInternal() {
+    int32_t durationMs = 0;
+    auto status = getHal()->getPwleV2PrimitiveDurationMinMillis(&durationMs);
+    return HalResultFactory::fromStatus<milliseconds>(std::move(status), milliseconds(durationMs));
+}
+
+HalResult<milliseconds> AidlHalWrapper::getMaxEnvelopeEffectControlPointDurationInternal() {
+    int32_t durationMs = 0;
+    auto status = getHal()->getPwleV2PrimitiveDurationMaxMillis(&durationMs);
+    return HalResultFactory::fromStatus<milliseconds>(std::move(status), milliseconds(durationMs));
 }
 
 std::shared_ptr<Aidl::IVibrator> AidlHalWrapper::getHal() {

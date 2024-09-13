@@ -33,6 +33,7 @@
 #include <utils/Thread.h>
 
 #include "InputDevice.h"
+#include "include/gestures.h"
 
 using android::base::StringPrintf;
 
@@ -180,6 +181,9 @@ void InputReader::loopOnce() {
         }
 
         if (oldGeneration != mGeneration) {
+            // Reset global meta state because it depends on connected input devices.
+            updateGlobalMetaStateLocked();
+
             inputDevicesChanged = true;
             inputDevices = getInputDevicesLocked();
             mPendingArgs.emplace_back(
@@ -210,15 +214,6 @@ void InputReader::loopOnce() {
     // the listeners are synchronized with the changes before the policy reacts to them.
     if (inputDevicesChanged) {
         mPolicy->notifyInputDevicesChanged(inputDevices);
-    }
-
-    // Notify the policy of configuration change. This must be after policy is notified about input
-    // device changes so that policy can fetch newly added input devices on configuration change.
-    for (const auto& args : notifyArgs) {
-        const auto* configArgs = std::get_if<NotifyConfigurationChangedArgs>(&args);
-        if (configArgs != nullptr) {
-            mPolicy->notifyConfigurationChanged(configArgs->eventTime);
-        }
     }
 
     // Notify the policy of the start of every new stylus gesture.
@@ -255,9 +250,6 @@ std::list<NotifyArgs> InputReader::processEventsLocked(const RawEvent* rawEvents
                     break;
                 case EventHubInterface::DEVICE_REMOVED:
                     removeDeviceLocked(rawEvent->when, rawEvent->deviceId);
-                    break;
-                case EventHubInterface::FINISHED_DEVICE_SCAN:
-                    handleConfigurationChangedLocked(rawEvent->when);
                     break;
                 default:
                     ALOG_ASSERT(false); // can't happen
@@ -421,14 +413,6 @@ std::list<NotifyArgs> InputReader::timeoutExpiredLocked(nsecs_t when) {
 
 int32_t InputReader::nextInputDeviceIdLocked() {
     return ++mNextInputDeviceId;
-}
-
-void InputReader::handleConfigurationChangedLocked(nsecs_t when) {
-    // Reset global meta state because it depends on the list of all configured devices.
-    updateGlobalMetaStateLocked();
-
-    // Enqueue configuration changed.
-    mPendingArgs.emplace_back(NotifyConfigurationChangedArgs{mContext.getNextId(), when});
 }
 
 void InputReader::refreshConfigurationLocked(ConfigurationChanges changes) {
@@ -832,6 +816,18 @@ std::vector<InputDeviceSensorInfo> InputReader::getSensors(int32_t deviceId) {
     }
 
     return device->getDeviceInfo().getSensors();
+}
+
+std::optional<HardwareProperties> InputReader::getTouchpadHardwareProperties(int32_t deviceId) {
+    std::scoped_lock _l(mLock);
+
+    InputDevice* device = findInputDeviceLocked(deviceId);
+
+    if (device == nullptr) {
+        return {};
+    }
+
+    return device->getTouchpadHardwareProperties();
 }
 
 bool InputReader::setLightColor(int32_t deviceId, int32_t lightId, int32_t color) {

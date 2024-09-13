@@ -90,15 +90,14 @@ void SensorService::SensorEventConnection::dump(String8& result) {
         result.append("NORMAL\n");
     }
     result.appendFormat("\t %s | WakeLockRefCount %d | uid %d | cache size %d | "
-            "max cache size %d\n", mPackageName.c_str(), mWakeLockRefCount, mUid, mCacheSize,
-            mMaxCacheSize);
+                        "max cache size %d | has sensor access: %s\n",
+                        mPackageName.c_str(), mWakeLockRefCount, mUid, mCacheSize, mMaxCacheSize,
+                        hasSensorAccess() ? "true" : "false");
     for (auto& it : mSensorInfo) {
         const FlushInfo& flushInfo = it.second;
-        result.appendFormat("\t %s 0x%08x | status: %s | pending flush events %d \n",
-                            mService->getSensorName(it.first).c_str(),
-                            it.first,
-                            flushInfo.mFirstFlushPending ? "First flush pending" :
-                                                           "active",
+        result.appendFormat("\t %s 0x%08x | first flush pending: %s | pending flush events %d \n",
+                            mService->getSensorName(it.first).c_str(), it.first,
+                            flushInfo.mFirstFlushPending ? "true" : "false",
                             flushInfo.mPendingFlushEventsToSend);
     }
 #if DEBUG_CONNECTIONS
@@ -173,7 +172,7 @@ bool SensorService::SensorEventConnection::addSensor(int32_t handle) {
 
 bool SensorService::SensorEventConnection::removeSensor(int32_t handle) {
     Mutex::Autolock _l(mConnectionLock);
-    if (mSensorInfo.erase(handle) >= 0) {
+    if (mSensorInfo.erase(handle) > 0) {
         return true;
     }
     return false;

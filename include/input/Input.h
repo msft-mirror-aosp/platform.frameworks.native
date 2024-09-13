@@ -251,6 +251,8 @@ enum class InputEventType {
     TOUCH_MODE = AINPUT_EVENT_TYPE_TOUCH_MODE,
     ftl_first = KEY,
     ftl_last = TOUCH_MODE,
+    // Used by LatencyTracker fuzzer
+    kMaxValue = ftl_last
 };
 
 std::string inputEventSourceToString(int32_t source);
@@ -900,9 +902,7 @@ public:
     void splitFrom(const MotionEvent& other, std::bitset<MAX_POINTER_ID + 1> splitPointerIds,
                    int32_t newEventId);
 
-    void addSample(
-            nsecs_t eventTime,
-            const PointerCoords* pointerCoords);
+    void addSample(nsecs_t eventTime, const PointerCoords* pointerCoords, int32_t eventId);
 
     void offsetLocation(float xOffset, float yOffset);
 

@@ -52,6 +52,7 @@
 #include "Connection.h"
 #include "DebugConfig.h"
 #include "InputDispatcher.h"
+#include "InputEventTimeline.h"
 #include "trace/InputTracer.h"
 #include "trace/InputTracingPerfettoBackend.h"
 #include "trace/ThreadedBackend.h"
@@ -558,7 +559,6 @@ bool isConnectionResponsive(const Connection& connection) {
 // Returns true if the event type passed as argument represents a user activity.
 bool isUserActivityEvent(const EventEntry& eventEntry) {
     switch (eventEntry.type) {
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET:
         case EventEntry::Type::DRAG:
         case EventEntry::Type::FOCUS:
@@ -694,7 +694,8 @@ std::optional<nsecs_t> getDownTime(const EventEntry& eventEntry) {
  */
 std::vector<TouchedWindow> getHoveringWindowsLocked(const TouchState* oldState,
                                                     const TouchState& newTouchState,
-                                                    const MotionEntry& entry) {
+                                                    const MotionEntry& entry,
+                                                    std::function<void()> dump) {
     const int32_t maskedAction = MotionEvent::getActionMasked(entry.action);
 
     if (maskedAction == AMOTION_EVENT_ACTION_SCROLL) {
@@ -742,6 +743,7 @@ std::vector<TouchedWindow> getHoveringWindowsLocked(const TouchState* oldState,
                     // crashing the device with FATAL.
                     severity = android::base::LogSeverity::ERROR;
                 }
+                dump();
                 LOG(severity) << "Expected ACTION_HOVER_MOVE instead of " << entry.getDescription();
             }
             touchedWindow.dispatchMode = InputTarget::DispatchMode::AS_IS;
@@ -1171,14 +1173,6 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t& nextWakeupTime) {
     }
 
     switch (mPendingEvent->type) {
-        case EventEntry::Type::CONFIGURATION_CHANGED: {
-            const ConfigurationChangedEntry& typedEntry =
-                    static_cast<const ConfigurationChangedEntry&>(*mPendingEvent);
-            done = dispatchConfigurationChangedLocked(currentTime, typedEntry);
-            dropReason = DropReason::NOT_DROPPED; // configuration changes are never dropped
-            break;
-        }
-
         case EventEntry::Type::DEVICE_RESET: {
             const DeviceResetEntry& typedEntry =
                     static_cast<const DeviceResetEntry&>(*mPendingEvent);
@@ -1410,7 +1404,6 @@ bool InputDispatcher::enqueueInboundEventLocked(std::unique_ptr<EventEntry> newE
             break;
         }
         case EventEntry::Type::TOUCH_MODE_CHANGED:
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET:
         case EventEntry::Type::SENSOR:
         case EventEntry::Type::POINTER_CAPTURE_CHANGED:
@@ -1584,7 +1577,6 @@ void InputDispatcher::dropInboundEventLocked(const EventEntry& entry, DropReason
         }
         case EventEntry::Type::FOCUS:
         case EventEntry::Type::TOUCH_MODE_CHANGED:
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET: {
             LOG_ALWAYS_FATAL("Should not drop %s events", ftl::enum_string(entry.type).c_str());
             break;
@@ -1671,18 +1663,6 @@ std::shared_ptr<KeyEntry> InputDispatcher::synthesizeKeyRepeatLocked(nsecs_t cur
     mKeyRepeatState.lastKeyEntry = newEntry;
     mKeyRepeatState.nextRepeatTime = currentTime + mConfig.keyRepeatDelay;
     return newEntry;
-}
-
-bool InputDispatcher::dispatchConfigurationChangedLocked(nsecs_t currentTime,
-                                                         const ConfigurationChangedEntry& entry) {
-    if (DEBUG_OUTBOUND_EVENT_DETAILS) {
-        ALOGD("dispatchConfigurationChanged - eventTime=%" PRId64, entry.eventTime);
-    }
-
-    // Reset key repeating in case a keyboard device was added or removed or something.
-    resetKeyRepeatLocked();
-
-    return true;
 }
 
 bool InputDispatcher::dispatchDeviceResetLocked(nsecs_t currentTime,
@@ -2252,7 +2232,6 @@ ui::LogicalDisplayId InputDispatcher::getTargetDisplayId(const EventEntry& entry
         case EventEntry::Type::TOUCH_MODE_CHANGED:
         case EventEntry::Type::POINTER_CAPTURE_CHANGED:
         case EventEntry::Type::FOCUS:
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET:
         case EventEntry::Type::SENSOR:
         case EventEntry::Type::DRAG: {
@@ -2472,12 +2451,19 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
         if (isDown) {
             targets += findOutsideTargetsLocked(displayId, newTouchedWindowHandle, pointer.id);
         }
+        LOG_IF(INFO, newTouchedWindowHandle == nullptr)
+                << "No new touched window at (" << std::format("{:.1f}, {:.1f}", x, y)
+                << ") in display " << displayId;
         // Handle the case where we did not find a window.
-        if (newTouchedWindowHandle == nullptr) {
-            ALOGD("No new touched window at (%.1f, %.1f) in display %s", x, y,
-                  displayId.toString().c_str());
-            // Try to assign the pointer to the first foreground window we find, if there is one.
-            newTouchedWindowHandle = tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
+        if (!input_flags::split_all_touches()) {
+            // If we are force splitting all touches, then touches outside of the window should
+            // be dropped, even if this device already has pointers down in another window.
+            if (newTouchedWindowHandle == nullptr) {
+                // Try to assign the pointer to the first foreground window we find, if there is
+                // one.
+                newTouchedWindowHandle =
+                        tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
+            }
         }
 
         // Verify targeted injection.
@@ -2700,7 +2686,7 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
 
                 // Check if the wallpaper window should deliver the corresponding event.
                 slipWallpaperTouch(targetFlags, oldTouchedWindowHandle, newTouchedWindowHandle,
-                                   tempTouchState, entry.deviceId, pointer, targets);
+                                   tempTouchState, entry, targets);
                 tempTouchState.removeTouchingPointerFromWindow(entry.deviceId, pointer.id,
                                                                oldTouchedWindowHandle);
             }
@@ -2727,7 +2713,9 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
     // Update dispatching for hover enter and exit.
     {
         std::vector<TouchedWindow> hoveringWindows =
-                getHoveringWindowsLocked(oldState, tempTouchState, entry);
+                getHoveringWindowsLocked(oldState, tempTouchState, entry,
+                                         std::bind_front(&InputDispatcher::logDispatchStateLocked,
+                                                         this));
         // Hardcode to single hovering pointer for now.
         std::bitset<MAX_POINTER_ID + 1> pointerIds;
         pointerIds.set(entry.pointerProperties[0].id);
@@ -3627,7 +3615,6 @@ void InputDispatcher::enqueueDispatchEntryLocked(const std::shared_ptr<Connectio
             LOG_ALWAYS_FATAL("SENSOR events should not go to apps via input channel");
             break;
         }
-        case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET: {
             LOG_ALWAYS_FATAL("%s events should not go to apps",
                              ftl::enum_string(eventEntry->type).c_str());
@@ -3888,7 +3875,6 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                 break;
             }
 
-            case EventEntry::Type::CONFIGURATION_CHANGED:
             case EventEntry::Type::DEVICE_RESET:
             case EventEntry::Type::SENSOR: {
                 LOG_ALWAYS_FATAL("Should never start dispatch cycles for %s events",
@@ -4284,7 +4270,6 @@ void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
                                  ftl::enum_string(cancelationEventEntry->type).c_str());
                 break;
             }
-            case EventEntry::Type::CONFIGURATION_CHANGED:
             case EventEntry::Type::DEVICE_RESET:
             case EventEntry::Type::SENSOR: {
                 LOG_ALWAYS_FATAL("%s event should not be found inside Connections's queue",
@@ -4367,7 +4352,6 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
             case EventEntry::Type::KEY:
             case EventEntry::Type::FOCUS:
             case EventEntry::Type::TOUCH_MODE_CHANGED:
-            case EventEntry::Type::CONFIGURATION_CHANGED:
             case EventEntry::Type::DEVICE_RESET:
             case EventEntry::Type::POINTER_CAPTURE_CHANGED:
             case EventEntry::Type::SENSOR:
@@ -4453,26 +4437,9 @@ std::unique_ptr<MotionEntry> InputDispatcher::splitMotionEvent(
 
 void InputDispatcher::notifyInputDevicesChanged(const NotifyInputDevicesChangedArgs& args) {
     std::scoped_lock _l(mLock);
+    // Reset key repeating in case a keyboard device was added or removed or something.
+    resetKeyRepeatLocked();
     mLatencyTracker.setInputDevices(args.inputDeviceInfos);
-}
-
-void InputDispatcher::notifyConfigurationChanged(const NotifyConfigurationChangedArgs& args) {
-    if (debugInboundEventDetails()) {
-        ALOGD("notifyConfigurationChanged - eventTime=%" PRId64, args.eventTime);
-    }
-
-    bool needWake = false;
-    { // acquire lock
-        std::scoped_lock _l(mLock);
-
-        std::unique_ptr<ConfigurationChangedEntry> newEntry =
-                std::make_unique<ConfigurationChangedEntry>(args.id, args.eventTime);
-        needWake = enqueueInboundEventLocked(std::move(newEntry));
-    } // release lock
-
-    if (needWake) {
-        mLooper->wake();
-    }
 }
 
 void InputDispatcher::notifyKey(const NotifyKeyArgs& args) {
@@ -4676,10 +4643,9 @@ void InputDispatcher::notifyMotion(const NotifyMotionArgs& args) {
         if (args.id != android::os::IInputConstants::INVALID_INPUT_EVENT_ID &&
             IdGenerator::getSource(args.id) == IdGenerator::Source::INPUT_READER &&
             !mInputFilterEnabled) {
-            const bool isDown = args.action == AMOTION_EVENT_ACTION_DOWN;
             std::set<InputDeviceUsageSource> sources = getUsageSourcesForMotionArgs(args);
-            mLatencyTracker.trackListener(args.id, isDown, args.eventTime, args.readTime,
-                                          args.deviceId, sources);
+            mLatencyTracker.trackListener(args.id, args.eventTime, args.readTime, args.deviceId,
+                                          sources, args.action, InputEventType::MOTION);
         }
 
         needWake = enqueueInboundEventLocked(std::move(newEntry));
@@ -4917,6 +4883,10 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
                     logDispatchStateLocked();
                     LOG(ERROR) << "Inconsistent event: " << motionEvent
                                << ", reason: " << result.error();
+                    if (policyFlags & POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY) {
+                        mLock.unlock();
+                        return InputEventInjectionResult::FAILED;
+                    }
                 }
             }
 
@@ -7052,6 +7022,13 @@ void InputDispatcher::onWindowInfosChanged(const gui::WindowInfosUpdate& update)
     for (const auto& info : update.windowInfos) {
         handlesPerDisplay.emplace(info.displayId, std::vector<sp<WindowInfoHandle>>());
         handlesPerDisplay[info.displayId].push_back(sp<WindowInfoHandle>::make(info));
+        if (input_flags::split_all_touches()) {
+            handlesPerDisplay[info.displayId]
+                    .back()
+                    ->editInfo()
+                    ->setInputConfig(android::gui::WindowInfo::InputConfig::PREVENT_SPLITTING,
+                                     false);
+        }
     }
 
     { // acquire lock
@@ -7127,9 +7104,11 @@ void InputDispatcher::setMonitorDispatchingTimeoutForTest(std::chrono::nanosecon
 void InputDispatcher::slipWallpaperTouch(ftl::Flags<InputTarget::Flags> targetFlags,
                                          const sp<WindowInfoHandle>& oldWindowHandle,
                                          const sp<WindowInfoHandle>& newWindowHandle,
-                                         TouchState& state, DeviceId deviceId,
-                                         const PointerProperties& pointerProperties,
+                                         TouchState& state, const MotionEntry& entry,
                                          std::vector<InputTarget>& targets) const {
+    LOG_IF(FATAL, entry.getPointerCount() != 1) << "Entry not eligible for slip: " << entry;
+    const DeviceId deviceId = entry.deviceId;
+    const PointerProperties& pointerProperties = entry.pointerProperties[0];
     std::vector<PointerProperties> pointers{pointerProperties};
     const bool oldHasWallpaper = oldWindowHandle->getInfo()->inputConfig.test(
             gui::WindowInfo::InputConfig::DUPLICATE_TOUCH_TO_WALLPAPER);
@@ -7156,7 +7135,7 @@ void InputDispatcher::slipWallpaperTouch(ftl::Flags<InputTarget::Flags> targetFl
         state.addOrUpdateWindow(newWallpaper, InputTarget::DispatchMode::SLIPPERY_ENTER,
                                 InputTarget::Flags::WINDOW_IS_OBSCURED |
                                         InputTarget::Flags::WINDOW_IS_PARTIALLY_OBSCURED,
-                                deviceId, pointers);
+                                deviceId, pointers, entry.eventTime);
     }
 }
 

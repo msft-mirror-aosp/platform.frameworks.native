@@ -32,19 +32,23 @@ static const int HW_TIMEOUT_MULTIPLIER = base::GetIntProperty("ro.hw_timeout_mul
 } // namespace
 
 void FakeInputReaderPolicy::assertInputDevicesChanged() {
-    waitForInputDevices([](bool devicesChanged) {
-        if (!devicesChanged) {
-            FAIL() << "Timed out waiting for notifyInputDevicesChanged() to be called.";
-        }
-    });
+    waitForInputDevices(
+            [](bool devicesChanged) {
+                if (!devicesChanged) {
+                    FAIL() << "Timed out waiting for notifyInputDevicesChanged() to be called.";
+                }
+            },
+            ADD_INPUT_DEVICE_TIMEOUT);
 }
 
 void FakeInputReaderPolicy::assertInputDevicesNotChanged() {
-    waitForInputDevices([](bool devicesChanged) {
-        if (devicesChanged) {
-            FAIL() << "Expected notifyInputDevicesChanged() to not be called.";
-        }
-    });
+    waitForInputDevices(
+            [](bool devicesChanged) {
+                if (devicesChanged) {
+                    FAIL() << "Expected notifyInputDevicesChanged() to not be called.";
+                }
+            },
+            INPUT_DEVICES_DIDNT_CHANGE_TIMEOUT);
 }
 
 void FakeInputReaderPolicy::assertStylusGestureNotified(int32_t deviceId) {
@@ -65,21 +69,15 @@ void FakeInputReaderPolicy::assertStylusGestureNotNotified() {
     ASSERT_FALSE(mDeviceIdOfNotifiedStylusGesture);
 }
 
-void FakeInputReaderPolicy::assertConfigurationChanged() {
+void FakeInputReaderPolicy::assertTouchpadHardwareStateNotified() {
     std::unique_lock lock(mLock);
     base::ScopedLockAssertion assumeLocked(mLock);
 
-    const bool configurationChanged =
-            mConfigurationChangedCondition.wait_for(lock, WAIT_TIMEOUT, [this]() REQUIRES(mLock) {
-                return mConfigurationChanged;
+    const bool success =
+            mTouchpadHardwareStateNotified.wait_for(lock, WAIT_TIMEOUT, [this]() REQUIRES(mLock) {
+                return mTouchpadHardwareState.has_value();
             });
-    ASSERT_TRUE(configurationChanged) << "Timed out waiting for configuration change";
-    mConfigurationChanged = false;
-}
-
-void FakeInputReaderPolicy::assertConfigurationNotChanged() {
-    std::scoped_lock lock(mLock);
-    ASSERT_FALSE(mConfigurationChanged);
+    ASSERT_TRUE(success) << "Timed out waiting for hardware state to be notified";
 }
 
 void FakeInputReaderPolicy::clearViewports() {
@@ -251,10 +249,11 @@ void FakeInputReaderPolicy::notifyInputDevicesChanged(
     mDevicesChangedCondition.notify_all();
 }
 
-void FakeInputReaderPolicy::notifyConfigurationChanged(nsecs_t when) {
+void FakeInputReaderPolicy::notifyTouchpadHardwareState(const SelfContainedHardwareState& schs,
+                                                        int32_t deviceId) {
     std::scoped_lock lock(mLock);
-    mConfigurationChanged = true;
-    mConfigurationChangedCondition.notify_all();
+    mTouchpadHardwareState = schs;
+    mTouchpadHardwareStateNotified.notify_all();
 }
 
 std::shared_ptr<KeyCharacterMap> FakeInputReaderPolicy::getKeyboardLayoutOverlay(
@@ -266,13 +265,13 @@ std::string FakeInputReaderPolicy::getDeviceAlias(const InputDeviceIdentifier&) 
     return "";
 }
 
-void FakeInputReaderPolicy::waitForInputDevices(std::function<void(bool)> processDevicesChanged) {
+void FakeInputReaderPolicy::waitForInputDevices(std::function<void(bool)> processDevicesChanged,
+                                                std::chrono::milliseconds timeout) {
     std::unique_lock<std::mutex> lock(mLock);
     base::ScopedLockAssertion assumeLocked(mLock);
 
     const bool devicesChanged =
-            mDevicesChangedCondition.wait_for(lock,
-                                              ADD_INPUT_DEVICE_TIMEOUT * HW_TIMEOUT_MULTIPLIER,
+            mDevicesChangedCondition.wait_for(lock, timeout * HW_TIMEOUT_MULTIPLIER,
                                               [this]() REQUIRES(mLock) {
                                                   return mInputDevicesChanged;
                                               });

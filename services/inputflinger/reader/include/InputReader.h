@@ -104,6 +104,8 @@ public:
 
     std::vector<InputDeviceSensorInfo> getSensors(int32_t deviceId) override;
 
+    std::optional<HardwareProperties> getTouchpadHardwareProperties(int32_t deviceId) override;
+
     bool setLightColor(int32_t deviceId, int32_t lightId, int32_t color) override;
 
     bool setLightPlayerId(int32_t deviceId, int32_t lightId, int32_t playerId) override;
@@ -220,8 +222,6 @@ private:
                                                                      const RawEvent* rawEvents,
                                                                      size_t count) REQUIRES(mLock);
     [[nodiscard]] std::list<NotifyArgs> timeoutExpiredLocked(nsecs_t when) REQUIRES(mLock);
-
-    void handleConfigurationChangedLocked(nsecs_t when) REQUIRES(mLock);
 
     int32_t mGlobalMetaState GUARDED_BY(mLock);
     void updateGlobalMetaStateLocked() REQUIRES(mLock);

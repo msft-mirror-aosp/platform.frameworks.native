@@ -97,7 +97,6 @@ public:
     status_t stop() override;
 
     void notifyInputDevicesChanged(const NotifyInputDevicesChangedArgs& args) override;
-    void notifyConfigurationChanged(const NotifyConfigurationChangedArgs& args) override;
     void notifyKey(const NotifyKeyArgs& args) override;
     void notifyMotion(const NotifyMotionArgs& args) override;
     void notifySwitch(const NotifySwitchArgs& args) override;
@@ -447,8 +446,6 @@ private:
             REQUIRES(mLock);
 
     // Dispatch inbound events.
-    bool dispatchConfigurationChangedLocked(nsecs_t currentTime,
-                                            const ConfigurationChangedEntry& entry) REQUIRES(mLock);
     bool dispatchDeviceResetLocked(nsecs_t currentTime, const DeviceResetEntry& entry)
             REQUIRES(mLock);
     bool dispatchKeyLocked(nsecs_t currentTime, std::shared_ptr<const KeyEntry> entry,
@@ -712,11 +709,23 @@ private:
 
     sp<InputReporterInterface> mReporter;
 
+    /**
+     * Slip the wallpaper touch if necessary.
+     *
+     * @param targetFlags the target flags
+     * @param oldWindowHandle the old window that the touch slipped out of
+     * @param newWindowHandle the new window that the touch is slipping into
+     * @param state the current touch state. This will be updated if necessary to reflect the new
+     *        windows that are receiving touch.
+     * @param deviceId the device id of the current motion being processed
+     * @param pointerProperties the pointer properties of the current motion being processed
+     * @param targets the current targets to add the walpaper ones to
+     * @param eventTime the new downTime for the wallpaper target
+     */
     void slipWallpaperTouch(ftl::Flags<InputTarget::Flags> targetFlags,
                             const sp<android::gui::WindowInfoHandle>& oldWindowHandle,
                             const sp<android::gui::WindowInfoHandle>& newWindowHandle,
-                            TouchState& state, DeviceId deviceId,
-                            const PointerProperties& pointerProperties,
+                            TouchState& state, const MotionEntry& entry,
                             std::vector<InputTarget>& targets) const REQUIRES(mLock);
     void transferWallpaperTouch(ftl::Flags<InputTarget::Flags> oldTargetFlags,
                                 ftl::Flags<InputTarget::Flags> newTargetFlags,
