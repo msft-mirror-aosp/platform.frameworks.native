@@ -490,9 +490,10 @@ public:
         auto layers = getLayerSnapshotsFn();
         auto layerFEs = mFlinger->extractLayerFEs(layers);
 
-        return mFlinger->renderScreenImpl(std::move(renderArea), buffer, regionSampling,
+        return mFlinger->renderScreenImpl(renderArea.get(), buffer, regionSampling,
                                           false /* grayscale */, false /* isProtected */,
-                                          captureResults, displayState, layers, layerFEs);
+                                          false /* attachGainmap */, captureResults, displayState,
+                                          layers, layerFEs);
     }
 
     auto getLayerSnapshotsForScreenshotsFn(ui::LayerStack layerStack, uint32_t uid) {

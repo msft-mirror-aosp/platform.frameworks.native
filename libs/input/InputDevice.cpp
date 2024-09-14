@@ -122,6 +122,10 @@ std::string getInputDeviceConfigurationFilePathByName(
             LOG_IF(INFO, DEBUG_PROBE)
                     << "Found system-provided input device configuration file at " << path;
             return path;
+        } else if (errno != ENOENT) {
+            LOG(WARNING) << "Couldn't find a system-provided input device configuration file at "
+                         << path << " due to error " << errno << " (" << strerror(errno)
+                         << "); there may be an IDC file there that cannot be loaded.";
         } else {
             LOG_IF(ERROR, DEBUG_PROBE)
                     << "Didn't find system-provided input device configuration file at " << path
@@ -142,6 +146,10 @@ std::string getInputDeviceConfigurationFilePathByName(
         LOG_IF(INFO, DEBUG_PROBE) << "Found system user input device configuration file at "
                                   << path;
         return path;
+    } else if (errno != ENOENT) {
+        LOG(WARNING) << "Couldn't find a system user input device configuration file at " << path
+                     << " due to error " << errno << " (" << strerror(errno)
+                     << "); there may be an IDC file there that cannot be loaded.";
     } else {
         LOG_IF(ERROR, DEBUG_PROBE) << "Didn't find system user input device configuration file at "
                                    << path << ": " << strerror(errno);
