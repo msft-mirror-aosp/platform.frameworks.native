@@ -81,6 +81,7 @@ public:
     bool ce_fence_promise() const;
     bool idle_screen_refresh_rate_timeout() const;
     bool graphite_renderengine() const;
+    bool filter_frames_before_trace_starts() const;
     bool latch_unsignaled_with_auto_refresh_changed() const;
     bool deprecate_vsync_sf() const;
     bool allow_n_vsyncs_in_targeter() const;
