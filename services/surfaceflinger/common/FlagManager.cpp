@@ -143,6 +143,7 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(ce_fence_promise);
     DUMP_READ_ONLY_FLAG(idle_screen_refresh_rate_timeout);
     DUMP_READ_ONLY_FLAG(graphite_renderengine);
+    DUMP_READ_ONLY_FLAG(filter_frames_before_trace_starts);
     DUMP_READ_ONLY_FLAG(latch_unsignaled_with_auto_refresh_changed);
     DUMP_READ_ONLY_FLAG(deprecate_vsync_sf);
     DUMP_READ_ONLY_FLAG(allow_n_vsyncs_in_targeter);
@@ -248,6 +249,7 @@ FLAG_MANAGER_READ_ONLY_FLAG(vrr_bugfix_24q4, "");
 FLAG_MANAGER_READ_ONLY_FLAG(vrr_bugfix_dropped_frame, "")
 FLAG_MANAGER_READ_ONLY_FLAG(ce_fence_promise, "");
 FLAG_MANAGER_READ_ONLY_FLAG(graphite_renderengine, "debug.renderengine.graphite")
+FLAG_MANAGER_READ_ONLY_FLAG(filter_frames_before_trace_starts, "")
 FLAG_MANAGER_READ_ONLY_FLAG(latch_unsignaled_with_auto_refresh_changed, "");
 FLAG_MANAGER_READ_ONLY_FLAG(deprecate_vsync_sf, "");
 FLAG_MANAGER_READ_ONLY_FLAG(allow_n_vsyncs_in_targeter, "");
