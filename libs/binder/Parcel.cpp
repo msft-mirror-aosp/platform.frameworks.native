@@ -2984,13 +2984,14 @@ status_t Parcel::restartWrite(size_t desired)
         return continueWrite(desired);
     }
 
+    releaseObjects();
+
     uint8_t* data = reallocZeroFree(mData, mDataCapacity, desired, mDeallocZero);
     if (!data && desired > mDataCapacity) {
+        LOG_ALWAYS_FATAL("out of memory");
         mError = NO_MEMORY;
         return NO_MEMORY;
     }
-
-    releaseObjects();
 
     if (data || desired == 0) {
         LOG_ALLOC("Parcel %p: restart from %zu to %zu capacity", this, mDataCapacity, desired);
