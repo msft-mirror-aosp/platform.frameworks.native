@@ -50,10 +50,11 @@ public:
     bool needsMoreSamples() const final { return false; }
     bool isVSyncInPhase(nsecs_t, Fps) final { return false; }
     void setDisplayModePtr(ftl::NonNull<DisplayModePtr>) final {}
-    void setRenderRate(Fps) final {}
+    void setRenderRate(Fps, bool) final {}
     void onFrameBegin(TimePoint, TimePoint) final {}
     void onFrameMissed(TimePoint) final {}
     void dump(std::string&) const final {}
+    bool isCurrentMode(const ftl::NonNull<DisplayModePtr>&) const final { return false; };
 
 protected:
     std::mutex mutable mMutex;
