@@ -91,6 +91,7 @@ cc_test {
             },
         },
     },
+    native_coverage: false,
 }
 
 // NOTE: This is a compile time test, and does not need to be
