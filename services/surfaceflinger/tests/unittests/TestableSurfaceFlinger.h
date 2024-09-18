@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <variant>
@@ -44,7 +43,6 @@
 #include "Layer.h"
 #include "NativeWindowSurface.h"
 #include "RenderArea.h"
-#include "Scheduler/MessageQueue.h"
 #include "Scheduler/RefreshRateSelector.h"
 #include "SurfaceFlinger.h"
 #include "TestableScheduler.h"
@@ -60,7 +58,6 @@
 
 #include "Scheduler/VSyncTracker.h"
 #include "Scheduler/VsyncController.h"
-#include "mock/MockVSyncDispatch.h"
 #include "mock/MockVSyncTracker.h"
 #include "mock/MockVsyncController.h"
 
@@ -88,9 +85,7 @@ class Factory final : public surfaceflinger::Factory {
 public:
     ~Factory() = default;
 
-    std::unique_ptr<HWComposer> createHWComposer(const std::string&) override {
-        return nullptr;
-    }
+    std::unique_ptr<HWComposer> createHWComposer(const std::string&) override { return nullptr; }
 
     std::unique_ptr<scheduler::VsyncConfiguration> createVsyncConfiguration(
             Fps /*currentRefreshRate*/) override {
@@ -276,17 +271,6 @@ public:
 
         auto eventThread = makeMock<mock::EventThread>(options.useNiceMock);
         auto sfEventThread = makeMock<mock::EventThread>(options.useNiceMock);
-
-        EXPECT_CALL(*eventThread, registerDisplayEventConnection(_));
-        EXPECT_CALL(*eventThread, createEventConnection(_, _))
-                .WillOnce(Return(sp<EventThreadConnection>::make(eventThread.get(),
-                                                                 mock::EventThread::kCallingUid)));
-
-        EXPECT_CALL(*sfEventThread, registerDisplayEventConnection(_));
-        EXPECT_CALL(*sfEventThread, createEventConnection(_, _))
-                .WillOnce(Return(sp<EventThreadConnection>::make(sfEventThread.get(),
-                                                                 mock::EventThread::kCallingUid)));
-
         auto vsyncController = makeMock<mock::VsyncController>(options.useNiceMock);
         auto vsyncTracker = makeSharedMock<mock::VSyncTracker>(options.useNiceMock);
 
@@ -502,7 +486,7 @@ public:
     }
 
     auto getDisplayNativePrimaries(const sp<IBinder>& displayToken,
-                                   ui::DisplayPrimaries &primaries) {
+                                   ui::DisplayPrimaries& primaries) {
         return mFlinger->SurfaceFlinger::getDisplayNativePrimaries(displayToken, primaries);
     }
 
