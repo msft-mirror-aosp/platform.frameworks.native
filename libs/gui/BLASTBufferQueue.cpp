@@ -1266,6 +1266,11 @@ void BLASTBufferQueue::setTransactionHangCallback(
     mTransactionHangCallback = std::move(callback);
 }
 
+void BLASTBufferQueue::setApplyToken(sp<IBinder> applyToken) {
+    std::lock_guard _lock{mMutex};
+    mApplyToken = std::move(applyToken);
+}
+
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
 
 BLASTBufferQueue::BufferReleaseReader::BufferReleaseReader(
