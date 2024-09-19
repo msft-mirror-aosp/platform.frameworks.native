@@ -37,6 +37,8 @@ namespace android {
 
 namespace {
 
+using std::chrono::nanoseconds;
+
 /**
  * Log debug messages relating to the consumer end of the transport channel.
  * Enable this via "adb shell setprop log.tag.InputTransportConsumer DEBUG" (requires restart)
@@ -485,7 +487,12 @@ InputConsumerNoResampling::createBatchedMotionEvent(const nsecs_t frameTime,
                                                     std::queue<InputMessage>& messages) {
     std::unique_ptr<MotionEvent> motionEvent;
     std::optional<uint32_t> firstSeqForBatch;
-    while (!messages.empty() && !(messages.front().body.motion.eventTime > frameTime)) {
+    const nanoseconds resampleLatency =
+            (mResampler != nullptr) ? mResampler->getResampleLatency() : nanoseconds{0};
+    const nanoseconds adjustedFrameTime = nanoseconds{frameTime} - resampleLatency;
+
+    while (!messages.empty() &&
+           (messages.front().body.motion.eventTime <= adjustedFrameTime.count())) {
         if (motionEvent == nullptr) {
             motionEvent = createMotionEvent(messages.front());
             firstSeqForBatch = messages.front().header.seq;
@@ -504,8 +511,7 @@ InputConsumerNoResampling::createBatchedMotionEvent(const nsecs_t frameTime,
         if (!messages.empty()) {
             futureSample = &messages.front();
         }
-        mResampler->resampleMotionEvent(static_cast<std::chrono::nanoseconds>(frameTime),
-                                        *motionEvent, futureSample);
+        mResampler->resampleMotionEvent(nanoseconds{frameTime}, *motionEvent, futureSample);
     }
     return std::make_pair(std::move(motionEvent), firstSeqForBatch);
 }
