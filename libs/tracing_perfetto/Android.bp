@@ -37,6 +37,7 @@ cc_library_shared {
     srcs: [
         "tracing_perfetto.cpp",
         "tracing_perfetto_internal.cpp",
+        "tracing_sdk.cpp",
     ],
 
     shared_libs: [
@@ -44,6 +45,10 @@ cc_library_shared {
         "libcutils",
         "libperfetto_c",
         "android.os.flags-aconfig-cc-host",
+    ],
+
+    export_shared_lib_headers: [
+        "libperfetto_c",
     ],
 
     host_supported: true,
