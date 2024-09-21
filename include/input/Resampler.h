@@ -47,6 +47,13 @@ struct Resampler {
      */
     virtual void resampleMotionEvent(std::chrono::nanoseconds frameTime, MotionEvent& motionEvent,
                                      const InputMessage* futureSample) = 0;
+
+    /**
+     * Returns resample latency. Resample latency is the time difference between frame time and
+     * resample time. More precisely, let frameTime and resampleTime be two timestamps, and
+     * frameTime > resampleTime. Resample latency is defined as frameTime - resampleTime.
+     */
+    virtual std::chrono::nanoseconds getResampleLatency() const = 0;
 };
 
 class LegacyResampler final : public Resampler {
@@ -62,6 +69,8 @@ public:
      */
     void resampleMotionEvent(std::chrono::nanoseconds frameTime, MotionEvent& motionEvent,
                              const InputMessage* futureSample) override;
+
+    std::chrono::nanoseconds getResampleLatency() const override;
 
 private:
     struct Pointer {

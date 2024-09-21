@@ -160,8 +160,7 @@ typedef struct ASurfaceTransactionStats ASurfaceTransactionStats;
  * Available since API level 29.
  */
 typedef void (*ASurfaceTransaction_OnComplete)(void* _Null_unspecified context,
-                                               ASurfaceTransactionStats* _Nonnull stats)
-        __INTRODUCED_IN(29);
+                                               ASurfaceTransactionStats* _Nonnull stats);
 
 /**
  * The ASurfaceTransaction_OnCommit callback is invoked when transaction is applied and the updates
@@ -189,8 +188,7 @@ typedef void (*ASurfaceTransaction_OnComplete)(void* _Null_unspecified context,
  * Available since API level 31.
  */
 typedef void (*ASurfaceTransaction_OnCommit)(void* _Null_unspecified context,
-                                             ASurfaceTransactionStats* _Nonnull stats)
-        __INTRODUCED_IN(31);
+                                             ASurfaceTransactionStats* _Nonnull stats);
 
 /**
  * The ASurfaceTransaction_OnBufferRelease callback is invoked when a buffer that was passed in
@@ -219,7 +217,7 @@ typedef void (*ASurfaceTransaction_OnCommit)(void* _Null_unspecified context,
  * Available since API level 36.
  */
 typedef void (*ASurfaceTransaction_OnBufferRelease)(void* _Null_unspecified context,
-                                                    int release_fence_fd) __INTRODUCED_IN(36);
+                                                    int release_fence_fd);
 
 /**
  * Returns the timestamp of when the frame was latched by the framework. Once a frame is
