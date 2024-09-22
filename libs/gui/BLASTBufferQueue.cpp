@@ -1135,6 +1135,17 @@ public:
         AsyncWorker::getInstance().post(
                 [listener = mListener, slots = slots]() { listener->onBuffersDiscarded(slots); });
     }
+
+    void onBufferDetached(int slot) override {
+        AsyncWorker::getInstance().post(
+                [listener = mListener, slot = slot]() { listener->onBufferDetached(slot); });
+    }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_CONSUMER_ATTACH_CALLBACK)
+    void onBufferAttached() override {
+        AsyncWorker::getInstance().post([listener = mListener]() { listener->onBufferAttached(); });
+    }
+#endif
 };
 
 // Extends the BufferQueueProducer to create a wrapper around the listener so the listener calls
@@ -1264,6 +1275,11 @@ void BLASTBufferQueue::setTransactionHangCallback(
         std::function<void(const std::string&)> callback) {
     std::lock_guard _lock{mMutex};
     mTransactionHangCallback = std::move(callback);
+}
+
+void BLASTBufferQueue::setApplyToken(sp<IBinder> applyToken) {
+    std::lock_guard _lock{mMutex};
+    mApplyToken = std::move(applyToken);
 }
 
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
