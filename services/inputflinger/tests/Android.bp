@@ -116,4 +116,5 @@ cc_test {
         unit_test: true,
     },
     test_suites: ["device-tests"],
+    native_coverage: false,
 }

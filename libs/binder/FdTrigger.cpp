@@ -108,7 +108,7 @@ status_t FdTrigger::triggerablePoll(const android::RpcTransportFd& transportFd, 
 
     // POLLNVAL: invalid FD number, e.g. not opened.
     if (pfd[0].revents & POLLNVAL) {
-        ALOGE("Invalid FD number (%d) in FdTrigger (POLLNVAL)", pfd[0].fd);
+        LOG_ALWAYS_FATAL("Invalid FD number (%d) in FdTrigger (POLLNVAL)", pfd[0].fd);
         return BAD_VALUE;
     }
 

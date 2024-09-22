@@ -134,8 +134,11 @@ private:
     }
 
     size_t getPresentFenceShift(Period minFramePeriod) const {
-        const bool isTwoVsyncsAhead = targetsVsyncsAhead<2>(minFramePeriod);
         size_t shift = 0;
+        if (minFramePeriod.ns() == 0) {
+            return shift;
+        }
+        const bool isTwoVsyncsAhead = targetsVsyncsAhead<2>(minFramePeriod);
         if (isTwoVsyncsAhead) {
             shift = static_cast<size_t>(expectedFrameDuration().ns() / minFramePeriod.ns());
             if (shift >= mPresentFences.size()) {
