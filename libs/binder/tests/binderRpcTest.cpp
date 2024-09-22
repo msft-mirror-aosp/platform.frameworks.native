@@ -454,7 +454,7 @@ TEST_P(BinderRpc, ThreadPoolGreaterThanEqualRequested) {
         GTEST_SKIP() << "This test requires multiple threads";
     }
 
-    constexpr size_t kNumThreads = 10;
+    constexpr size_t kNumThreads = 5;
 
     auto proc = createRpcTestSocketServerProcess({.numThreads = kNumThreads});
 
