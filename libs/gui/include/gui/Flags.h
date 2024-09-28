@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 The Android Open Source Project
+ * Copyright 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,29 +16,9 @@
 
 #pragma once
 
-#include <cstdint>
-#include <deque>
-#include <mutex>
+#include <com_android_graphics_libgui_flags.h>
 
-#include <ui/Fence.h>
-
-namespace android::gui {
-
-class FenceMonitor {
-public:
-    explicit FenceMonitor(const char* name);
-    void queueFence(const sp<Fence>& fence);
-
-private:
-    void loop();
-    void threadLoop();
-
-    const char* mName;
-    uint32_t mFencesQueued;
-    uint32_t mFencesSignaled;
-    std::deque<sp<Fence>> mQueue;
-    std::condition_variable mCondition;
-    std::mutex mMutex;
-};
-
-} // namespace android::gui
+#define WB_CAMERA3_AND_PROCESSORS_WITH_DEPENDENCIES                  \
+    (COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CAMERA3_AND_PROCESSORS) && \
+     COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ) &&  \
+     COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS))
