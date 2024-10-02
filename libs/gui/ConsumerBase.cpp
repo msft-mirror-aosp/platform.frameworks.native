@@ -254,6 +254,17 @@ void ConsumerBase::onBuffersReleased() {
 void ConsumerBase::onSidebandStreamChanged() {
 }
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+void ConsumerBase::onSlotCountChanged(int slotCount) {
+    CB_LOGV("onSlotCountChanged: %d", slotCount);
+    Mutex::Autolock lock(mMutex);
+
+    if (slotCount > (int)mSlots.size()) {
+        mSlots.resize(slotCount);
+    }
+}
+#endif
+
 void ConsumerBase::abandon() {
     CB_LOGV("abandon");
     Mutex::Autolock lock(mMutex);
