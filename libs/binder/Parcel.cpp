@@ -1150,31 +1150,6 @@ status_t Parcel::finishWrite(size_t len)
     return NO_ERROR;
 }
 
-status_t Parcel::writeUnpadded(const void* data, size_t len)
-{
-    if (len > INT32_MAX) {
-        // don't accept size_t values which may have come from an
-        // inadvertent conversion from a negative int.
-        return BAD_VALUE;
-    }
-
-    size_t end = mDataPos + len;
-    if (end < mDataPos) {
-        // integer overflow
-        return BAD_VALUE;
-    }
-
-    if (end <= mDataCapacity) {
-restart_write:
-        memcpy(mData+mDataPos, data, len);
-        return finishWrite(len);
-    }
-
-    status_t err = growData(len);
-    if (err == NO_ERROR) goto restart_write;
-    return err;
-}
-
 status_t Parcel::write(const void* data, size_t len)
 {
     if (len > INT32_MAX) {
@@ -2945,6 +2920,14 @@ status_t Parcel::growData(size_t len)
     if (len > INT32_MAX) {
         // don't accept size_t values which may have come from an
         // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
+    if (mDataPos > mDataSize) {
+        // b/370831157 - this case used to abort. We also don't expect mDataPos < mDataSize, but
+        // this would only waste a bit of memory, so it's okay.
+        ALOGE("growData only expected at the end of a Parcel. pos: %zu, size: %zu, capacity: %zu",
+              mDataPos, len, mDataCapacity);
         return BAD_VALUE;
     }
 
