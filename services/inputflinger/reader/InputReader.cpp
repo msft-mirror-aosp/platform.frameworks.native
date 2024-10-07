@@ -33,6 +33,7 @@
 #include <utils/Thread.h>
 
 #include "InputDevice.h"
+#include "include/gestures.h"
 
 using android::base::StringPrintf;
 
@@ -121,7 +122,8 @@ status_t InputReader::start() {
         return ALREADY_EXISTS;
     }
     mThread = std::make_unique<InputThread>(
-            "InputReader", [this]() { loopOnce(); }, [this]() { mEventHub->wake(); });
+            "InputReader", [this]() { loopOnce(); }, [this]() { mEventHub->wake(); },
+            /*isInCriticalPath=*/true);
     return OK;
 }
 
@@ -624,15 +626,6 @@ bool InputReader::markSupportedKeyCodesLocked(int32_t deviceId, uint32_t sourceM
     return result;
 }
 
-void InputReader::addKeyRemapping(int32_t deviceId, int32_t fromKeyCode, int32_t toKeyCode) const {
-    std::scoped_lock _l(mLock);
-
-    InputDevice* device = findInputDeviceLocked(deviceId);
-    if (device != nullptr) {
-        device->addKeyRemapping(fromKeyCode, toKeyCode);
-    }
-}
-
 int32_t InputReader::getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const {
     std::scoped_lock _l(mLock);
 
@@ -815,6 +808,18 @@ std::vector<InputDeviceSensorInfo> InputReader::getSensors(int32_t deviceId) {
     }
 
     return device->getDeviceInfo().getSensors();
+}
+
+std::optional<HardwareProperties> InputReader::getTouchpadHardwareProperties(int32_t deviceId) {
+    std::scoped_lock _l(mLock);
+
+    InputDevice* device = findInputDeviceLocked(deviceId);
+
+    if (device == nullptr) {
+        return {};
+    }
+
+    return device->getTouchpadHardwareProperties();
 }
 
 bool InputReader::setLightColor(int32_t deviceId, int32_t lightId, int32_t color) {

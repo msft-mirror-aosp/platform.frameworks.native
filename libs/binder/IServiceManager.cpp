@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+#include <sys/socket.h>
 #define LOG_TAG "ServiceManagerCppClient"
 
 #include <binder/IServiceManager.h>
+#include <binder/IServiceManagerUnitTestHelper.h>
 #include "BackendUnifiedServiceManager.h"
 
 #include <inttypes.h>
@@ -24,14 +26,19 @@
 #include <chrono>
 #include <condition_variable>
 
+#include <FdTrigger.h>
+#include <RpcSocketAddress.h>
 #include <android-base/properties.h>
+#include <android/os/BnAccessor.h>
 #include <android/os/BnServiceCallback.h>
+#include <android/os/BnServiceManager.h>
 #include <android/os/IAccessor.h>
 #include <android/os/IServiceManager.h>
 #include <binder/IPCThreadState.h>
 #include <binder/Parcel.h>
+#include <binder/RpcSession.h>
 #include <utils/String8.h>
-
+#include <variant>
 #ifndef __ANDROID_VNDK__
 #include <binder/IPermissionController.h>
 #endif
@@ -79,10 +86,9 @@ IServiceManager::IServiceManager() {}
 IServiceManager::~IServiceManager() {}
 
 // From the old libbinder IServiceManager interface to IServiceManager.
-class ServiceManagerShim : public IServiceManager
-{
+class CppBackendShim : public IServiceManager {
 public:
-    explicit ServiceManagerShim (const sp<AidlServiceManager>& impl);
+    explicit CppBackendShim(const sp<BackendUnifiedServiceManager>& impl);
 
     sp<IBinder> getService(const String16& name) const override;
     sp<IBinder> checkService(const String16& name) const override;
@@ -136,11 +142,11 @@ protected:
                                           sp<RegistrationWaiter>* waiter);
 
     // Directly get the service in a way that, for lazy services, requests the service to be started
-    // if it is not currently started. This way, calls directly to ServiceManagerShim::getService
+    // if it is not currently started. This way, calls directly to CppBackendShim::getService
     // will still have the 5s delay that is expected by a large amount of Android code.
     //
-    // When implementing ServiceManagerShim, use realGetService instead of
-    // mUnifiedServiceManager->getService so that it can be overridden in ServiceManagerHostShim.
+    // When implementing CppBackendShim, use realGetService instead of
+    // mUnifiedServiceManager->getService so that it can be overridden in CppServiceManagerHostShim.
     virtual Status realGetService(const std::string& name, sp<IBinder>* _aidl_return) {
         Service service;
         Status status = mUnifiedServiceManager->getService2(name, &service);
@@ -149,13 +155,156 @@ protected:
     }
 };
 
+class AccessorProvider {
+public:
+    AccessorProvider(std::set<std::string>&& instances, RpcAccessorProvider&& provider)
+          : mInstances(std::move(instances)), mProvider(std::move(provider)) {}
+    sp<IBinder> provide(const String16& name) {
+        if (mInstances.count(String8(name).c_str()) > 0) {
+            return mProvider(name);
+        } else {
+            return nullptr;
+        }
+    }
+    const std::set<std::string>& instances() { return mInstances; }
+
+private:
+    AccessorProvider() = delete;
+
+    std::set<std::string> mInstances;
+    RpcAccessorProvider mProvider;
+};
+
+class AccessorProviderEntry {
+public:
+    AccessorProviderEntry(std::shared_ptr<AccessorProvider>&& provider)
+          : mProvider(std::move(provider)) {}
+    std::shared_ptr<AccessorProvider> mProvider;
+
+private:
+    AccessorProviderEntry() = delete;
+};
+
 [[clang::no_destroy]] static std::once_flag gSmOnce;
 [[clang::no_destroy]] static sp<IServiceManager> gDefaultServiceManager;
+[[clang::no_destroy]] static std::mutex gAccessorProvidersMutex;
+[[clang::no_destroy]] static std::vector<AccessorProviderEntry> gAccessorProviders;
+
+class LocalAccessor : public android::os::BnAccessor {
+public:
+    LocalAccessor(const String16& instance, RpcSocketAddressProvider&& connectionInfoProvider)
+          : mInstance(instance), mConnectionInfoProvider(std::move(connectionInfoProvider)) {
+        LOG_ALWAYS_FATAL_IF(!mConnectionInfoProvider,
+                            "LocalAccessor object needs a valid connection info provider");
+    }
+
+    ~LocalAccessor() {
+        if (mOnDelete) mOnDelete();
+    }
+
+    ::android::binder::Status addConnection(::android::os::ParcelFileDescriptor* outFd) {
+        using android::os::IAccessor;
+        sockaddr_storage addrStorage;
+        std::unique_ptr<FdTrigger> trigger = FdTrigger::make();
+        RpcTransportFd fd;
+        status_t status =
+                mConnectionInfoProvider(mInstance, reinterpret_cast<sockaddr*>(&addrStorage),
+                                        sizeof(addrStorage));
+        if (status != OK) {
+            const std::string error = "The connection info provider was unable to provide "
+                                      "connection info for instance " +
+                    std::string(String8(mInstance).c_str()) +
+                    " with status: " + statusToString(status);
+            ALOGE("%s", error.c_str());
+            return Status::fromServiceSpecificError(IAccessor::ERROR_CONNECTION_INFO_NOT_FOUND,
+                                                    error.c_str());
+        }
+        if (addrStorage.ss_family == AF_VSOCK) {
+            sockaddr_vm* addr = reinterpret_cast<sockaddr_vm*>(&addrStorage);
+            status = singleSocketConnection(VsockSocketAddress(addr->svm_cid, addr->svm_port),
+                                            trigger, &fd);
+        } else if (addrStorage.ss_family == AF_UNIX) {
+            sockaddr_un* addr = reinterpret_cast<sockaddr_un*>(&addrStorage);
+            status = singleSocketConnection(UnixSocketAddress(addr->sun_path), trigger, &fd);
+        } else if (addrStorage.ss_family == AF_INET) {
+            sockaddr_in* addr = reinterpret_cast<sockaddr_in*>(&addrStorage);
+            status = singleSocketConnection(InetSocketAddress(reinterpret_cast<sockaddr*>(addr),
+                                                              sizeof(sockaddr_in),
+                                                              inet_ntoa(addr->sin_addr),
+                                                              ntohs(addr->sin_port)),
+                                            trigger, &fd);
+        } else {
+            const std::string error =
+                    "Unsupported socket family type or the ConnectionInfoProvider failed to find a "
+                    "valid address. Family type: " +
+                    std::to_string(addrStorage.ss_family);
+            ALOGE("%s", error.c_str());
+            return Status::fromServiceSpecificError(IAccessor::ERROR_UNSUPPORTED_SOCKET_FAMILY,
+                                                    error.c_str());
+        }
+        if (status != OK) {
+            const std::string error = "Failed to connect to socket for " +
+                    std::string(String8(mInstance).c_str()) +
+                    " with status: " + statusToString(status);
+            ALOGE("%s", error.c_str());
+            int err = 0;
+            if (status == -EACCES) {
+                err = IAccessor::ERROR_FAILED_TO_CONNECT_EACCES;
+            } else {
+                err = IAccessor::ERROR_FAILED_TO_CONNECT_TO_SOCKET;
+            }
+            return Status::fromServiceSpecificError(err, error.c_str());
+        }
+        *outFd = os::ParcelFileDescriptor(std::move(fd.fd));
+        return Status::ok();
+    }
+
+    ::android::binder::Status getInstanceName(String16* instance) {
+        *instance = mInstance;
+        return Status::ok();
+    }
+
+private:
+    LocalAccessor() = delete;
+    String16 mInstance;
+    RpcSocketAddressProvider mConnectionInfoProvider;
+    std::function<void()> mOnDelete;
+};
+
+android::binder::Status getInjectedAccessor(const std::string& name,
+                                            android::os::Service* service) {
+    std::vector<AccessorProviderEntry> copiedProviders;
+    {
+        std::lock_guard<std::mutex> lock(gAccessorProvidersMutex);
+        copiedProviders.insert(copiedProviders.begin(), gAccessorProviders.begin(),
+                               gAccessorProviders.end());
+    }
+
+    // Unlocked to call the providers. This requires the providers to be
+    // threadsafe and not contain any references to objects that could be
+    // deleted.
+    for (const auto& provider : copiedProviders) {
+        sp<IBinder> binder = provider.mProvider->provide(String16(name.c_str()));
+        if (binder == nullptr) continue;
+        status_t status = validateAccessor(String16(name.c_str()), binder);
+        if (status != OK) {
+            ALOGE("A provider returned a binder that is not an IAccessor for instance %s. Status: "
+                  "%s",
+                  name.c_str(), statusToString(status).c_str());
+            return android::binder::Status::fromStatusT(android::INVALID_OPERATION);
+        }
+        *service = os::Service::make<os::Service::Tag::accessor>(binder);
+        return android::binder::Status::ok();
+    }
+
+    *service = os::Service::make<os::Service::Tag::accessor>(nullptr);
+    return android::binder::Status::ok();
+}
 
 sp<IServiceManager> defaultServiceManager()
 {
     std::call_once(gSmOnce, []() {
-        gDefaultServiceManager = sp<ServiceManagerShim>::make(getBackendUnifiedServiceManager());
+        gDefaultServiceManager = sp<CppBackendShim>::make(getBackendUnifiedServiceManager());
     });
 
     return gDefaultServiceManager;
@@ -171,6 +320,104 @@ void setDefaultServiceManager(const sp<IServiceManager>& sm) {
     if (!called) {
         LOG_ALWAYS_FATAL("setDefaultServiceManager() called after defaultServiceManager().");
     }
+}
+
+sp<IServiceManager> getServiceManagerShimFromAidlServiceManagerForTests(
+        const sp<AidlServiceManager>& sm) {
+    return sp<CppBackendShim>::make(sp<BackendUnifiedServiceManager>::make(sm));
+}
+
+// gAccessorProvidersMutex must be locked already
+static bool isInstanceProvidedLocked(const std::string& instance) {
+    return gAccessorProviders.end() !=
+            std::find_if(gAccessorProviders.begin(), gAccessorProviders.end(),
+                         [&instance](const AccessorProviderEntry& entry) {
+                             return entry.mProvider->instances().count(instance) > 0;
+                         });
+}
+
+std::weak_ptr<AccessorProvider> addAccessorProvider(std::set<std::string>&& instances,
+                                                    RpcAccessorProvider&& providerCallback) {
+    if (instances.empty()) {
+        ALOGE("Set of instances is empty! Need a non empty set of instances to provide for.");
+        return std::weak_ptr<AccessorProvider>();
+    }
+    std::lock_guard<std::mutex> lock(gAccessorProvidersMutex);
+    for (const auto& instance : instances) {
+        if (isInstanceProvidedLocked(instance)) {
+            ALOGE("The instance %s is already provided for by a previously added "
+                  "RpcAccessorProvider.",
+                  instance.c_str());
+            return std::weak_ptr<AccessorProvider>();
+        }
+    }
+    std::shared_ptr<AccessorProvider> provider =
+            std::make_shared<AccessorProvider>(std::move(instances), std::move(providerCallback));
+    std::weak_ptr<AccessorProvider> receipt = provider;
+    gAccessorProviders.push_back(AccessorProviderEntry(std::move(provider)));
+
+    return receipt;
+}
+
+status_t removeAccessorProvider(std::weak_ptr<AccessorProvider> wProvider) {
+    std::shared_ptr<AccessorProvider> provider = wProvider.lock();
+    if (provider == nullptr) {
+        ALOGE("The provider supplied to removeAccessorProvider has already been removed or the "
+              "argument to this function was nullptr.");
+        return BAD_VALUE;
+    }
+    std::lock_guard<std::mutex> lock(gAccessorProvidersMutex);
+    size_t sizeBefore = gAccessorProviders.size();
+    gAccessorProviders.erase(std::remove_if(gAccessorProviders.begin(), gAccessorProviders.end(),
+                                            [&](AccessorProviderEntry entry) {
+                                                return entry.mProvider == provider;
+                                            }),
+                             gAccessorProviders.end());
+    if (sizeBefore == gAccessorProviders.size()) {
+        ALOGE("Failed to find an AccessorProvider for removeAccessorProvider");
+        return NAME_NOT_FOUND;
+    }
+
+    return OK;
+}
+
+status_t validateAccessor(const String16& instance, const sp<IBinder>& binder) {
+    if (binder == nullptr) {
+        ALOGE("Binder is null");
+        return BAD_VALUE;
+    }
+    sp<IAccessor> accessor = interface_cast<IAccessor>(binder);
+    if (accessor == nullptr) {
+        ALOGE("This binder for %s is not an IAccessor binder", String8(instance).c_str());
+        return BAD_TYPE;
+    }
+    String16 reportedInstance;
+    Status status = accessor->getInstanceName(&reportedInstance);
+    if (!status.isOk()) {
+        ALOGE("Failed to validate the binder being used to create a new ARpc_Accessor for %s with "
+              "status: %s",
+              String8(instance).c_str(), status.toString8().c_str());
+        return NAME_NOT_FOUND;
+    }
+    if (reportedInstance != instance) {
+        ALOGE("Instance %s doesn't match the Accessor's instance of %s", String8(instance).c_str(),
+              String8(reportedInstance).c_str());
+        return NAME_NOT_FOUND;
+    }
+    return OK;
+}
+
+sp<IBinder> createAccessor(const String16& instance,
+                           RpcSocketAddressProvider&& connectionInfoProvider) {
+    // Try to create a new accessor
+    if (!connectionInfoProvider) {
+        ALOGE("Could not find an Accessor for %s and no ConnectionInfoProvider provided to "
+              "create a new one",
+              String8(instance).c_str());
+        return nullptr;
+    }
+    sp<IBinder> binder = sp<LocalAccessor>::make(instance, std::move(connectionInfoProvider));
+    return binder;
 }
 
 #if !defined(__ANDROID_VNDK__)
@@ -279,16 +526,14 @@ void* openDeclaredPassthroughHal(const String16& interface, const String16& inst
 
 // ----------------------------------------------------------------------
 
-ServiceManagerShim::ServiceManagerShim(const sp<AidlServiceManager>& impl) {
-    mUnifiedServiceManager = sp<BackendUnifiedServiceManager>::make(impl);
-}
+CppBackendShim::CppBackendShim(const sp<BackendUnifiedServiceManager>& impl)
+      : mUnifiedServiceManager(impl) {}
 
 // This implementation could be simplified and made more efficient by delegating
 // to waitForService. However, this changes the threading structure in some
 // cases and could potentially break prebuilts. Once we have higher logistical
 // complexity, this could be attempted.
-sp<IBinder> ServiceManagerShim::getService(const String16& name) const
-{
+sp<IBinder> CppBackendShim::getService(const String16& name) const {
     static bool gSystemBootCompleted = false;
 
     sp<IBinder> svc = checkService(name);
@@ -332,8 +577,7 @@ sp<IBinder> ServiceManagerShim::getService(const String16& name) const
     return nullptr;
 }
 
-sp<IBinder> ServiceManagerShim::checkService(const String16& name) const
-{
+sp<IBinder> CppBackendShim::checkService(const String16& name) const {
     Service ret;
     if (!mUnifiedServiceManager->checkService(String8(name).c_str(), &ret).isOk()) {
         return nullptr;
@@ -341,16 +585,14 @@ sp<IBinder> ServiceManagerShim::checkService(const String16& name) const
     return ret.get<Service::Tag::binder>();
 }
 
-status_t ServiceManagerShim::addService(const String16& name, const sp<IBinder>& service,
-                                        bool allowIsolated, int dumpsysPriority)
-{
+status_t CppBackendShim::addService(const String16& name, const sp<IBinder>& service,
+                                    bool allowIsolated, int dumpsysPriority) {
     Status status = mUnifiedServiceManager->addService(String8(name).c_str(), service,
                                                        allowIsolated, dumpsysPriority);
     return status.exceptionCode();
 }
 
-Vector<String16> ServiceManagerShim::listServices(int dumpsysPriority)
-{
+Vector<String16> CppBackendShim::listServices(int dumpsysPriority) {
     std::vector<std::string> ret;
     if (!mUnifiedServiceManager->listServices(dumpsysPriority, &ret).isOk()) {
         return {};
@@ -364,8 +606,7 @@ Vector<String16> ServiceManagerShim::listServices(int dumpsysPriority)
     return res;
 }
 
-sp<IBinder> ServiceManagerShim::waitForService(const String16& name16)
-{
+sp<IBinder> CppBackendShim::waitForService(const String16& name16) {
     class Waiter : public android::os::BnServiceCallback {
         Status onRegistration(const std::string& /*name*/,
                               const sp<IBinder>& binder) override {
@@ -454,7 +695,7 @@ sp<IBinder> ServiceManagerShim::waitForService(const String16& name16)
     }
 }
 
-bool ServiceManagerShim::isDeclared(const String16& name) {
+bool CppBackendShim::isDeclared(const String16& name) {
     bool declared;
     if (Status status = mUnifiedServiceManager->isDeclared(String8(name).c_str(), &declared);
         !status.isOk()) {
@@ -465,7 +706,7 @@ bool ServiceManagerShim::isDeclared(const String16& name) {
     return declared;
 }
 
-Vector<String16> ServiceManagerShim::getDeclaredInstances(const String16& interface) {
+Vector<String16> CppBackendShim::getDeclaredInstances(const String16& interface) {
     std::vector<std::string> out;
     if (Status status =
                 mUnifiedServiceManager->getDeclaredInstances(String8(interface).c_str(), &out);
@@ -483,7 +724,7 @@ Vector<String16> ServiceManagerShim::getDeclaredInstances(const String16& interf
     return res;
 }
 
-std::optional<String16> ServiceManagerShim::updatableViaApex(const String16& name) {
+std::optional<String16> CppBackendShim::updatableViaApex(const String16& name) {
     std::optional<std::string> declared;
     if (Status status = mUnifiedServiceManager->updatableViaApex(String8(name).c_str(), &declared);
         !status.isOk()) {
@@ -494,7 +735,7 @@ std::optional<String16> ServiceManagerShim::updatableViaApex(const String16& nam
     return declared ? std::optional<String16>(String16(declared.value().c_str())) : std::nullopt;
 }
 
-Vector<String16> ServiceManagerShim::getUpdatableNames(const String16& apexName) {
+Vector<String16> CppBackendShim::getUpdatableNames(const String16& apexName) {
     std::vector<std::string> out;
     if (Status status = mUnifiedServiceManager->getUpdatableNames(String8(apexName).c_str(), &out);
         !status.isOk()) {
@@ -511,7 +752,7 @@ Vector<String16> ServiceManagerShim::getUpdatableNames(const String16& apexName)
     return res;
 }
 
-std::optional<IServiceManager::ConnectionInfo> ServiceManagerShim::getConnectionInfo(
+std::optional<IServiceManager::ConnectionInfo> CppBackendShim::getConnectionInfo(
         const String16& name) {
     std::optional<os::ConnectionInfo> connectionInfo;
     if (Status status =
@@ -526,8 +767,8 @@ std::optional<IServiceManager::ConnectionInfo> ServiceManagerShim::getConnection
             : std::nullopt;
 }
 
-status_t ServiceManagerShim::registerForNotifications(const String16& name,
-                                                      const sp<AidlRegistrationCallback>& cb) {
+status_t CppBackendShim::registerForNotifications(const String16& name,
+                                                  const sp<AidlRegistrationCallback>& cb) {
     if (cb == nullptr) {
         ALOGE("%s: null cb passed", __FUNCTION__);
         return BAD_VALUE;
@@ -546,9 +787,9 @@ status_t ServiceManagerShim::registerForNotifications(const String16& name,
     return OK;
 }
 
-void ServiceManagerShim::removeRegistrationCallbackLocked(const sp<AidlRegistrationCallback>& cb,
-                                                          ServiceCallbackMap::iterator* it,
-                                                          sp<RegistrationWaiter>* waiter) {
+void CppBackendShim::removeRegistrationCallbackLocked(const sp<AidlRegistrationCallback>& cb,
+                                                      ServiceCallbackMap::iterator* it,
+                                                      sp<RegistrationWaiter>* waiter) {
     std::vector<LocalRegistrationAndWaiter>& localRegistrationAndWaiters = (*it)->second;
     for (auto lit = localRegistrationAndWaiters.begin();
          lit != localRegistrationAndWaiters.end();) {
@@ -567,8 +808,8 @@ void ServiceManagerShim::removeRegistrationCallbackLocked(const sp<AidlRegistrat
     }
 }
 
-status_t ServiceManagerShim::unregisterForNotifications(const String16& name,
-                                                        const sp<AidlRegistrationCallback>& cb) {
+status_t CppBackendShim::unregisterForNotifications(const String16& name,
+                                                    const sp<AidlRegistrationCallback>& cb) {
     if (cb == nullptr) {
         ALOGE("%s: null cb passed", __FUNCTION__);
         return BAD_VALUE;
@@ -597,7 +838,7 @@ status_t ServiceManagerShim::unregisterForNotifications(const String16& name,
     return OK;
 }
 
-std::vector<IServiceManager::ServiceDebugInfo> ServiceManagerShim::getServiceDebugInfo() {
+std::vector<IServiceManager::ServiceDebugInfo> CppBackendShim::getServiceDebugInfo() {
     std::vector<os::ServiceDebugInfo> serviceDebugInfos;
     std::vector<IServiceManager::ServiceDebugInfo> ret;
     if (Status status = mUnifiedServiceManager->getServiceDebugInfo(&serviceDebugInfos);
@@ -615,21 +856,21 @@ std::vector<IServiceManager::ServiceDebugInfo> ServiceManagerShim::getServiceDeb
 }
 
 #ifndef __ANDROID__
-// ServiceManagerShim for host. Implements the old libbinder android::IServiceManager API.
+// CppBackendShim for host. Implements the old libbinder android::IServiceManager API.
 // The internal implementation of the AIDL interface android::os::IServiceManager calls into
 // on-device service manager.
-class ServiceManagerHostShim : public ServiceManagerShim {
+class CppServiceManagerHostShim : public CppBackendShim {
 public:
-    ServiceManagerHostShim(const sp<AidlServiceManager>& impl,
-                           const RpcDelegateServiceManagerOptions& options)
-          : ServiceManagerShim(impl), mOptions(options) {}
-    // ServiceManagerShim::getService is based on checkService, so no need to override it.
+    CppServiceManagerHostShim(const sp<AidlServiceManager>& impl,
+                              const RpcDelegateServiceManagerOptions& options)
+          : CppBackendShim(sp<BackendUnifiedServiceManager>::make(impl)), mOptions(options) {}
+    // CppBackendShim::getService is based on checkService, so no need to override it.
     sp<IBinder> checkService(const String16& name) const override {
         return getDeviceService({String8(name).c_str()}, mOptions);
     }
 
 protected:
-    // Override realGetService for ServiceManagerShim::waitForService.
+    // Override realGetService for CppBackendShim::waitForService.
     Status realGetService(const std::string& name, sp<IBinder>* _aidl_return) override {
         *_aidl_return = getDeviceService({"-g", name}, mOptions);
         return Status::ok();
@@ -650,7 +891,7 @@ sp<IServiceManager> createRpcDelegateServiceManager(
         ALOGE("getDeviceService(\"manager\") returns non service manager");
         return nullptr;
     }
-    return sp<ServiceManagerHostShim>::make(interface, options);
+    return sp<CppServiceManagerHostShim>::make(interface, options);
 }
 #endif
 

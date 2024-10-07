@@ -21,7 +21,9 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include <android/gui/DisplayCaptureArgs.h>
 #include <android/gui/IWindowInfosReportedListener.h>
+#include <android/gui/LayerCaptureArgs.h>
 #include <android/gui/TrustedPresentationThresholds.h>
 #include <android/native_window.h>
 #include <gui/IGraphicBufferProducer.h>
@@ -35,9 +37,7 @@
 
 #include <ftl/flags.h>
 #include <gui/BufferReleaseChannel.h>
-#include <gui/DisplayCaptureArgs.h>
 #include <gui/ISurfaceComposer.h>
-#include <gui/LayerCaptureArgs.h>
 #include <gui/LayerMetadata.h>
 #include <gui/SpHash.h>
 #include <gui/SurfaceControl.h>
@@ -330,7 +330,7 @@ struct layer_state_t {
     Region transparentRegion;
     uint32_t bufferTransform;
     bool transformToDisplayInverse;
-    Rect crop;
+    FloatRect crop;
     std::shared_ptr<BufferData> bufferData = nullptr;
     ui::Dataspace dataspace;
     HdrMetadata hdrMetadata;

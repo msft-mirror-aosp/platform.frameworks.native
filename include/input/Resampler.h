@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <optional>
+#include <vector>
 
 #include <input/Input.h>
 #include <input/InputTransport.h>
@@ -34,9 +35,9 @@ struct Resampler {
     virtual ~Resampler() = default;
 
     /**
-     * Tries to resample motionEvent at resampleTime. The provided resampleTime must be greater than
+     * Tries to resample motionEvent at frameTime. The provided frameTime must be greater than
      * the latest sample time of motionEvent. It is not guaranteed that resampling occurs at
-     * resampleTime. Interpolation may occur is futureSample is available. Otherwise, motionEvent
+     * frameTime. Interpolation may occur is futureSample is available. Otherwise, motionEvent
      * may be resampled by another method, or not resampled at all. Furthermore, it is the
      * implementer's responsibility to guarantee the following:
      * - If resampling occurs, a single additional sample should be added to motionEvent. That is,
@@ -44,24 +45,33 @@ struct Resampler {
      * samples by the end of the resampling. No other field of motionEvent should be modified.
      * - If resampling does not occur, then motionEvent must not be modified in any way.
      */
-    virtual void resampleMotionEvent(std::chrono::nanoseconds resampleTime,
-                                     MotionEvent& motionEvent,
+    virtual void resampleMotionEvent(std::chrono::nanoseconds frameTime, MotionEvent& motionEvent,
                                      const InputMessage* futureSample) = 0;
+
+    /**
+     * Returns resample latency. Resample latency is the time difference between frame time and
+     * resample time. More precisely, let frameTime and resampleTime be two timestamps, and
+     * frameTime > resampleTime. Resample latency is defined as frameTime - resampleTime.
+     */
+    virtual std::chrono::nanoseconds getResampleLatency() const = 0;
 };
 
 class LegacyResampler final : public Resampler {
 public:
     /**
-     * Tries to resample `motionEvent` at `resampleTime` by adding a resampled sample at the end of
+     * Tries to resample `motionEvent` at `frameTime` by adding a resampled sample at the end of
      * `motionEvent` with eventTime equal to `resampleTime` and pointer coordinates determined by
      * linear interpolation or linear extrapolation. An earlier `resampleTime` will be used if
      * extrapolation takes place and `resampleTime` is too far in the future. If `futureSample` is
      * not null, interpolation will occur. If `futureSample` is null and there is enough historical
      * data, LegacyResampler will extrapolate. Otherwise, no resampling takes place and
-     * `motionEvent` is unmodified.
+     * `motionEvent` is unmodified. Furthermore, motionEvent is not resampled if resampleTime equals
+     * the last sample eventTime of motionEvent.
      */
-    void resampleMotionEvent(std::chrono::nanoseconds resampleTime, MotionEvent& motionEvent,
+    void resampleMotionEvent(std::chrono::nanoseconds frameTime, MotionEvent& motionEvent,
                              const InputMessage* futureSample) override;
+
+    std::chrono::nanoseconds getResampleLatency() const override;
 
 private:
     struct Pointer {
@@ -71,14 +81,16 @@ private:
 
     struct Sample {
         std::chrono::nanoseconds eventTime;
-        Pointer pointer;
-    };
+        std::vector<Pointer> pointers;
 
-    /**
-     * Keeps track of the previous MotionEvent deviceId to enable comparison between the previous
-     * and the current deviceId.
-     */
-    std::optional<DeviceId> mPreviousDeviceId;
+        std::vector<PointerCoords> asPointerCoords() const {
+            std::vector<PointerCoords> pointersCoords;
+            for (const Pointer& pointer : pointers) {
+                pointersCoords.push_back(pointer.coords);
+            }
+            return pointersCoords;
+        }
+    };
 
     /**
      * Up to two latest samples from MotionEvent. Updated every time resampleMotionEvent is called.
@@ -88,11 +100,20 @@ private:
     RingBuffer<Sample> mLatestSamples{/*capacity=*/2};
 
     /**
-     * Adds up to mLatestSamples.capacity() of motionEvent's latest samples to mLatestSamples. (If
+     * Adds up to mLatestSamples.capacity() of motionEvent's latest samples to mLatestSamples. If
      * motionEvent has fewer samples than mLatestSamples.capacity(), then the available samples are
-     * added to mLatestSamples.)
+     * added to mLatestSamples.
      */
     void updateLatestSamples(const MotionEvent& motionEvent);
+
+    static Sample messageToSample(const InputMessage& message);
+
+    /**
+     * Checks if auxiliary sample has the same pointer properties of target sample. That is,
+     * auxiliary pointer IDs must appear in the same order as target pointer IDs, their toolType
+     * must match and be resampleable.
+     */
+    static bool pointerPropertiesResampleable(const Sample& target, const Sample& auxiliary);
 
     /**
      * Checks if there are necessary conditions to interpolate. For example, interpolation cannot

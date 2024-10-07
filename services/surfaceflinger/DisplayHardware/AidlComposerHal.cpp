@@ -60,6 +60,7 @@ using AidlDisplayCapability = aidl::android::hardware::graphics::composer3::Disp
 using AidlHdrCapabilities = aidl::android::hardware::graphics::composer3::HdrCapabilities;
 using AidlHdrConversionCapability =
         aidl::android::hardware::graphics::common::HdrConversionCapability;
+using AidlHdcpLevels = aidl::android::hardware::drm::HdcpLevels;
 using AidlHdrConversionStrategy = aidl::android::hardware::graphics::common::HdrConversionStrategy;
 using AidlOverlayProperties = aidl::android::hardware::graphics::composer3::OverlayProperties;
 using AidlPerFrameMetadata = aidl::android::hardware::graphics::composer3::PerFrameMetadata;
@@ -220,6 +221,12 @@ public:
     ::ndk::ScopedAStatus onHotplugEvent(int64_t in_display,
                                         AidlDisplayHotplugEvent event) override {
         mCallback.onComposerHalHotplugEvent(translate<Display>(in_display), event);
+        return ::ndk::ScopedAStatus::ok();
+    }
+
+    ::ndk::ScopedAStatus onHdcpLevelsChanged(int64_t in_display,
+                                             const AidlHdcpLevels& levels) override {
+        mCallback.onComposerHalHdcpLevelsChanged(translate<Display>(in_display), levels);
         return ::ndk::ScopedAStatus::ok();
     }
 
@@ -1540,11 +1547,23 @@ Error AidlComposer::getClientTargetProperty(
     return error;
 }
 
-Error AidlComposer::getDisplayLuts(Display display, std::vector<Lut>* outLuts) {
+Error AidlComposer::getRequestedLuts(Display display, std::vector<DisplayLuts::LayerLut>* outLuts) {
     Error error = Error::NONE;
     mMutex.lock_shared();
     if (auto reader = getReader(display)) {
         *outLuts = reader->get().takeDisplayLuts(translate<int64_t>(display));
+    } else {
+        error = Error::BAD_DISPLAY;
+    }
+    mMutex.unlock_shared();
+    return error;
+}
+
+Error AidlComposer::setLayerLuts(Display display, Layer layer, std::vector<Lut>& luts) {
+    Error error = Error::NONE;
+    mMutex.lock_shared();
+    if (auto writer = getWriter(display)) {
+        writer->get().setLayerLuts(translate<int64_t>(display), translate<int64_t>(layer), luts);
     } else {
         error = Error::BAD_DISPLAY;
     }

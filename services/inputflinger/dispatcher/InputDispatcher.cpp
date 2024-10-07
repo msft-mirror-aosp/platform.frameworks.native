@@ -52,6 +52,7 @@
 #include "Connection.h"
 #include "DebugConfig.h"
 #include "InputDispatcher.h"
+#include "InputEventTimeline.h"
 #include "trace/InputTracer.h"
 #include "trace/InputTracingPerfettoBackend.h"
 #include "trace/ThreadedBackend.h"
@@ -153,6 +154,10 @@ constexpr std::chrono::milliseconds SLOW_INTERCEPTION_THRESHOLD = 50ms;
 
 // Number of recent events to keep for debugging purposes.
 constexpr size_t RECENT_QUEUE_MAX_SIZE = 10;
+
+// Interval at which we should push the atom gathering input event latencies in
+// LatencyAggregatorWithHistograms
+constexpr nsecs_t LATENCY_STATISTICS_PUSH_INTERVAL = 6 * 3600 * 1000000000LL; // 6 hours
 
 // Event log tags. See EventLogTags.logtags for reference.
 constexpr int LOGTAG_INPUT_INTERACTION = 62000;
@@ -747,7 +752,8 @@ std::vector<TouchedWindow> getHoveringWindowsLocked(const TouchState* oldState,
             }
             touchedWindow.dispatchMode = InputTarget::DispatchMode::AS_IS;
         }
-        touchedWindow.addHoveringPointer(entry.deviceId, pointer);
+        const auto [x, y] = resolveTouchedPosition(entry);
+        touchedWindow.addHoveringPointer(entry.deviceId, pointer, x, y);
         if (canReceiveForegroundTouches(*newWindow->getInfo())) {
             touchedWindow.targetFlags |= InputTarget::Flags::FOREGROUND;
         }
@@ -874,6 +880,8 @@ std::pair<bool /*cancelPointers*/, bool /*cancelNonPointers*/> expandCancellatio
             return {false, true};
         case CancelationOptions::Mode::CANCEL_FALLBACK_EVENTS:
             return {false, true};
+        case CancelationOptions::Mode::CANCEL_HOVER_EVENTS:
+            return {true, false};
     }
 }
 
@@ -943,8 +951,13 @@ InputDispatcher::InputDispatcher(InputDispatcherPolicyInterface& policy,
         mFocusedDisplayId(ui::LogicalDisplayId::DEFAULT),
         mWindowTokenWithPointerCapture(nullptr),
         mAwaitedApplicationDisplayId(ui::LogicalDisplayId::INVALID),
-        mLatencyAggregator(),
-        mLatencyTracker(&mLatencyAggregator) {
+        mInputEventTimelineProcessor(
+                input_flags::enable_per_device_input_latency_metrics()
+                        ? std::move(std::unique_ptr<InputEventTimelineProcessor>(
+                                  new LatencyAggregatorWithHistograms()))
+                        : std::move(std::unique_ptr<InputEventTimelineProcessor>(
+                                  new LatencyAggregator()))),
+        mLatencyTracker(*mInputEventTimelineProcessor) {
     mLooper = sp<Looper>::make(false);
     mReporter = createInputReporter();
 
@@ -980,7 +993,8 @@ status_t InputDispatcher::start() {
         return ALREADY_EXISTS;
     }
     mThread = std::make_unique<InputThread>(
-            "InputDispatcher", [this]() { dispatchOnce(); }, [this]() { mLooper->wake(); });
+            "InputDispatcher", [this]() { dispatchOnce(); }, [this]() { mLooper->wake(); },
+            /*isInCriticalPath=*/true);
     return OK;
 }
 
@@ -1015,6 +1029,11 @@ void InputDispatcher::dispatchOnce() {
         // we might have to wake up earlier to check if an app is anr'ing.
         const nsecs_t nextAnrCheck = processAnrsLocked();
         nextWakeupTime = std::min(nextWakeupTime, nextAnrCheck);
+
+        if (mPerDeviceInputLatencyMetricsFlag) {
+            const nsecs_t nextStatisticsPush = processLatencyStatisticsLocked();
+            nextWakeupTime = std::min(nextWakeupTime, nextStatisticsPush);
+        }
 
         // We are about to enter an infinitely long sleep, because we have no commands or
         // pending or queued events
@@ -1094,6 +1113,21 @@ nsecs_t InputDispatcher::processAnrsLocked() {
     mAnrTracker.eraseToken(connection->getToken());
     onAnrLocked(connection);
     return LLONG_MIN;
+}
+
+/**
+ * Check if enough time has passed since the last latency statistics push.
+ * Return the time at which we should wake up next.
+ */
+nsecs_t InputDispatcher::processLatencyStatisticsLocked() {
+    const nsecs_t currentTime = now();
+    // Log the atom recording latency statistics if more than 6 hours passed from the last
+    // push
+    if (currentTime - mLastStatisticPushTime >= LATENCY_STATISTICS_PUSH_INTERVAL) {
+        mInputEventTimelineProcessor->pushLatencyStatistics();
+        mLastStatisticPushTime = currentTime;
+    }
+    return mLastStatisticPushTime + LATENCY_STATISTICS_PUSH_INTERVAL;
 }
 
 std::chrono::nanoseconds InputDispatcher::getDispatchingTimeoutLocked(
@@ -2510,7 +2544,8 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
 
             if (isHoverAction) {
                 // The "windowHandle" is the target of this hovering pointer.
-                tempTouchState.addHoveringPointerToWindow(windowHandle, entry.deviceId, pointer);
+                tempTouchState.addHoveringPointerToWindow(windowHandle, entry.deviceId, pointer, x,
+                                                          y);
             }
 
             // Set target flags.
@@ -4490,6 +4525,10 @@ void InputDispatcher::notifyKey(const NotifyKeyArgs& args) {
     { // acquire lock
         mLock.lock();
 
+        if (input_flags::keyboard_repeat_keys() && !mConfig.keyRepeatEnabled) {
+            policyFlags |= POLICY_FLAG_DISABLE_KEY_REPEAT;
+        }
+
         if (shouldSendKeyToInputFilterLocked(args)) {
             mLock.unlock();
 
@@ -4508,6 +4547,14 @@ void InputDispatcher::notifyKey(const NotifyKeyArgs& args) {
                                            repeatCount, args.downTime);
         if (mTracer) {
             newEntry->traceTracker = mTracer->traceInboundEvent(*newEntry);
+        }
+
+        if (mPerDeviceInputLatencyMetricsFlag) {
+            if (args.id != android::os::IInputConstants::INVALID_INPUT_EVENT_ID &&
+                IdGenerator::getSource(args.id) == IdGenerator::Source::INPUT_READER &&
+                !mInputFilterEnabled) {
+                mLatencyTracker.trackNotifyKey(args);
+            }
         }
 
         needWake = enqueueInboundEventLocked(std::move(newEntry));
@@ -4642,10 +4689,7 @@ void InputDispatcher::notifyMotion(const NotifyMotionArgs& args) {
         if (args.id != android::os::IInputConstants::INVALID_INPUT_EVENT_ID &&
             IdGenerator::getSource(args.id) == IdGenerator::Source::INPUT_READER &&
             !mInputFilterEnabled) {
-            const bool isDown = args.action == AMOTION_EVENT_ACTION_DOWN;
-            std::set<InputDeviceUsageSource> sources = getUsageSourcesForMotionArgs(args);
-            mLatencyTracker.trackListener(args.id, isDown, args.eventTime, args.readTime,
-                                          args.deviceId, sources);
+            mLatencyTracker.trackNotifyMotion(args);
         }
 
         needWake = enqueueInboundEventLocked(std::move(newEntry));
@@ -5415,6 +5459,32 @@ void InputDispatcher::setInputWindowsLocked(
         }
     }
 
+    // Check if the hovering should stop because the window is no longer eligible to receive it
+    // (for example, if the touchable region changed)
+    if (const auto& it = mTouchStatesByDisplay.find(displayId); it != mTouchStatesByDisplay.end()) {
+        TouchState& state = it->second;
+        for (TouchedWindow& touchedWindow : state.windows) {
+            std::vector<DeviceId> erasedDevices = touchedWindow.eraseHoveringPointersIf(
+                    [this, displayId, &touchedWindow](const PointerProperties& properties, float x,
+                                                      float y) REQUIRES(mLock) {
+                        const bool isStylus = properties.toolType == ToolType::STYLUS;
+                        const ui::Transform displayTransform = getTransformLocked(displayId);
+                        const bool stillAcceptsTouch =
+                                windowAcceptsTouchAt(*touchedWindow.windowHandle->getInfo(),
+                                                     displayId, x, y, isStylus, displayTransform);
+                        return !stillAcceptsTouch;
+                    });
+
+            for (DeviceId deviceId : erasedDevices) {
+                CancelationOptions options(CancelationOptions::Mode::CANCEL_HOVER_EVENTS,
+                                           "WindowInfo changed",
+                                           traceContext.getTracker());
+                options.deviceId = deviceId;
+                synthesizeCancelationEventsForWindowLocked(touchedWindow.windowHandle, options);
+            }
+        }
+    }
+
     // Release information for windows that are no longer present.
     // This ensures that unused input channels are released promptly.
     // Otherwise, they might stick around until the window handle is destroyed
@@ -6055,7 +6125,7 @@ void InputDispatcher::dumpDispatchStateLocked(std::string& dump) const {
     dump += StringPrintf(INDENT2 "KeyRepeatTimeout: %" PRId64 "ms\n",
                          ns2ms(mConfig.keyRepeatTimeout));
     dump += mLatencyTracker.dump(INDENT2);
-    dump += mLatencyAggregator.dump(INDENT2);
+    dump += mInputEventTimelineProcessor->dump(INDENT2);
     dump += INDENT "InputTracer: ";
     dump += mTracer == nullptr ? "Disabled" : "Enabled";
 }
@@ -7209,11 +7279,13 @@ sp<WindowInfoHandle> InputDispatcher::findWallpaperWindowBelow(
 }
 
 void InputDispatcher::setKeyRepeatConfiguration(std::chrono::nanoseconds timeout,
-                                                std::chrono::nanoseconds delay) {
+                                                std::chrono::nanoseconds delay,
+                                                bool keyRepeatEnabled) {
     std::scoped_lock _l(mLock);
 
     mConfig.keyRepeatTimeout = timeout.count();
     mConfig.keyRepeatDelay = delay.count();
+    mConfig.keyRepeatEnabled = keyRepeatEnabled;
 }
 
 bool InputDispatcher::isPointerInWindow(const sp<android::IBinder>& token,

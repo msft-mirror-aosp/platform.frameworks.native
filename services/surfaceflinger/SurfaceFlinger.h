@@ -135,6 +135,7 @@ class FrameTracer;
 class ScreenCapturer;
 class WindowInfosListenerInvoker;
 
+using ::aidl::android::hardware::drm::HdcpLevels;
 using ::aidl::android::hardware::graphics::common::DisplayHotplugEvent;
 using ::aidl::android::hardware::graphics::composer3::RefreshRateChangedDebugData;
 using frontend::TransactionHandler;
@@ -292,15 +293,10 @@ public:
     void onLayerDestroyed(Layer*);
     void onLayerUpdate();
 
-    void removeHierarchyFromOffscreenLayers(Layer* layer);
-    void removeFromOffscreenLayers(Layer* layer);
-
     // Called when all clients have released all their references to
     // this layer. The layer may still be kept alive by its parents but
     // the client can no longer modify this layer directly.
-    void onHandleDestroyed(BBinder* handle, sp<Layer>& layer, uint32_t layerId);
-
-    std::vector<Layer*> mLayerMirrorRoots;
+    void onHandleDestroyed(sp<Layer>& layer, uint32_t layerId);
 
     TransactionCallbackInvoker& getTransactionCallbackInvoker() {
         return mTransactionCallbackInvoker;
@@ -392,11 +388,10 @@ private:
 
     class State {
     public:
-        explicit State(LayerVector::StateSet set) : stateSet(set), layersSortedByZ(set) {}
+        explicit State(LayerVector::StateSet set) : stateSet(set) {}
         State& operator=(const State& other) {
             // We explicitly don't copy stateSet so that, e.g., mDrawingState
             // always uses the Drawing StateSet.
-            layersSortedByZ = other.layersSortedByZ;
             displays = other.displays;
             colorMatrixChanged = other.colorMatrixChanged;
             if (colorMatrixChanged) {
@@ -408,7 +403,6 @@ private:
         }
 
         const LayerVector::StateSet stateSet = LayerVector::StateSet::Invalid;
-        LayerVector layersSortedByZ;
 
         // TODO(b/241285876): Replace deprecated DefaultKeyedVector with ftl::SmallMap.
         DefaultKeyedVector<wp<IBinder>, DisplayDeviceState> displays;
@@ -428,10 +422,6 @@ private:
         mat4 colorMatrix;
 
         ShadowSettings globalShadowSettings;
-
-        void traverse(const LayerVector::Visitor& visitor) const;
-        void traverseInZOrder(const LayerVector::Visitor& visitor) const;
-        void traverseInReverseZOrder(const LayerVector::Visitor& visitor) const;
     };
 
     // Keeps track of pending buffers per layer handle in the transaction queue or current/drawing
@@ -443,32 +433,32 @@ private:
     // This is done to avoid lock contention with the main thread.
     class BufferCountTracker {
     public:
-        void increment(BBinder* layerHandle) {
+        void increment(uint32_t layerId) {
             std::lock_guard<std::mutex> lock(mLock);
-            auto it = mCounterByLayerHandle.find(layerHandle);
-            if (it != mCounterByLayerHandle.end()) {
+            auto it = mCounterByLayerId.find(layerId);
+            if (it != mCounterByLayerId.end()) {
                 auto [name, pendingBuffers] = it->second;
                 int32_t count = ++(*pendingBuffers);
                 SFTRACE_INT(name.c_str(), count);
             } else {
-                ALOGW("Handle not found! %p", layerHandle);
+                ALOGW("Layer ID not found! %d", layerId);
             }
         }
 
-        void add(BBinder* layerHandle, const std::string& name, std::atomic<int32_t>* counter) {
+        void add(uint32_t layerId, const std::string& name, std::atomic<int32_t>* counter) {
             std::lock_guard<std::mutex> lock(mLock);
-            mCounterByLayerHandle[layerHandle] = std::make_pair(name, counter);
+            mCounterByLayerId[layerId] = std::make_pair(name, counter);
         }
 
-        void remove(BBinder* layerHandle) {
+        void remove(uint32_t layerId) {
             std::lock_guard<std::mutex> lock(mLock);
-            mCounterByLayerHandle.erase(layerHandle);
+            mCounterByLayerId.erase(layerId);
         }
 
     private:
         std::mutex mLock;
-        std::unordered_map<BBinder*, std::pair<std::string, std::atomic<int32_t>*>>
-                mCounterByLayerHandle GUARDED_BY(mLock);
+        std::unordered_map<uint32_t, std::pair<std::string, std::atomic<int32_t>*>>
+                mCounterByLayerId GUARDED_BY(mLock);
     };
 
     enum class BootStage {
@@ -682,6 +672,7 @@ private:
     void onComposerHalSeamlessPossible(hal::HWDisplayId) override;
     void onComposerHalVsyncIdle(hal::HWDisplayId) override;
     void onRefreshRateChangedDebug(const RefreshRateChangedDebugData&) override;
+    void onComposerHalHdcpLevelsChanged(hal::HWDisplayId, const HdcpLevels& levels) override;
 
     // ICompositor overrides:
     void configure() override REQUIRES(kMainThreadContext);
@@ -794,9 +785,9 @@ private:
             REQUIRES(mStateLock, kMainThreadContext);
     // Flush pending transactions that were presented after desiredPresentTime.
     // For test only
-    bool flushTransactionQueues(VsyncId) REQUIRES(kMainThreadContext);
+    bool flushTransactionQueues() REQUIRES(kMainThreadContext);
 
-    bool applyTransactions(std::vector<TransactionState>&, VsyncId) REQUIRES(kMainThreadContext);
+    bool applyTransactions(std::vector<TransactionState>&) REQUIRES(kMainThreadContext);
     bool applyAndCommitDisplayTransactionStatesLocked(std::vector<TransactionState>& transactions)
             REQUIRES(kMainThreadContext, mStateLock);
 
@@ -824,11 +815,9 @@ private:
     // Clears and returns the masked bits.
     uint32_t clearTransactionFlags(uint32_t mask);
 
-    void commitOffscreenLayers();
-
     static LatchUnsignaledConfig getLatchUnsignaledConfig();
     bool shouldLatchUnsignaled(const layer_state_t&, size_t numStates, bool firstTransaction) const;
-    bool applyTransactionsLocked(std::vector<TransactionState>& transactions, VsyncId)
+    bool applyTransactionsLocked(std::vector<TransactionState>& transactions)
             REQUIRES(mStateLock, kMainThreadContext);
     uint32_t setDisplayStateLocked(const DisplayState& s) REQUIRES(mStateLock);
     uint32_t addInputWindowCommands(const InputWindowCommands& inputWindowCommands)
@@ -852,8 +841,6 @@ private:
     status_t mirrorDisplay(DisplayId displayId, const LayerCreationArgs& args,
                            gui::CreateSurfaceResult& outResult);
 
-    void markLayerPendingRemovalLocked(const sp<Layer>& layer) REQUIRES(mStateLock);
-
     // add a layer to SurfaceFlinger
     status_t addClientLayer(LayerCreationArgs& args, const sp<IBinder>& handle,
                             const sp<Layer>& layer, const wp<Layer>& parentLayer,
@@ -874,7 +861,7 @@ private:
 
     void captureScreenCommon(RenderAreaBuilderVariant, GetLayerSnapshotsFunction,
                              ui::Size bufferSize, ui::PixelFormat, bool allowProtected,
-                             bool grayscale, const sp<IScreenCaptureListener>&);
+                             bool grayscale, bool attachGainmap, const sp<IScreenCaptureListener>&);
 
     std::optional<OutputCompositionState> getDisplayStateFromRenderAreaBuilder(
             RenderAreaBuilderVariant& renderAreaBuilder) REQUIRES(kMainThreadContext);
@@ -888,20 +875,21 @@ private:
     ftl::SharedFuture<FenceResult> captureScreenshot(
             const RenderAreaBuilderVariant& renderAreaBuilder,
             const std::shared_ptr<renderengine::ExternalTexture>& buffer, bool regionSampling,
-            bool grayscale, bool isProtected, const sp<IScreenCaptureListener>& captureListener,
+            bool grayscale, bool isProtected, bool attachGainmap,
+            const sp<IScreenCaptureListener>& captureListener,
             std::optional<OutputCompositionState>& displayState,
             std::vector<sp<LayerFE>>& layerFEs);
 
     ftl::SharedFuture<FenceResult> captureScreenshotLegacy(
             RenderAreaBuilderVariant, GetLayerSnapshotsFunction,
             const std::shared_ptr<renderengine::ExternalTexture>&, bool regionSampling,
-            bool grayscale, bool isProtected, const sp<IScreenCaptureListener>&);
+            bool grayscale, bool isProtected, bool attachGainmap,
+            const sp<IScreenCaptureListener>&);
 
     ftl::SharedFuture<FenceResult> renderScreenImpl(
-            std::unique_ptr<const RenderArea>,
-            const std::shared_ptr<renderengine::ExternalTexture>&, bool regionSampling,
-            bool grayscale, bool isProtected, ScreenCaptureResults&,
-            std::optional<OutputCompositionState>& displayState,
+            const RenderArea*, const std::shared_ptr<renderengine::ExternalTexture>&,
+            bool regionSampling, bool grayscale, bool isProtected, bool attachGainmap,
+            ScreenCaptureResults&, std::optional<OutputCompositionState>& displayState,
             std::vector<std::pair<Layer*, sp<LayerFE>>>& layers,
             std::vector<sp<LayerFE>>& layerFEs);
 
@@ -1133,9 +1121,6 @@ private:
 
     perfetto::protos::LayersProto dumpDrawingStateProto(uint32_t traceFlags) const
             REQUIRES(kMainThreadContext);
-    void dumpOffscreenLayersProto(perfetto::protos::LayersProto& layersProto,
-                                  uint32_t traceFlags = LayerTracing::TRACE_ALL) const
-            REQUIRES(kMainThreadContext);
     google::protobuf::RepeatedPtrField<perfetto::protos::DisplayProto> dumpDisplayProto() const;
     void doActiveLayersTracingIfNeeded(bool isCompositionComputed, bool visibleRegionDirty,
                                        TimePoint, VsyncId) REQUIRES(kMainThreadContext);
@@ -1147,7 +1132,6 @@ private:
     void dumpHwc(std::string& result) const;
     perfetto::protos::LayersProto dumpProtoFromMainThread(
             uint32_t traceFlags = LayerTracing::TRACE_ALL) EXCLUDES(mStateLock);
-    void dumpOffscreenLayers(std::string& result) EXCLUDES(mStateLock);
     void dumpPlannerInfo(const DumpArgs& args, std::string& result) const REQUIRES(mStateLock);
 
     status_t doDump(int fd, const DumpArgs& args, bool asProto);
@@ -1208,7 +1192,6 @@ private:
     State mCurrentState{LayerVector::StateSet::Current};
     std::atomic<int32_t> mTransactionFlags = 0;
     std::atomic<uint32_t> mUniqueTransactionId = 1;
-    SortedVector<sp<Layer>> mLayersPendingRemoval;
 
     // Buffers that have been discarded by clients and need to be evicted from per-layer caches so
     // the graphics memory can be immediately freed.
@@ -1248,7 +1231,6 @@ private:
     // TODO: Also move visibleRegions over to a boolean system.
     bool mUpdateInputInfo = false;
     bool mSomeChildrenChanged;
-    bool mForceTransactionDisplayChange = false;
     bool mUpdateAttachedChoreographer = false;
 
     struct LayerIntHash {
@@ -1279,7 +1261,6 @@ private:
     };
 
     bool mIsHdcpViaNegVsync = false;
-    bool mIsHotplugErrViaNegVsync = false;
 
     std::mutex mHotplugMutex;
     std::vector<HotplugEvent> mPendingHotplugEvents GUARDED_BY(mHotplugMutex);
@@ -1393,23 +1374,10 @@ private:
     // Flag used to set override desired display mode from backdoor
     bool mDebugDisplayModeSetByBackdoor = false;
 
-    // A set of layers that have no parent so they are not drawn on screen.
-    // Should only be accessed by the main thread.
-    // The Layer pointer is removed from the set when the destructor is called so there shouldn't
-    // be any issues with a raw pointer referencing an invalid object.
-    std::unordered_set<Layer*> mOffscreenLayers;
-
     BufferCountTracker mBufferCountTracker;
 
     std::unordered_map<DisplayId, sp<HdrLayerInfoReporter>> mHdrLayerInfoListeners
             GUARDED_BY(mStateLock);
-
-    mutable std::mutex mCreatedLayersLock;
-
-    // A temporay pool that store the created layers and will be added to current state in main
-    // thread.
-    std::vector<LayerCreatedState> mCreatedLayers GUARDED_BY(mCreatedLayersLock);
-    void handleLayerCreatedLocked(const LayerCreatedState&, VsyncId) REQUIRES(mStateLock);
 
     std::atomic<ui::Transform::RotationFlags> mActiveDisplayTransformHint;
 
@@ -1451,6 +1419,8 @@ private:
     frontend::LayerHierarchyBuilder mLayerHierarchyBuilder GUARDED_BY(kMainThreadContext);
     frontend::LayerSnapshotBuilder mLayerSnapshotBuilder GUARDED_BY(kMainThreadContext);
 
+    mutable std::mutex mCreatedLayersLock;
+    std::vector<sp<Layer>> mCreatedLayers GUARDED_BY(mCreatedLayersLock);
     std::vector<std::pair<uint32_t, std::string>> mDestroyedHandles GUARDED_BY(mCreatedLayersLock);
     std::vector<std::unique_ptr<frontend::RequestedLayerState>> mNewLayers
             GUARDED_BY(mCreatedLayersLock);

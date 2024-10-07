@@ -62,14 +62,33 @@ static void eraseByValue(std::multimap<K, V>& map, const V& value) {
     }
 }
 
-LatencyTracker::LatencyTracker(InputEventTimelineProcessor* processor)
-      : mTimelineProcessor(processor) {
-    LOG_ALWAYS_FATAL_IF(processor == nullptr);
+LatencyTracker::LatencyTracker(InputEventTimelineProcessor& processor)
+      : mTimelineProcessor(&processor) {}
+
+void LatencyTracker::trackNotifyMotion(const NotifyMotionArgs& args) {
+    std::set<InputDeviceUsageSource> sources = getUsageSourcesForMotionArgs(args);
+    trackListener(args.id, args.eventTime, args.readTime, args.deviceId, sources, args.action,
+                  InputEventType::MOTION);
 }
 
-void LatencyTracker::trackListener(int32_t inputEventId, bool isDown, nsecs_t eventTime,
-                                   nsecs_t readTime, DeviceId deviceId,
-                                   const std::set<InputDeviceUsageSource>& sources) {
+void LatencyTracker::trackNotifyKey(const NotifyKeyArgs& args) {
+    int32_t keyboardType = AINPUT_KEYBOARD_TYPE_NONE;
+    for (auto& inputDevice : mInputDevices) {
+        if (args.deviceId == inputDevice.getId()) {
+            keyboardType = inputDevice.getKeyboardType();
+            break;
+        }
+    }
+    std::set<InputDeviceUsageSource> sources =
+            std::set{getUsageSourceForKeyArgs(keyboardType, args)};
+    trackListener(args.id, args.eventTime, args.readTime, args.deviceId, sources, args.action,
+                  InputEventType::KEY);
+}
+
+void LatencyTracker::trackListener(int32_t inputEventId, nsecs_t eventTime, nsecs_t readTime,
+                                   DeviceId deviceId,
+                                   const std::set<InputDeviceUsageSource>& sources,
+                                   int32_t inputEventAction, InputEventType inputEventType) {
     reportAndPruneMatureRecords(eventTime);
     const auto it = mTimelines.find(inputEventId);
     if (it != mTimelines.end()) {
@@ -101,9 +120,41 @@ void LatencyTracker::trackListener(int32_t inputEventId, bool isDown, nsecs_t ev
         return;
     }
 
+    const InputEventActionType inputEventActionType = [&]() {
+        switch (inputEventType) {
+            case InputEventType::MOTION: {
+                switch (MotionEvent::getActionMasked(inputEventAction)) {
+                    case AMOTION_EVENT_ACTION_DOWN:
+                        return InputEventActionType::MOTION_ACTION_DOWN;
+                    case AMOTION_EVENT_ACTION_MOVE:
+                        return InputEventActionType::MOTION_ACTION_MOVE;
+                    case AMOTION_EVENT_ACTION_UP:
+                        return InputEventActionType::MOTION_ACTION_UP;
+                    case AMOTION_EVENT_ACTION_HOVER_MOVE:
+                        return InputEventActionType::MOTION_ACTION_HOVER_MOVE;
+                    case AMOTION_EVENT_ACTION_SCROLL:
+                        return InputEventActionType::MOTION_ACTION_SCROLL;
+                    default:
+                        return InputEventActionType::UNKNOWN_INPUT_EVENT;
+                }
+            }
+            case InputEventType::KEY: {
+                switch (inputEventAction) {
+                    case AKEY_EVENT_ACTION_DOWN:
+                    case AKEY_EVENT_ACTION_UP:
+                        return InputEventActionType::KEY;
+                    default:
+                        return InputEventActionType::UNKNOWN_INPUT_EVENT;
+                }
+            }
+            default:
+                return InputEventActionType::UNKNOWN_INPUT_EVENT;
+        }
+    }();
+
     mTimelines.emplace(inputEventId,
-                       InputEventTimeline(isDown, eventTime, readTime, identifier->vendor,
-                                          identifier->product, sources));
+                       InputEventTimeline(eventTime, readTime, identifier->vendor,
+                                          identifier->product, sources, inputEventActionType));
     mEventTimes.emplace(eventTime, inputEventId);
 }
 

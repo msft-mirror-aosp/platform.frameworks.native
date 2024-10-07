@@ -44,6 +44,7 @@ public:
                              std::function<perfetto::protos::RectProto*()> getRectProto);
     static void writeToProto(const Rect& rect, perfetto::protos::RectProto* rectProto);
     static void readFromProto(const perfetto::protos::RectProto& proto, Rect& outRect);
+    static void readFromProto(const perfetto::protos::RectProto& proto, FloatRect& outRect);
     static void writeToProto(const FloatRect& rect,
                              std::function<perfetto::protos::FloatRectProto*()> getFloatRectProto);
     static void writeToProto(const Region& region,
@@ -62,7 +63,7 @@ public:
             const renderengine::ExternalTexture& buffer,
             std::function<perfetto::protos::ActiveBufferProto*()> getActiveBufferProto);
     static void writeToProto(
-            const gui::WindowInfo& inputInfo, const wp<Layer>& touchableRegionBounds,
+            const gui::WindowInfo& inputInfo,
             std::function<perfetto::protos::InputWindowInfoProto*()> getInputWindowInfoProto);
     static void writeToProto(const mat4 matrix,
                              perfetto::protos::ColorTransformProto* colorTransformProto);
@@ -88,7 +89,12 @@ public:
             mLegacyLayers(legacyLayers),
             mDisplayInfos(displayInfos),
             mTraceFlags(traceFlags) {}
-    perfetto::protos::LayersProto generate(const frontend::LayerHierarchy& root);
+    LayerProtoFromSnapshotGenerator& with(const frontend::LayerHierarchy& root);
+    // Creates a fake root and adds all offscreen layers from the passed in hierarchy to the fake
+    // root
+    LayerProtoFromSnapshotGenerator& withOffscreenLayers(
+            const frontend::LayerHierarchy& offscreenRoot);
+    perfetto::protos::LayersProto generate() { return mLayersProto; };
 
 private:
     void writeHierarchyToProto(const frontend::LayerHierarchy& root,

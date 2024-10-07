@@ -21,6 +21,7 @@
 
 #include <android-base/logging.h>
 #include <android-base/properties.h>
+#include <ftl/enum.h>
 
 #include <input/Resampler.h>
 #include <utils/Timers.h>
@@ -56,6 +57,11 @@ constexpr std::chrono::milliseconds RESAMPLE_MAX_DELTA{20};
 
 constexpr std::chrono::milliseconds RESAMPLE_MAX_PREDICTION{8};
 
+bool canResampleTool(ToolType toolType) {
+    return toolType == ToolType::FINGER || toolType == ToolType::MOUSE ||
+            toolType == ToolType::STYLUS || toolType == ToolType::UNKNOWN;
+}
+
 inline float lerp(float a, float b, float alpha) {
     return a + alpha * (b - a);
 }
@@ -73,21 +79,70 @@ PointerCoords calculateResampledCoords(const PointerCoords& a, const PointerCoor
 
 void LegacyResampler::updateLatestSamples(const MotionEvent& motionEvent) {
     const size_t numSamples = motionEvent.getHistorySize() + 1;
-    for (size_t i = 0; i < numSamples; ++i) {
+    const size_t latestIndex = numSamples - 1;
+    const size_t secondToLatestIndex = (latestIndex > 0) ? (latestIndex - 1) : 0;
+    for (size_t sampleIndex = secondToLatestIndex; sampleIndex < numSamples; ++sampleIndex) {
+        std::vector<Pointer> pointers;
+        const size_t numPointers = motionEvent.getPointerCount();
+        for (size_t pointerIndex = 0; pointerIndex < numPointers; ++pointerIndex) {
+            // getSamplePointerCoords is the vector representation of a getHistorySize by
+            // getPointerCount matrix.
+            const PointerCoords& pointerCoords =
+                    motionEvent.getSamplePointerCoords()[sampleIndex * numPointers + pointerIndex];
+            pointers.push_back(
+                    Pointer{*motionEvent.getPointerProperties(pointerIndex), pointerCoords});
+        }
         mLatestSamples.pushBack(
-                Sample{static_cast<nanoseconds>(motionEvent.getHistoricalEventTime(i)),
-                       Pointer{*motionEvent.getPointerProperties(0),
-                               motionEvent.getSamplePointerCoords()[i]}});
+                Sample{nanoseconds{motionEvent.getHistoricalEventTime(sampleIndex)}, pointers});
     }
 }
 
-bool LegacyResampler::canInterpolate(const InputMessage& futureSample) const {
+LegacyResampler::Sample LegacyResampler::messageToSample(const InputMessage& message) {
+    std::vector<Pointer> pointers;
+    for (uint32_t i = 0; i < message.body.motion.pointerCount; ++i) {
+        pointers.push_back(Pointer{message.body.motion.pointers[i].properties,
+                                   message.body.motion.pointers[i].coords});
+    }
+    return Sample{nanoseconds{message.body.motion.eventTime}, pointers};
+}
+
+bool LegacyResampler::pointerPropertiesResampleable(const Sample& target, const Sample& auxiliary) {
+    if (target.pointers.size() > auxiliary.pointers.size()) {
+        LOG_IF(INFO, debugResampling())
+                << "Not resampled. Auxiliary sample has fewer pointers than target sample.";
+        return false;
+    }
+    for (size_t i = 0; i < target.pointers.size(); ++i) {
+        if (target.pointers[i].properties.id != auxiliary.pointers[i].properties.id) {
+            LOG_IF(INFO, debugResampling()) << "Not resampled. Pointer ID mismatch.";
+            return false;
+        }
+        if (target.pointers[i].properties.toolType != auxiliary.pointers[i].properties.toolType) {
+            LOG_IF(INFO, debugResampling()) << "Not resampled. Pointer ToolType mismatch.";
+            return false;
+        }
+        if (!canResampleTool(target.pointers[i].properties.toolType)) {
+            LOG_IF(INFO, debugResampling())
+                    << "Not resampled. Cannot resample "
+                    << ftl::enum_string(target.pointers[i].properties.toolType) << " ToolType.";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool LegacyResampler::canInterpolate(const InputMessage& message) const {
     LOG_IF(FATAL, mLatestSamples.empty())
             << "Not resampled. mLatestSamples must not be empty to interpolate.";
 
     const Sample& pastSample = *(mLatestSamples.end() - 1);
-    const nanoseconds delta =
-            static_cast<nanoseconds>(futureSample.body.motion.eventTime) - pastSample.eventTime;
+    const Sample& futureSample = messageToSample(message);
+
+    if (!pointerPropertiesResampleable(pastSample, futureSample)) {
+        return false;
+    }
+
+    const nanoseconds delta = futureSample.eventTime - pastSample.eventTime;
     if (delta < RESAMPLE_MIN_DELTA) {
         LOG_IF(INFO, debugResampling()) << "Not resampled. Delta is too small: " << delta << "ns.";
         return false;
@@ -104,15 +159,20 @@ std::optional<LegacyResampler::Sample> LegacyResampler::attemptInterpolation(
             << "Not resampled. mLatestSamples must not be empty to interpolate.";
 
     const Sample& pastSample = *(mLatestSamples.end() - 1);
+
     const nanoseconds delta =
-            static_cast<nanoseconds>(futureSample.body.motion.eventTime) - pastSample.eventTime;
+            nanoseconds{futureSample.body.motion.eventTime} - pastSample.eventTime;
     const float alpha =
             std::chrono::duration<float, std::milli>(resampleTime - pastSample.eventTime) / delta;
-    const PointerCoords resampledCoords =
-            calculateResampledCoords(pastSample.pointer.coords,
-                                     futureSample.body.motion.pointers[0].coords, alpha);
 
-    return Sample{resampleTime, Pointer{pastSample.pointer.properties, resampledCoords}};
+    std::vector<Pointer> resampledPointers;
+    for (size_t i = 0; i < pastSample.pointers.size(); ++i) {
+        const PointerCoords& resampledCoords =
+                calculateResampledCoords(pastSample.pointers[i].coords,
+                                         futureSample.body.motion.pointers[i].coords, alpha);
+        resampledPointers.push_back(Pointer{pastSample.pointers[i].properties, resampledCoords});
+    }
+    return Sample{resampleTime, resampledPointers};
 }
 
 bool LegacyResampler::canExtrapolate() const {
@@ -123,6 +183,10 @@ bool LegacyResampler::canExtrapolate() const {
 
     const Sample& pastSample = *(mLatestSamples.end() - 2);
     const Sample& presentSample = *(mLatestSamples.end() - 1);
+
+    if (!pointerPropertiesResampleable(presentSample, pastSample)) {
+        return false;
+    }
 
     const nanoseconds delta = presentSample.eventTime - pastSample.eventTime;
     if (delta < RESAMPLE_MIN_DELTA) {
@@ -160,24 +224,35 @@ std::optional<LegacyResampler::Sample> LegacyResampler::attemptExtrapolation(
     const float alpha =
             std::chrono::duration<float, std::milli>(newResampleTime - pastSample.eventTime) /
             delta;
-    const PointerCoords resampledCoords =
-            calculateResampledCoords(pastSample.pointer.coords, presentSample.pointer.coords,
-                                     alpha);
 
-    return Sample{newResampleTime, Pointer{presentSample.pointer.properties, resampledCoords}};
+    std::vector<Pointer> resampledPointers;
+    for (size_t i = 0; i < presentSample.pointers.size(); ++i) {
+        const PointerCoords& resampledCoords =
+                calculateResampledCoords(pastSample.pointers[i].coords,
+                                         presentSample.pointers[i].coords, alpha);
+        resampledPointers.push_back(Pointer{presentSample.pointers[i].properties, resampledCoords});
+    }
+    return Sample{newResampleTime, resampledPointers};
 }
 
 inline void LegacyResampler::addSampleToMotionEvent(const Sample& sample,
                                                     MotionEvent& motionEvent) {
-    motionEvent.addSample(sample.eventTime.count(), &sample.pointer.coords, motionEvent.getId());
+    motionEvent.addSample(sample.eventTime.count(), sample.asPointerCoords().data(),
+                          motionEvent.getId());
 }
 
-void LegacyResampler::resampleMotionEvent(nanoseconds resampleTime, MotionEvent& motionEvent,
+nanoseconds LegacyResampler::getResampleLatency() const {
+    return RESAMPLE_LATENCY;
+}
+
+void LegacyResampler::resampleMotionEvent(nanoseconds frameTime, MotionEvent& motionEvent,
                                           const InputMessage* futureSample) {
-    if (mPreviousDeviceId && *mPreviousDeviceId != motionEvent.getDeviceId()) {
-        mLatestSamples.clear();
+    const nanoseconds resampleTime = frameTime - RESAMPLE_LATENCY;
+
+    if (resampleTime.count() == motionEvent.getEventTime()) {
+        LOG_IF(INFO, debugResampling()) << "Not resampled. Resample time equals motion event time.";
+        return;
     }
-    mPreviousDeviceId = motionEvent.getDeviceId();
 
     updateLatestSamples(motionEvent);
 

@@ -38,7 +38,6 @@
 #include <FrameTimeline/FrameTimeline.h>
 #include <scheduler/interface/ICompositor.h>
 
-#include <algorithm>
 #include <cinttypes>
 #include <cstdint>
 #include <functional>
@@ -46,16 +45,15 @@
 #include <numeric>
 
 #include <common/FlagManager.h>
-#include "../Layer.h"
 #include "EventThread.h"
 #include "FrameRateOverrideMappings.h"
 #include "FrontEnd/LayerHandle.h"
+#include "Layer.h"
 #include "OneShotTimer.h"
 #include "RefreshRateStats.h"
 #include "SurfaceFlingerFactory.h"
 #include "SurfaceFlingerProperties.h"
 #include "TimeStats/TimeStats.h"
-#include "VSyncTracker.h"
 #include "VsyncConfiguration.h"
 #include "VsyncController.h"
 #include "VsyncSchedule.h"
@@ -122,6 +120,12 @@ void Scheduler::setPacesetterDisplay(PhysicalDisplayId pacesetterId) {
 
     demotePacesetterDisplay(kPromotionParams);
     promotePacesetterDisplay(pacesetterId, kPromotionParams);
+
+    // Cancel the pending refresh rate change, if any, before updating the phase configuration.
+    mVsyncModulator->cancelRefreshRateChange();
+
+    mVsyncConfiguration->reset();
+    updatePhaseConfiguration(pacesetterId, pacesetterSelectorPtr()->getActiveMode().fps);
 }
 
 void Scheduler::registerDisplay(PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr,
@@ -355,10 +359,8 @@ void Scheduler::createEventThread(Cycle cycle, frametimeline::TokenManager* toke
 
     if (cycle == Cycle::Render) {
         mRenderEventThread = std::move(eventThread);
-        mRenderEventConnection = mRenderEventThread->createEventConnection();
     } else {
         mLastCompositeEventThread = std::move(eventThread);
-        mLastCompositeEventConnection = mLastCompositeEventThread->createEventConnection();
     }
 }
 
@@ -481,19 +483,16 @@ void Scheduler::setDuration(Cycle cycle, std::chrono::nanoseconds workDuration,
     }
 }
 
-void Scheduler::updatePhaseConfiguration(Fps refreshRate) {
+void Scheduler::updatePhaseConfiguration(PhysicalDisplayId displayId, Fps refreshRate) {
+    const bool isPacesetter =
+            FTL_FAKE_GUARD(kMainThreadContext,
+                           (std::scoped_lock(mDisplayLock), displayId == mPacesetterDisplayId));
+    if (!isPacesetter) return;
+
     mRefreshRateStats->setRefreshRate(refreshRate);
     mVsyncConfiguration->setRefreshRateFps(refreshRate);
     setVsyncConfig(mVsyncModulator->setVsyncConfigSet(mVsyncConfiguration->getCurrentConfigs()),
                    refreshRate.getPeriod());
-}
-
-void Scheduler::resetPhaseConfiguration(Fps refreshRate) {
-    // Cancel the pending refresh rate change, if any, before updating the phase configuration.
-    mVsyncModulator->cancelRefreshRateChange();
-
-    mVsyncConfiguration->reset();
-    updatePhaseConfiguration(refreshRate);
 }
 
 void Scheduler::setActiveDisplayPowerModeForRefreshRateStats(hal::PowerMode powerMode) {

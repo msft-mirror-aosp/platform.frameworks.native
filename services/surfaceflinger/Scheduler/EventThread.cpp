@@ -320,7 +320,8 @@ void EventThread::setDuration(std::chrono::nanoseconds workDuration,
 
     mVsyncRegistration.update({.workDuration = mWorkDuration.get().count(),
                                .readyDuration = mReadyDuration.count(),
-                               .lastVsync = mLastVsyncCallbackTime.ns()});
+                               .lastVsync = mLastVsyncCallbackTime.ns(),
+                               .committedVsyncOpt = mLastCommittedVsyncTime.ns()});
 }
 
 sp<EventThreadConnection> EventThread::createEventConnection(
@@ -425,8 +426,8 @@ void EventThread::onVsync(nsecs_t vsyncTime, nsecs_t wakeupTime, nsecs_t readyTi
 
     LOG_FATAL_IF(!mVSyncState);
     mVsyncTracer = (mVsyncTracer + 1) % 2;
-    mPendingEvents.push_back(makeVSync(mVSyncState->displayId, wakeupTime, ++mVSyncState->count,
-                                       vsyncTime, readyTime));
+    mPendingEvents.push_back(makeVSync(mVsyncSchedule->getPhysicalDisplayId(), wakeupTime,
+                                       ++mVSyncState->count, vsyncTime, readyTime));
     mCondition.notify_all();
 }
 
@@ -485,9 +486,9 @@ void EventThread::threadMain(std::unique_lock<std::mutex>& lock) {
             if (event->header.type == DisplayEventReceiver::DISPLAY_EVENT_HOTPLUG) {
                 if (event->hotplug.connectionError == 0) {
                     if (event->hotplug.connected && !mVSyncState) {
-                        mVSyncState.emplace(event->header.displayId);
-                    } else if (!event->hotplug.connected && mVSyncState &&
-                               mVSyncState->displayId == event->header.displayId) {
+                        mVSyncState.emplace();
+                    } else if (!event->hotplug.connected &&
+                               mVsyncSchedule->getPhysicalDisplayId() == event->header.displayId) {
                         mVSyncState.reset();
                     }
                 } else {
@@ -527,10 +528,11 @@ void EventThread::threadMain(std::unique_lock<std::mutex>& lock) {
         }
 
         if (mState == State::VSync) {
-            const auto scheduleResult =
-                    mVsyncRegistration.schedule({.workDuration = mWorkDuration.get().count(),
-                                                 .readyDuration = mReadyDuration.count(),
-                                                 .lastVsync = mLastVsyncCallbackTime.ns()});
+            const auto scheduleResult = mVsyncRegistration.schedule(
+                    {.workDuration = mWorkDuration.get().count(),
+                     .readyDuration = mReadyDuration.count(),
+                     .lastVsync = mLastVsyncCallbackTime.ns(),
+                     .committedVsyncOpt = mLastCommittedVsyncTime.ns()});
             LOG_ALWAYS_FATAL_IF(!scheduleResult, "Error scheduling callback");
         } else {
             mVsyncRegistration.cancel();
@@ -557,7 +559,7 @@ void EventThread::threadMain(std::unique_lock<std::mutex>& lock) {
                 const auto now = systemTime(SYSTEM_TIME_MONOTONIC);
                 const auto deadlineTimestamp = now + timeout.count();
                 const auto expectedVSyncTime = deadlineTimestamp + timeout.count();
-                mPendingEvents.push_back(makeVSync(mVSyncState->displayId, now,
+                mPendingEvents.push_back(makeVSync(mVsyncSchedule->getPhysicalDisplayId(), now,
                                                    ++mVSyncState->count, expectedVSyncTime,
                                                    deadlineTimestamp));
             }
@@ -725,8 +727,9 @@ void EventThread::dispatchEvent(const DisplayEventReceiver::Event& event,
     }
     if (event.header.type == DisplayEventReceiver::DISPLAY_EVENT_VSYNC &&
         FlagManager::getInstance().vrr_config()) {
-        mCallback.onExpectedPresentTimePosted(
-                TimePoint::fromNs(event.vsync.vsyncData.preferredExpectedPresentationTime()));
+        mLastCommittedVsyncTime =
+                TimePoint::fromNs(event.vsync.vsyncData.preferredExpectedPresentationTime());
+        mCallback.onExpectedPresentTimePosted(mLastCommittedVsyncTime);
     }
 }
 
@@ -736,7 +739,7 @@ void EventThread::dump(std::string& result) const {
     StringAppendF(&result, "%s: state=%s VSyncState=", mThreadName, toCString(mState));
     if (mVSyncState) {
         StringAppendF(&result, "{displayId=%s, count=%u%s}\n",
-                      to_string(mVSyncState->displayId).c_str(), mVSyncState->count,
+                      to_string(mVsyncSchedule->getPhysicalDisplayId()).c_str(), mVSyncState->count,
                       mVSyncState->synthetic ? ", synthetic" : "");
     } else {
         StringAppendF(&result, "none\n");
@@ -744,9 +747,12 @@ void EventThread::dump(std::string& result) const {
 
     const auto relativeLastCallTime =
             ticks<std::milli, float>(mLastVsyncCallbackTime - TimePoint::now());
+    const auto relativeLastCommittedTime =
+            ticks<std::milli, float>(mLastCommittedVsyncTime - TimePoint::now());
     StringAppendF(&result, "mWorkDuration=%.2f mReadyDuration=%.2f last vsync time ",
                   mWorkDuration.get().count() / 1e6f, mReadyDuration.count() / 1e6f);
     StringAppendF(&result, "%.2fms relative to now\n", relativeLastCallTime);
+    StringAppendF(&result, " with vsync committed at %.2fms", relativeLastCommittedTime);
 
     StringAppendF(&result, "  pending events (count=%zu):\n", mPendingEvents.size());
     for (const auto& event : mPendingEvents) {
@@ -794,7 +800,8 @@ scheduler::VSyncCallbackRegistration EventThread::onNewVsyncScheduleInternal(
     if (reschedule) {
         mVsyncRegistration.schedule({.workDuration = mWorkDuration.get().count(),
                                      .readyDuration = mReadyDuration.count(),
-                                     .lastVsync = mLastVsyncCallbackTime.ns()});
+                                     .lastVsync = mLastVsyncCallbackTime.ns(),
+                                     .committedVsyncOpt = mLastCommittedVsyncTime.ns()});
     }
     return oldRegistration;
 }

@@ -65,8 +65,6 @@ public:
     int32_t getKeyCodeState(int32_t deviceId, uint32_t sourceMask, int32_t keyCode) override;
     int32_t getSwitchState(int32_t deviceId, uint32_t sourceMask, int32_t sw) override;
 
-    void addKeyRemapping(int32_t deviceId, int32_t fromKeyCode, int32_t toKeyCode) const override;
-
     int32_t getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const override;
 
     void toggleCapsLockState(int32_t deviceId) override;
@@ -103,6 +101,8 @@ public:
     std::vector<InputDeviceLightInfo> getLights(int32_t deviceId) override;
 
     std::vector<InputDeviceSensorInfo> getSensors(int32_t deviceId) override;
+
+    std::optional<HardwareProperties> getTouchpadHardwareProperties(int32_t deviceId) override;
 
     bool setLightColor(int32_t deviceId, int32_t lightId, int32_t color) override;
 
