@@ -95,7 +95,7 @@ public:
     struct State {
         int32_t sequence; // changes when visible regions can change
         // Crop is expressed in layer space coordinate.
-        Rect crop;
+        FloatRect crop;
         LayerMetadata metadata;
 
         ui::Dataspace dataspace;
@@ -172,7 +172,7 @@ public:
     // be delayed until the resize completes.
 
     // Buffer space
-    bool setCrop(const Rect& crop);
+    bool setCrop(const FloatRect& crop);
 
     bool setTransform(uint32_t /*transform*/);
     bool setTransformToDisplayInverse(bool /*transformToDisplayInverse*/);
@@ -198,7 +198,7 @@ public:
     Region getVisibleRegion(const DisplayDevice*) const;
     void updateLastLatchTime(nsecs_t latchtime);
 
-    Rect getCrop(const Layer::State& s) const { return s.crop; }
+    Rect getCrop(const Layer::State& s) const { return Rect(s.crop); }
 
     // from graphics API
     static ui::Dataspace translateDataspace(ui::Dataspace dataspace);
@@ -369,7 +369,7 @@ public:
 
     // See mPendingBufferTransactions
     void decrementPendingBufferCount();
-    std::atomic<int32_t>* getPendingBufferCounter() { return &mPendingBufferTransactions; }
+    std::atomic<int32_t>* getPendingBufferCounter() { return &mPendingBuffers; }
     std::string getPendingBufferCounterName() { return mBlastTransactionName; }
     void callReleaseBufferCallback(const sp<ITransactionCompletedListener>& listener,
                                    const sp<GraphicBuffer>& buffer, uint64_t framenumber,
@@ -562,7 +562,7 @@ private:
     //     - If the integer increases, a buffer arrived at the server.
     //     - If the integer decreases in latchBuffer, that buffer was latched
     //     - If the integer decreases in setBuffer, a buffer was dropped
-    std::atomic<int32_t> mPendingBufferTransactions{0};
+    std::atomic<int32_t> mPendingBuffers{0};
 
     // Contains requested position and matrix updates. This will be applied if the client does
     // not specify a destination frame.

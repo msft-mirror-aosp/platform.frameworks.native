@@ -65,7 +65,8 @@ public:
      * extrapolation takes place and `resampleTime` is too far in the future. If `futureSample` is
      * not null, interpolation will occur. If `futureSample` is null and there is enough historical
      * data, LegacyResampler will extrapolate. Otherwise, no resampling takes place and
-     * `motionEvent` is unmodified.
+     * `motionEvent` is unmodified. Furthermore, motionEvent is not resampled if resampleTime equals
+     * the last sample eventTime of motionEvent.
      */
     void resampleMotionEvent(std::chrono::nanoseconds frameTime, MotionEvent& motionEvent,
                              const InputMessage* futureSample) override;
@@ -97,6 +98,17 @@ private:
      * calculations are possible with only one previous sample.
      */
     RingBuffer<Sample> mLatestSamples{/*capacity=*/2};
+
+    /**
+     * Latest sample in mLatestSamples after resampling motion event. Used to compare if a pointer
+     * does not move between samples.
+     */
+    std::optional<Sample> mLastRealSample;
+
+    /**
+     * Latest prediction. Used to overwrite motion event samples if a set of conditions is met.
+     */
+    std::optional<Sample> mPreviousPrediction;
 
     /**
      * Adds up to mLatestSamples.capacity() of motionEvent's latest samples to mLatestSamples. If
@@ -142,6 +154,23 @@ private:
      * this function returns nullopt.
      */
     std::optional<Sample> attemptExtrapolation(std::chrono::nanoseconds resampleTime) const;
+
+    /**
+     * Iterates through motion event samples, and calls overwriteStillPointers on each sample.
+     */
+    void overwriteMotionEventSamples(MotionEvent& motionEvent) const;
+
+    /**
+     * Overwrites with resampled data the pointer coordinates that did not move between motion event
+     * samples, that is, both x and y values are identical to mLastRealSample.
+     */
+    void overwriteStillPointers(MotionEvent& motionEvent, size_t sampleIndex) const;
+
+    /**
+     * Overwrites the pointer coordinates of a sample with event time older than
+     * that of mPreviousPrediction.
+     */
+    void overwriteOldPointers(MotionEvent& motionEvent, size_t sampleIndex) const;
 
     inline static void addSampleToMotionEvent(const Sample& sample, MotionEvent& motionEvent);
 };

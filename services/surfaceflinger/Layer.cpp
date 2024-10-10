@@ -138,7 +138,7 @@ Layer::Layer(const surfaceflinger::LayerCreationArgs& args)
                 args.metadata.getInt32(gui::METADATA_WINDOW_TYPE, 0))) {
     ALOGV("Creating Layer %s", getDebugName());
 
-    mDrawingState.crop.makeInvalid();
+    mDrawingState.crop = {0, 0, -1, -1};
     mDrawingState.sequence = 0;
     mDrawingState.transform.set(0, 0);
     mDrawingState.frameNumber = 0;
@@ -183,7 +183,6 @@ Layer::~Layer() {
     mFlinger->mTimeStats->onDestroy(layerId);
     mFlinger->mFrameTracer->onDestroy(layerId);
 
-    mFrameTracker.logAndResetStats(mName);
     mFlinger->onLayerDestroyed(this);
 
     if (mDrawingState.sidebandStream != nullptr) {
@@ -316,7 +315,7 @@ bool Layer::computeTrustedPresentationState(const FloatRect& bounds, const Float
 
 Rect Layer::getCroppedBufferSize(const State& s) const {
     Rect size = getBufferSize(s);
-    Rect crop = getCrop(s);
+    Rect crop = Rect(getCrop(s));
     if (!crop.isEmpty() && size.isValid()) {
         size.intersect(crop, &size);
     } else if (!crop.isEmpty()) {
@@ -373,7 +372,7 @@ void Layer::setTransactionFlags(uint32_t mask) {
     mTransactionFlags |= mask;
 }
 
-bool Layer::setCrop(const Rect& crop) {
+bool Layer::setCrop(const FloatRect& crop) {
     if (mDrawingState.crop == crop) return false;
     mDrawingState.sequence++;
     mDrawingState.crop = crop;
@@ -603,10 +602,6 @@ void Layer::dumpFrameStats(std::string& result) const {
 
 void Layer::clearFrameStats() {
     mFrameTracker.clearStats();
-}
-
-void Layer::logFrameStats() {
-    mFrameTracker.logAndResetStats(mName);
 }
 
 void Layer::getFrameStats(FrameStats* outStats) const {
@@ -1347,7 +1342,7 @@ Rect Layer::computeBufferCrop(const State& s) {
 }
 
 void Layer::decrementPendingBufferCount() {
-    int32_t pendingBuffers = --mPendingBufferTransactions;
+    int32_t pendingBuffers = --mPendingBuffers;
     tracePendingBufferCount(pendingBuffers);
 }
 
