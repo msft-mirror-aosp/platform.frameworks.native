@@ -1031,8 +1031,7 @@ void InputDispatcher::dispatchOnce() {
         nextWakeupTime = std::min(nextWakeupTime, nextAnrCheck);
 
         if (mPerDeviceInputLatencyMetricsFlag) {
-            const nsecs_t nextStatisticsPush = processLatencyStatisticsLocked();
-            nextWakeupTime = std::min(nextWakeupTime, nextStatisticsPush);
+            processLatencyStatisticsLocked();
         }
 
         // We are about to enter an infinitely long sleep, because we have no commands or
@@ -1117,9 +1116,8 @@ nsecs_t InputDispatcher::processAnrsLocked() {
 
 /**
  * Check if enough time has passed since the last latency statistics push.
- * Return the time at which we should wake up next.
  */
-nsecs_t InputDispatcher::processLatencyStatisticsLocked() {
+void InputDispatcher::processLatencyStatisticsLocked() {
     const nsecs_t currentTime = now();
     // Log the atom recording latency statistics if more than 6 hours passed from the last
     // push
@@ -1127,7 +1125,6 @@ nsecs_t InputDispatcher::processLatencyStatisticsLocked() {
         mInputEventTimelineProcessor->pushLatencyStatistics();
         mLastStatisticPushTime = currentTime;
     }
-    return mLastStatisticPushTime + LATENCY_STATISTICS_PUSH_INTERVAL;
 }
 
 std::chrono::nanoseconds InputDispatcher::getDispatchingTimeoutLocked(
@@ -2898,7 +2895,8 @@ void InputDispatcher::finishDragAndDrop(ui::LogicalDisplayId displayId, float x,
 }
 
 void InputDispatcher::addDragEventLocked(const MotionEntry& entry) {
-    if (!mDragState || mDragState->dragWindow->getInfo()->displayId != entry.displayId) {
+    if (!mDragState || mDragState->dragWindow->getInfo()->displayId != entry.displayId ||
+        mDragState->deviceId != entry.deviceId) {
         return;
     }
 
@@ -5823,7 +5821,7 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
             }
             // Track the pointer id for drag window and generate the drag state.
             const size_t id = pointers.begin()->id;
-            mDragState = std::make_unique<DragState>(toWindowHandle, id);
+            mDragState = std::make_unique<DragState>(toWindowHandle, deviceId, id);
         }
 
         // Synthesize cancel for old window and down for new window.
