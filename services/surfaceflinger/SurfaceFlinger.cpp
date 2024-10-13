@@ -1654,6 +1654,22 @@ status_t SurfaceFlinger::getOverlaySupport(gui::OverlayProperties* outProperties
         outProperties->combinations.emplace_back(outCombination);
     }
     outProperties->supportMixedColorSpaces = aidlProperties.supportMixedColorSpaces;
+    if (aidlProperties.lutProperties.has_value()) {
+        std::vector<gui::LutProperties> outLutProperties;
+        for (const auto& properties : aidlProperties.lutProperties.value()) {
+            gui::LutProperties currentProperties;
+            currentProperties.dimension =
+                    static_cast<gui::LutProperties::Dimension>(properties->dimension);
+            currentProperties.size = properties->size;
+            currentProperties.samplingKeys.reserve(properties->samplingKeys.size());
+            std::transform(properties->samplingKeys.cbegin(), properties->samplingKeys.cend(),
+                           std::back_inserter(currentProperties.samplingKeys), [](const auto& val) {
+                               return static_cast<gui::LutProperties::SamplingKey>(val);
+                           });
+            outLutProperties.push_back(std::move(currentProperties));
+        }
+        outProperties->lutProperties.emplace(outLutProperties.begin(), outLutProperties.end());
+    }
     return NO_ERROR;
 }
 
@@ -3268,8 +3284,6 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
         // getTotalSize returns the total number of buffers that were allocated by SurfaceFlinger
         SFTRACE_INT64("Total Buffer Size", GraphicBufferAllocator::get().getTotalSize());
     }
-
-    logFrameStats(presentTime);
 }
 
 void SurfaceFlinger::commitTransactions() {
@@ -5181,6 +5195,7 @@ status_t SurfaceFlinger::createLayer(LayerCreationArgs& args, gui::CreateSurface
                 std::string counterName = layer->getPendingBufferCounterName();
                 mBufferCountTracker.add(LayerHandle::getLayerId(outResult.handle), counterName,
                                         pendingBufferCounter);
+                args.pendingBuffers = pendingBufferCounter;
             }
         } break;
         default:
