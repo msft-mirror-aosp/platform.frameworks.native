@@ -1669,7 +1669,9 @@ protected:
     void setUpConsumer() {
         EXPECT_EQ(OK, mConsumer->consumerConnect(mConsumerListener, false));
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
         EXPECT_EQ(OK, mConsumer->allowUnlimitedSlots(true));
+#endif
         EXPECT_EQ(OK, mConsumer->setConsumerUsageBits(GraphicBuffer::USAGE_SW_READ_OFTEN));
         EXPECT_EQ(OK, mConsumer->setDefaultBufferSize(10, 10));
         EXPECT_EQ(OK, mConsumer->setDefaultBufferFormat(PIXEL_FORMAT_RGBA_8888));
@@ -1683,7 +1685,9 @@ protected:
         EXPECT_EQ(OK,
                   mProducer->connect(mProducerListener, NATIVE_WINDOW_API_CPU,
                                      /*producerControlledByApp*/ true, &output));
-
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+        ASSERT_TRUE(output.isSlotExpansionAllowed);
+#endif
         ASSERT_EQ(OK, mProducer->setMaxDequeuedBufferCount(kDequeableBufferCount));
         ASSERT_EQ(OK, mProducer->allowAllocation(true));
     }
