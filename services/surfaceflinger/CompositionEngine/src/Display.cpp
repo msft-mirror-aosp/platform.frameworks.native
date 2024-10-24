@@ -278,6 +278,7 @@ void Display::applyCompositionStrategy(const std::optional<DeviceRequestedChange
         applyDisplayRequests(changes->displayRequests);
         applyLayerRequestsToLayers(changes->layerRequests);
         applyClientTargetRequests(changes->clientTargetProperty);
+        applyLayerLutsToLayers(changes->layerLuts);
     }
 
     // Determine what type of composition we are doing from the final state
@@ -359,6 +360,25 @@ void Display::applyClientTargetRequests(const ClientTargetProperty& clientTarget
             static_cast<ui::PixelFormat>(clientTargetProperty.clientTargetProperty.pixelFormat));
 }
 
+void Display::applyLayerLutsToLayers(const LayerLuts& layerLuts) {
+    auto& mapper = getCompositionEngine().getHwComposer().getLutFileDescriptorMapper();
+    for (auto* layer : getOutputLayersOrderedByZ()) {
+        auto hwcLayer = layer->getHwcLayer();
+        if (!hwcLayer) {
+            continue;
+        }
+
+        if (auto lutsIt = layerLuts.find(hwcLayer); lutsIt != layerLuts.end()) {
+            if (auto mapperIt = mapper.find(hwcLayer); mapperIt != mapper.end()) {
+                layer->applyDeviceLayerLut(ndk::ScopedFileDescriptor(mapperIt->second.release()),
+                                           lutsIt->second);
+            }
+        }
+    }
+
+    mapper.clear();
+}
+
 void Display::executeCommands() {
     const auto halDisplayIdOpt = HalDisplayId::tryCast(mId);
     if (mIsDisconnected || !halDisplayIdOpt) {
@@ -435,6 +455,11 @@ void Display::setHintSessionGpuFence(std::unique_ptr<FenceTime>&& gpuFence) {
 
 void Display::setHintSessionRequiresRenderEngine(bool requiresRenderEngine) {
     mPowerAdvisor->setRequiresRenderEngine(mId, requiresRenderEngine);
+}
+
+const aidl::android::hardware::graphics::composer3::OverlayProperties*
+Display::getOverlaySupport() {
+    return &getCompositionEngine().getHwComposer().getOverlaySupport();
 }
 
 void Display::finishFrame(GpuCompositionResult&& result) {

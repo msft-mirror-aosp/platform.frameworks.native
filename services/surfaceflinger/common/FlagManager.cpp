@@ -116,10 +116,10 @@ void FlagManager::dump(std::string& result) const {
     DUMP_SERVER_FLAG(adpf_use_fmq_channel);
 
     /// Trunk stable readonly flags ///
+    DUMP_READ_ONLY_FLAG(adpf_fmq_sf);
     DUMP_READ_ONLY_FLAG(connected_display);
     DUMP_READ_ONLY_FLAG(enable_small_area_detection);
     DUMP_READ_ONLY_FLAG(frame_rate_category_mrr);
-    DUMP_READ_ONLY_FLAG(view_set_requested_frame_rate_mrr);
     DUMP_READ_ONLY_FLAG(misc1);
     DUMP_READ_ONLY_FLAG(vrr_config);
     DUMP_READ_ONLY_FLAG(hotplug2);
@@ -133,7 +133,6 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(fp16_client_target);
     DUMP_READ_ONLY_FLAG(game_default_frame_rate);
     DUMP_READ_ONLY_FLAG(enable_layer_command_batching);
-    DUMP_READ_ONLY_FLAG(screenshot_fence_preservation);
     DUMP_READ_ONLY_FLAG(vulkan_renderengine);
     DUMP_READ_ONLY_FLAG(renderable_buffer_usage);
     DUMP_READ_ONLY_FLAG(vrr_bugfix_24q4);
@@ -141,14 +140,15 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(restore_blur_step);
     DUMP_READ_ONLY_FLAG(dont_skip_on_early_ro);
     DUMP_READ_ONLY_FLAG(protected_if_client);
-    DUMP_READ_ONLY_FLAG(ce_fence_promise);
     DUMP_READ_ONLY_FLAG(idle_screen_refresh_rate_timeout);
     DUMP_READ_ONLY_FLAG(graphite_renderengine);
+    DUMP_READ_ONLY_FLAG(filter_frames_before_trace_starts);
     DUMP_READ_ONLY_FLAG(latch_unsignaled_with_auto_refresh_changed);
     DUMP_READ_ONLY_FLAG(deprecate_vsync_sf);
     DUMP_READ_ONLY_FLAG(allow_n_vsyncs_in_targeter);
     DUMP_READ_ONLY_FLAG(detached_mirror);
     DUMP_READ_ONLY_FLAG(commit_not_composited);
+    DUMP_READ_ONLY_FLAG(correct_dpi_with_display_size);
     DUMP_READ_ONLY_FLAG(local_tonemap_screenshots);
     DUMP_READ_ONLY_FLAG(override_trusted_overlay);
     DUMP_READ_ONLY_FLAG(flush_buffer_slots_to_uncache);
@@ -221,11 +221,10 @@ FLAG_MANAGER_LEGACY_SERVER_FLAG(use_skia_tracing, PROPERTY_SKIA_ATRACE_ENABLED,
                                 "SkiaTracingFeature__use_skia_tracing")
 
 /// Trunk stable readonly flags ///
+FLAG_MANAGER_READ_ONLY_FLAG(adpf_fmq_sf, "")
 FLAG_MANAGER_READ_ONLY_FLAG(connected_display, "")
 FLAG_MANAGER_READ_ONLY_FLAG(enable_small_area_detection, "")
 FLAG_MANAGER_READ_ONLY_FLAG(frame_rate_category_mrr, "debug.sf.frame_rate_category_mrr")
-FLAG_MANAGER_READ_ONLY_FLAG(view_set_requested_frame_rate_mrr,
-                            "debug.sf.view_set_requested_frame_rate_mrr")
 FLAG_MANAGER_READ_ONLY_FLAG(misc1, "")
 FLAG_MANAGER_READ_ONLY_FLAG(vrr_config, "debug.sf.enable_vrr_config")
 FLAG_MANAGER_READ_ONLY_FLAG(hotplug2, "")
@@ -240,7 +239,6 @@ FLAG_MANAGER_READ_ONLY_FLAG(display_protected, "")
 FLAG_MANAGER_READ_ONLY_FLAG(fp16_client_target, "debug.sf.fp16_client_target")
 FLAG_MANAGER_READ_ONLY_FLAG(game_default_frame_rate, "")
 FLAG_MANAGER_READ_ONLY_FLAG(enable_layer_command_batching, "debug.sf.enable_layer_command_batching")
-FLAG_MANAGER_READ_ONLY_FLAG(screenshot_fence_preservation, "debug.sf.screenshot_fence_preservation")
 FLAG_MANAGER_READ_ONLY_FLAG(vulkan_renderengine, "debug.renderengine.vulkan")
 FLAG_MANAGER_READ_ONLY_FLAG(renderable_buffer_usage, "")
 FLAG_MANAGER_READ_ONLY_FLAG(restore_blur_step, "debug.renderengine.restore_blur_step")
@@ -248,13 +246,14 @@ FLAG_MANAGER_READ_ONLY_FLAG(dont_skip_on_early_ro, "")
 FLAG_MANAGER_READ_ONLY_FLAG(protected_if_client, "")
 FLAG_MANAGER_READ_ONLY_FLAG(vrr_bugfix_24q4, "");
 FLAG_MANAGER_READ_ONLY_FLAG(vrr_bugfix_dropped_frame, "")
-FLAG_MANAGER_READ_ONLY_FLAG(ce_fence_promise, "");
 FLAG_MANAGER_READ_ONLY_FLAG(graphite_renderengine, "debug.renderengine.graphite")
+FLAG_MANAGER_READ_ONLY_FLAG(filter_frames_before_trace_starts, "")
 FLAG_MANAGER_READ_ONLY_FLAG(latch_unsignaled_with_auto_refresh_changed, "");
 FLAG_MANAGER_READ_ONLY_FLAG(deprecate_vsync_sf, "");
 FLAG_MANAGER_READ_ONLY_FLAG(allow_n_vsyncs_in_targeter, "");
 FLAG_MANAGER_READ_ONLY_FLAG(detached_mirror, "");
 FLAG_MANAGER_READ_ONLY_FLAG(commit_not_composited, "");
+FLAG_MANAGER_READ_ONLY_FLAG(correct_dpi_with_display_size, "");
 FLAG_MANAGER_READ_ONLY_FLAG(local_tonemap_screenshots, "debug.sf.local_tonemap_screenshots");
 FLAG_MANAGER_READ_ONLY_FLAG(override_trusted_overlay, "");
 FLAG_MANAGER_READ_ONLY_FLAG(flush_buffer_slots_to_uncache, "");

@@ -15,6 +15,7 @@ rust_library {
         "libbinder_ndk_sys",
         "libdowncast_rs",
         "liblibc",
+        "liblog_rust",
     ],
     host_supported: true,
     vendor_available: true,
@@ -79,6 +80,9 @@ rust_library {
     shared_libs: [
         "libbinder_ndk",
     ],
+    rustlibs: [
+        "liblibc",
+    ],
     host_supported: true,
     vendor_available: true,
     product_available: true,
@@ -129,8 +133,17 @@ rust_bindgen {
         // rustified
         "libbinder_ndk_bindgen_flags.txt",
     ],
+    bindgen_flags: [
+        "--blocklist-type",
+        "sockaddr",
+        "--raw-line",
+        "use libc::sockaddr;",
+    ],
     shared_libs: [
         "libbinder_ndk",
+    ],
+    rustlibs: [
+        "liblibc",
     ],
     host_supported: true,
     vendor_available: true,
@@ -185,6 +198,7 @@ rust_test {
         "libbinder_ndk_sys",
         "libdowncast_rs",
         "liblibc",
+        "liblog_rust",
     ],
 }
 
@@ -196,4 +210,7 @@ rust_test {
     auto_gen_config: true,
     clippy_lints: "none",
     lints: "none",
+    rustlibs: [
+        "liblibc",
+    ],
 }

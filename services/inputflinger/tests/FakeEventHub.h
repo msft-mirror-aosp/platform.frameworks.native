@@ -55,7 +55,7 @@ class FakeEventHub : public EventHubInterface {
         KeyedVector<int32_t, int32_t> absoluteAxisValue;
         KeyedVector<int32_t, KeyInfo> keysByScanCode;
         KeyedVector<int32_t, KeyInfo> keysByUsageCode;
-        std::unordered_map<int32_t, int32_t> keyRemapping;
+        std::map<int32_t, int32_t> keyRemapping;
         KeyedVector<int32_t, bool> leds;
         // fake mapping which would normally come from keyCharacterMap
         std::unordered_map<int32_t, int32_t> keyCodeMapping;
@@ -94,6 +94,8 @@ class FakeEventHub : public EventHubInterface {
     // Simulates a device light intensities, from light id to light intensities map.
     std::unordered_map<int32_t /* lightId */, std::unordered_map<LightColor, int32_t>>
             mLightIntensities;
+    // fake sysfs node path and value.
+    std::unordered_map<int32_t /*deviceId*/, bool /* wakeupNode*/> mKernelWakeup;
 
 public:
     static constexpr int32_t DEFAULT_BATTERY = 1;
@@ -129,7 +131,7 @@ public:
     void addKey(int32_t deviceId, int32_t scanCode, int32_t usageCode, int32_t keyCode,
                 uint32_t flags);
     void addKeyCodeMapping(int32_t deviceId, int32_t fromKeyCode, int32_t toKeyCode);
-    void addKeyRemapping(int32_t deviceId, int32_t fromKeyCode, int32_t toKeyCode) const;
+    void setKeyRemapping(int32_t deviceId, const std::map<int32_t, int32_t>& keyRemapping) const;
     void addVirtualKeyDefinition(int32_t deviceId, const VirtualKeyDefinition& definition);
 
     void addSensorAxis(int32_t deviceId, int32_t absCode, InputDeviceSensorType sensorType,
@@ -158,6 +160,8 @@ public:
     void setMtSlotValues(int32_t deviceId, int32_t axis, const std::vector<int32_t>& values);
     base::Result<std::vector<int32_t>> getMtSlotValues(int32_t deviceId, int32_t axis,
                                                        size_t slotCount) const override;
+    bool setKernelWakeEnabled(int32_t deviceId, bool enabled) override;
+    bool fakeReadKernelWakeup(int32_t deviceId) const;
 
 private:
     Device* getDevice(int32_t deviceId) const;

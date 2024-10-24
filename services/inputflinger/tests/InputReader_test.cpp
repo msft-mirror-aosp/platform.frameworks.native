@@ -1392,6 +1392,20 @@ TEST_F(InputReaderTest, LightGetColor) {
     ASSERT_EQ(mReader->getLightColor(deviceId, /*lightId=*/1), LIGHT_BRIGHTNESS);
 }
 
+TEST_F(InputReaderTest, SetPowerWakeUp) {
+    ASSERT_NO_FATAL_FAILURE(addDevice(1, "1st", InputDeviceClass::KEYBOARD, nullptr));
+    ASSERT_NO_FATAL_FAILURE(addDevice(2, "2nd", InputDeviceClass::KEYBOARD, nullptr));
+    ASSERT_NO_FATAL_FAILURE(addDevice(3, "3rd", InputDeviceClass::KEYBOARD, nullptr));
+
+    ASSERT_EQ(mFakeEventHub->fakeReadKernelWakeup(1), false);
+
+    ASSERT_TRUE(mFakeEventHub->setKernelWakeEnabled(2, true));
+    ASSERT_EQ(mFakeEventHub->fakeReadKernelWakeup(2), true);
+
+    ASSERT_TRUE(mFakeEventHub->setKernelWakeEnabled(3, false));
+    ASSERT_EQ(mFakeEventHub->fakeReadKernelWakeup(3), false);
+}
+
 // --- InputReaderIntegrationTest ---
 
 // These tests create and interact with the InputReader only through its interface.
@@ -3330,11 +3344,11 @@ TEST_F(KeyboardInputMapperTest, Process_SimpleKeyPress) {
 TEST_F(KeyboardInputMapperTest, Process_KeyRemapping) {
     mFakeEventHub->addKey(EVENTHUB_ID, KEY_A, 0, AKEYCODE_A, 0);
     mFakeEventHub->addKey(EVENTHUB_ID, KEY_B, 0, AKEYCODE_B, 0);
-    mFakeEventHub->addKeyRemapping(EVENTHUB_ID, AKEYCODE_A, AKEYCODE_B);
 
     KeyboardInputMapper& mapper =
             constructAndAddMapper<KeyboardInputMapper>(AINPUT_SOURCE_KEYBOARD);
 
+    mFakeEventHub->setKeyRemapping(EVENTHUB_ID, {{AKEYCODE_A, AKEYCODE_B}});
     // Key down by scan code.
     process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, KEY_A, 1);
     NotifyKeyArgs args;
@@ -3669,40 +3683,6 @@ TEST_F(KeyboardInputMapperTest, Process_LockedKeysShouldToggleMetaStateAndLeds) 
     ASSERT_FALSE(mFakeEventHub->getLedState(EVENTHUB_ID, LED_NUML));
     ASSERT_FALSE(mFakeEventHub->getLedState(EVENTHUB_ID, LED_SCROLLL));
     ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
-}
-
-TEST_F(KeyboardInputMapperTest, NoMetaStateWhenMetaKeysNotPresent) {
-    mFakeEventHub->addKey(EVENTHUB_ID, BTN_A, 0, AKEYCODE_BUTTON_A, 0);
-    mFakeEventHub->addKey(EVENTHUB_ID, BTN_B, 0, AKEYCODE_BUTTON_B, 0);
-    mFakeEventHub->addKey(EVENTHUB_ID, BTN_X, 0, AKEYCODE_BUTTON_X, 0);
-    mFakeEventHub->addKey(EVENTHUB_ID, BTN_Y, 0, AKEYCODE_BUTTON_Y, 0);
-
-    KeyboardInputMapper& mapper =
-            constructAndAddMapper<KeyboardInputMapper>(AINPUT_SOURCE_KEYBOARD);
-
-    // Meta state should be AMETA_NONE after reset
-    std::list<NotifyArgs> unused = mapper.reset(ARBITRARY_TIME);
-    ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
-    // Meta state should be AMETA_NONE with update, as device doesn't have the keys.
-    mapper.updateMetaState(AKEYCODE_NUM_LOCK);
-    ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
-
-    NotifyKeyArgs args;
-    // Press button "A"
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, BTN_A, 1);
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
-    ASSERT_EQ(AMETA_NONE, args.metaState);
-    ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
-    ASSERT_EQ(AKEY_EVENT_ACTION_DOWN, args.action);
-    ASSERT_EQ(AKEYCODE_BUTTON_A, args.keyCode);
-
-    // Button up.
-    process(mapper, ARBITRARY_TIME + 2, READ_TIME, EV_KEY, BTN_A, 0);
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
-    ASSERT_EQ(AMETA_NONE, args.metaState);
-    ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
-    ASSERT_EQ(AKEY_EVENT_ACTION_UP, args.action);
-    ASSERT_EQ(AKEYCODE_BUTTON_A, args.keyCode);
 }
 
 TEST_F(KeyboardInputMapperTest, Configure_AssignsDisplayPort) {

@@ -132,7 +132,9 @@ std::optional<KeyboardLayoutInfo> KeyboardInputMapper::getKeyboardLayoutInfo() c
 void KeyboardInputMapper::populateDeviceInfo(InputDeviceInfo& info) {
     InputMapper::populateDeviceInfo(info);
 
-    info.setKeyCharacterMap(getDeviceContext().getKeyCharacterMap());
+    if (const auto kcm = getDeviceContext().getKeyCharacterMap(); kcm != nullptr) {
+        info.setKeyCharacterMap(std::make_unique<KeyCharacterMap>(*kcm));
+    }
 
     std::optional keyboardLayoutInfo = getKeyboardLayoutInfo();
     if (keyboardLayoutInfo) {
@@ -241,11 +243,16 @@ std::list<NotifyArgs> KeyboardInputMapper::process(const RawEvent& rawEvent) {
     mHidUsageAccumulator.process(rawEvent);
     switch (rawEvent.type) {
         case EV_KEY: {
-            int32_t scanCode = rawEvent.code;
+            // Skip processing repeated keys (value == 2) since auto repeat is handled by Android
+            // internally.
+            if (rawEvent.value == 2) {
+                break;
+            }
 
+            const int32_t scanCode = rawEvent.code;
             if (isSupportedScanCode(scanCode)) {
-                out += processKey(rawEvent.when, rawEvent.readTime, rawEvent.value != 0,
-                                  scanCode, mHidUsageAccumulator.consumeCurrentHidUsage());
+                out += processKey(rawEvent.when, rawEvent.readTime, rawEvent.value != 0, scanCode,
+                                  mHidUsageAccumulator.consumeCurrentHidUsage());
             }
             break;
         }
@@ -390,15 +397,6 @@ int32_t KeyboardInputMapper::getMetaState() {
     return mMetaState;
 }
 
-bool KeyboardInputMapper::updateMetaState(int32_t keyCode) {
-    if (!android::isMetaKey(keyCode) || !getDeviceContext().hasKeyCode(keyCode)) {
-        return false;
-    }
-
-    updateMetaStateIfNeeded(keyCode, false);
-    return true;
-}
-
 bool KeyboardInputMapper::updateMetaStateIfNeeded(int32_t keyCode, bool down) {
     int32_t oldMetaState = mMetaState;
     int32_t newMetaState = android::updateMetaState(keyCode, down, oldMetaState);
@@ -434,17 +432,21 @@ void KeyboardInputMapper::updateLedState(bool reset) {
     mMetaState &= ~(AMETA_CAPS_LOCK_ON | AMETA_NUM_LOCK_ON | AMETA_SCROLL_LOCK_ON);
     mMetaState |= getContext()->getLedMetaState();
 
-    constexpr int32_t META_NUM = 3;
-    const std::vector<int32_t> keyCodes{AKEYCODE_CAPS_LOCK, AKEYCODE_NUM_LOCK,
-                                        AKEYCODE_SCROLL_LOCK};
-    const std::array<int32_t, META_NUM> metaCodes = {AMETA_CAPS_LOCK_ON, AMETA_NUM_LOCK_ON,
-                                                     AMETA_SCROLL_LOCK_ON};
-    std::array<uint8_t, META_NUM> flags = {0, 0, 0};
-    bool hasKeyLayout = getDeviceContext().markSupportedKeyCodes(keyCodes, flags.data());
+    std::vector<int32_t> keyCodesToCheck{AKEYCODE_NUM_LOCK, AKEYCODE_SCROLL_LOCK};
+    std::vector<int32_t> metaCodes{AMETA_NUM_LOCK_ON, AMETA_SCROLL_LOCK_ON};
+    // Check for physical CapsLock key only for non-alphabetic keyboards. For Alphabetic
+    // keyboards, we will allow Caps Lock even if there is no physical CapsLock key.
+    if (getDeviceContext().getKeyboardType() != KeyboardType::ALPHABETIC) {
+        keyCodesToCheck.push_back(AKEYCODE_CAPS_LOCK);
+        metaCodes.push_back(AMETA_CAPS_LOCK_ON);
+    }
+    size_t size = keyCodesToCheck.size();
+    std::vector<uint8_t> flags(size, 0);
+    bool hasKeyLayout = getDeviceContext().markSupportedKeyCodes(keyCodesToCheck, flags.data());
     // If the device doesn't have the physical meta key it shouldn't generate the corresponding
     // meta state.
     if (hasKeyLayout) {
-        for (int i = 0; i < META_NUM; i++) {
+        for (size_t i = 0; i < size; i++) {
             if (!flags[i]) {
                 mMetaState &= ~metaCodes[i];
             }

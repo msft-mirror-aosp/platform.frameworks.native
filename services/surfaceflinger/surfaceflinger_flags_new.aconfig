@@ -4,11 +4,27 @@ package: "com.android.graphics.surfaceflinger.flags"
 container: "system"
 
 flag {
-    name: "adpf_gpu_sf"
-    namespace: "game"
-    description: "Guards use of the sending ADPF GPU duration hint and load hints from SurfaceFlinger to Power HAL"
-    bug: "284324521"
+  name: "adpf_fmq_sf"
+  namespace: "game"
+  description: "Guards use of the ADPF FMQ system specifically for SurfaceFlinger"
+  bug: "315894228"
+  is_fixed_read_only: true
+} # adpf_fmq_sf
+
+flag {
+  name: "adpf_gpu_sf"
+  namespace: "game"
+  description: "Guards use of the sending ADPF GPU duration hint and load hints from SurfaceFlinger to Power HAL"
+  bug: "284324521"
 } # adpf_gpu_sf
+
+flag {
+  name: "arr_setframerate_api"
+  namespace: "core_graphics"
+  description: "New setFrameRate API for Android 16"
+  bug: "356987016"
+  is_fixed_read_only: true
+} # arr_setframerate_api
 
 flag {
   name: "ce_fence_promise"
@@ -21,18 +37,29 @@ flag {
   }
  } # ce_fence_promise
 
- flag {
-   name: "commit_not_composited"
-   namespace: "core_graphics"
-   description: "mark frames as non janky if the transaction resulted in no composition"
-   bug: "340633280"
-   is_fixed_read_only: true
-   metadata {
-     purpose: PURPOSE_BUGFIX
-   }
-  } # commit_not_composited
+flag {
+  name: "commit_not_composited"
+  namespace: "core_graphics"
+  description: "mark frames as non janky if the transaction resulted in no composition"
+  bug: "340633280"
+  is_fixed_read_only: true
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+} # commit_not_composited
 
- flag {
+flag {
+  name: "correct_dpi_with_display_size"
+  namespace: "core_graphics"
+  description: "indicate whether missing or likely incorrect dpi should be corrected using the display size."
+  bug: "328425848"
+  is_fixed_read_only: true
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+} # correct_dpi_with_display_size
+
+flag {
   name: "deprecate_vsync_sf"
   namespace: "core_graphics"
   description: "Depracate eVsyncSourceSurfaceFlinger and use vsync_app everywhere"
@@ -43,7 +70,7 @@ flag {
   }
 } # deprecate_vsync_sf
 
- flag {
+flag {
   name: "detached_mirror"
   namespace: "window_surfaces"
   description: "Ignore local transform when mirroring a partial hierarchy"
@@ -53,6 +80,17 @@ flag {
     purpose: PURPOSE_BUGFIX
   }
 } # detached_mirror
+
+flag {
+  name: "filter_frames_before_trace_starts"
+  namespace: "core_graphics"
+  description: "Do not trace FrameTimeline events for frames started before the trace started"
+  bug: "364194637"
+  is_fixed_read_only: true
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+} # filter_frames_before_trace_starts
 
 flag {
   name: "flush_buffer_slots_to_uncache"
@@ -96,11 +134,11 @@ flag {
 } # latch_unsignaled_with_auto_refresh_changed
 
 flag {
-    name: "local_tonemap_screenshots"
-    namespace: "core_graphics"
-    description: "Enables local tonemapping when capturing screenshots"
-    bug: "329464641"
-    is_fixed_read_only: true
+  name: "local_tonemap_screenshots"
+  namespace: "core_graphics"
+  description: "Enables local tonemapping when capturing screenshots"
+  bug: "329464641"
+  is_fixed_read_only: true
 } # local_tonemap_screenshots
 
 flag {
@@ -115,11 +153,11 @@ flag {
  } # single_hop_screenshot
 
 flag {
-    name: "true_hdr_screenshots"
-    namespace: "core_graphics"
-    description: "Enables screenshotting display content in HDR, sans tone mapping"
-    bug: "329470026"
-    is_fixed_read_only: true
+  name: "true_hdr_screenshots"
+  namespace: "core_graphics"
+  description: "Enables screenshotting display content in HDR, sans tone mapping"
+  bug: "329470026"
+  is_fixed_read_only: true
 } # true_hdr_screenshots
 
  flag {
@@ -134,11 +172,11 @@ flag {
 } # override_trusted_overlay
 
 flag {
-    name: "view_set_requested_frame_rate_mrr"
-    namespace: "core_graphics"
-    description: "Enable to use frame rate category NoPreference with fixed frame rate vote on MRR devices"
-    bug: "352206100"
-    is_fixed_read_only: true
+  name: "view_set_requested_frame_rate_mrr"
+  namespace: "core_graphics"
+  description: "Enable to use frame rate category NoPreference with fixed frame rate vote on MRR devices"
+  bug: "352206100"
+  is_fixed_read_only: true
 } # view_set_requested_frame_rate_mrr
 
 flag {

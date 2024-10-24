@@ -83,6 +83,7 @@ enum class SessionTag : int32_t {
   HWUI = 2,
   GAME = 3,
   APP = 4,
+  SYSUI = 5,
 };
 
 /**
@@ -108,6 +109,10 @@ APerformanceHintSession* APerformanceHint_createSessionInternal(APerformanceHint
                                         const int32_t* threadIds, size_t size,
                                         int64_t initialTargetWorkDurationNanos, SessionTag tag);
 
+/**
+ * Forces FMQ to be enabled or disabled, for testing only.
+ */
+void APerformanceHint_setUseFMQForTesting(bool enabled);
 
 __END_DECLS
 

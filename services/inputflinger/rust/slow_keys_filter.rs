@@ -26,7 +26,8 @@ use com_android_server_inputflinger::aidl::com::android::server::inputflinger::{
 };
 use input::KeyboardType;
 use log::debug;
-use std::collections::HashSet;
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 // Policy flags from Input.h
@@ -100,7 +101,7 @@ impl Filter for SlowKeysFilter {
             // acquire write lock
             let mut slow_filter = self.write_inner();
             if !(slow_filter.supported_devices.contains(&event.deviceId)
-                && event.source == Source::KEYBOARD)
+                && event.source.0 & Source::KEYBOARD.0 != 0)
             {
                 slow_filter.next.notify_key(event);
                 return;
@@ -185,6 +186,19 @@ impl Filter for SlowKeysFilter {
         let mut slow_filter = self.write_inner();
         slow_filter.input_filter_thread.unregister_thread_callback(Box::new(self.clone()));
         slow_filter.next.destroy();
+    }
+
+    fn save(
+        &mut self,
+        state: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
+    ) -> HashMap<&'static str, Box<dyn Any + Send + Sync>> {
+        let mut slow_filter = self.write_inner();
+        slow_filter.next.save(state)
+    }
+
+    fn restore(&mut self, state: &HashMap<&'static str, Box<dyn Any + Send + Sync>>) {
+        let mut slow_filter = self.write_inner();
+        slow_filter.next.restore(state);
     }
 
     fn dump(&mut self, dump_str: String) -> String {
@@ -293,6 +307,63 @@ mod tests {
             KeyEvent { action: KeyEventAction::DOWN, source: Source::STYLUS, ..BASE_KEY_EVENT };
         filter.notify_key(&event);
         assert_eq!(next.last_event().unwrap(), event);
+    }
+
+    #[test]
+    fn test_notify_key_for_tv_remote_when_key_pressed_for_threshold_time() {
+        let test_callbacks = TestCallbacks::new();
+        let test_thread = get_thread(test_callbacks.clone());
+        let next = TestFilter::new();
+        let mut filter = setup_filter_with_external_device(
+            Box::new(next.clone()),
+            test_thread.clone(),
+            1, /* device_id */
+            SLOW_KEYS_THRESHOLD_NS,
+            KeyboardType::NonAlphabetic,
+        );
+        let down_time = clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap().num_nanoseconds();
+        let source = Source(Source::KEYBOARD.0 | Source::DPAD.0);
+        filter.notify_key(&KeyEvent {
+            action: KeyEventAction::DOWN,
+            downTime: down_time,
+            eventTime: down_time,
+            source,
+            ..BASE_KEY_EVENT
+        });
+        assert!(next.last_event().is_none());
+
+        std::thread::sleep(Duration::from_nanos(2 * SLOW_KEYS_THRESHOLD_NS as u64));
+        assert_eq!(
+            next.last_event().unwrap(),
+            KeyEvent {
+                action: KeyEventAction::DOWN,
+                downTime: down_time + SLOW_KEYS_THRESHOLD_NS,
+                eventTime: down_time + SLOW_KEYS_THRESHOLD_NS,
+                source,
+                policyFlags: POLICY_FLAG_DISABLE_KEY_REPEAT,
+                ..BASE_KEY_EVENT
+            }
+        );
+
+        let up_time = clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap().num_nanoseconds();
+        filter.notify_key(&KeyEvent {
+            action: KeyEventAction::UP,
+            downTime: down_time,
+            eventTime: up_time,
+            source,
+            ..BASE_KEY_EVENT
+        });
+
+        assert_eq!(
+            next.last_event().unwrap(),
+            KeyEvent {
+                action: KeyEventAction::UP,
+                downTime: down_time + SLOW_KEYS_THRESHOLD_NS,
+                eventTime: up_time,
+                source,
+                ..BASE_KEY_EVENT
+            }
+        );
     }
 
     #[test]

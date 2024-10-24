@@ -151,9 +151,10 @@ void FakeEventHub::addKeyCodeMapping(int32_t deviceId, int32_t fromKeyCode, int3
     getDevice(deviceId)->keyCodeMapping.insert_or_assign(fromKeyCode, toKeyCode);
 }
 
-void FakeEventHub::addKeyRemapping(int32_t deviceId, int32_t fromKeyCode, int32_t toKeyCode) const {
+void FakeEventHub::setKeyRemapping(int32_t deviceId,
+                                   const std::map<int32_t, int32_t>& keyRemapping) const {
     Device* device = getDevice(deviceId);
-    device->keyRemapping.insert_or_assign(fromKeyCode, toKeyCode);
+    device->keyRemapping = keyRemapping;
 }
 
 void FakeEventHub::addLed(int32_t deviceId, int32_t led, bool initialState) {
@@ -647,6 +648,27 @@ void FakeEventHub::sysfsNodeChanged(const std::string& sysfsNodePath) {
         addDevice(foundDeviceId, identifier.name, classes | InputDeviceClass::LIGHT,
                   identifier.bus);
     }
+}
+
+bool FakeEventHub::setKernelWakeEnabled(int32_t deviceId, bool enabled) {
+    Device* device = getDevice(deviceId);
+    if (device == nullptr) {
+        return false;
+    }
+    mKernelWakeup.emplace(deviceId, enabled);
+    return true;
+}
+
+bool FakeEventHub::fakeReadKernelWakeup(int32_t deviceId) const {
+    Device* device = getDevice(deviceId);
+    if (device == nullptr) {
+        return false;
+    }
+    auto it = mKernelWakeup.find(deviceId);
+    if (it == mKernelWakeup.end()) {
+        return false;
+    }
+    return it->second;
 }
 
 } // namespace android
