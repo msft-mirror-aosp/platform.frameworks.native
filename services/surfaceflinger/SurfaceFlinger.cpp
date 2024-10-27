@@ -83,6 +83,7 @@
 #include <renderengine/RenderEngine.h>
 #include <renderengine/impl/ExternalTexture.h>
 #include <scheduler/FrameTargeter.h>
+#include <statslog_surfaceflinger.h>
 #include <sys/types.h>
 #include <ui/ColorSpace.h>
 #include <ui/DebugUtils.h>
@@ -1655,19 +1656,22 @@ status_t SurfaceFlinger::getOverlaySupport(gui::OverlayProperties* outProperties
         outProperties->combinations.emplace_back(outCombination);
     }
     outProperties->supportMixedColorSpaces = aidlProperties.supportMixedColorSpaces;
-    if (aidlProperties.lutProperties.has_value()) {
+    if (aidlProperties.lutProperties) {
         std::vector<gui::LutProperties> outLutProperties;
-        for (const auto& properties : aidlProperties.lutProperties.value()) {
-            gui::LutProperties currentProperties;
-            currentProperties.dimension =
-                    static_cast<gui::LutProperties::Dimension>(properties->dimension);
-            currentProperties.size = properties->size;
-            currentProperties.samplingKeys.reserve(properties->samplingKeys.size());
-            std::transform(properties->samplingKeys.cbegin(), properties->samplingKeys.cend(),
-                           std::back_inserter(currentProperties.samplingKeys), [](const auto& val) {
-                               return static_cast<gui::LutProperties::SamplingKey>(val);
-                           });
-            outLutProperties.push_back(std::move(currentProperties));
+        for (auto properties : *aidlProperties.lutProperties) {
+            if (!properties) {
+                gui::LutProperties currentProperties;
+                currentProperties.dimension =
+                        static_cast<gui::LutProperties::Dimension>(properties->dimension);
+                currentProperties.size = properties->size;
+                currentProperties.samplingKeys.reserve(properties->samplingKeys.size());
+                std::transform(properties->samplingKeys.cbegin(), properties->samplingKeys.cend(),
+                               std::back_inserter(currentProperties.samplingKeys),
+                               [](const auto& val) {
+                                   return static_cast<gui::LutProperties::SamplingKey>(val);
+                               });
+                outLutProperties.push_back(std::move(currentProperties));
+            }
         }
         outProperties->lutProperties.emplace(outLutProperties.begin(), outLutProperties.end());
     }
@@ -3142,6 +3146,19 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
         haveNewListeners = mAddingHDRLayerInfoListener; // grab this with state lock
         mAddingHDRLayerInfoListener = false;
     }
+
+    for (const auto& layerEvent : mLayerEvents) {
+        auto result =
+                stats::stats_write(stats::SURFACE_CONTROL_EVENT,
+                                   static_cast<int32_t>(layerEvent.uid),
+                                   static_cast<int64_t>(layerEvent.timeSinceLastEvent.count()),
+                                   static_cast<int32_t>(layerEvent.dataspace));
+        if (result < 0) {
+            ALOGW("Failed to report layer event with error: %d", result);
+        }
+    }
+
+    mLayerEvents.clear();
 
     if (haveNewListeners || mHdrLayerInfoChanged) {
         for (auto& [compositionDisplay, listener] : hdrInfoListeners) {
