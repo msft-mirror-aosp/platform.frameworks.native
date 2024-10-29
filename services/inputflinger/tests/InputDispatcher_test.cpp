@@ -9307,6 +9307,24 @@ TEST_F(InputDispatcherKeyRepeatTest, FocusedWindow_StopsKeyRepeatAfterUp) {
     mWindow->assertNoEvents();
 }
 
+TEST_F(InputDispatcherKeyRepeatTest, FocusedWindow_StopsKeyRepeatAfterFocusedWindowChanged) {
+    sp<FakeWindowHandle> anotherWindow =
+            sp<FakeWindowHandle>::make(mApp, mDispatcher, "AnotherWindow",
+                                       ui::LogicalDisplayId::DEFAULT);
+    anotherWindow->setFocusable(true);
+    mDispatcher->onWindowInfosChanged({{*mWindow->getInfo(), *anotherWindow->getInfo()}, {}, 0, 0});
+
+    sendAndConsumeKeyDown(/*deviceId=*/1);
+    expectKeyRepeatOnce(/*repeatCount=*/1);
+    expectKeyRepeatOnce(/*repeatCount=*/2);
+    setFocusedWindow(anotherWindow);
+    anotherWindow->consumeFocusEvent(true);
+
+    // Window should receive key up event with cancel.
+    mWindow->consumeKeyUp(ui::LogicalDisplayId::DEFAULT, AKEY_EVENT_FLAG_CANCELED);
+    anotherWindow->assertNoEvents();
+}
+
 TEST_F(InputDispatcherKeyRepeatTest, FocusedWindow_KeyRepeatAfterStaleDeviceKeyUp) {
     sendAndConsumeKeyDown(/*deviceId=*/1);
     expectKeyRepeatOnce(/*repeatCount=*/1);
