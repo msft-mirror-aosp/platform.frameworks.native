@@ -85,10 +85,12 @@ private:
     void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>& inputDevices) override;
     void notifyTouchpadHardwareState(const SelfContainedHardwareState& schs,
                                      int32_t deviceId) override;
+    void notifyTouchpadGestureInfo(GestureType type, int32_t deviceId) override;
     std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(
             const InputDeviceIdentifier&, const std::optional<KeyboardLayoutInfo>) override;
     std::string getDeviceAlias(const InputDeviceIdentifier&) override;
-    void waitForInputDevices(std::function<void(bool)> processDevicesChanged);
+    void waitForInputDevices(std::function<void(bool)> processDevicesChanged,
+                             std::chrono::milliseconds timeout);
     void notifyStylusGestureStarted(int32_t deviceId, nsecs_t eventTime) override;
 
     mutable std::mutex mLock;

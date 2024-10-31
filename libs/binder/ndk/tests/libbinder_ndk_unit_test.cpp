@@ -46,6 +46,7 @@
 #include "android/binder_ibinder.h"
 
 using namespace android;
+using namespace std::chrono_literals;
 
 constexpr char kExistingNonNdkService[] = "SurfaceFlinger";
 constexpr char kBinderNdkUnitTestService[] = "BinderNdkUnitTest";
@@ -54,7 +55,7 @@ constexpr char kForcePersistNdkUnitTestService[] = "ForcePersistNdkUnitTestServi
 constexpr char kActiveServicesNdkUnitTestService[] = "ActiveServicesNdkUnitTestService";
 constexpr char kBinderNdkUnitTestServiceFlagged[] = "BinderNdkUnitTestFlagged";
 
-constexpr unsigned int kShutdownWaitTime = 11;
+constexpr auto kShutdownWaitTime = 30s;
 constexpr uint64_t kContextTestValue = 0xb4e42fb4d9a1d715;
 
 class MyTestFoo : public IFoo {
@@ -253,12 +254,22 @@ int lazyService(const char* instance) {
 }
 
 bool isServiceRunning(const char* serviceName) {
-    AIBinder* binder = AServiceManager_checkService(serviceName);
-    if (binder == nullptr) {
-        return false;
+    static const sp<android::IServiceManager> sm(android::defaultServiceManager());
+    const Vector<String16> services = sm->listServices();
+    for (const auto service : services) {
+        if (service == String16(serviceName)) return true;
     }
-    AIBinder_decStrong(binder);
+    return false;
+}
 
+bool isServiceShutdownWithWait(const char* serviceName) {
+    LOG(INFO) << "About to check and wait for shutdown of " << std::string(serviceName);
+    const auto before = std::chrono::steady_clock::now();
+    while (isServiceRunning(serviceName)) {
+        sleep(1);
+        const auto after = std::chrono::steady_clock::now();
+        if (after - before >= kShutdownWaitTime) return false;
+    }
     return true;
 }
 
@@ -450,8 +461,8 @@ TEST(NdkBinder, CheckLazyServiceShutDown) {
     service = nullptr;
     IPCThreadState::self()->flushCommands();
     // Make sure the service is dead after some time of no use
-    sleep(kShutdownWaitTime);
-    ASSERT_EQ(nullptr, AServiceManager_checkService(kLazyBinderNdkUnitTestService));
+    ASSERT_TRUE(isServiceShutdownWithWait(kLazyBinderNdkUnitTestService))
+            << "Service failed to shut down";
 }
 
 TEST(NdkBinder, ForcedPersistenceTest) {
@@ -466,14 +477,12 @@ TEST(NdkBinder, ForcedPersistenceTest) {
         service = nullptr;
         IPCThreadState::self()->flushCommands();
 
-        sleep(kShutdownWaitTime);
-
-        bool isRunning = isServiceRunning(kForcePersistNdkUnitTestService);
-
         if (i == 0) {
-            ASSERT_TRUE(isRunning) << "Service shut down when it shouldn't have.";
+            ASSERT_TRUE(isServiceRunning(kForcePersistNdkUnitTestService))
+                    << "Service shut down when it shouldn't have.";
         } else {
-            ASSERT_FALSE(isRunning) << "Service failed to shut down.";
+            ASSERT_TRUE(isServiceShutdownWithWait(kForcePersistNdkUnitTestService))
+                    << "Service failed to shut down";
         }
     }
 }
@@ -491,10 +500,7 @@ TEST(NdkBinder, ActiveServicesCallbackTest) {
     service = nullptr;
     IPCThreadState::self()->flushCommands();
 
-    LOG(INFO) << "ActiveServicesCallbackTest about to sleep";
-    sleep(kShutdownWaitTime);
-
-    ASSERT_FALSE(isServiceRunning(kActiveServicesNdkUnitTestService))
+    ASSERT_TRUE(isServiceShutdownWithWait(kActiveServicesNdkUnitTestService))
             << "Service failed to shut down.";
 }
 
@@ -1100,6 +1106,37 @@ TEST(NdkBinder_ScopedAResource, Release) {
         (void)resource.release();
     }
     EXPECT_EQ(deleteCount, 0);
+}
+
+void* EmptyOnCreate(void* args) {
+    return args;
+}
+void EmptyOnDestroy(void* /*userData*/) {}
+binder_status_t EmptyOnTransact(AIBinder* /*binder*/, transaction_code_t /*code*/,
+                                const AParcel* /*in*/, AParcel* /*out*/) {
+    return STATUS_OK;
+}
+
+TEST(NdkBinder_DeathTest, SetCodeMapTwice) {
+    const char* codeToFunction1[] = {"function-1", "function-2", "function-3"};
+    const char* codeToFunction2[] = {"function-4", "function-5"};
+    const char* interfaceName = "interface_descriptor";
+    AIBinder_Class* clazz =
+            AIBinder_Class_define(interfaceName, EmptyOnCreate, EmptyOnDestroy, EmptyOnTransact);
+    AIBinder_Class_setTransactionCodeToFunctionNameMap(clazz, codeToFunction1, 3);
+    // Reset/clear is not allowed
+    EXPECT_DEATH(AIBinder_Class_setTransactionCodeToFunctionNameMap(clazz, codeToFunction2, 2), "");
+}
+
+TEST(NdkBinder_DeathTest, SetNullCodeMap) {
+    const char* codeToFunction[] = {"function-1", "function-2", "function-3"};
+    const char* interfaceName = "interface_descriptor";
+    AIBinder_Class* clazz =
+            AIBinder_Class_define(interfaceName, EmptyOnCreate, EmptyOnDestroy, EmptyOnTransact);
+    EXPECT_DEATH(AIBinder_Class_setTransactionCodeToFunctionNameMap(nullptr, codeToFunction, 3),
+                 "");
+    EXPECT_DEATH(AIBinder_Class_setTransactionCodeToFunctionNameMap(clazz, nullptr, 0), "");
+    EXPECT_DEATH(AIBinder_Class_setTransactionCodeToFunctionNameMap(nullptr, nullptr, 0), "");
 }
 
 int main(int argc, char* argv[]) {

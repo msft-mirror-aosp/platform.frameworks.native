@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <com_android_input_flags.h>
+
 #include "AnrTracker.h"
 #include "CancelationOptions.h"
 #include "DragState.h"
@@ -28,6 +30,7 @@
 #include "InputTarget.h"
 #include "InputThread.h"
 #include "LatencyAggregator.h"
+#include "LatencyAggregatorWithHistograms.h"
 #include "LatencyTracker.h"
 #include "Monitor.h"
 #include "TouchState.h"
@@ -153,8 +156,8 @@ public:
     // Public to allow tests to verify that a Monitor can get ANR.
     void setMonitorDispatchingTimeoutForTest(std::chrono::nanoseconds timeout);
 
-    void setKeyRepeatConfiguration(std::chrono::nanoseconds timeout,
-                                   std::chrono::nanoseconds delay) override;
+    void setKeyRepeatConfiguration(std::chrono::nanoseconds timeout, std::chrono::nanoseconds delay,
+                                   bool keyRepeatEnabled) override;
 
     bool isPointerInWindow(const sp<IBinder>& token, ui::LogicalDisplayId displayId,
                            DeviceId deviceId, int32_t pointerId) override;
@@ -296,6 +299,10 @@ private:
 
     // Event injection and synchronization.
     std::condition_variable mInjectionResultAvailable;
+    bool shouldRejectInjectedMotionLocked(const MotionEvent& motion, DeviceId deviceId,
+                                          ui::LogicalDisplayId displayId,
+                                          std::optional<gui::Uid> targetUid, int32_t flags)
+            REQUIRES(mLock);
     void setInjectionResult(const EventEntry& entry,
                             android::os::InputEventInjectionResult injectionResult);
     void transformMotionEntryForInjectionLocked(MotionEntry&,
@@ -326,6 +333,7 @@ private:
     std::chrono::nanoseconds mMonitorDispatchingTimeout GUARDED_BY(mLock);
 
     nsecs_t processAnrsLocked() REQUIRES(mLock);
+    void processLatencyStatisticsLocked() REQUIRES(mLock);
     std::chrono::nanoseconds getDispatchingTimeoutLocked(
             const std::shared_ptr<Connection>& connection) REQUIRES(mLock);
 
@@ -697,7 +705,8 @@ private:
                                          DeviceId deviceId) const REQUIRES(mLock);
 
     // Statistics gathering.
-    LatencyAggregator mLatencyAggregator GUARDED_BY(mLock);
+    nsecs_t mLastStatisticPushTime = 0;
+    std::unique_ptr<InputEventTimelineProcessor> mInputEventTimelineProcessor GUARDED_BY(mLock);
     LatencyTracker mLatencyTracker GUARDED_BY(mLock);
     void traceInboundQueueLengthLocked() REQUIRES(mLock);
     void traceOutboundQueueLength(const Connection& connection);
@@ -738,6 +747,10 @@ private:
 
     sp<android::gui::WindowInfoHandle> findWallpaperWindowBelow(
             const sp<android::gui::WindowInfoHandle>& windowHandle) const REQUIRES(mLock);
+
+    /** Stores the value of the input flag for per device input latency metrics. */
+    const bool mPerDeviceInputLatencyMetricsFlag =
+            com::android::input::flags::enable_per_device_input_latency_metrics();
 };
 
 } // namespace android::inputdispatcher

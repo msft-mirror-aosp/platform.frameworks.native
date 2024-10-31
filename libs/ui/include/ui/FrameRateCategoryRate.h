@@ -1,6 +1,6 @@
 /*
- * Copyright 2019 The Android Open Source Project
-
+ * Copyright 2024 The Android Open Source Project
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,21 +14,22 @@
  * limitations under the License.
  */
 
-#include "MockPowerAdvisor.h"
+#pragma once
 
-namespace android {
-namespace Hwc2 {
+namespace android::ui {
 
-// This will go away once PowerAdvisor is moved into the "backend" library
-PowerAdvisor::~PowerAdvisor() = default;
+// Represents frame rate for FrameRateCategory Normal and High.
+class FrameRateCategoryRate {
+public:
+    FrameRateCategoryRate(float normal = 0, float high = 0) : mNormal(normal), mHigh(high) {}
 
-namespace mock {
+    float getNormal() const { return mNormal; }
 
-// The Google Mock documentation recommends explicit non-header instantiations
-// for better compile time performance.
-PowerAdvisor::PowerAdvisor() = default;
-PowerAdvisor::~PowerAdvisor() = default;
+    float getHigh() const { return mHigh; }
 
-} // namespace mock
-} // namespace Hwc2
-} // namespace android
+private:
+    float mNormal;
+    float mHigh;
+};
+
+} // namespace android::ui
