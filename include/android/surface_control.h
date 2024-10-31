@@ -145,6 +145,9 @@ typedef struct ASurfaceTransactionStats ASurfaceTransactionStats;
  * Buffers which are replaced or removed from the scene in the transaction invoking
  * this callback may be reused after this point.
  *
+ * Starting with API level 36, prefer using \a ASurfaceTransaction_OnBufferRelease to listen
+ * to when a buffer is ready to be reused.
+ *
  * \param context Optional context provided by the client that is passed into
  * the callback.
  *
@@ -153,12 +156,9 @@ typedef struct ASurfaceTransactionStats ASurfaceTransactionStats;
  *
  * THREADING
  * The transaction completed callback can be invoked on any thread.
- *
- * Available since API level 29.
  */
 typedef void (*ASurfaceTransaction_OnComplete)(void* _Null_unspecified context,
-                                               ASurfaceTransactionStats* _Nonnull stats)
-        __INTRODUCED_IN(29);
+                                               ASurfaceTransactionStats* _Nonnull stats);
 
 /**
  * The ASurfaceTransaction_OnCommit callback is invoked when transaction is applied and the updates
@@ -182,12 +182,36 @@ typedef void (*ASurfaceTransaction_OnComplete)(void* _Null_unspecified context,
  *
  * THREADING
  * The transaction committed callback can be invoked on any thread.
- *
- * Available since API level 31.
  */
 typedef void (*ASurfaceTransaction_OnCommit)(void* _Null_unspecified context,
-                                             ASurfaceTransactionStats* _Nonnull stats)
-        __INTRODUCED_IN(31);
+                                             ASurfaceTransactionStats* _Nonnull stats);
+
+/**
+ * The ASurfaceTransaction_OnBufferRelease callback is invoked when a buffer that was passed in
+ * ASurfaceTransaction_setBuffer is ready to be reused.
+ *
+ * This callback is guaranteed to be invoked if ASurfaceTransaction_setBuffer is called with a non
+ * null buffer. If the buffer in the transaction is replaced via another call to
+ * ASurfaceTransaction_setBuffer, the callback will be invoked immediately. Otherwise the callback
+ * will be invoked before the ASurfaceTransaction_OnComplete callback after the buffer was
+ * presented.
+ *
+ * If this callback is set, caller should not release the buffer using the
+ * ASurfaceTransaction_OnComplete.
+ *
+ * \param context Optional context provided by the client that is passed into the callback.
+ *
+ * \param release_fence_fd Returns the fence file descriptor used to signal the release of buffer
+ * associated with this callback. If this fence is valid (>=0), the buffer has not yet been released
+ * and the fence will signal when the buffer has been released. If the fence is -1 , the buffer is
+ * already released. The recipient of the callback takes ownership of the fence fd and is
+ * responsible for closing it.
+ *
+ * THREADING
+ * The callback can be invoked on any thread.
+ */
+typedef void (*ASurfaceTransaction_OnBufferRelease)(void* _Null_unspecified context,
+                                                    int release_fence_fd);
 
 /**
  * Returns the timestamp of when the frame was latched by the framework. Once a frame is
@@ -251,7 +275,7 @@ int64_t ASurfaceTransactionStats_getAcquireTime(
 /**
  * The returns the fence used to signal the release of the PREVIOUS buffer set on
  * this surface. If this fence is valid (>=0), the PREVIOUS buffer has not yet been released and the
- * fence will signal when the PREVIOUS buffer has been released. If the fence is -1 , the PREVIOUS
+ * fence will signal when the PREVIOUS buffer has been released. If the fence is -1, the PREVIOUS
  * buffer is already released. The recipient of the callback takes ownership of the
  * previousReleaseFenceFd and is responsible for closing it.
  *
@@ -353,12 +377,38 @@ void ASurfaceTransaction_setZOrder(ASurfaceTransaction* _Nonnull transaction,
  * Note that the buffer must be allocated with AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE
  * as the surface control might be composited using the GPU.
  *
+ * Starting with API level 36, prefer using \a ASurfaceTransaction_setBufferWithRelease to
+ * set a buffer and a callback which will be invoked when the buffer is ready to be reused.
+ *
  * Available since API level 29.
  */
 void ASurfaceTransaction_setBuffer(ASurfaceTransaction* _Nonnull transaction,
                                    ASurfaceControl* _Nonnull surface_control,
                                    AHardwareBuffer* _Nonnull buffer, int acquire_fence_fd)
         __INTRODUCED_IN(29);
+
+/**
+ * Updates the AHardwareBuffer displayed for \a surface_control. If not -1, the
+ * acquire_fence_fd should be a file descriptor that is signaled when all pending work
+ * for the buffer is complete and the buffer can be safely read.
+ *
+ * The frameworks takes ownership of the \a acquire_fence_fd passed and is responsible
+ * for closing it.
+ *
+ * Note that the buffer must be allocated with AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE
+ * as the surface control might be composited using the GPU.
+ *
+ * When the buffer is ready to be reused, the ASurfaceTransaction_OnBufferRelease
+ * callback will be invoked. If the buffer is null, the callback will not be invoked.
+ *
+ * Available since API level 36.
+ */
+void ASurfaceTransaction_setBufferWithRelease(ASurfaceTransaction* _Nonnull transaction,
+                                              ASurfaceControl* _Nonnull surface_control,
+                                              AHardwareBuffer* _Nonnull buffer,
+                                              int acquire_fence_fd, void* _Null_unspecified context,
+                                              ASurfaceTransaction_OnBufferRelease _Nonnull func)
+        __INTRODUCED_IN(36);
 
 /**
  * Updates the color for \a surface_control.  This will make the background color for the
@@ -711,6 +761,69 @@ void ASurfaceTransaction_setFrameRateWithChangeStrategy(ASurfaceTransaction* _No
                                                         float frameRate, int8_t compatibility,
                                                         int8_t changeFrameRateStrategy)
                                                         __INTRODUCED_IN(31);
+
+/**
+ * Sets the intended frame rate for the given \a surface_control.
+ *
+ * On devices that are capable of running the display at different frame rates,
+ * the system may choose a display refresh rate to better match this surface's frame
+ * rate. Usage of this API won't introduce frame rate throttling, or affect other
+ * aspects of the application's frame production pipeline. However, because the system
+ * may change the display refresh rate, calls to this function may result in changes
+ * to Choreographer callback timings, and changes to the time interval at which the
+ * system releases buffers back to the application.
+ *
+ * You can register for changes in the refresh rate using
+ * \a AChoreographer_registerRefreshRateCallback.
+ *
+ * See ASurfaceTransaction_clearFrameRate().
+ *
+ * Available since API level 36.
+ *
+ * \param desiredMinRate The desired minimum frame rate (inclusive) for the surface, specifying that
+ * the surface prefers the device render rate to be at least `desiredMinRate`.
+ *
+ * <p>Set `desiredMinRate` = `desiredMaxRate` to indicate the surface prefers an exact frame rate.
+ *
+ * <p>Set `desiredMinRate` = 0 to indicate the surface has no preference
+ * and any frame rate is acceptable.
+ *
+ * <p>The value should be greater than or equal to 0.
+ *
+ * \param desiredMaxRate The desired maximum frame rate (inclusive) for the surface, specifying that
+ * the surface prefers the device render rate to be at most `desiredMaxRate`.
+ *
+ * <p>Set `desiredMaxRate` = `desiredMinRate` to indicate the surface prefers an exact frame rate.
+ *
+ * <p>Set `desiredMaxRate` = positive infinity to indicate the surface has no preference
+ * and any frame rate is acceptable.
+ *
+ * <p>The value should be greater than or equal to `desiredMinRate`.
+ *
+ * \param fixedSourceRate The "fixed source" frame rate of the surface if the content has an
+ * inherently fixed frame rate, e.g. a video that has a specific frame rate.
+ *
+ * <p>When the frame rate chosen for the surface is the `fixedSourceRate` or a
+ * multiple, the surface can render without frame pulldown, for optimal smoothness. For
+ * example, a 30 fps video (`fixedSourceRate`=30) renders just as smoothly on 30 fps,
+ * 60 fps, 90 fps, 120 fps, and so on.
+ *
+ * <p>Setting the fixed source rate can also be used together with a desired
+ * frame rate min and max via setting `desiredMinRate` and `desiredMaxRate`. This still
+ * means the surface's content has a fixed frame rate of `fixedSourceRate`, but additionally
+ * specifies the preference to be in the range [`desiredMinRate`, `desiredMaxRate`]. For example, an
+ * app might want to specify there is 30 fps video (`fixedSourceRate`=30) as well as a smooth
+ * animation on the same surface which looks good when drawing within a frame rate range such as
+ * [`desiredMinRate`, `desiredMaxRate`] = [60,120].
+ *
+ * \param changeFrameRateStrategy Whether display refresh rate transitions caused by this surface
+ * should be seamless. A seamless transition is one that doesn't have any visual interruptions, such
+ * as a black screen for a second or two.
+ */
+void ASurfaceTransaction_setFrameRateParams(
+        ASurfaceTransaction* _Nonnull transaction, ASurfaceControl* _Nonnull surface_control,
+        float desiredMinRate, float desiredMaxRate, float fixedSourceRate,
+        ANativeWindow_ChangeFrameRateStrategy changeFrameRateStrategy) __INTRODUCED_IN(36);
 
 /**
  * Clears the frame rate which is set for \a surface_control.

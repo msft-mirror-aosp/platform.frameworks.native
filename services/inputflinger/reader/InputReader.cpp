@@ -122,7 +122,8 @@ status_t InputReader::start() {
         return ALREADY_EXISTS;
     }
     mThread = std::make_unique<InputThread>(
-            "InputReader", [this]() { loopOnce(); }, [this]() { mEventHub->wake(); });
+            "InputReader", [this]() { loopOnce(); }, [this]() { mEventHub->wake(); },
+            /*isInCriticalPath=*/true);
     return OK;
 }
 
@@ -583,18 +584,9 @@ int32_t InputReader::getStateLocked(int32_t deviceId, uint32_t sourceMask, int32
 
 void InputReader::toggleCapsLockState(int32_t deviceId) {
     std::scoped_lock _l(mLock);
-    InputDevice* device = findInputDeviceLocked(deviceId);
-    if (!device) {
-        ALOGW("Ignoring toggleCapsLock for unknown deviceId %" PRId32 ".", deviceId);
-        return;
+    if (mKeyboardClassifier->getKeyboardType(deviceId) == KeyboardType::ALPHABETIC) {
+        updateLedMetaStateLocked(mLedMetaState ^ AMETA_CAPS_LOCK_ON);
     }
-
-    if (device->isIgnored()) {
-        ALOGW("Ignoring toggleCapsLock for ignored deviceId %" PRId32 ".", deviceId);
-        return;
-    }
-
-    device->updateMetaState(AKEYCODE_CAPS_LOCK);
 }
 
 bool InputReader::hasKeys(int32_t deviceId, uint32_t sourceMask,
@@ -623,15 +615,6 @@ bool InputReader::markSupportedKeyCodesLocked(int32_t deviceId, uint32_t sourceM
         }
     }
     return result;
-}
-
-void InputReader::addKeyRemapping(int32_t deviceId, int32_t fromKeyCode, int32_t toKeyCode) const {
-    std::scoped_lock _l(mLock);
-
-    InputDevice* device = findInputDeviceLocked(deviceId);
-    if (device != nullptr) {
-        device->addKeyRemapping(fromKeyCode, toKeyCode);
-    }
 }
 
 int32_t InputReader::getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const {
@@ -916,6 +899,16 @@ void InputReader::notifyMouseCursorFadedOnTyping() {
     std::scoped_lock _l(mLock);
     // disable touchpad taps when cursor has faded due to typing
     mPreventingTouchpadTaps = true;
+}
+
+bool InputReader::setKernelWakeEnabled(int32_t deviceId, bool enabled) {
+    std::scoped_lock _l(mLock);
+
+    InputDevice* device = findInputDeviceLocked(deviceId);
+    if (device) {
+        return device->setKernelWakeEnabled(enabled);
+    }
+    return false;
 }
 
 void InputReader::dump(std::string& dump) {

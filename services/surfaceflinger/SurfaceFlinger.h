@@ -135,6 +135,7 @@ class FrameTracer;
 class ScreenCapturer;
 class WindowInfosListenerInvoker;
 
+using ::aidl::android::hardware::drm::HdcpLevels;
 using ::aidl::android::hardware::graphics::common::DisplayHotplugEvent;
 using ::aidl::android::hardware::graphics::composer3::RefreshRateChangedDebugData;
 using frontend::TransactionHandler;
@@ -295,7 +296,7 @@ public:
     // Called when all clients have released all their references to
     // this layer. The layer may still be kept alive by its parents but
     // the client can no longer modify this layer directly.
-    void onHandleDestroyed(BBinder* handle, sp<Layer>& layer, uint32_t layerId);
+    void onHandleDestroyed(sp<Layer>& layer, uint32_t layerId);
 
     TransactionCallbackInvoker& getTransactionCallbackInvoker() {
         return mTransactionCallbackInvoker;
@@ -432,32 +433,32 @@ private:
     // This is done to avoid lock contention with the main thread.
     class BufferCountTracker {
     public:
-        void increment(BBinder* layerHandle) {
+        void increment(uint32_t layerId) {
             std::lock_guard<std::mutex> lock(mLock);
-            auto it = mCounterByLayerHandle.find(layerHandle);
-            if (it != mCounterByLayerHandle.end()) {
+            auto it = mCounterByLayerId.find(layerId);
+            if (it != mCounterByLayerId.end()) {
                 auto [name, pendingBuffers] = it->second;
                 int32_t count = ++(*pendingBuffers);
                 SFTRACE_INT(name.c_str(), count);
             } else {
-                ALOGW("Handle not found! %p", layerHandle);
+                ALOGW("Layer ID not found! %d", layerId);
             }
         }
 
-        void add(BBinder* layerHandle, const std::string& name, std::atomic<int32_t>* counter) {
+        void add(uint32_t layerId, const std::string& name, std::atomic<int32_t>* counter) {
             std::lock_guard<std::mutex> lock(mLock);
-            mCounterByLayerHandle[layerHandle] = std::make_pair(name, counter);
+            mCounterByLayerId[layerId] = std::make_pair(name, counter);
         }
 
-        void remove(BBinder* layerHandle) {
+        void remove(uint32_t layerId) {
             std::lock_guard<std::mutex> lock(mLock);
-            mCounterByLayerHandle.erase(layerHandle);
+            mCounterByLayerId.erase(layerId);
         }
 
     private:
         std::mutex mLock;
-        std::unordered_map<BBinder*, std::pair<std::string, std::atomic<int32_t>*>>
-                mCounterByLayerHandle GUARDED_BY(mLock);
+        std::unordered_map<uint32_t, std::pair<std::string, std::atomic<int32_t>*>>
+                mCounterByLayerId GUARDED_BY(mLock);
     };
 
     enum class BootStage {
@@ -671,6 +672,7 @@ private:
     void onComposerHalSeamlessPossible(hal::HWDisplayId) override;
     void onComposerHalVsyncIdle(hal::HWDisplayId) override;
     void onRefreshRateChangedDebug(const RefreshRateChangedDebugData&) override;
+    void onComposerHalHdcpLevelsChanged(hal::HWDisplayId, const HdcpLevels& levels) override;
 
     // ICompositor overrides:
     void configure() override REQUIRES(kMainThreadContext);
@@ -783,9 +785,9 @@ private:
             REQUIRES(mStateLock, kMainThreadContext);
     // Flush pending transactions that were presented after desiredPresentTime.
     // For test only
-    bool flushTransactionQueues(VsyncId) REQUIRES(kMainThreadContext);
+    bool flushTransactionQueues() REQUIRES(kMainThreadContext);
 
-    bool applyTransactions(std::vector<TransactionState>&, VsyncId) REQUIRES(kMainThreadContext);
+    bool applyTransactions(std::vector<TransactionState>&) REQUIRES(kMainThreadContext);
     bool applyAndCommitDisplayTransactionStatesLocked(std::vector<TransactionState>& transactions)
             REQUIRES(kMainThreadContext, mStateLock);
 
@@ -815,7 +817,7 @@ private:
 
     static LatchUnsignaledConfig getLatchUnsignaledConfig();
     bool shouldLatchUnsignaled(const layer_state_t&, size_t numStates, bool firstTransaction) const;
-    bool applyTransactionsLocked(std::vector<TransactionState>& transactions, VsyncId)
+    bool applyTransactionsLocked(std::vector<TransactionState>& transactions)
             REQUIRES(mStateLock, kMainThreadContext);
     uint32_t setDisplayStateLocked(const DisplayState& s) REQUIRES(mStateLock);
     uint32_t addInputWindowCommands(const InputWindowCommands& inputWindowCommands)
@@ -849,46 +851,35 @@ private:
     void attachReleaseFenceFutureToLayer(Layer* layer, LayerFE* layerFE, ui::LayerStack layerStack);
 
     // Checks if a protected layer exists in a list of layers.
-    bool layersHasProtectedLayer(const std::vector<sp<LayerFE>>& layers) const;
+    bool layersHasProtectedLayer(const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) const;
 
     using OutputCompositionState = compositionengine::impl::OutputCompositionState;
 
     std::optional<OutputCompositionState> getSnapshotsFromMainThread(
             RenderAreaBuilderVariant& renderAreaBuilder,
-            GetLayerSnapshotsFunction getLayerSnapshotsFn, std::vector<sp<LayerFE>>& layerFEs);
+            GetLayerSnapshotsFunction getLayerSnapshotsFn,
+            std::vector<std::pair<Layer*, sp<LayerFE>>>& layers);
 
     void captureScreenCommon(RenderAreaBuilderVariant, GetLayerSnapshotsFunction,
                              ui::Size bufferSize, ui::PixelFormat, bool allowProtected,
-                             bool grayscale, const sp<IScreenCaptureListener>&);
+                             bool grayscale, bool attachGainmap, const sp<IScreenCaptureListener>&);
 
     std::optional<OutputCompositionState> getDisplayStateFromRenderAreaBuilder(
             RenderAreaBuilderVariant& renderAreaBuilder) REQUIRES(kMainThreadContext);
 
-    // Legacy layer raw pointer is not safe to access outside the main thread.
-    // Creates a new vector consisting only of LayerFEs, which can be safely
-    // accessed outside the main thread.
-    std::vector<sp<LayerFE>> extractLayerFEs(
-            const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) const;
-
     ftl::SharedFuture<FenceResult> captureScreenshot(
             const RenderAreaBuilderVariant& renderAreaBuilder,
             const std::shared_ptr<renderengine::ExternalTexture>& buffer, bool regionSampling,
-            bool grayscale, bool isProtected, const sp<IScreenCaptureListener>& captureListener,
+            bool grayscale, bool isProtected, bool attachGainmap,
+            const sp<IScreenCaptureListener>& captureListener,
             std::optional<OutputCompositionState>& displayState,
-            std::vector<sp<LayerFE>>& layerFEs);
-
-    ftl::SharedFuture<FenceResult> captureScreenshotLegacy(
-            RenderAreaBuilderVariant, GetLayerSnapshotsFunction,
-            const std::shared_ptr<renderengine::ExternalTexture>&, bool regionSampling,
-            bool grayscale, bool isProtected, const sp<IScreenCaptureListener>&);
+            std::vector<std::pair<Layer*, sp<LayerFE>>>& layers);
 
     ftl::SharedFuture<FenceResult> renderScreenImpl(
-            std::unique_ptr<const RenderArea>,
-            const std::shared_ptr<renderengine::ExternalTexture>&, bool regionSampling,
-            bool grayscale, bool isProtected, ScreenCaptureResults&,
+            const RenderArea*, const std::shared_ptr<renderengine::ExternalTexture>&,
+            bool regionSampling, bool grayscale, bool isProtected, ScreenCaptureResults&,
             std::optional<OutputCompositionState>& displayState,
-            std::vector<std::pair<Layer*, sp<LayerFE>>>& layers,
-            std::vector<sp<LayerFE>>& layerFEs);
+            std::vector<std::pair<Layer*, sp<LayerFE>>>& layers);
 
     void readPersistentProperties();
 
@@ -1218,6 +1209,14 @@ private:
 
     bool mHdrLayerInfoChanged = false;
 
+    struct LayerEvent {
+        uid_t uid;
+        int32_t layerId;
+        ui::Dataspace dataspace;
+        std::chrono::milliseconds timeSinceLastEvent;
+    };
+    std::vector<LayerEvent> mLayerEvents;
+
     // Used to ensure we omit a callback when HDR layer info listener is newly added but the
     // scene hasn't changed
     bool mAddingHDRLayerInfoListener = false;
@@ -1228,7 +1227,6 @@ private:
     // TODO: Also move visibleRegions over to a boolean system.
     bool mUpdateInputInfo = false;
     bool mSomeChildrenChanged;
-    bool mForceTransactionDisplayChange = false;
     bool mUpdateAttachedChoreographer = false;
 
     struct LayerIntHash {
@@ -1259,7 +1257,6 @@ private:
     };
 
     bool mIsHdcpViaNegVsync = false;
-    bool mIsHotplugErrViaNegVsync = false;
 
     std::mutex mHotplugMutex;
     std::vector<HotplugEvent> mPendingHotplugEvents GUARDED_BY(mHotplugMutex);
