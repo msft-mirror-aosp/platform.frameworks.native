@@ -108,20 +108,33 @@ public:
     using is_gtest_matcher = void;
     explicit WithMotionActionMatcher(int32_t action) : mAction(action) {}
 
-    bool MatchAndExplain(const NotifyMotionArgs& args, std::ostream*) const {
-        bool matches = mAction == args.action;
-        if (args.action == AMOTION_EVENT_ACTION_CANCEL) {
-            matches &= (args.flags & AMOTION_EVENT_FLAG_CANCELED) != 0;
+    bool MatchAndExplain(const NotifyMotionArgs& args,
+                         testing::MatchResultListener* listener) const {
+        if (mAction != args.action) {
+            *listener << "expected " << MotionEvent::actionToString(mAction) << ", but got "
+                      << MotionEvent::actionToString(args.action);
+            return false;
         }
-        return matches;
+        if (args.action == AMOTION_EVENT_ACTION_CANCEL &&
+            (args.flags & AMOTION_EVENT_FLAG_CANCELED) == 0) {
+            *listener << "event with CANCEL action is missing FLAG_CANCELED";
+            return false;
+        }
+        return true;
     }
 
-    bool MatchAndExplain(const MotionEvent& event, std::ostream*) const {
-        bool matches = mAction == event.getAction();
-        if (event.getAction() == AMOTION_EVENT_ACTION_CANCEL) {
-            matches &= (event.getFlags() & AMOTION_EVENT_FLAG_CANCELED) != 0;
+    bool MatchAndExplain(const MotionEvent& event, testing::MatchResultListener* listener) const {
+        if (mAction != event.getAction()) {
+            *listener << "expected " << MotionEvent::actionToString(mAction) << ", but got "
+                      << MotionEvent::actionToString(event.getAction());
+            return false;
         }
-        return matches;
+        if (event.getAction() == AMOTION_EVENT_ACTION_CANCEL &&
+            (event.getFlags() & AMOTION_EVENT_FLAG_CANCELED) == 0) {
+            *listener << "event with CANCEL action is missing FLAG_CANCELED";
+            return false;
+        }
+        return true;
     }
 
     void DescribeTo(std::ostream* os) const {
@@ -540,6 +553,34 @@ inline WithKeyCodeMatcher WithKeyCode(int32_t keyCode) {
     return WithKeyCodeMatcher(keyCode);
 }
 
+/// Scan code
+class WithScanCodeMatcher {
+public:
+    using is_gtest_matcher = void;
+    explicit WithScanCodeMatcher(int32_t scanCode) : mScanCode(scanCode) {}
+
+    bool MatchAndExplain(const NotifyKeyArgs& args, std::ostream*) const {
+        return mScanCode == args.scanCode;
+    }
+
+    bool MatchAndExplain(const KeyEvent& event, std::ostream*) const {
+        return mScanCode == event.getKeyCode();
+    }
+
+    void DescribeTo(std::ostream* os) const {
+        *os << "with scan code " << KeyEvent::getLabel(mScanCode);
+    }
+
+    void DescribeNegationTo(std::ostream* os) const { *os << "wrong scan code"; }
+
+private:
+    const int32_t mScanCode;
+};
+
+inline WithScanCodeMatcher WithScanCode(int32_t scanCode) {
+    return WithScanCodeMatcher(scanCode);
+}
+
 /// EventId
 class WithEventIdMatcher {
 public:
@@ -615,7 +656,12 @@ public:
     explicit WithPointerIdMatcher(size_t index, int32_t pointerId)
           : mIndex(index), mPointerId(pointerId) {}
 
-    bool MatchAndExplain(const NotifyMotionArgs& args, std::ostream*) const {
+    bool MatchAndExplain(const NotifyMotionArgs& args, std::ostream* os) const {
+        if (mIndex >= args.pointerCoords.size()) {
+            *os << "Pointer index " << mIndex << " is out of bounds";
+            return false;
+        }
+
         return args.pointerProperties[mIndex].id == mPointerId;
     }
 
@@ -646,12 +692,51 @@ MATCHER_P2(WithCursorPosition, x, y, "InputEvent with specified cursor position"
     return (isnan(x) ? isnan(argX) : x == argX) && (isnan(y) ? isnan(argY) : y == argY);
 }
 
-MATCHER_P2(WithRelativeMotion, x, y, "InputEvent with specified relative motion") {
-    const auto argX = arg.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_RELATIVE_X);
-    const auto argY = arg.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_RELATIVE_Y);
-    *result_listener << "expected relative motion (" << x << ", " << y << "), but got (" << argX
-                     << ", " << argY << ")";
-    return argX == x && argY == y;
+/// Relative motion matcher
+class WithRelativeMotionMatcher {
+public:
+    using is_gtest_matcher = void;
+    explicit WithRelativeMotionMatcher(size_t pointerIndex, float relX, float relY)
+          : mPointerIndex(pointerIndex), mRelX(relX), mRelY(relY) {}
+
+    bool MatchAndExplain(const NotifyMotionArgs& event, std::ostream* os) const {
+        if (mPointerIndex >= event.pointerCoords.size()) {
+            *os << "Pointer index " << mPointerIndex << " is out of bounds";
+            return false;
+        }
+
+        const PointerCoords& coords = event.pointerCoords[mPointerIndex];
+        bool matches = mRelX == coords.getAxisValue(AMOTION_EVENT_AXIS_RELATIVE_X) &&
+                mRelY == coords.getAxisValue(AMOTION_EVENT_AXIS_RELATIVE_Y);
+        if (!matches) {
+            *os << "expected relative motion (" << mRelX << ", " << mRelY << ") at pointer index "
+                << mPointerIndex << ", but got ("
+                << coords.getAxisValue(AMOTION_EVENT_AXIS_RELATIVE_X) << ", "
+                << coords.getAxisValue(AMOTION_EVENT_AXIS_RELATIVE_Y) << ")";
+        }
+        return matches;
+    }
+
+    void DescribeTo(std::ostream* os) const {
+        *os << "with relative motion (" << mRelX << ", " << mRelY << ") at pointer index "
+            << mPointerIndex;
+    }
+
+    void DescribeNegationTo(std::ostream* os) const { *os << "wrong relative motion"; }
+
+private:
+    const size_t mPointerIndex;
+    const float mRelX;
+    const float mRelY;
+};
+
+inline WithRelativeMotionMatcher WithRelativeMotion(float relX, float relY) {
+    return WithRelativeMotionMatcher(0, relX, relY);
+}
+
+inline WithRelativeMotionMatcher WithPointerRelativeMotion(size_t pointerIndex, float relX,
+                                                           float relY) {
+    return WithRelativeMotionMatcher(pointerIndex, relX, relY);
 }
 
 MATCHER_P3(WithGestureOffset, dx, dy, epsilon,
@@ -758,10 +843,14 @@ MATCHER_P(WithToolType, toolType, "InputEvent with specified tool type") {
     return argToolType == toolType;
 }
 
-MATCHER_P2(WithPointerToolType, pointer, toolType,
+MATCHER_P2(WithPointerToolType, pointerIndex, toolType,
            "InputEvent with specified tool type for pointer") {
-    const auto argToolType = arg.pointerProperties[pointer].toolType;
-    *result_listener << "expected pointer " << pointer << " to have tool type "
+    if (std::cmp_greater_equal(pointerIndex, arg.getPointerCount())) {
+        *result_listener << "Pointer index " << pointerIndex << " is out of bounds";
+        return false;
+    }
+    const auto argToolType = arg.pointerProperties[pointerIndex].toolType;
+    *result_listener << "expected pointer " << pointerIndex << " to have tool type "
                      << ftl::enum_string(toolType) << ", but got " << ftl::enum_string(argToolType);
     return argToolType == toolType;
 }

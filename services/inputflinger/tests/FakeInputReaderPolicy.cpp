@@ -217,7 +217,6 @@ float FakeInputReaderPolicy::getPointerGestureZoomSpeedRatio() {
 }
 
 void FakeInputReaderPolicy::setVelocityControlParams(const VelocityControlParameters& params) {
-    mConfig.pointerVelocityControlParameters = params;
     mConfig.wheelVelocityControlParameters = params;
 }
 
@@ -254,6 +253,10 @@ void FakeInputReaderPolicy::notifyTouchpadHardwareState(const SelfContainedHardw
     std::scoped_lock lock(mLock);
     mTouchpadHardwareState = schs;
     mTouchpadHardwareStateNotified.notify_all();
+}
+
+void FakeInputReaderPolicy::notifyTouchpadGestureInfo(GestureType type, int32_t deviceId) {
+    std::scoped_lock lock(mLock);
 }
 
 std::shared_ptr<KeyCharacterMap> FakeInputReaderPolicy::getKeyboardLayoutOverlay(
