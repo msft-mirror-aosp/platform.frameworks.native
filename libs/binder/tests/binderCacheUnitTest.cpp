@@ -137,9 +137,9 @@ TEST_F(LibbinderCacheTest, RemoveFromCacheOnServerDeath) {
     ASSERT_EQ(binder1, result);
 
     // Kill the server, this should remove from cache.
-    foo.killServer(binder1);
     pid_t pid;
     ASSERT_EQ(OK, binder1->getDebugPid(&pid));
+    foo.killServer(binder1);
     system(("kill -9 " + std::to_string(pid)).c_str());
 
     sp<IBinder> binder2 = sp<BBinder>::make();
@@ -149,7 +149,16 @@ TEST_F(LibbinderCacheTest, RemoveFromCacheOnServerDeath) {
     EXPECT_EQ(OK, mServiceManager->addService(kCachedServiceName, binder2));
 
     // Confirm that new service is returned instead of old.
-    sp<IBinder> result2 = mServiceManager->checkService(kCachedServiceName);
+    int retry_count = 20;
+    sp<IBinder> result2;
+    do {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (retry_count-- == 0) {
+            break;
+        }
+        result2 = mServiceManager->checkService(kCachedServiceName);
+    } while (result2 != binder2);
+
     ASSERT_EQ(binder2, result2);
 }
 
