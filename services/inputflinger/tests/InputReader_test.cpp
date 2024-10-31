@@ -28,7 +28,6 @@
 #include <MultiTouchInputMapper.h>
 #include <NotifyArgsBuilders.h>
 #include <PeripheralController.h>
-#include <SensorInputMapper.h>
 #include <SingleTouchInputMapper.h>
 #include <TestEventMatchers.h>
 #include <TestInputListener.h>
@@ -36,6 +35,7 @@
 #include <UinputDevice.h>
 #include <android-base/thread_annotations.h>
 #include <com_android_input_flags.h>
+#include <flag_macros.h>
 #include <ftl/enum.h>
 #include <gtest/gtest.h>
 #include <ui/Rotation.h>
@@ -1390,6 +1390,20 @@ TEST_F(InputReaderTest, LightGetColor) {
     ASSERT_EQ(controller.getLightColor(/*lightId=*/1), LIGHT_BRIGHTNESS);
     ASSERT_TRUE(mReader->setLightColor(deviceId, /*lightId=*/1, LIGHT_BRIGHTNESS));
     ASSERT_EQ(mReader->getLightColor(deviceId, /*lightId=*/1), LIGHT_BRIGHTNESS);
+}
+
+TEST_F(InputReaderTest, SetPowerWakeUp) {
+    ASSERT_NO_FATAL_FAILURE(addDevice(1, "1st", InputDeviceClass::KEYBOARD, nullptr));
+    ASSERT_NO_FATAL_FAILURE(addDevice(2, "2nd", InputDeviceClass::KEYBOARD, nullptr));
+    ASSERT_NO_FATAL_FAILURE(addDevice(3, "3rd", InputDeviceClass::KEYBOARD, nullptr));
+
+    ASSERT_EQ(mFakeEventHub->fakeReadKernelWakeup(1), false);
+
+    ASSERT_TRUE(mFakeEventHub->setKernelWakeEnabled(2, true));
+    ASSERT_EQ(mFakeEventHub->fakeReadKernelWakeup(2), true);
+
+    ASSERT_TRUE(mFakeEventHub->setKernelWakeEnabled(3, false));
+    ASSERT_EQ(mFakeEventHub->fakeReadKernelWakeup(3), false);
 }
 
 // --- InputReaderIntegrationTest ---
@@ -3017,159 +3031,6 @@ TEST_F(InputDeviceTest, KernelBufferOverflowResetsMappers) {
     mapper.assertProcessWasCalled();
 }
 
-// --- SensorInputMapperTest ---
-
-class SensorInputMapperTest : public InputMapperTest {
-protected:
-    static const int32_t ACCEL_RAW_MIN;
-    static const int32_t ACCEL_RAW_MAX;
-    static const int32_t ACCEL_RAW_FUZZ;
-    static const int32_t ACCEL_RAW_FLAT;
-    static const int32_t ACCEL_RAW_RESOLUTION;
-
-    static const int32_t GYRO_RAW_MIN;
-    static const int32_t GYRO_RAW_MAX;
-    static const int32_t GYRO_RAW_FUZZ;
-    static const int32_t GYRO_RAW_FLAT;
-    static const int32_t GYRO_RAW_RESOLUTION;
-
-    static const float GRAVITY_MS2_UNIT;
-    static const float DEGREE_RADIAN_UNIT;
-
-    void prepareAccelAxes();
-    void prepareGyroAxes();
-    void setAccelProperties();
-    void setGyroProperties();
-    void SetUp() override { InputMapperTest::SetUp(DEVICE_CLASSES | InputDeviceClass::SENSOR); }
-};
-
-const int32_t SensorInputMapperTest::ACCEL_RAW_MIN = -32768;
-const int32_t SensorInputMapperTest::ACCEL_RAW_MAX = 32768;
-const int32_t SensorInputMapperTest::ACCEL_RAW_FUZZ = 16;
-const int32_t SensorInputMapperTest::ACCEL_RAW_FLAT = 0;
-const int32_t SensorInputMapperTest::ACCEL_RAW_RESOLUTION = 8192;
-
-const int32_t SensorInputMapperTest::GYRO_RAW_MIN = -2097152;
-const int32_t SensorInputMapperTest::GYRO_RAW_MAX = 2097152;
-const int32_t SensorInputMapperTest::GYRO_RAW_FUZZ = 16;
-const int32_t SensorInputMapperTest::GYRO_RAW_FLAT = 0;
-const int32_t SensorInputMapperTest::GYRO_RAW_RESOLUTION = 1024;
-
-const float SensorInputMapperTest::GRAVITY_MS2_UNIT = 9.80665f;
-const float SensorInputMapperTest::DEGREE_RADIAN_UNIT = 0.0174533f;
-
-void SensorInputMapperTest::prepareAccelAxes() {
-    mFakeEventHub->addAbsoluteAxis(EVENTHUB_ID, ABS_X, ACCEL_RAW_MIN, ACCEL_RAW_MAX, ACCEL_RAW_FUZZ,
-                                   ACCEL_RAW_FLAT, ACCEL_RAW_RESOLUTION);
-    mFakeEventHub->addAbsoluteAxis(EVENTHUB_ID, ABS_Y, ACCEL_RAW_MIN, ACCEL_RAW_MAX, ACCEL_RAW_FUZZ,
-                                   ACCEL_RAW_FLAT, ACCEL_RAW_RESOLUTION);
-    mFakeEventHub->addAbsoluteAxis(EVENTHUB_ID, ABS_Z, ACCEL_RAW_MIN, ACCEL_RAW_MAX, ACCEL_RAW_FUZZ,
-                                   ACCEL_RAW_FLAT, ACCEL_RAW_RESOLUTION);
-}
-
-void SensorInputMapperTest::prepareGyroAxes() {
-    mFakeEventHub->addAbsoluteAxis(EVENTHUB_ID, ABS_RX, GYRO_RAW_MIN, GYRO_RAW_MAX, GYRO_RAW_FUZZ,
-                                   GYRO_RAW_FLAT, GYRO_RAW_RESOLUTION);
-    mFakeEventHub->addAbsoluteAxis(EVENTHUB_ID, ABS_RY, GYRO_RAW_MIN, GYRO_RAW_MAX, GYRO_RAW_FUZZ,
-                                   GYRO_RAW_FLAT, GYRO_RAW_RESOLUTION);
-    mFakeEventHub->addAbsoluteAxis(EVENTHUB_ID, ABS_RZ, GYRO_RAW_MIN, GYRO_RAW_MAX, GYRO_RAW_FUZZ,
-                                   GYRO_RAW_FLAT, GYRO_RAW_RESOLUTION);
-}
-
-void SensorInputMapperTest::setAccelProperties() {
-    mFakeEventHub->addSensorAxis(EVENTHUB_ID, /* absCode */ 0, InputDeviceSensorType::ACCELEROMETER,
-                                 /* sensorDataIndex */ 0);
-    mFakeEventHub->addSensorAxis(EVENTHUB_ID, /* absCode */ 1, InputDeviceSensorType::ACCELEROMETER,
-                                 /* sensorDataIndex */ 1);
-    mFakeEventHub->addSensorAxis(EVENTHUB_ID, /* absCode */ 2, InputDeviceSensorType::ACCELEROMETER,
-                                 /* sensorDataIndex */ 2);
-    mFakeEventHub->setMscEvent(EVENTHUB_ID, MSC_TIMESTAMP);
-    addConfigurationProperty("sensor.accelerometer.reportingMode", "0");
-    addConfigurationProperty("sensor.accelerometer.maxDelay", "100000");
-    addConfigurationProperty("sensor.accelerometer.minDelay", "5000");
-    addConfigurationProperty("sensor.accelerometer.power", "1.5");
-}
-
-void SensorInputMapperTest::setGyroProperties() {
-    mFakeEventHub->addSensorAxis(EVENTHUB_ID, /* absCode */ 3, InputDeviceSensorType::GYROSCOPE,
-                                 /* sensorDataIndex */ 0);
-    mFakeEventHub->addSensorAxis(EVENTHUB_ID, /* absCode */ 4, InputDeviceSensorType::GYROSCOPE,
-                                 /* sensorDataIndex */ 1);
-    mFakeEventHub->addSensorAxis(EVENTHUB_ID, /* absCode */ 5, InputDeviceSensorType::GYROSCOPE,
-                                 /* sensorDataIndex */ 2);
-    mFakeEventHub->setMscEvent(EVENTHUB_ID, MSC_TIMESTAMP);
-    addConfigurationProperty("sensor.gyroscope.reportingMode", "0");
-    addConfigurationProperty("sensor.gyroscope.maxDelay", "100000");
-    addConfigurationProperty("sensor.gyroscope.minDelay", "5000");
-    addConfigurationProperty("sensor.gyroscope.power", "0.8");
-}
-
-TEST_F(SensorInputMapperTest, GetSources) {
-    SensorInputMapper& mapper = constructAndAddMapper<SensorInputMapper>();
-
-    ASSERT_EQ(static_cast<uint32_t>(AINPUT_SOURCE_SENSOR), mapper.getSources());
-}
-
-TEST_F(SensorInputMapperTest, ProcessAccelerometerSensor) {
-    setAccelProperties();
-    prepareAccelAxes();
-    SensorInputMapper& mapper = constructAndAddMapper<SensorInputMapper>();
-
-    ASSERT_TRUE(mapper.enableSensor(InputDeviceSensorType::ACCELEROMETER,
-                                    std::chrono::microseconds(10000),
-                                    std::chrono::microseconds(0)));
-    ASSERT_TRUE(mFakeEventHub->isDeviceEnabled(EVENTHUB_ID));
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_X, 20000);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_Y, -20000);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_Z, 40000);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_MSC, MSC_TIMESTAMP, 1000);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_SYN, SYN_REPORT, 0);
-
-    NotifySensorArgs args;
-    std::vector<float> values = {20000.0f / ACCEL_RAW_RESOLUTION * GRAVITY_MS2_UNIT,
-                                 -20000.0f / ACCEL_RAW_RESOLUTION * GRAVITY_MS2_UNIT,
-                                 40000.0f / ACCEL_RAW_RESOLUTION * GRAVITY_MS2_UNIT};
-
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifySensorWasCalled(&args));
-    ASSERT_EQ(args.source, AINPUT_SOURCE_SENSOR);
-    ASSERT_EQ(args.deviceId, DEVICE_ID);
-    ASSERT_EQ(args.sensorType, InputDeviceSensorType::ACCELEROMETER);
-    ASSERT_EQ(args.accuracy, InputDeviceSensorAccuracy::ACCURACY_HIGH);
-    ASSERT_EQ(args.hwTimestamp, ARBITRARY_TIME);
-    ASSERT_EQ(args.values, values);
-    mapper.flushSensor(InputDeviceSensorType::ACCELEROMETER);
-}
-
-TEST_F(SensorInputMapperTest, ProcessGyroscopeSensor) {
-    setGyroProperties();
-    prepareGyroAxes();
-    SensorInputMapper& mapper = constructAndAddMapper<SensorInputMapper>();
-
-    ASSERT_TRUE(mapper.enableSensor(InputDeviceSensorType::GYROSCOPE,
-                                    std::chrono::microseconds(10000),
-                                    std::chrono::microseconds(0)));
-    ASSERT_TRUE(mFakeEventHub->isDeviceEnabled(EVENTHUB_ID));
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_RX, 20000);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_RY, -20000);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_ABS, ABS_RZ, 40000);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_MSC, MSC_TIMESTAMP, 1000);
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_SYN, SYN_REPORT, 0);
-
-    NotifySensorArgs args;
-    std::vector<float> values = {20000.0f / GYRO_RAW_RESOLUTION * DEGREE_RADIAN_UNIT,
-                                 -20000.0f / GYRO_RAW_RESOLUTION * DEGREE_RADIAN_UNIT,
-                                 40000.0f / GYRO_RAW_RESOLUTION * DEGREE_RADIAN_UNIT};
-
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifySensorWasCalled(&args));
-    ASSERT_EQ(args.source, AINPUT_SOURCE_SENSOR);
-    ASSERT_EQ(args.deviceId, DEVICE_ID);
-    ASSERT_EQ(args.sensorType, InputDeviceSensorType::GYROSCOPE);
-    ASSERT_EQ(args.accuracy, InputDeviceSensorAccuracy::ACCURACY_HIGH);
-    ASSERT_EQ(args.hwTimestamp, ARBITRARY_TIME);
-    ASSERT_EQ(args.values, values);
-    mapper.flushSensor(InputDeviceSensorType::GYROSCOPE);
-}
-
 // --- KeyboardInputMapperTest ---
 
 class KeyboardInputMapperTest : public InputMapperTest {
@@ -3330,11 +3191,11 @@ TEST_F(KeyboardInputMapperTest, Process_SimpleKeyPress) {
 TEST_F(KeyboardInputMapperTest, Process_KeyRemapping) {
     mFakeEventHub->addKey(EVENTHUB_ID, KEY_A, 0, AKEYCODE_A, 0);
     mFakeEventHub->addKey(EVENTHUB_ID, KEY_B, 0, AKEYCODE_B, 0);
-    mFakeEventHub->addKeyRemapping(EVENTHUB_ID, AKEYCODE_A, AKEYCODE_B);
 
     KeyboardInputMapper& mapper =
             constructAndAddMapper<KeyboardInputMapper>(AINPUT_SOURCE_KEYBOARD);
 
+    mFakeEventHub->setKeyRemapping(EVENTHUB_ID, {{AKEYCODE_A, AKEYCODE_B}});
     // Key down by scan code.
     process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, KEY_A, 1);
     NotifyKeyArgs args;
@@ -3671,40 +3532,6 @@ TEST_F(KeyboardInputMapperTest, Process_LockedKeysShouldToggleMetaStateAndLeds) 
     ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
 }
 
-TEST_F(KeyboardInputMapperTest, NoMetaStateWhenMetaKeysNotPresent) {
-    mFakeEventHub->addKey(EVENTHUB_ID, BTN_A, 0, AKEYCODE_BUTTON_A, 0);
-    mFakeEventHub->addKey(EVENTHUB_ID, BTN_B, 0, AKEYCODE_BUTTON_B, 0);
-    mFakeEventHub->addKey(EVENTHUB_ID, BTN_X, 0, AKEYCODE_BUTTON_X, 0);
-    mFakeEventHub->addKey(EVENTHUB_ID, BTN_Y, 0, AKEYCODE_BUTTON_Y, 0);
-
-    KeyboardInputMapper& mapper =
-            constructAndAddMapper<KeyboardInputMapper>(AINPUT_SOURCE_KEYBOARD);
-
-    // Meta state should be AMETA_NONE after reset
-    std::list<NotifyArgs> unused = mapper.reset(ARBITRARY_TIME);
-    ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
-    // Meta state should be AMETA_NONE with update, as device doesn't have the keys.
-    mapper.updateMetaState(AKEYCODE_NUM_LOCK);
-    ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
-
-    NotifyKeyArgs args;
-    // Press button "A"
-    process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, BTN_A, 1);
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
-    ASSERT_EQ(AMETA_NONE, args.metaState);
-    ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
-    ASSERT_EQ(AKEY_EVENT_ACTION_DOWN, args.action);
-    ASSERT_EQ(AKEYCODE_BUTTON_A, args.keyCode);
-
-    // Button up.
-    process(mapper, ARBITRARY_TIME + 2, READ_TIME, EV_KEY, BTN_A, 0);
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
-    ASSERT_EQ(AMETA_NONE, args.metaState);
-    ASSERT_EQ(AMETA_NONE, mapper.getMetaState());
-    ASSERT_EQ(AKEY_EVENT_ACTION_UP, args.action);
-    ASSERT_EQ(AKEYCODE_BUTTON_A, args.keyCode);
-}
-
 TEST_F(KeyboardInputMapperTest, Configure_AssignsDisplayPort) {
     // keyboard 1.
     mFakeEventHub->addKey(EVENTHUB_ID, KEY_UP, 0, AKEYCODE_DPAD_UP, 0);
@@ -4037,6 +3864,44 @@ TEST_F(KeyboardInputMapperTest, Process_GesureEventToSetFlagKeepTouchMode) {
     process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, KEY_LEFT, 1);
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
     ASSERT_EQ(AKEY_EVENT_FLAG_FROM_SYSTEM | AKEY_EVENT_FLAG_KEEP_TOUCH_MODE, args.flags);
+}
+
+TEST_F_WITH_FLAGS(KeyboardInputMapperTest, WakeBehavior_AlphabeticKeyboard,
+                  REQUIRES_FLAGS_ENABLED(ACONFIG_FLAG(com::android::input::flags,
+                                                      enable_alphabetic_keyboard_wake))) {
+    // For internal alphabetic devices, keys will trigger wake on key down.
+
+    mFakeEventHub->addKey(EVENTHUB_ID, KEY_A, 0, AKEYCODE_A, 0);
+    mFakeEventHub->addKey(EVENTHUB_ID, KEY_HOME, 0, AKEYCODE_HOME, 0);
+    mFakeEventHub->addKey(EVENTHUB_ID, KEY_PLAYPAUSE, 0, AKEYCODE_MEDIA_PLAY_PAUSE, 0);
+
+    KeyboardInputMapper& mapper =
+            constructAndAddMapper<KeyboardInputMapper>(AINPUT_SOURCE_KEYBOARD);
+
+    process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, KEY_A, 1);
+    NotifyKeyArgs args;
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
+    ASSERT_EQ(POLICY_FLAG_WAKE, args.policyFlags);
+
+    process(mapper, ARBITRARY_TIME + 1, READ_TIME, EV_KEY, KEY_A, 0);
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
+    ASSERT_EQ(uint32_t(0), args.policyFlags);
+
+    process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, KEY_HOME, 1);
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
+    ASSERT_EQ(POLICY_FLAG_WAKE, args.policyFlags);
+
+    process(mapper, ARBITRARY_TIME + 1, READ_TIME, EV_KEY, KEY_HOME, 0);
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
+    ASSERT_EQ(uint32_t(0), args.policyFlags);
+
+    process(mapper, ARBITRARY_TIME, READ_TIME, EV_KEY, KEY_PLAYPAUSE, 1);
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
+    ASSERT_EQ(POLICY_FLAG_WAKE, args.policyFlags);
+
+    process(mapper, ARBITRARY_TIME + 1, READ_TIME, EV_KEY, KEY_PLAYPAUSE, 0);
+    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyKeyWasCalled(&args));
+    ASSERT_EQ(uint32_t(0), args.policyFlags);
 }
 
 /**

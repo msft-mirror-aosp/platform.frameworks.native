@@ -106,6 +106,13 @@ void LayerProtoHelper::readFromProto(const perfetto::protos::RectProto& proto, R
     outRect.right = proto.right();
 }
 
+void LayerProtoHelper::readFromProto(const perfetto::protos::RectProto& proto, FloatRect& outRect) {
+    outRect.left = proto.left();
+    outRect.top = proto.top();
+    outRect.bottom = proto.bottom();
+    outRect.right = proto.right();
+}
+
 void LayerProtoHelper::writeToProto(
         const FloatRect& rect,
         std::function<perfetto::protos::FloatRectProto*()> getFloatRectProto) {
@@ -178,12 +185,8 @@ void LayerProtoHelper::writeToProto(
 }
 
 void LayerProtoHelper::writeToProto(
-        const WindowInfo& inputInfo, const wp<Layer>& touchableRegionBounds,
+        const WindowInfo& inputInfo,
         std::function<perfetto::protos::InputWindowInfoProto*()> getInputWindowInfoProto) {
-    if (inputInfo.token == nullptr) {
-        return;
-    }
-
     perfetto::protos::InputWindowInfoProto* proto = getInputWindowInfoProto();
     proto->set_layout_params_flags(inputInfo.layoutParamsFlags.get());
     proto->set_input_config(inputInfo.inputConfig.get());
@@ -208,13 +211,6 @@ void LayerProtoHelper::writeToProto(
     proto->set_global_scale_factor(inputInfo.globalScaleFactor);
     LayerProtoHelper::writeToProtoDeprecated(inputInfo.transform, proto->mutable_transform());
     proto->set_replace_touchable_region_with_crop(inputInfo.replaceTouchableRegionWithCrop);
-    auto cropLayer = touchableRegionBounds.promote();
-    if (cropLayer != nullptr) {
-        proto->set_crop_layer_id(cropLayer->sequence);
-        LayerProtoHelper::writeToProto(cropLayer->getScreenBounds(
-                                               false /* reduceTransparentRegion */),
-                                       [&]() { return proto->mutable_touchable_region_crop(); });
-    }
 }
 
 void LayerProtoHelper::writeToProto(const mat4 matrix,
@@ -434,7 +430,7 @@ void LayerProtoHelper::writeSnapshotToProto(perfetto::protos::LayerProto* layerI
                                        layerInfo->mutable_color_transform());
     }
 
-    LayerProtoHelper::writeToProto(snapshot.croppedBufferSize.toFloatRect(),
+    LayerProtoHelper::writeToProto(snapshot.croppedBufferSize,
                                    [&]() { return layerInfo->mutable_source_bounds(); });
     LayerProtoHelper::writeToProto(snapshot.transformedBounds,
                                    [&]() { return layerInfo->mutable_screen_bounds(); });
@@ -462,7 +458,7 @@ void LayerProtoHelper::writeSnapshotToProto(perfetto::protos::LayerProto* layerI
         return layerInfo->mutable_requested_position();
     });
 
-    LayerProtoHelper::writeToProto(requestedState.crop,
+    LayerProtoHelper::writeToProto(Rect(requestedState.crop),
                                    [&]() { return layerInfo->mutable_crop(); });
 
     layerInfo->set_is_opaque(snapshot.contentOpaque);
@@ -482,7 +478,7 @@ void LayerProtoHelper::writeSnapshotToProto(perfetto::protos::LayerProto* layerI
     layerInfo->set_owner_uid(requestedState.ownerUid.val());
 
     if ((traceFlags & LayerTracing::TRACE_INPUT) && snapshot.hasInputInfo()) {
-        LayerProtoHelper::writeToProto(snapshot.inputInfo, {},
+        LayerProtoHelper::writeToProto(snapshot.inputInfo,
                                        [&]() { return layerInfo->mutable_input_window_info(); });
     }
 
