@@ -44,7 +44,7 @@ using hardware::Return;
 using aidl::android::hardware::graphics::composer3::BnComposerCallback;
 using aidl::android::hardware::graphics::composer3::Capability;
 using aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness;
-using aidl::android::hardware::graphics::composer3::Lut;
+using aidl::android::hardware::graphics::composer3::Luts;
 using aidl::android::hardware::graphics::composer3::PowerMode;
 using aidl::android::hardware::graphics::composer3::VirtualDisplay;
 
@@ -60,6 +60,7 @@ using AidlDisplayCapability = aidl::android::hardware::graphics::composer3::Disp
 using AidlHdrCapabilities = aidl::android::hardware::graphics::composer3::HdrCapabilities;
 using AidlHdrConversionCapability =
         aidl::android::hardware::graphics::common::HdrConversionCapability;
+using AidlHdcpLevels = aidl::android::hardware::drm::HdcpLevels;
 using AidlHdrConversionStrategy = aidl::android::hardware::graphics::common::HdrConversionStrategy;
 using AidlOverlayProperties = aidl::android::hardware::graphics::composer3::OverlayProperties;
 using AidlPerFrameMetadata = aidl::android::hardware::graphics::composer3::PerFrameMetadata;
@@ -220,6 +221,12 @@ public:
     ::ndk::ScopedAStatus onHotplugEvent(int64_t in_display,
                                         AidlDisplayHotplugEvent event) override {
         mCallback.onComposerHalHotplugEvent(translate<Display>(in_display), event);
+        return ::ndk::ScopedAStatus::ok();
+    }
+
+    ::ndk::ScopedAStatus onHdcpLevelsChanged(int64_t in_display,
+                                             const AidlHdcpLevels& levels) override {
+        mCallback.onComposerHalHdcpLevelsChanged(translate<Display>(in_display), levels);
         return ::ndk::ScopedAStatus::ok();
     }
 
@@ -1540,7 +1547,8 @@ Error AidlComposer::getClientTargetProperty(
     return error;
 }
 
-Error AidlComposer::getRequestedLuts(Display display, std::vector<DisplayLuts::LayerLut>* outLuts) {
+Error AidlComposer::getRequestedLuts(Display display, std::vector<Layer>* outLayers,
+                                     std::vector<DisplayLuts::LayerLut>* outLuts) {
     Error error = Error::NONE;
     mMutex.lock_shared();
     if (auto reader = getReader(display)) {
@@ -1549,10 +1557,15 @@ Error AidlComposer::getRequestedLuts(Display display, std::vector<DisplayLuts::L
         error = Error::BAD_DISPLAY;
     }
     mMutex.unlock_shared();
+
+    outLayers->reserve(outLuts->size());
+    for (const auto& layerLut : *outLuts) {
+        outLayers->emplace_back(translate<Layer>(layerLut.layer));
+    }
     return error;
 }
 
-Error AidlComposer::setLayerLuts(Display display, Layer layer, std::vector<Lut>& luts) {
+Error AidlComposer::setLayerLuts(Display display, Layer layer, Luts& luts) {
     Error error = Error::NONE;
     mMutex.lock_shared();
     if (auto writer = getWriter(display)) {

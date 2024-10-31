@@ -813,11 +813,14 @@ void Output::updateCompositionState(const compositionengine::CompositionRefreshA
     mLayerRequestingBackgroundBlur = findLayerRequestingBackgroundComposition();
     bool forceClientComposition = mLayerRequestingBackgroundBlur != nullptr;
 
+    auto* properties = getOverlaySupport();
+
     for (auto* layer : getOutputLayersOrderedByZ()) {
         layer->updateCompositionState(refreshArgs.updatingGeometryThisFrame,
                                       refreshArgs.devOptForceClientComposition ||
                                               forceClientComposition,
-                                      refreshArgs.internalDisplayRotationFlags);
+                                      refreshArgs.internalDisplayRotationFlags,
+                                      properties ? properties->lutProperties : std::nullopt);
 
         if (mLayerRequestingBackgroundBlur == layer) {
             forceClientComposition = false;
@@ -1610,13 +1613,7 @@ void Output::presentFrameAndReleaseLayers(bool flushEvenWhenDisabled) {
             releaseFence =
                     Fence::merge("LayerRelease", releaseFence, frame.clientTargetAcquireFence);
         }
-        if (FlagManager::getInstance().ce_fence_promise()) {
-            layer->getLayerFE().setReleaseFence(releaseFence);
-        } else {
-            layer->getLayerFE()
-                    .onLayerDisplayed(ftl::yield<FenceResult>(std::move(releaseFence)).share(),
-                                      outputState.layerFilter.layerStack);
-        }
+        layer->getLayerFE().setReleaseFence(releaseFence);
     }
 
     // We've got a list of layers needing fences, that are disjoint with
@@ -1624,12 +1621,7 @@ void Output::presentFrameAndReleaseLayers(bool flushEvenWhenDisabled) {
     // supply them with the present fence.
     for (auto& weakLayer : mReleasedLayers) {
         if (const auto layer = weakLayer.promote()) {
-            if (FlagManager::getInstance().ce_fence_promise()) {
-                layer->setReleaseFence(frame.presentFence);
-            } else {
-                layer->onLayerDisplayed(ftl::yield<FenceResult>(frame.presentFence).share(),
-                                        outputState.layerFilter.layerStack);
-            }
+            layer->setReleaseFence(frame.presentFence);
         }
     }
 
@@ -1687,6 +1679,10 @@ void Output::updateHwcAsyncWorker() {
 
 void Output::setTreat170mAsSrgb(bool enable) {
     editState().treat170mAsSrgb = enable;
+}
+
+const aidl::android::hardware::graphics::composer3::OverlayProperties* Output::getOverlaySupport() {
+    return nullptr;
 }
 
 bool Output::canPredictCompositionStrategy(const CompositionRefreshArgs& refreshArgs) {
