@@ -92,6 +92,7 @@
 #include <ui/DisplayStatInfo.h>
 #include <ui/DisplayState.h>
 #include <ui/DynamicDisplayInfo.h>
+#include <ui/FrameRateCategoryRate.h>
 #include <ui/GraphicBufferAllocator.h>
 #include <ui/HdrRenderTypeUtils.h>
 #include <ui/LayerStack.h>
@@ -1217,6 +1218,10 @@ void SurfaceFlinger::getDynamicDisplayInfoInternal(ui::DynamicDisplayInfo*& info
     info->activeDisplayModeId = ftl::to_underlying(mode.modePtr->getId());
     info->renderFrameRate = mode.fps.getValue();
     info->hasArrSupport = mode.modePtr->getVrrConfig() && FlagManager::getInstance().vrr_config();
+
+    const auto [normal, high] = display->refreshRateSelector().getFrameRateCategoryRates();
+    ui::FrameRateCategoryRate frameRateCategoryRate(normal.getValue(), high.getValue());
+    info->frameRateCategoryRate = frameRateCategoryRate;
     info->activeColorMode = display->getCompositionDisplay()->getState().colorMode;
     info->hdrCapabilities = filterOut4k30(display->getHdrCapabilities());
 
@@ -3660,6 +3665,26 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     return display;
 }
 
+void SurfaceFlinger::incRefreshableDisplays() {
+    if (FlagManager::getInstance().no_vsyncs_on_screen_off()) {
+        mRefreshableDisplays++;
+        if (mRefreshableDisplays == 1) {
+            ftl::FakeGuard guard(kMainThreadContext);
+            mScheduler->omitVsyncDispatching(false);
+        }
+    }
+}
+
+void SurfaceFlinger::decRefreshableDisplays() {
+    if (FlagManager::getInstance().no_vsyncs_on_screen_off()) {
+        mRefreshableDisplays--;
+        if (mRefreshableDisplays == 0) {
+            ftl::FakeGuard guard(kMainThreadContext);
+            mScheduler->omitVsyncDispatching(true);
+        }
+    }
+}
+
 void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
                                          const DisplayDeviceState& state) {
     ui::Size resolution(0, 0);
@@ -3751,6 +3776,10 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
         display->adjustRefreshRate(mScheduler->getPacesetterRefreshRate());
     }
 
+    if (display->isRefreshable()) {
+        incRefreshableDisplays();
+    }
+
     mDisplays.try_emplace(displayToken, std::move(display));
 
     // For an external display, loadDisplayModes already attempted to select the same mode
@@ -3785,6 +3814,10 @@ void SurfaceFlinger::processDisplayRemoved(const wp<IBinder>& displayToken) {
         } else {
             mScheduler->unregisterDisplay(display->getPhysicalId(), mActiveDisplayId);
         }
+
+        if (display->isRefreshable()) {
+            decRefreshableDisplays();
+        }
     }
 
     mDisplays.erase(displayToken);
@@ -3818,6 +3851,10 @@ void SurfaceFlinger::processDisplayChanged(const wp<IBinder>& displayToken,
             display->disconnect();
             if (display->isVirtual()) {
                 releaseVirtualDisplay(display->getVirtualId());
+            }
+
+            if (display->isRefreshable()) {
+                decRefreshableDisplays();
             }
         }
 
@@ -5317,7 +5354,15 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
                      activeDisplay->isPoweredOn(),
              "Trying to change power mode on inactive display without powering off active display");
 
+    const bool couldRefresh = display->isRefreshable();
     display->setPowerMode(mode);
+    const bool canRefresh = display->isRefreshable();
+
+    if (couldRefresh && !canRefresh) {
+        decRefreshableDisplays();
+    } else if (!couldRefresh && canRefresh) {
+        incRefreshableDisplays();
+    }
 
     const auto activeMode = display->refreshRateSelector().getActiveMode().modePtr;
     if (currentMode == hal::PowerMode::OFF) {
@@ -8496,6 +8541,9 @@ void SurfaceComposerAIDL::getDynamicDisplayInfoInternal(ui::DynamicDisplayInfo& 
     outInfo->activeDisplayModeId = info.activeDisplayModeId;
     outInfo->renderFrameRate = info.renderFrameRate;
     outInfo->hasArrSupport = info.hasArrSupport;
+    gui::FrameRateCategoryRate& frameRateCategoryRate = outInfo->frameRateCategoryRate;
+    frameRateCategoryRate.normal = info.frameRateCategoryRate.getNormal();
+    frameRateCategoryRate.high = info.frameRateCategoryRate.getHigh();
 
     outInfo->supportedColorModes.clear();
     outInfo->supportedColorModes.reserve(info.supportedColorModes.size());
