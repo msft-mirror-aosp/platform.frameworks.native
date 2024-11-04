@@ -97,10 +97,9 @@ enum class InputEventActionType : int32_t {
 };
 
 struct InputEventTimeline {
-    InputEventTimeline(bool isDown, nsecs_t eventTime, nsecs_t readTime, uint16_t vendorId,
-                       uint16_t productId, const std::set<InputDeviceUsageSource>& sources,
+    InputEventTimeline(nsecs_t eventTime, nsecs_t readTime, uint16_t vendorId, uint16_t productId,
+                       const std::set<InputDeviceUsageSource>& sources,
                        InputEventActionType inputEventActionType);
-    const bool isDown; // True if this is an ACTION_DOWN event
     const nsecs_t eventTime;
     const nsecs_t readTime;
     const uint16_t vendorId;
@@ -122,13 +121,21 @@ struct InputEventTimeline {
 class InputEventTimelineProcessor {
 protected:
     InputEventTimelineProcessor() {}
-    virtual ~InputEventTimelineProcessor() {}
 
 public:
+    virtual ~InputEventTimelineProcessor() {}
+
     /**
      * Process the provided timeline
      */
     virtual void processTimeline(const InputEventTimeline& timeline) = 0;
+
+    /**
+     * Trigger a push for the input event latency statistics
+     */
+    virtual void pushLatencyStatistics() = 0;
+
+    virtual std::string dump(const char* prefix) const = 0;
 };
 
 } // namespace inputdispatcher

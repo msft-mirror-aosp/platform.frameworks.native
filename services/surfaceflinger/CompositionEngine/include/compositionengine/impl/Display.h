@@ -82,11 +82,13 @@ public:
     using DisplayRequests = android::HWComposer::DeviceRequestedChanges::DisplayRequests;
     using LayerRequests = android::HWComposer::DeviceRequestedChanges::LayerRequests;
     using ClientTargetProperty = android::HWComposer::DeviceRequestedChanges::ClientTargetProperty;
+    using LayerLuts = android::HWComposer::DeviceRequestedChanges::LayerLuts;
     virtual bool allLayersRequireClientComposition() const;
     virtual void applyChangedTypesToLayers(const ChangedTypes&);
     virtual void applyDisplayRequests(const DisplayRequests&);
     virtual void applyLayerRequestsToLayers(const LayerRequests&);
     virtual void applyClientTargetRequests(const ClientTargetProperty&);
+    virtual void applyLayerLutsToLayers(const LayerLuts&);
 
     // Internal
     virtual void setConfiguration(const compositionengine::DisplayCreationArgs&);
@@ -101,6 +103,8 @@ private:
     DisplayId mId;
     bool mIsDisconnected = false;
     Hwc2::PowerAdvisor* mPowerAdvisor = nullptr;
+    const aidl::android::hardware::graphics::composer3::OverlayProperties* getOverlaySupport()
+            override;
 };
 
 // This template factory function standardizes the implementation details of the

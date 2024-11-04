@@ -16,17 +16,11 @@
 
 #include "MockHWComposer.h"
 
-namespace android {
-
-// This will go away once HWComposer is moved into the "backend" library
-HWComposer::~HWComposer() = default;
-
-namespace mock {
+namespace android::mock {
 
 // The Google Mock documentation recommends explicit non-header instantiations
 // for better compile time performance.
 HWComposer::HWComposer() = default;
 HWComposer::~HWComposer() = default;
 
-} // namespace mock
-} // namespace android
+} // namespace android::mock

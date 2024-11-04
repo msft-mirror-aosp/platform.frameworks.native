@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,24 +16,20 @@
 
 #pragma once
 
-#include <utils/Looper.h>
-#include <utils/StrongPointer.h>
+namespace android::ui {
 
-namespace android {
-
-/**
- * LooperInterface allows the use of TestLooper in InputConsumerNoResampling without reassigning to
- * Looper. LooperInterface is needed to control how InputConsumerNoResampling consumes and batches
- * InputMessages.
- */
-class LooperInterface {
+// Represents frame rate for FrameRateCategory Normal and High.
+class FrameRateCategoryRate {
 public:
-    virtual ~LooperInterface() = default;
+    FrameRateCategoryRate(float normal = 0, float high = 0) : mNormal(normal), mHigh(high) {}
 
-    virtual int addFd(int fd, int ident, int events, const sp<LooperCallback>& callback,
-                      void* data) = 0;
-    virtual int removeFd(int fd) = 0;
+    float getNormal() const { return mNormal; }
 
-    virtual sp<Looper> getLooper() const = 0;
+    float getHigh() const { return mHigh; }
+
+private:
+    float mNormal;
+    float mHigh;
 };
-} // namespace android
+
+} // namespace android::ui

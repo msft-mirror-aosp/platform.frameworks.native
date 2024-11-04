@@ -88,12 +88,6 @@ public:
     // Windows that are not in focus, but voted for a specific mode ID.
     static constexpr int32_t PRIORITY_NOT_FOCUSED_WITH_MODE = 2;
 
-    enum { // flags for doTransaction()
-        eDontUpdateGeometryState = 0x00000001,
-        eVisibleRegion = 0x00000002,
-        eInputInfoChanged = 0x00000004
-    };
-
     using FrameRate = scheduler::LayerInfo::FrameRate;
     using FrameRateCompatibility = scheduler::FrameRateCompatibility;
     using FrameRateSelectionStrategy = scheduler::LayerInfo::FrameRateSelectionStrategy;
@@ -101,7 +95,7 @@ public:
     struct State {
         int32_t sequence; // changes when visible regions can change
         // Crop is expressed in layer space coordinate.
-        Rect crop;
+        FloatRect crop;
         LayerMetadata metadata;
 
         ui::Dataspace dataspace;
@@ -171,9 +165,6 @@ public:
     static bool isLayerFocusedBasedOnPriority(int32_t priority);
     static void miniDumpHeader(std::string& result);
 
-    // Provide unique string for each class type in the Layer hierarchy
-    const char* getType() const { return "Layer"; }
-
     // This second set of geometry attributes are controlled by
     // setGeometryAppliesWithResize, and their default mode is to be
     // immediate. If setGeometryAppliesWithResize is specified
@@ -181,7 +172,7 @@ public:
     // be delayed until the resize completes.
 
     // Buffer space
-    bool setCrop(const Rect& crop);
+    bool setCrop(const FloatRect& crop);
 
     bool setTransform(uint32_t /*transform*/);
     bool setTransformToDisplayInverse(bool /*transformToDisplayInverse*/);
@@ -200,7 +191,6 @@ public:
                                           bool willPresent);
 
     sp<LayerFE> getCompositionEngineLayerFE(const frontend::LayerHierarchy::TraversalPath&);
-    sp<LayerFE> getOrCreateCompositionEngineLayerFE(const frontend::LayerHierarchy::TraversalPath&);
 
     // If we have received a new buffer this frame, we will pass its surface
     // damage down to hardware composer. Otherwise, we must send a region with
@@ -208,18 +198,7 @@ public:
     Region getVisibleRegion(const DisplayDevice*) const;
     void updateLastLatchTime(nsecs_t latchtime);
 
-    /*
-     * isProtected - true if the layer may contain protected contents in the
-     * GRALLOC_USAGE_PROTECTED sense.
-     */
-    bool isProtected() const;
-    /*
-     * usesSourceCrop - true if content should use a source crop
-     */
-    bool usesSourceCrop() const { return hasBufferOrSidebandStream(); }
-
-    Rect getCrop(const Layer::State& s) const { return s.crop; }
-    bool needsFiltering(const DisplayDevice*) const;
+    Rect getCrop(const Layer::State& s) const { return Rect(s.crop); }
 
     // from graphics API
     static ui::Dataspace translateDataspace(ui::Dataspace dataspace);
@@ -242,23 +221,6 @@ public:
     bool latchBufferImpl(bool& /*recomputeVisibleRegions*/, nsecs_t /*latchTime*/,
                          bool bgColorOnly);
 
-    /*
-     * Returns true if the currently presented buffer will be released when this layer state
-     * is latched. This will return false if there is no buffer currently presented.
-     */
-    bool willReleaseBufferOnLatch() const;
-
-    /*
-     * returns the rectangle that crops the content of the layer and scales it
-     * to the layer's size.
-     */
-    Rect getBufferCrop() const;
-
-    /*
-     * Returns the transform applied to the buffer.
-     */
-    uint32_t getBufferTransform() const;
-
     sp<GraphicBuffer> getBuffer() const;
     /**
      * Returns active buffer size in the correct orientation. Buffer size is determined by undoing
@@ -280,6 +242,8 @@ public:
         sp<Fence> mFence;
         uint32_t mTransform{0};
         ui::Dataspace mDataspace{ui::Dataspace::UNKNOWN};
+        std::chrono::steady_clock::time_point mTimeSinceDataspaceUpdate =
+                std::chrono::steady_clock::time_point::min();
         Rect mCrop;
         PixelFormat mPixelFormat{PIXEL_FORMAT_NONE};
         bool mTransformToDisplayInverse{false};
@@ -295,8 +259,6 @@ public:
 
     bool fenceHasSignaled() const;
     void onPreComposition(nsecs_t refreshStartTime);
-    void onLayerDisplayed(ftl::SharedFuture<FenceResult>, ui::LayerStack layerStack,
-                          std::function<FenceResult(FenceResult)>&& continuation = nullptr);
 
     // Tracks mLastClientCompositionFence and gets the callback handle for this layer.
     sp<CallbackHandle> findCallbackHandle();
@@ -312,8 +274,6 @@ public:
     }
 
     const char* getDebugName() const;
-
-    uint32_t getTransactionFlags() const { return mTransactionFlags; }
 
     static bool computeTrustedPresentationState(const FloatRect& bounds,
                                                 const FloatRect& sourceBounds,
@@ -332,9 +292,6 @@ public:
     // Sets the masked bits.
     void setTransactionFlags(uint32_t mask);
 
-    // Clears and returns the masked bits.
-    uint32_t clearTransactionFlags(uint32_t mask);
-
     int32_t getSequence() const { return sequence; }
 
     // For tracing.
@@ -348,14 +305,6 @@ public:
     void writeCompositionStateToProto(perfetto::protos::LayerProto* layerProto,
                                       ui::LayerStack layerStack);
 
-    gui::WindowInfo::Type getWindowType() const { return mWindowType; }
-
-    /*
-     * doTransaction - process the transaction. This is a good place to figure
-     * out which attributes of the surface have changed.
-     */
-    uint32_t doTransaction(uint32_t transactionFlags);
-
     inline const State& getDrawingState() const { return mDrawingState; }
     inline State& getDrawingState() { return mDrawingState; }
 
@@ -366,13 +315,6 @@ public:
     void getFrameStats(FrameStats* outStats) const;
     void onDisconnect();
 
-    ui::Transform getTransform() const;
-
-    half4 getColor() const;
-    int32_t getBackgroundBlurRadius() const;
-    bool drawShadows() const { return mEffectiveShadowRadius > 0.f; };
-
-    bool isHandleAlive() const { return mHandleAlive; }
     bool onHandleDestroyed() { return mHandleAlive = false; }
 
     /**
@@ -383,7 +325,6 @@ public:
      */
     Rect getCroppedBufferSize(const Layer::State& s) const;
 
-    void setFrameTimelineInfoForBuffer(const FrameTimelineInfo& /*info*/) {}
     void setFrameTimelineVsyncForBufferTransaction(const FrameTimelineInfo& info, nsecs_t postTime,
                                                    gui::GameMode gameMode);
     void setFrameTimelineVsyncForBufferlessTransaction(const FrameTimelineInfo& info,
@@ -412,13 +353,8 @@ public:
     // this to be called once.
     sp<IBinder> getHandle();
     const std::string& getName() const { return mName; }
-    void setInputInfo(const gui::WindowInfo& info);
 
     virtual uid_t getOwnerUid() const { return mOwnerUid; }
-
-    pid_t getOwnerPid() { return mOwnerPid; }
-
-    int32_t getOwnerAppId() { return mOwnerAppId; }
 
     // Used to check if mUsedVsyncIdForRefreshRateSelection should be expired when it stop updating.
     nsecs_t mMaxTimeForUseVsyncId = 0;
@@ -431,12 +367,9 @@ public:
     // the same.
     const int32_t sequence;
 
-    bool mPendingHWCDestroy{false};
-
-    bool setBufferCrop(const Rect& /* bufferCrop */);
     // See mPendingBufferTransactions
     void decrementPendingBufferCount();
-    std::atomic<int32_t>* getPendingBufferCounter() { return &mPendingBufferTransactions; }
+    std::atomic<int32_t>* getPendingBufferCounter() { return &mPendingBuffers; }
     std::string getPendingBufferCounterName() { return mBlastTransactionName; }
     void callReleaseBufferCallback(const sp<ITransactionCompletedListener>& listener,
                                    const sp<GraphicBuffer>& buffer, uint64_t framenumber,
@@ -453,20 +386,6 @@ public:
     // the release fences from the correct displays when we release the last buffer
     // from the layer.
     std::vector<ui::LayerStack> mPreviouslyPresentedLayerStacks;
-
-    struct FenceAndContinuation {
-        ftl::SharedFuture<FenceResult> future;
-        std::function<FenceResult(FenceResult)> continuation;
-
-        ftl::SharedFuture<FenceResult> chain() const {
-            if (continuation) {
-                return ftl::Future(future).then(continuation).share();
-            } else {
-                return future;
-            }
-        }
-    };
-    std::vector<FenceAndContinuation> mPreviousReleaseFenceAndContinuations;
 
     // Release fences for buffers that have not yet received a release
     // callback. A release callback may not be given when capturing
@@ -513,10 +432,6 @@ protected:
     int64_t mEnteredTrustedPresentationStateTime = -1;
 
     uint32_t mTransactionFlags{0};
-    // Updated in doTransaction, used to track the last sequence number we
-    // committed. Currently this is really only used for updating visible
-    // regions.
-    int32_t mLastCommittedTxSequence = -1;
 
     // Timestamp history for UIAutomation. Thread safe.
     FrameTracker mFrameTracker;
@@ -632,8 +547,8 @@ private:
     // You can understand the trace this way:
     //     - If the integer increases, a buffer arrived at the server.
     //     - If the integer decreases in latchBuffer, that buffer was latched
-    //     - If the integer decreases in setBuffer or doTransaction, a buffer was dropped
-    std::atomic<int32_t> mPendingBufferTransactions{0};
+    //     - If the integer decreases in setBuffer, a buffer was dropped
+    std::atomic<int32_t> mPendingBuffers{0};
 
     // Contains requested position and matrix updates. This will be applied if the client does
     // not specify a destination frame.

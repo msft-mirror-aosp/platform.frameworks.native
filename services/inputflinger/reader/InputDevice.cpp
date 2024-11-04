@@ -365,6 +365,18 @@ std::list<NotifyArgs> InputDevice::configureInternal(nsecs_t when,
             // so update the enabled state when there is a change in display info.
             out += updateEnableState(when, readerConfig, forceEnable);
         }
+
+        if (!changes.any() || changes.test(InputReaderConfiguration::Change::KEY_REMAPPING)) {
+            const bool isFullKeyboard =
+                    (mSources & AINPUT_SOURCE_KEYBOARD) == AINPUT_SOURCE_KEYBOARD &&
+                    mKeyboardType == KeyboardType::ALPHABETIC;
+            if (isFullKeyboard) {
+                for_each_subdevice([&readerConfig](auto& context) {
+                    context.setKeyRemapping(readerConfig.keyRemapping);
+                });
+                bumpGeneration();
+            }
+        }
     }
     return out;
 }
@@ -679,22 +691,6 @@ int32_t InputDevice::getMetaState() {
     return result;
 }
 
-void InputDevice::updateMetaState(int32_t keyCode) {
-    first_in_mappers<bool>([keyCode](InputMapper& mapper) {
-        if (sourcesMatchMask(mapper.getSources(), AINPUT_SOURCE_KEYBOARD) &&
-            mapper.updateMetaState(keyCode)) {
-            return std::make_optional(true);
-        }
-        return std::optional<bool>();
-    });
-}
-
-void InputDevice::addKeyRemapping(int32_t fromKeyCode, int32_t toKeyCode) {
-    for_each_subdevice([fromKeyCode, toKeyCode](auto& context) {
-        context.addKeyRemapping(fromKeyCode, toKeyCode);
-    });
-}
-
 void InputDevice::bumpGeneration() {
     mGeneration = mContext->bumpGeneration();
 }
@@ -747,6 +743,14 @@ void InputDevice::setKeyboardType(KeyboardType keyboardType) {
         mKeyboardType = keyboardType;
         bumpGeneration();
     }
+}
+
+bool InputDevice::setKernelWakeEnabled(bool enabled) {
+    bool success = false;
+    for_each_subdevice([&enabled, &success](InputDeviceContext& context) {
+        success |= context.setKernelWakeEnabled(enabled);
+    });
+    return success;
 }
 
 InputDeviceContext::InputDeviceContext(InputDevice& device, int32_t eventHubId)

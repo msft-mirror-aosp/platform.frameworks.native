@@ -182,10 +182,10 @@ public:
     MOCK_METHOD(Error, notifyExpectedPresent, (Display, nsecs_t, int32_t));
     MOCK_METHOD(
             Error, getRequestedLuts,
-            (Display,
+            (Display, std::vector<Layer>*,
              std::vector<aidl::android::hardware::graphics::composer3::DisplayLuts::LayerLut>*));
     MOCK_METHOD(Error, setLayerLuts,
-                (Display, Layer, std::vector<aidl::android::hardware::graphics::composer3::Lut>&));
+                (Display, Layer, aidl::android::hardware::graphics::composer3::Luts&));
 };
 
 } // namespace Hwc2::mock

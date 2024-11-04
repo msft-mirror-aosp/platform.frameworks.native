@@ -166,6 +166,7 @@ TEST_F(HWComposerTest, getModesWithLegacyDisplayConfigs) {
     expectHotplugConnect(kHwcDisplayId);
     const auto info = mHwc.onHotplug(kHwcDisplayId, hal::Connection::CONNECTED);
     ASSERT_TRUE(info);
+    ASSERT_TRUE(info->preferredDetailedTimingDescriptor.has_value());
 
     EXPECT_CALL(*mHal, isVrrSupported()).WillRepeatedly(Return(false));
 
@@ -179,6 +180,10 @@ TEST_F(HWComposerTest, getModesWithLegacyDisplayConfigs) {
         constexpr int32_t kHeight = 720;
         constexpr int32_t kConfigGroup = 1;
         constexpr int32_t kVsyncPeriod = 16666667;
+        constexpr float kMmPerInch = 25.4f;
+        const ui::Size size = info->preferredDetailedTimingDescriptor->physicalSizeInMm;
+        const float expectedDpiX = (kWidth * kMmPerInch / size.width);
+        const float expectedDpiY = (kHeight * kMmPerInch / size.height);
 
         EXPECT_CALL(*mHal,
                     getDisplayAttribute(kHwcDisplayId, kConfigId, IComposerClient::Attribute::WIDTH,
@@ -218,8 +223,13 @@ TEST_F(HWComposerTest, getModesWithLegacyDisplayConfigs) {
         EXPECT_EQ(modes.front().height, kHeight);
         EXPECT_EQ(modes.front().configGroup, kConfigGroup);
         EXPECT_EQ(modes.front().vsyncPeriod, kVsyncPeriod);
-        EXPECT_EQ(modes.front().dpiX, -1);
-        EXPECT_EQ(modes.front().dpiY, -1);
+        if (!FlagManager::getInstance().correct_dpi_with_display_size()) {
+            EXPECT_EQ(modes.front().dpiX, -1);
+            EXPECT_EQ(modes.front().dpiY, -1);
+        } else {
+            EXPECT_EQ(modes.front().dpiX, expectedDpiX);
+            EXPECT_EQ(modes.front().dpiY, expectedDpiY);
+        }
 
         // Optional parameters are supported
         constexpr int32_t kDpi = 320;
@@ -271,6 +281,10 @@ TEST_F(HWComposerTest, getModesWithDisplayConfigurations_VRR_OFF) {
         constexpr int32_t kHeight = 720;
         constexpr int32_t kConfigGroup = 1;
         constexpr int32_t kVsyncPeriod = 16666667;
+        constexpr float kMmPerInch = 25.4f;
+        const ui::Size size = info->preferredDetailedTimingDescriptor->physicalSizeInMm;
+        const float expectedDpiX = (kWidth * kMmPerInch / size.width);
+        const float expectedDpiY = (kHeight * kMmPerInch / size.height);
 
         EXPECT_CALL(*mHal,
                     getDisplayAttribute(kHwcDisplayId, kConfigId, IComposerClient::Attribute::WIDTH,
@@ -310,8 +324,13 @@ TEST_F(HWComposerTest, getModesWithDisplayConfigurations_VRR_OFF) {
         EXPECT_EQ(modes.front().height, kHeight);
         EXPECT_EQ(modes.front().configGroup, kConfigGroup);
         EXPECT_EQ(modes.front().vsyncPeriod, kVsyncPeriod);
-        EXPECT_EQ(modes.front().dpiX, -1);
-        EXPECT_EQ(modes.front().dpiY, -1);
+        if (!FlagManager::getInstance().correct_dpi_with_display_size()) {
+            EXPECT_EQ(modes.front().dpiX, -1);
+            EXPECT_EQ(modes.front().dpiY, -1);
+        } else {
+            EXPECT_EQ(modes.front().dpiX, expectedDpiX);
+            EXPECT_EQ(modes.front().dpiY, expectedDpiY);
+        }
 
         // Optional parameters are supported
         constexpr int32_t kDpi = 320;
@@ -361,6 +380,10 @@ TEST_F(HWComposerTest, getModesWithDisplayConfigurations_VRR_ON) {
         constexpr int32_t kHeight = 720;
         constexpr int32_t kConfigGroup = 1;
         constexpr int32_t kVsyncPeriod = 16666667;
+        constexpr float kMmPerInch = 25.4f;
+        const ui::Size size = info->preferredDetailedTimingDescriptor->physicalSizeInMm;
+        const float expectedDpiX = (kWidth * kMmPerInch / size.width);
+        const float expectedDpiY = (kHeight * kMmPerInch / size.height);
         const hal::VrrConfig vrrConfig =
                 hal::VrrConfig{.minFrameIntervalNs = static_cast<Fps>(120_Hz).getPeriodNsecs(),
                                .notifyExpectedPresentConfig = hal::VrrConfig::
@@ -387,8 +410,13 @@ TEST_F(HWComposerTest, getModesWithDisplayConfigurations_VRR_ON) {
         EXPECT_EQ(modes.front().configGroup, kConfigGroup);
         EXPECT_EQ(modes.front().vsyncPeriod, kVsyncPeriod);
         EXPECT_EQ(modes.front().vrrConfig, vrrConfig);
-        EXPECT_EQ(modes.front().dpiX, -1);
-        EXPECT_EQ(modes.front().dpiY, -1);
+        if (!FlagManager::getInstance().correct_dpi_with_display_size()) {
+            EXPECT_EQ(modes.front().dpiX, -1);
+            EXPECT_EQ(modes.front().dpiY, -1);
+        } else {
+            EXPECT_EQ(modes.front().dpiX, expectedDpiX);
+            EXPECT_EQ(modes.front().dpiY, expectedDpiY);
+        }
 
         // Supports optional dpi parameter
         constexpr int32_t kDpi = 320;
