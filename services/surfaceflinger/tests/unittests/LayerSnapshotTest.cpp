@@ -162,12 +162,12 @@ TEST_F(LayerSnapshotTest, croppedByParent) {
     info.info.logicalHeight = 100;
     info.info.logicalWidth = 200;
     mFrontEndDisplayInfos.emplace_or_replace(ui::LayerStack::fromValue(1), info);
-    Rect layerCrop(0, 0, 10, 20);
+    FloatRect layerCrop(0, 0, 10, 20);
     setCrop(11, layerCrop);
     EXPECT_TRUE(mLifecycleManager.getGlobalChanges().test(RequestedLayerState::Changes::Geometry));
     UPDATE_AND_VERIFY_WITH_DISPLAY_CHANGES(mSnapshotBuilder, STARTING_ZORDER);
     EXPECT_EQ(getSnapshot(11)->geomCrop, layerCrop);
-    EXPECT_EQ(getSnapshot(111)->geomLayerBounds, layerCrop.toFloatRect());
+    EXPECT_EQ(getSnapshot(111)->geomLayerBounds, layerCrop);
     float maxHeight = static_cast<float>(info.info.logicalHeight * 10);
     float maxWidth = static_cast<float>(info.info.logicalWidth * 10);
 
@@ -1762,6 +1762,7 @@ TEST_F(LayerSnapshotTest, hideLayerWithNanMatrix) {
     UPDATE_AND_VERIFY(mSnapshotBuilder, {2});
     EXPECT_TRUE(getSnapshot(1)->isHiddenByPolicy());
 }
+
 TEST_F(LayerSnapshotTest, edgeExtensionPropagatesInHierarchy) {
     if (!com::android::graphics::libgui::flags::edge_extension_shader()) {
         GTEST_SKIP() << "Skipping test because edge_extension_shader is off";
@@ -1920,4 +1921,68 @@ TEST_F(LayerSnapshotTest, multipleEdgeExtensionIncreaseBoundSizeWithinCrop) {
     EXPECT_GE(getSnapshot({.id = 1221})->transformedBounds.top, 0);
 }
 
+TEST_F(LayerSnapshotTest, shouldUpdateInputWhenNoInputInfo) {
+    // By default the layer has no buffer, so we don't expect it to have an input info
+    EXPECT_FALSE(getSnapshot(111)->hasInputInfo());
+
+    setBuffer(111);
+
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+
+    EXPECT_TRUE(getSnapshot(111)->hasInputInfo());
+    EXPECT_TRUE(getSnapshot(111)->inputInfo.inputConfig.test(
+            gui::WindowInfo::InputConfig::NO_INPUT_CHANNEL));
+    EXPECT_FALSE(getSnapshot(2)->hasInputInfo());
+}
+
+// content dirty test
+TEST_F(LayerSnapshotTest, contentDirtyWhenParentAlphaChanges) {
+    setAlpha(1, 0.5);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_TRUE(getSnapshot(1)->contentDirty);
+    EXPECT_TRUE(getSnapshot(11)->contentDirty);
+    EXPECT_TRUE(getSnapshot(111)->contentDirty);
+
+    // subsequent updates clear the dirty bit
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_FALSE(getSnapshot(1)->contentDirty);
+    EXPECT_FALSE(getSnapshot(11)->contentDirty);
+    EXPECT_FALSE(getSnapshot(111)->contentDirty);
+}
+
+TEST_F(LayerSnapshotTest, contentDirtyWhenAutoRefresh) {
+    setAutoRefresh(1, true);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_TRUE(getSnapshot(1)->contentDirty);
+
+    // subsequent updates don't clear the dirty bit
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_TRUE(getSnapshot(1)->contentDirty);
+
+    // second update after removing auto refresh will clear content dirty
+    setAutoRefresh(1, false);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_FALSE(getSnapshot(1)->contentDirty);
+}
+
+TEST_F(LayerSnapshotTest, contentDirtyWhenColorChanges) {
+    setColor(1, {1, 2, 3});
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_TRUE(getSnapshot(1)->contentDirty);
+
+    // subsequent updates clear the dirty bit
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_FALSE(getSnapshot(1)->contentDirty);
+}
+
+TEST_F(LayerSnapshotTest, contentDirtyWhenParentGeometryChanges) {
+    setPosition(1, 2, 3);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_TRUE(getSnapshot(1)->contentDirty);
+
+    // subsequent updates clear the dirty bit
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_FALSE(getSnapshot(1)->contentDirty);
+}
 } // namespace android::surfaceflinger::frontend

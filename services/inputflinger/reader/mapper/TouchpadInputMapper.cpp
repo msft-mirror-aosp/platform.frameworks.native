@@ -375,6 +375,9 @@ std::list<NotifyArgs> TouchpadInputMapper::reconfigure(nsecs_t when,
         mPropertyProvider.getProperty("Button Right Click Zone Enable")
                 .setBoolValues({config.touchpadRightClickZoneEnabled});
         mTouchpadHardwareStateNotificationsEnabled = config.shouldNotifyTouchpadHardwareState;
+
+        mGestureConverter.setThreeFingerTapShortcutEnabled(
+                config.touchpadThreeFingerTapShortcutEnabled);
     }
     std::list<NotifyArgs> out;
     if ((!changes.any() && config.pointerCaptureRequest.isEnable()) ||
@@ -480,6 +483,9 @@ void TouchpadInputMapper::consumeGesture(const Gesture* gesture) {
         return;
     }
     mGesturesToProcess.push_back(*gesture);
+    if (mTouchpadHardwareStateNotificationsEnabled) {
+        getPolicy()->notifyTouchpadGestureInfo(gesture->type, getDeviceId());
+    }
 }
 
 std::list<NotifyArgs> TouchpadInputMapper::processGestures(nsecs_t when, nsecs_t readTime) {

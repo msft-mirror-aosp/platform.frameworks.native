@@ -384,8 +384,8 @@ mod tests {
     use std::time::Duration;
 
     use binder::{
-        BinderFeatures, DeathRecipient, FromIBinder, IBinder, Interface, SpIBinder, StatusCode,
-        Strong,
+        Accessor, BinderFeatures, DeathRecipient, FromIBinder, IBinder, Interface, SpIBinder,
+        StatusCode, Strong,
     };
     // Import from impl API for testing only, should not be necessary as long as
     // you are using AIDL.
@@ -906,6 +906,80 @@ mod tests {
             service_ibinder.into_interface().expect("Could not reassociate the generic ibinder");
 
         assert_eq!(service.test().unwrap(), service_name);
+    }
+
+    struct ToBeDeleted {
+        deleted: Arc<AtomicBool>,
+    }
+
+    impl Drop for ToBeDeleted {
+        fn drop(&mut self) {
+            assert!(!self.deleted.load(Ordering::Relaxed));
+            self.deleted.store(true, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn test_accessor_callback_destruction() {
+        let deleted: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+        {
+            let accessor: Accessor;
+            {
+                let helper = ToBeDeleted { deleted: deleted.clone() };
+                let get_connection_info = move |_instance: &str| {
+                    // Capture this object so we can see it get destructed
+                    // after the parent scope
+                    let _ = &helper;
+                    None
+                };
+                accessor = Accessor::new("foo.service", get_connection_info);
+            }
+
+            match accessor.as_binder() {
+                Some(_) => {
+                    assert!(!deleted.load(Ordering::Relaxed));
+                }
+                None => panic!("failed to get that accessor binder"),
+            }
+        }
+        assert!(deleted.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_accessor_delegator_new_each_time() {
+        let get_connection_info = move |_instance: &str| None;
+        let accessor = Accessor::new("foo.service", get_connection_info);
+        let delegator_binder =
+            binder::delegate_accessor("foo.service", accessor.as_binder().unwrap());
+        let delegator_binder2 =
+            binder::delegate_accessor("foo.service", accessor.as_binder().unwrap());
+
+        // The delegate_accessor creates new delegators each time
+        assert!(delegator_binder != delegator_binder2);
+    }
+
+    #[test]
+    fn test_accessor_delegate_the_delegator() {
+        let get_connection_info = move |_instance: &str| None;
+        let accessor = Accessor::new("foo.service", get_connection_info);
+        let delegator_binder =
+            binder::delegate_accessor("foo.service", accessor.as_binder().unwrap());
+        let delegator_binder2 =
+            binder::delegate_accessor("foo.service", delegator_binder.clone().unwrap());
+
+        assert!(delegator_binder.clone() == delegator_binder);
+        // The delegate_accessor creates new delegators each time. Even when they are delegators
+        // of delegators.
+        assert!(delegator_binder != delegator_binder2);
+    }
+
+    #[test]
+    fn test_accessor_delegator_wrong_name() {
+        let get_connection_info = move |_instance: &str| None;
+        let accessor = Accessor::new("foo.service", get_connection_info);
+        let delegator_binder =
+            binder::delegate_accessor("NOT.foo.service", accessor.as_binder().unwrap());
+        assert_eq!(delegator_binder, Err(StatusCode::NAME_NOT_FOUND));
     }
 
     #[tokio::test]

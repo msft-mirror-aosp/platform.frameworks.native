@@ -122,6 +122,10 @@ std::string getInputDeviceConfigurationFilePathByName(
             LOG_IF(INFO, DEBUG_PROBE)
                     << "Found system-provided input device configuration file at " << path;
             return path;
+        } else if (errno != ENOENT) {
+            LOG(WARNING) << "Couldn't find a system-provided input device configuration file at "
+                         << path << " due to error " << errno << " (" << strerror(errno)
+                         << "); there may be an IDC file there that cannot be loaded.";
         } else {
             LOG_IF(ERROR, DEBUG_PROBE)
                     << "Didn't find system-provided input device configuration file at " << path
@@ -142,6 +146,10 @@ std::string getInputDeviceConfigurationFilePathByName(
         LOG_IF(INFO, DEBUG_PROBE) << "Found system user input device configuration file at "
                                   << path;
         return path;
+    } else if (errno != ENOENT) {
+        LOG(WARNING) << "Couldn't find a system user input device configuration file at " << path
+                     << " due to error " << errno << " (" << strerror(errno)
+                     << "); there may be an IDC file there that cannot be loaded.";
     } else {
         LOG_IF(ERROR, DEBUG_PROBE) << "Didn't find system user input device configuration file at "
                                    << path << ": " << strerror(errno);
@@ -183,7 +191,9 @@ InputDeviceInfo::InputDeviceInfo(const InputDeviceInfo& other)
         mKeyboardLayoutInfo(other.mKeyboardLayoutInfo),
         mSources(other.mSources),
         mKeyboardType(other.mKeyboardType),
-        mKeyCharacterMap(other.mKeyCharacterMap),
+        mKeyCharacterMap(other.mKeyCharacterMap
+                                 ? std::make_unique<KeyCharacterMap>(*other.mKeyCharacterMap)
+                                 : nullptr),
         mUsiVersion(other.mUsiVersion),
         mAssociatedDisplayId(other.mAssociatedDisplayId),
         mEnabled(other.mEnabled),
@@ -195,6 +205,34 @@ InputDeviceInfo::InputDeviceInfo(const InputDeviceInfo& other)
         mSensors(other.mSensors),
         mLights(other.mLights),
         mViewBehavior(other.mViewBehavior) {}
+
+InputDeviceInfo& InputDeviceInfo::operator=(const InputDeviceInfo& other) {
+    mId = other.mId;
+    mGeneration = other.mGeneration;
+    mControllerNumber = other.mControllerNumber;
+    mIdentifier = other.mIdentifier;
+    mAlias = other.mAlias;
+    mIsExternal = other.mIsExternal;
+    mHasMic = other.mHasMic;
+    mKeyboardLayoutInfo = other.mKeyboardLayoutInfo;
+    mSources = other.mSources;
+    mKeyboardType = other.mKeyboardType;
+    mKeyCharacterMap = other.mKeyCharacterMap
+            ? std::make_unique<KeyCharacterMap>(*other.mKeyCharacterMap)
+            : nullptr;
+    mUsiVersion = other.mUsiVersion;
+    mAssociatedDisplayId = other.mAssociatedDisplayId;
+    mEnabled = other.mEnabled;
+    mHasVibrator = other.mHasVibrator;
+    mHasBattery = other.mHasBattery;
+    mHasButtonUnderPad = other.mHasButtonUnderPad;
+    mHasSensor = other.mHasSensor;
+    mMotionRanges = other.mMotionRanges;
+    mSensors = other.mSensors;
+    mLights = other.mLights;
+    mViewBehavior = other.mViewBehavior;
+    return *this;
+}
 
 InputDeviceInfo::~InputDeviceInfo() {
 }

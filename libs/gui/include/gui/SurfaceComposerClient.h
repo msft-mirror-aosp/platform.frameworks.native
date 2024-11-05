@@ -437,6 +437,8 @@ public:
         static void mergeFrameTimelineInfo(FrameTimelineInfo& t, const FrameTimelineInfo& other);
         // Tracks registered callbacks
         sp<TransactionCompletedListener> mTransactionCompletedListener = nullptr;
+        // Prints debug logs when enabled.
+        bool mLogCallPoints = false;
 
     protected:
         std::unordered_map<sp<IBinder>, ComposerState, IBinderHash> mComposerStates;
@@ -549,6 +551,7 @@ public:
         Transaction& setMatrix(const sp<SurfaceControl>& sc,
                 float dsdx, float dtdx, float dtdy, float dsdy);
         Transaction& setCrop(const sp<SurfaceControl>& sc, const Rect& crop);
+        Transaction& setCrop(const sp<SurfaceControl>& sc, const FloatRect& crop);
         Transaction& setCornerRadius(const sp<SurfaceControl>& sc, float cornerRadius);
         Transaction& setBackgroundBlurRadius(const sp<SurfaceControl>& sc,
                                              int backgroundBlurRadius);
@@ -601,6 +604,11 @@ public:
         Transaction& setExtendedRangeBrightness(const sp<SurfaceControl>& sc,
                                                 float currentBufferRatio, float desiredRatio);
         Transaction& setDesiredHdrHeadroom(const sp<SurfaceControl>& sc, float desiredRatio);
+        Transaction& setLuts(const sp<SurfaceControl>& sc, const base::unique_fd& lutFd,
+                             const std::vector<int32_t>& offsets,
+                             const std::vector<int32_t>& dimensions,
+                             const std::vector<int32_t>& sizes,
+                             const std::vector<int32_t>& samplingKeys);
         Transaction& setCachingHint(const sp<SurfaceControl>& sc, gui::CachingHint cachingHint);
         Transaction& setHdrMetadata(const sp<SurfaceControl>& sc, const HdrMetadata& hdrMetadata);
         Transaction& setSurfaceDamageRegion(const sp<SurfaceControl>& sc,
@@ -803,6 +811,7 @@ public:
         static void setDefaultApplyToken(sp<IBinder> applyToken);
 
         static status_t sendSurfaceFlushJankDataTransaction(const sp<SurfaceControl>& sc);
+        void enableDebugLogCallPoints();
     };
 
     status_t clearLayerFrameStats(const sp<IBinder>& token) const;

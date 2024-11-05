@@ -19,10 +19,9 @@ extern crate nativewindow_bindgen as ffi;
 mod handle;
 mod surface;
 
-pub use handle::NativeHandle;
-pub use surface::Surface;
-
 pub use ffi::{AHardwareBuffer_Format, AHardwareBuffer_UsageFlags};
+pub use handle::NativeHandle;
+pub use surface::{buffer::Buffer, Surface};
 
 use binder::{
     binder_impl::{BorrowedParcel, UnstructuredParcelable},
@@ -204,8 +203,8 @@ impl HardwareBuffer {
         Self(buffer_ptr)
     }
 
-    /// Creates a new Rust HardwareBuffer to wrap the given AHardwareBuffer without taking ownership
-    /// of it.
+    /// Creates a new Rust HardwareBuffer to wrap the given `AHardwareBuffer` without taking
+    /// ownership of it.
     ///
     /// Unlike [`from_raw`](Self::from_raw) this method will increment the refcount on the buffer.
     /// This means that the caller can continue to use the raw buffer it passed in, and must call
@@ -221,8 +220,20 @@ impl HardwareBuffer {
         Self(buffer)
     }
 
-    /// Get the internal |AHardwareBuffer| pointer without decrementing the refcount. This can
-    /// be used to provide a pointer to the AHB for a C/C++ API over the FFI.
+    /// Returns the internal `AHardwareBuffer` pointer.
+    ///
+    /// This is only valid as long as this `HardwareBuffer` exists, so shouldn't be stored. It can
+    /// be used to provide a pointer for a C/C++ API over FFI.
+    pub fn as_raw(&self) -> NonNull<AHardwareBuffer> {
+        self.0
+    }
+
+    /// Gets the internal `AHardwareBuffer` pointer without decrementing the refcount. This can
+    /// be used for a C/C++ API which takes ownership of the pointer.
+    ///
+    /// The caller is responsible for releasing the `AHardwareBuffer` pointer by calling
+    /// `AHardwareBuffer_release` when it is finished with it, or may convert it back to a Rust
+    /// `HardwareBuffer` by calling [`HardwareBuffer::from_raw`].
     pub fn into_raw(self) -> NonNull<AHardwareBuffer> {
         let buffer = ManuallyDrop::new(self);
         buffer.0

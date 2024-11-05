@@ -116,7 +116,7 @@ ui::Transform getInputTransform(const LayerSnapshot& snapshot) {
  * that's already included.
  */
 std::pair<FloatRect, bool> getInputBounds(const LayerSnapshot& snapshot, bool fillParentBounds) {
-    FloatRect inputBounds = snapshot.croppedBufferSize.toFloatRect();
+    FloatRect inputBounds = snapshot.croppedBufferSize;
     if (snapshot.hasBufferOrSidebandStream() && snapshot.croppedBufferSize.isValid() &&
         snapshot.localTransform.getType() != ui::Transform::IDENTITY) {
         inputBounds = snapshot.localTransform.transform(inputBounds);
@@ -220,7 +220,7 @@ void handleDropInputMode(LayerSnapshot& snapshot, const LayerSnapshot& parentSna
     }
 
     // Check if the parent has cropped the buffer
-    Rect bufferSize = snapshot.croppedBufferSize;
+    FloatRect bufferSize = snapshot.croppedBufferSize;
     if (!bufferSize.isValid()) {
         snapshot.inputInfo.inputConfig |= gui::WindowInfo::InputConfig::DROP_INPUT_IF_OBSCURED;
         return;
@@ -279,24 +279,6 @@ void updateVisibility(LayerSnapshot& snapshot, bool visible) {
           snapshot.getDebugString().c_str());
 }
 
-bool needsInputInfo(const LayerSnapshot& snapshot, const RequestedLayerState& requested) {
-    if (requested.potentialCursor) {
-        return false;
-    }
-
-    if (snapshot.inputInfo.token != nullptr) {
-        return true;
-    }
-
-    if (snapshot.hasBufferOrSidebandStream()) {
-        return true;
-    }
-
-    return requested.windowInfoHandle &&
-            requested.windowInfoHandle->getInfo()->inputConfig.test(
-                    gui::WindowInfo::InputConfig::NO_INPUT_CHANNEL);
-}
-
 void updateMetadata(LayerSnapshot& snapshot, const RequestedLayerState& requested,
                     const LayerSnapshotBuilder::Args& args) {
     snapshot.metadata.clear();
@@ -332,8 +314,8 @@ void updateMetadataAndGameMode(LayerSnapshot& snapshot, const RequestedLayerStat
 void clearChanges(LayerSnapshot& snapshot) {
     snapshot.changes.clear();
     snapshot.clientChanges = 0;
-    snapshot.contentDirty = false;
-    snapshot.hasReadyFrame = false;
+    snapshot.contentDirty = snapshot.autoRefresh;
+    snapshot.hasReadyFrame = snapshot.autoRefresh;
     snapshot.sidebandStreamHasFrame = false;
     snapshot.surfaceDamage.clear();
 }
@@ -742,10 +724,12 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
     if (args.displayChanges) snapshot.changes |= RequestedLayerState::Changes::Geometry;
     snapshot.reachablilty = LayerSnapshot::Reachablilty::Reachable;
     snapshot.clientChanges |= (parentSnapshot.clientChanges & layer_state_t::AFFECTS_CHILDREN);
+    // mark the content as dirty if the parent state changes can dirty the child's content (for
+    // example alpha)
+    snapshot.contentDirty |= (snapshot.clientChanges & layer_state_t::CONTENT_DIRTY) != 0;
     snapshot.isHiddenByPolicyFromParent = parentSnapshot.isHiddenByPolicyFromParent ||
             parentSnapshot.invalidTransform || requested.isHiddenByPolicy() ||
             (args.excludeLayerIds.find(path.id) != args.excludeLayerIds.end());
-
     const bool forceUpdate = args.forceUpdate == ForceUpdateFlags::ALL ||
             snapshot.clientChanges & layer_state_t::eReparent ||
             snapshot.changes.any(RequestedLayerState::Changes::Visibility |
@@ -988,7 +972,7 @@ void LayerSnapshotBuilder::updateRoundedCorner(LayerSnapshot& snapshot,
         parentRoundedCorner.radius.y *= t.getScaleY();
     }
 
-    FloatRect layerCropRect = snapshot.croppedBufferSize.toFloatRect();
+    FloatRect layerCropRect = snapshot.croppedBufferSize;
     const vec2 radius(requested.cornerRadius, requested.cornerRadius);
     RoundedCornerState layerSettings(layerCropRect, radius);
     const bool layerSettingsValid = layerSettings.hasRoundedCorners() && !layerCropRect.isEmpty();
@@ -1079,7 +1063,7 @@ void LayerSnapshotBuilder::updateLayerBounds(LayerSnapshot& snapshot,
             requested.externalTexture ? snapshot.bufferSize.toFloatRect() : parentBounds;
     snapshot.geomLayerCrop = parentBounds;
     if (!requested.crop.isEmpty()) {
-        snapshot.geomLayerCrop = snapshot.geomLayerCrop.intersect(requested.crop.toFloatRect());
+        snapshot.geomLayerCrop = snapshot.geomLayerCrop.intersect(requested.crop);
     }
     snapshot.geomLayerBounds = snapshot.geomLayerBounds.intersect(snapshot.geomLayerCrop);
     snapshot.transformedBounds = snapshot.geomLayerTransform.transform(snapshot.geomLayerBounds);
@@ -1090,10 +1074,10 @@ void LayerSnapshotBuilder::updateLayerBounds(LayerSnapshot& snapshot,
             snapshot.geomLayerTransform.transform(geomLayerBoundsWithoutTransparentRegion);
     snapshot.parentTransform = parentSnapshot.geomLayerTransform;
 
-    // Subtract the transparent region and snap to the bounds
-    const Rect bounds =
-            RequestedLayerState::reduce(snapshot.croppedBufferSize, requested.transparentRegion);
     if (requested.potentialCursor) {
+        // Subtract the transparent region and snap to the bounds
+        const Rect bounds = RequestedLayerState::reduce(Rect(snapshot.croppedBufferSize),
+                                                        requested.transparentRegion);
         snapshot.cursorFrame = snapshot.geomLayerTransform.transform(bounds);
     }
 }
@@ -1162,7 +1146,7 @@ void LayerSnapshotBuilder::updateInput(LayerSnapshot& snapshot,
     }
 
     updateVisibility(snapshot, snapshot.isVisible);
-    if (!needsInputInfo(snapshot, requested)) {
+    if (!requested.needsInputInfo()) {
         return;
     }
 
@@ -1172,7 +1156,7 @@ void LayerSnapshotBuilder::updateInput(LayerSnapshot& snapshot,
     bool noValidDisplay = !displayInfoOpt.has_value();
     auto displayInfo = displayInfoOpt.value_or(sDefaultInfo);
 
-    if (!requested.windowInfoHandle) {
+    if (!requested.hasInputInfo()) {
         snapshot.inputInfo.inputConfig = InputConfig::NO_INPUT_CHANNEL;
     }
     fillInputFrameInfo(snapshot.inputInfo, displayInfo.transform, snapshot);
@@ -1210,7 +1194,8 @@ void LayerSnapshotBuilder::updateInput(LayerSnapshot& snapshot,
         snapshot.inputInfo.inputConfig |= InputConfig::TRUSTED_OVERLAY;
     }
 
-    snapshot.inputInfo.contentSize = snapshot.croppedBufferSize.getSize();
+    snapshot.inputInfo.contentSize = {snapshot.croppedBufferSize.getHeight(),
+                                      snapshot.croppedBufferSize.getWidth()};
 
     // If the layer is a clone, we need to crop the input region to cloned root to prevent
     // touches from going outside the cloned area.
