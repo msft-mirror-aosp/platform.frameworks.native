@@ -29,6 +29,7 @@
 #include <android/gui/IWindowInfosListener.h>
 #include <android/gui/TrustedPresentationThresholds.h>
 #include <android/os/IInputConstants.h>
+#include <gui/DisplayLuts.h>
 #include <gui/FrameRateUtils.h>
 #include <gui/TraceUtils.h>
 #include <utils/Errors.h>
@@ -56,6 +57,7 @@
 #include <ui/DisplayMode.h>
 #include <ui/DisplayState.h>
 #include <ui/DynamicDisplayInfo.h>
+#include <ui/FrameRateCategoryRate.h>
 
 #include <android-base/thread_annotations.h>
 #include <gui/LayerStatePermissions.h>
@@ -1346,21 +1348,22 @@ status_t SurfaceComposerClient::Transaction::apply(bool synchronous, bool oneWay
     sp<IBinder> applyToken = mApplyToken ? mApplyToken : getDefaultApplyToken();
 
     sp<ISurfaceComposer> sf(ComposerService::getComposerService());
-    sf->setTransactionState(mFrameTimelineInfo, composerStates, displayStates, flags, applyToken,
-                            mInputWindowCommands, mDesiredPresentTime, mIsAutoTimestamp,
-                            mUncacheBuffers, hasListenerCallbacks, listenerCallbacks, mId,
-                            mMergedTransactionIds);
+    status_t binderStatus =
+            sf->setTransactionState(mFrameTimelineInfo, composerStates, displayStates, flags,
+                                    applyToken, mInputWindowCommands, mDesiredPresentTime,
+                                    mIsAutoTimestamp, mUncacheBuffers, hasListenerCallbacks,
+                                    listenerCallbacks, mId, mMergedTransactionIds);
     mId = generateId();
 
     // Clear the current states and flags
     clear();
 
-    if (synchronous) {
+    if (synchronous && binderStatus == OK) {
         syncCallback->wait();
     }
 
     mStatus = NO_ERROR;
-    return NO_ERROR;
+    return binderStatus;
 }
 
 sp<IBinder> SurfaceComposerClient::Transaction::sApplyToken = new BBinder();
@@ -1374,7 +1377,7 @@ sp<IBinder> SurfaceComposerClient::Transaction::getDefaultApplyToken() {
 
 void SurfaceComposerClient::Transaction::setDefaultApplyToken(sp<IBinder> applyToken) {
     std::scoped_lock lock{sApplyTokenMutex};
-    sApplyToken = applyToken;
+    sApplyToken = std::move(applyToken);
 }
 
 status_t SurfaceComposerClient::Transaction::sendSurfaceFlushJankDataTransaction(
@@ -1934,6 +1937,24 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setDesir
     }
     s->what |= layer_state_t::eDesiredHdrHeadroomChanged;
     s->desiredHdrSdrRatio = desiredRatio;
+
+    registerSurfaceControlForCallback(sc);
+    return *this;
+}
+
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setLuts(
+        const sp<SurfaceControl>& sc, const base::unique_fd& lutFd,
+        const std::vector<int32_t>& offsets, const std::vector<int32_t>& dimensions,
+        const std::vector<int32_t>& sizes, const std::vector<int32_t>& samplingKeys) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+
+    s->luts = std::make_shared<gui::DisplayLuts>(base::unique_fd(dup(lutFd.get())), offsets,
+                                                 dimensions, sizes, samplingKeys);
+    s->what |= layer_state_t::eLutsChanged;
 
     registerSurfaceControlForCallback(sc);
     return *this;
@@ -2793,6 +2814,9 @@ void SurfaceComposerClient::getDynamicDisplayInfoInternal(gui::DynamicDisplayInf
     outInfo->autoLowLatencyModeSupported = ginfo.autoLowLatencyModeSupported;
     outInfo->gameContentTypeSupported = ginfo.gameContentTypeSupported;
     outInfo->preferredBootDisplayMode = ginfo.preferredBootDisplayMode;
+    outInfo->hasArrSupport = ginfo.hasArrSupport;
+    outInfo->frameRateCategoryRate = ui::FrameRateCategoryRate(ginfo.frameRateCategoryRate.normal,
+                                                               ginfo.frameRateCategoryRate.high);
 }
 
 status_t SurfaceComposerClient::getDynamicDisplayInfoFromId(int64_t displayId,

@@ -38,6 +38,8 @@ namespace {
 using std::chrono::nanoseconds;
 using namespace std::chrono_literals;
 
+const std::chrono::milliseconds RESAMPLE_LATENCY{5};
+
 struct Pointer {
     int32_t id{0};
     float x{0.0f};
@@ -197,8 +199,6 @@ TEST_F(InputConsumerResamplingTest, EventIsResampled) {
     mClientTestChannel->enqueueMessage(nextPointerMessage(
             {0ms, {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}}, AMOTION_EVENT_ACTION_DOWN}));
 
-    mClientTestChannel->assertNoSentMessages();
-
     invokeLooperCallback();
     assertReceivedMotionEvent({InputEventEntry{0ms,
                                                {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}},
@@ -237,8 +237,6 @@ TEST_F(InputConsumerResamplingTest, EventIsResampledWithDifferentId) {
     // InputEvent with a single action.
     mClientTestChannel->enqueueMessage(nextPointerMessage(
             {0ms, {Pointer{.id = 1, .x = 10.0f, .y = 20.0f}}, AMOTION_EVENT_ACTION_DOWN}));
-
-    mClientTestChannel->assertNoSentMessages();
 
     invokeLooperCallback();
     assertReceivedMotionEvent({InputEventEntry{0ms,
@@ -279,8 +277,6 @@ TEST_F(InputConsumerResamplingTest, StylusEventIsResampled) {
             {0ms,
              {Pointer{.id = 0, .x = 10.0f, .y = 20.0f, .toolType = ToolType::STYLUS}},
              AMOTION_EVENT_ACTION_DOWN}));
-
-    mClientTestChannel->assertNoSentMessages();
 
     invokeLooperCallback();
     assertReceivedMotionEvent({InputEventEntry{0ms,
@@ -338,8 +334,6 @@ TEST_F(InputConsumerResamplingTest, MouseEventIsResampled) {
              {Pointer{.id = 0, .x = 10.0f, .y = 20.0f, .toolType = ToolType::MOUSE}},
              AMOTION_EVENT_ACTION_DOWN}));
 
-    mClientTestChannel->assertNoSentMessages();
-
     invokeLooperCallback();
     assertReceivedMotionEvent({InputEventEntry{0ms,
                                                {Pointer{.id = 0,
@@ -396,8 +390,6 @@ TEST_F(InputConsumerResamplingTest, PalmEventIsNotResampled) {
              {Pointer{.id = 0, .x = 10.0f, .y = 20.0f, .toolType = ToolType::PALM}},
              AMOTION_EVENT_ACTION_DOWN}));
 
-    mClientTestChannel->assertNoSentMessages();
-
     invokeLooperCallback();
     assertReceivedMotionEvent(
             {InputEventEntry{0ms,
@@ -438,8 +430,6 @@ TEST_F(InputConsumerResamplingTest, SampleTimeEqualsEventTime) {
     mClientTestChannel->enqueueMessage(nextPointerMessage(
             {0ms, {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}}, AMOTION_EVENT_ACTION_DOWN}));
 
-    mClientTestChannel->assertNoSentMessages();
-
     invokeLooperCallback();
     assertReceivedMotionEvent({InputEventEntry{0ms,
                                                {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}},
@@ -452,7 +442,7 @@ TEST_F(InputConsumerResamplingTest, SampleTimeEqualsEventTime) {
             {20ms, {Pointer{.id = 0, .x = 30.0f, .y = 30.0f}}, AMOTION_EVENT_ACTION_MOVE}));
 
     invokeLooperCallback();
-    mConsumer->consumeBatchedInputEvents(nanoseconds{20ms + 5ms /*RESAMPLE_LATENCY*/}.count());
+    mConsumer->consumeBatchedInputEvents(nanoseconds{20ms + RESAMPLE_LATENCY}.count());
 
     // MotionEvent should not resampled because the resample time falls exactly on the existing
     // event time.
@@ -466,6 +456,289 @@ TEST_F(InputConsumerResamplingTest, SampleTimeEqualsEventTime) {
     mClientTestChannel->assertFinishMessage(/*seq=*/1, /*handled=*/true);
     mClientTestChannel->assertFinishMessage(/*seq=*/2, /*handled=*/true);
     mClientTestChannel->assertFinishMessage(/*seq=*/3, /*handled=*/true);
+}
+
+/**
+ * Once we send a resampled value to the app, we should continue to send the last predicted value if
+ * a pointer does not move. Only real values are used to determine if a pointer does not move.
+ */
+TEST_F(InputConsumerResamplingTest, ResampledValueIsUsedForIdenticalCoordinates) {
+    // Send the initial ACTION_DOWN separately, so that the first consumed event will only return an
+    // InputEvent with a single action.
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {0ms, {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}}, AMOTION_EVENT_ACTION_DOWN}));
+
+    invokeLooperCallback();
+    assertReceivedMotionEvent({InputEventEntry{0ms,
+                                               {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}},
+                                               AMOTION_EVENT_ACTION_DOWN}});
+
+    // Two ACTION_MOVE events 10 ms apart that move in X direction and stay still in Y
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {10ms, {Pointer{.id = 0, .x = 20.0f, .y = 30.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {20ms, {Pointer{.id = 0, .x = 30.0f, .y = 30.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(nanoseconds{35ms}.count());
+    assertReceivedMotionEvent(
+            {InputEventEntry{10ms,
+                             {Pointer{.id = 0, .x = 20.0f, .y = 30.0f}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{20ms,
+                             {Pointer{.id = 0, .x = 30.0f, .y = 30.0f}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{25ms,
+                             {Pointer{.id = 0, .x = 35.0f, .y = 30.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE}});
+
+    // Coordinate value 30 has been resampled to 35. When a new event comes in with value 30 again,
+    // the system should still report 35.
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {40ms, {Pointer{.id = 0, .x = 30.0f, .y = 30.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(nanoseconds{45ms + RESAMPLE_LATENCY}.count());
+    // Original and resampled event should be both overwritten.
+    assertReceivedMotionEvent(
+            {InputEventEntry{40ms,
+                             {Pointer{.id = 0, .x = 35.0f, .y = 30.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{45ms,
+                             {Pointer{.id = 0, .x = 35.0f, .y = 30.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE}});
+
+    mClientTestChannel->assertFinishMessage(/*seq=*/1, /*handled=*/true);
+    mClientTestChannel->assertFinishMessage(/*seq=*/2, /*handled=*/true);
+    mClientTestChannel->assertFinishMessage(/*seq=*/3, /*handled=*/true);
+    mClientTestChannel->assertFinishMessage(/*seq=*/4, /*handled=*/true);
+}
+
+TEST_F(InputConsumerResamplingTest, OldEventReceivedAfterResampleOccurs) {
+    // Send the initial ACTION_DOWN separately, so that the first consumed event will only return an
+    // InputEvent with a single action.
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {0ms, {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}}, AMOTION_EVENT_ACTION_DOWN}));
+
+    invokeLooperCallback();
+    assertReceivedMotionEvent({InputEventEntry{0ms,
+                                               {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}},
+                                               AMOTION_EVENT_ACTION_DOWN}});
+
+    // Two ACTION_MOVE events 10 ms apart that move in X direction and stay still in Y
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {10ms, {Pointer{.id = 0, .x = 20.0f, .y = 30.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {20ms, {Pointer{.id = 0, .x = 30.0f, .y = 30.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(nanoseconds{35ms}.count());
+    assertReceivedMotionEvent(
+            {InputEventEntry{10ms,
+                             {Pointer{.id = 0, .x = 20.0f, .y = 30.0f}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{20ms,
+                             {Pointer{.id = 0, .x = 30.0f, .y = 30.0f}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{25ms,
+                             {Pointer{.id = 0, .x = 35.0f, .y = 30.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE}});
+
+    // Above, the resampled event is at 25ms rather than at 30 ms = 35ms - RESAMPLE_LATENCY
+    // because we are further bound by how far we can extrapolate by the "last time delta".
+    // That's 50% of (20 ms - 10ms) => 5ms. So we can't predict more than 5 ms into the future
+    // from the event at 20ms, which is why the resampled event is at t = 25 ms.
+
+    // We resampled the event to 25 ms. Now, an older 'real' event comes in.
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {24ms, {Pointer{.id = 0, .x = 40.0f, .y = 30.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(nanoseconds{50ms}.count());
+    // Original and resampled event should be both overwritten.
+    assertReceivedMotionEvent(
+            {InputEventEntry{24ms,
+                             {Pointer{.id = 0, .x = 35.0f, .y = 30.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{26ms,
+                             {Pointer{.id = 0, .x = 45.0f, .y = 30.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE}});
+
+    mClientTestChannel->assertFinishMessage(/*seq=*/1, /*handled=*/true);
+    mClientTestChannel->assertFinishMessage(/*seq=*/2, /*handled=*/true);
+    mClientTestChannel->assertFinishMessage(/*seq=*/3, /*handled=*/true);
+    mClientTestChannel->assertFinishMessage(/*seq=*/4, /*handled=*/true);
+}
+
+TEST_F(InputConsumerResamplingTest, DoNotResampleWhenFrameTimeIsNotAvailable) {
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {0ms, {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}}, AMOTION_EVENT_ACTION_DOWN}));
+
+    invokeLooperCallback();
+    assertReceivedMotionEvent({InputEventEntry{0ms,
+                                               {Pointer{.id = 0, .x = 10.0f, .y = 20.0f}},
+                                               AMOTION_EVENT_ACTION_DOWN}});
+
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {10ms, {Pointer{.id = 0, .x = 20.0f, .y = 30.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {20ms, {Pointer{.id = 0, .x = 30.0f, .y = 30.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(std::nullopt);
+    assertReceivedMotionEvent({InputEventEntry{10ms,
+                                               {Pointer{.id = 0, .x = 20.0f, .y = 30.0f}},
+                                               AMOTION_EVENT_ACTION_MOVE},
+                               InputEventEntry{20ms,
+                                               {Pointer{.id = 0, .x = 30.0f, .y = 30.0f}},
+                                               AMOTION_EVENT_ACTION_MOVE}});
+
+    mClientTestChannel->assertFinishMessage(/*seq=*/1, /*handled=*/true);
+    mClientTestChannel->assertFinishMessage(/*seq=*/2, /*handled=*/true);
+    mClientTestChannel->assertFinishMessage(/*seq=*/3, /*handled=*/true);
+}
+
+TEST_F(InputConsumerResamplingTest, TwoPointersAreResampledIndependently) {
+    // Full action for when a pointer with index=1 appears (some other pointer must already be
+    // present)
+    const int32_t actionPointer1Down =
+            AMOTION_EVENT_ACTION_POINTER_DOWN + (1 << AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+
+    // Full action for when a pointer with index=0 disappears (some other pointer must still remain)
+    const int32_t actionPointer0Up =
+            AMOTION_EVENT_ACTION_POINTER_UP + (0 << AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {0ms, {Pointer{.id = 0, .x = 100.0f, .y = 100.0f}}, AMOTION_EVENT_ACTION_DOWN}));
+
+    mClientTestChannel->assertNoSentMessages();
+
+    invokeLooperCallback();
+    assertReceivedMotionEvent({InputEventEntry{0ms,
+                                               {Pointer{.id = 0, .x = 100.0f, .y = 100.0f}},
+                                               AMOTION_EVENT_ACTION_DOWN}});
+
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {10ms, {Pointer{.id = 0, .x = 100.0f, .y = 100.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(nanoseconds{10ms + RESAMPLE_LATENCY}.count());
+    // Not resampled value because requestedFrameTime - RESAMPLE_LATENCY == eventTime
+    assertReceivedMotionEvent({InputEventEntry{10ms,
+                                               {Pointer{.id = 0, .x = 100.0f, .y = 100.0f}},
+                                               AMOTION_EVENT_ACTION_MOVE}});
+
+    // Second pointer id=1 appears
+    mClientTestChannel->enqueueMessage(
+            nextPointerMessage({15ms,
+                                {Pointer{.id = 0, .x = 100.0f, .y = 100.0f},
+                                 Pointer{.id = 1, .x = 500.0f, .y = 500.0f}},
+                                actionPointer1Down}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(nanoseconds{20ms + RESAMPLE_LATENCY}.count());
+    // Not resampled value because requestedFrameTime - RESAMPLE_LATENCY == eventTime.
+    assertReceivedMotionEvent({InputEventEntry{15ms,
+                                               {Pointer{.id = 0, .x = 100.0f, .y = 100.0f},
+                                                Pointer{.id = 1, .x = 500.0f, .y = 500.0f}},
+                                               actionPointer1Down}});
+
+    // Both pointers move
+    mClientTestChannel->enqueueMessage(
+            nextPointerMessage({30ms,
+                                {Pointer{.id = 0, .x = 100.0f, .y = 100.0f},
+                                 Pointer{.id = 1, .x = 500.0f, .y = 500.0f}},
+                                AMOTION_EVENT_ACTION_MOVE}));
+    mClientTestChannel->enqueueMessage(
+            nextPointerMessage({40ms,
+                                {Pointer{.id = 0, .x = 120.0f, .y = 120.0f},
+                                 Pointer{.id = 1, .x = 600.0f, .y = 600.0f}},
+                                AMOTION_EVENT_ACTION_MOVE}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(nanoseconds{45ms + RESAMPLE_LATENCY}.count());
+    assertReceivedMotionEvent(
+            {InputEventEntry{30ms,
+                             {Pointer{.id = 0, .x = 100.0f, .y = 100.0f},
+                              Pointer{.id = 1, .x = 500.0f, .y = 500.0f}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{40ms,
+                             {Pointer{.id = 0, .x = 120.0f, .y = 120.0f},
+                              Pointer{.id = 1, .x = 600.0f, .y = 600.0f}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{45ms,
+                             {Pointer{.id = 0, .x = 130.0f, .y = 130.0f, .isResampled = true},
+                              Pointer{.id = 1, .x = 650.0f, .y = 650.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE}});
+
+    // Both pointers move again
+    mClientTestChannel->enqueueMessage(
+            nextPointerMessage({60ms,
+                                {Pointer{.id = 0, .x = 120.0f, .y = 120.0f},
+                                 Pointer{.id = 1, .x = 600.0f, .y = 600.0f}},
+                                AMOTION_EVENT_ACTION_MOVE}));
+    mClientTestChannel->enqueueMessage(
+            nextPointerMessage({70ms,
+                                {Pointer{.id = 0, .x = 130.0f, .y = 130.0f},
+                                 Pointer{.id = 1, .x = 700.0f, .y = 700.0f}},
+                                AMOTION_EVENT_ACTION_MOVE}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(nanoseconds{75ms + RESAMPLE_LATENCY}.count());
+
+    /*
+     * The pointer id 0 at t = 60 should not be equal to 120 because the value was received twice,
+     * and resampled to 130. Therefore, if we reported 130, then we should continue to report it as
+     * such. Likewise, with pointer id 1.
+     */
+
+    // Not 120 because it matches a previous real event.
+    assertReceivedMotionEvent(
+            {InputEventEntry{60ms,
+                             {Pointer{.id = 0, .x = 130.0f, .y = 130.0f, .isResampled = true},
+                              Pointer{.id = 1, .x = 650.0f, .y = 650.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{70ms,
+                             {Pointer{.id = 0, .x = 130.0f, .y = 130.0f},
+                              Pointer{.id = 1, .x = 700.0f, .y = 700.0f}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{75ms,
+                             {Pointer{.id = 0, .x = 135.0f, .y = 135.0f, .isResampled = true},
+                              Pointer{.id = 1, .x = 750.0f, .y = 750.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE}});
+
+    // First pointer id=0 leaves the screen
+    mClientTestChannel->enqueueMessage(
+            nextPointerMessage({80ms,
+                                {Pointer{.id = 0, .x = 120.0f, .y = 120.0f},
+                                 Pointer{.id = 1, .x = 600.0f, .y = 600.0f}},
+                                actionPointer0Up}));
+
+    invokeLooperCallback();
+    // Not resampled event for ACTION_POINTER_UP
+    assertReceivedMotionEvent({InputEventEntry{80ms,
+                                               {Pointer{.id = 0, .x = 120.0f, .y = 120.0f},
+                                                Pointer{.id = 1, .x = 600.0f, .y = 600.0f}},
+                                               actionPointer0Up}});
+
+    // Remaining pointer id=1 is still present, but doesn't move
+    mClientTestChannel->enqueueMessage(nextPointerMessage(
+            {90ms, {Pointer{.id = 1, .x = 600.0f, .y = 600.0f}}, AMOTION_EVENT_ACTION_MOVE}));
+
+    invokeLooperCallback();
+    mConsumer->consumeBatchedInputEvents(nanoseconds{100ms}.count());
+
+    /*
+     * The latest event with ACTION_MOVE was at t = 70 with value = 700. Thus, the resampled value
+     * is 700 + ((95 - 70)/(90 - 70))*(600 - 700) = 575.
+     */
+    assertReceivedMotionEvent(
+            {InputEventEntry{90ms,
+                             {Pointer{.id = 1, .x = 600.0f, .y = 600.0f}},
+                             AMOTION_EVENT_ACTION_MOVE},
+             InputEventEntry{95ms,
+                             {Pointer{.id = 1, .x = 575.0f, .y = 575.0f, .isResampled = true}},
+                             AMOTION_EVENT_ACTION_MOVE}});
 }
 
 } // namespace android

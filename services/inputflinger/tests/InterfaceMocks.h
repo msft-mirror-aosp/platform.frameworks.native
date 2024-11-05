@@ -180,6 +180,7 @@ public:
     MOCK_METHOD(status_t, enableDevice, (int32_t deviceId), (override));
     MOCK_METHOD(status_t, disableDevice, (int32_t deviceId), (override));
     MOCK_METHOD(void, sysfsNodeChanged, (const std::string& sysfsNodePath), (override));
+    MOCK_METHOD(bool, setKernelWakeEnabled, (int32_t deviceId, bool enabled), (override));
 };
 
 class MockPointerChoreographerPolicyInterface : public PointerChoreographerPolicyInterface {
@@ -246,8 +247,6 @@ public:
     MOCK_METHOD(std::optional<int32_t>, getLightPlayerId, (int32_t lightId), ());
 
     MOCK_METHOD(int32_t, getMetaState, (), ());
-    MOCK_METHOD(void, updateMetaState, (int32_t keyCode), ());
-
     MOCK_METHOD(void, setKeyboardType, (KeyboardType keyboardType), ());
 
     MOCK_METHOD(void, bumpGeneration, (), ());

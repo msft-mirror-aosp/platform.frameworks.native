@@ -299,6 +299,10 @@ private:
 
     // Event injection and synchronization.
     std::condition_variable mInjectionResultAvailable;
+    bool shouldRejectInjectedMotionLocked(const MotionEvent& motion, DeviceId deviceId,
+                                          ui::LogicalDisplayId displayId,
+                                          std::optional<gui::Uid> targetUid, int32_t flags)
+            REQUIRES(mLock);
     void setInjectionResult(const EventEntry& entry,
                             android::os::InputEventInjectionResult injectionResult);
     void transformMotionEntryForInjectionLocked(MotionEntry&,
@@ -329,7 +333,7 @@ private:
     std::chrono::nanoseconds mMonitorDispatchingTimeout GUARDED_BY(mLock);
 
     nsecs_t processAnrsLocked() REQUIRES(mLock);
-    nsecs_t processLatencyStatisticsLocked() REQUIRES(mLock);
+    void processLatencyStatisticsLocked() REQUIRES(mLock);
     std::chrono::nanoseconds getDispatchingTimeoutLocked(
             const std::shared_ptr<Connection>& connection) REQUIRES(mLock);
 

@@ -386,7 +386,7 @@ status_t validateAccessor(const String16& instance, const sp<IBinder>& binder) {
         ALOGE("Binder is null");
         return BAD_VALUE;
     }
-    sp<IAccessor> accessor = interface_cast<IAccessor>(binder);
+    sp<IAccessor> accessor = checked_interface_cast<IAccessor>(binder);
     if (accessor == nullptr) {
         ALOGE("This binder for %s is not an IAccessor binder", String8(instance).c_str());
         return BAD_TYPE;
@@ -418,6 +418,28 @@ sp<IBinder> createAccessor(const String16& instance,
     }
     sp<IBinder> binder = sp<LocalAccessor>::make(instance, std::move(connectionInfoProvider));
     return binder;
+}
+
+status_t delegateAccessor(const String16& name, const sp<IBinder>& accessor,
+                          sp<IBinder>* delegator) {
+    LOG_ALWAYS_FATAL_IF(delegator == nullptr, "delegateAccessor called with a null out param");
+    if (accessor == nullptr) {
+        ALOGW("Accessor argument to delegateAccessor is null.");
+        *delegator = nullptr;
+        return OK;
+    }
+    status_t status = validateAccessor(name, accessor);
+    if (status != OK) {
+        ALOGE("The provided accessor binder is not an IAccessor for instance %s. Status: "
+              "%s",
+              String8(name).c_str(), statusToString(status).c_str());
+        return status;
+    }
+    // validateAccessor already called checked_interface_cast and made sure this
+    // is a valid accessor object.
+    *delegator = sp<android::os::IAccessorDelegator>::make(interface_cast<IAccessor>(accessor));
+
+    return OK;
 }
 
 #if !defined(__ANDROID_VNDK__)
@@ -539,8 +561,9 @@ sp<IBinder> CppBackendShim::getService(const String16& name) const {
     sp<IBinder> svc = checkService(name);
     if (svc != nullptr) return svc;
 
+    sp<ProcessState> self = ProcessState::selfOrNull();
     const bool isVendorService =
-        strcmp(ProcessState::self()->getDriverName().c_str(), "/dev/vndbinder") == 0;
+            self && strcmp(self->getDriverName().c_str(), "/dev/vndbinder") == 0;
     constexpr auto timeout = 5s;
     const auto startTime = std::chrono::steady_clock::now();
     // Vendor code can't access system properties
@@ -557,7 +580,7 @@ sp<IBinder> CppBackendShim::getService(const String16& name) const {
     const useconds_t sleepTime = gSystemBootCompleted ? 1000 : 100;
 
     ALOGI("Waiting for service '%s' on '%s'...", String8(name).c_str(),
-          ProcessState::self()->getDriverName().c_str());
+          self ? self->getDriverName().c_str() : "RPC accessors only");
 
     int n = 0;
     while (std::chrono::steady_clock::now() - startTime < timeout) {
@@ -639,7 +662,8 @@ sp<IBinder> CppBackendShim::waitForService(const String16& name16) {
     if (Status status = realGetService(name, &out); !status.isOk()) {
         ALOGW("Failed to getService in waitForService for %s: %s", name.c_str(),
               status.toString8().c_str());
-        if (0 == ProcessState::self()->getThreadPoolMaxTotalThreadCount()) {
+        sp<ProcessState> self = ProcessState::selfOrNull();
+        if (self && 0 == self->getThreadPoolMaxTotalThreadCount()) {
             ALOGW("Got service, but may be racey because we could not wait efficiently for it. "
                   "Threadpool has 0 guaranteed threads. "
                   "Is the threadpool configured properly? "
@@ -673,9 +697,10 @@ sp<IBinder> CppBackendShim::waitForService(const String16& name16) {
             if (waiter->mBinder != nullptr) return waiter->mBinder;
         }
 
+        sp<ProcessState> self = ProcessState::selfOrNull();
         ALOGW("Waited one second for %s (is service started? Number of threads started in the "
               "threadpool: %zu. Are binder threads started and available?)",
-              name.c_str(), ProcessState::self()->getThreadPoolMaxTotalThreadCount());
+              name.c_str(), self ? self->getThreadPoolMaxTotalThreadCount() : 0);
 
         // Handle race condition for lazy services. Here is what can happen:
         // - the service dies (not processed by init yet).

@@ -122,8 +122,6 @@ public:
     std::optional<int32_t> getLightPlayerId(int32_t lightId);
 
     int32_t getMetaState();
-    void updateMetaState(int32_t keyCode);
-
     void setKeyboardType(KeyboardType keyboardType);
 
     void bumpGeneration();
@@ -140,6 +138,8 @@ public:
     size_t getMapperCount();
 
     std::optional<HardwareProperties> getTouchpadHardwareProperties();
+
+    bool setKernelWakeEnabled(bool enabled);
 
     // construct and add a mapper to the input device
     template <class T, typename... Args>
@@ -470,6 +470,9 @@ public:
     inline KeyboardType getKeyboardType() const { return mDevice.getKeyboardType(); }
     inline void setKeyboardType(KeyboardType keyboardType) {
         return mDevice.setKeyboardType(keyboardType);
+    }
+    inline bool setKernelWakeEnabled(bool enabled) {
+        return mEventHub->setKernelWakeEnabled(mId, enabled);
     }
 
 private:

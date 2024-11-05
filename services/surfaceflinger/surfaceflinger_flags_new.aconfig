@@ -4,11 +4,35 @@ package: "com.android.graphics.surfaceflinger.flags"
 container: "system"
 
 flag {
+  name: "adpf_fmq_sf"
+  namespace: "game"
+  description: "Guards use of the ADPF FMQ system specifically for SurfaceFlinger"
+  bug: "315894228"
+  is_fixed_read_only: true
+} # adpf_fmq_sf
+
+flag {
   name: "adpf_gpu_sf"
   namespace: "game"
   description: "Guards use of the sending ADPF GPU duration hint and load hints from SurfaceFlinger to Power HAL"
   bug: "284324521"
 } # adpf_gpu_sf
+
+flag {
+  name: "arr_setframerate_api"
+  namespace: "core_graphics"
+  description: "New SDK Surface#setFrameRate API and Surface.FrameRateParams for Android 16"
+  bug: "356987016"
+  is_fixed_read_only: true
+} # arr_setframerate_api
+
+flag {
+  name: "arr_surfacecontrol_setframerate_api"
+  namespace: "core_graphics"
+  description: "New SDK SurfaceControl.Transaction#setFrameRate API for Android 16"
+  bug: "356987016"
+  is_fixed_read_only: true
+} # arr_surfacecontrol_setframerate_api
 
 flag {
   name: "ce_fence_promise"
@@ -31,6 +55,14 @@ flag {
     purpose: PURPOSE_BUGFIX
   }
 } # commit_not_composited
+
+flag {
+  name: "connected_display_hdr"
+  namespace: "core_graphics"
+  description: "enable connected display hdr capability"
+  bug: "374182788"
+  is_fixed_read_only: true
+} # connected_display_hdr
 
 flag {
   name: "correct_dpi_with_display_size"
@@ -64,6 +96,14 @@ flag {
     purpose: PURPOSE_BUGFIX
   }
 } # detached_mirror
+
+flag {
+  name: "display_config_error_hal"
+  namespace: "core_graphics"
+  description: "Report HAL display configuration errors like modeset failure or link training failure"
+  bug: "374184110"
+  is_fixed_read_only: true
+} # display_config_error_hal
 
 flag {
   name: "filter_frames_before_trace_starts"
@@ -124,6 +164,14 @@ flag {
   bug: "329464641"
   is_fixed_read_only: true
 } # local_tonemap_screenshots
+
+flag {
+  name: "no_vsyncs_on_screen_off"
+  namespace: "core_graphics"
+  description: "Stop vsync / Choreographer callbacks to apps when the screen is off"
+  bug: "331636736"
+  is_fixed_read_only: true
+} # no_vsyncs_on_screen_off
 
 flag {
   name: "single_hop_screenshot"

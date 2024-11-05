@@ -836,13 +836,9 @@ bool isStylusActiveInDisplay(ui::LogicalDisplayId displayId,
 }
 
 Result<void> validateWindowInfosUpdate(const gui::WindowInfosUpdate& update) {
-    struct HashFunction {
-        size_t operator()(const WindowInfo& info) const { return info.id; }
-    };
-
-    std::unordered_set<WindowInfo, HashFunction> windowSet;
+    std::unordered_set<int32_t> windowIds;
     for (const WindowInfo& info : update.windowInfos) {
-        const auto [_, inserted] = windowSet.insert(info);
+        const auto [_, inserted] = windowIds.insert(info.id);
         if (!inserted) {
             return Error() << "Duplicate entry for " << info;
         }
@@ -1031,8 +1027,7 @@ void InputDispatcher::dispatchOnce() {
         nextWakeupTime = std::min(nextWakeupTime, nextAnrCheck);
 
         if (mPerDeviceInputLatencyMetricsFlag) {
-            const nsecs_t nextStatisticsPush = processLatencyStatisticsLocked();
-            nextWakeupTime = std::min(nextWakeupTime, nextStatisticsPush);
+            processLatencyStatisticsLocked();
         }
 
         // We are about to enter an infinitely long sleep, because we have no commands or
@@ -1117,9 +1112,8 @@ nsecs_t InputDispatcher::processAnrsLocked() {
 
 /**
  * Check if enough time has passed since the last latency statistics push.
- * Return the time at which we should wake up next.
  */
-nsecs_t InputDispatcher::processLatencyStatisticsLocked() {
+void InputDispatcher::processLatencyStatisticsLocked() {
     const nsecs_t currentTime = now();
     // Log the atom recording latency statistics if more than 6 hours passed from the last
     // push
@@ -1127,7 +1121,6 @@ nsecs_t InputDispatcher::processLatencyStatisticsLocked() {
         mInputEventTimelineProcessor->pushLatencyStatistics();
         mLastStatisticPushTime = currentTime;
     }
-    return mLastStatisticPushTime + LATENCY_STATISTICS_PUSH_INTERVAL;
 }
 
 std::chrono::nanoseconds InputDispatcher::getDispatchingTimeoutLocked(
@@ -2898,7 +2891,8 @@ void InputDispatcher::finishDragAndDrop(ui::LogicalDisplayId displayId, float x,
 }
 
 void InputDispatcher::addDragEventLocked(const MotionEntry& entry) {
-    if (!mDragState || mDragState->dragWindow->getInfo()->displayId != entry.displayId) {
+    if (!mDragState || mDragState->dragWindow->getInfo()->displayId != entry.displayId ||
+        mDragState->deviceId != entry.deviceId) {
         return;
     }
 
@@ -4553,7 +4547,7 @@ void InputDispatcher::notifyKey(const NotifyKeyArgs& args) {
             if (args.id != android::os::IInputConstants::INVALID_INPUT_EVENT_ID &&
                 IdGenerator::getSource(args.id) == IdGenerator::Source::INPUT_READER &&
                 !mInputFilterEnabled) {
-                mLatencyTracker.trackNotifyKey(args);
+                mLatencyTracker.trackListener(args);
             }
         }
 
@@ -4689,7 +4683,7 @@ void InputDispatcher::notifyMotion(const NotifyMotionArgs& args) {
         if (args.id != android::os::IInputConstants::INVALID_INPUT_EVENT_ID &&
             IdGenerator::getSource(args.id) == IdGenerator::Source::INPUT_READER &&
             !mInputFilterEnabled) {
-            mLatencyTracker.trackNotifyMotion(args);
+            mLatencyTracker.trackListener(args);
         }
 
         needWake = enqueueInboundEventLocked(std::move(newEntry));
@@ -4794,6 +4788,39 @@ void InputDispatcher::notifyPointerCaptureChanged(const NotifyPointerCaptureChan
     if (needWake) {
         mLooper->wake();
     }
+}
+
+bool InputDispatcher::shouldRejectInjectedMotionLocked(const MotionEvent& motionEvent,
+                                                       DeviceId deviceId,
+                                                       ui::LogicalDisplayId displayId,
+                                                       std::optional<gui::Uid> targetUid,
+                                                       int32_t flags) {
+    // Don't verify targeted injection, since it will only affect the caller's
+    // window, and the windows are typically destroyed at the end of the test.
+    if (targetUid.has_value()) {
+        return false;
+    }
+
+    // Verify all other injected streams, whether the injection is coming from apps or from
+    // input filter. Print an error if the stream becomes inconsistent with this event.
+    // An inconsistent injected event sent could cause a crash in the later stages of
+    // dispatching pipeline.
+    auto [it, _] = mInputFilterVerifiersByDisplay.try_emplace(displayId,
+                                                              std::string("Injection on ") +
+                                                                      displayId.toString());
+    InputVerifier& verifier = it->second;
+
+    Result<void> result =
+            verifier.processMovement(deviceId, motionEvent.getSource(), motionEvent.getAction(),
+                                     motionEvent.getPointerCount(),
+                                     motionEvent.getPointerProperties(),
+                                     motionEvent.getSamplePointerCoords(), flags);
+    if (!result.ok()) {
+        logDispatchStateLocked();
+        LOG(ERROR) << "Inconsistent event: " << motionEvent << ", reason: " << result.error();
+        return true;
+    }
+    return false;
 }
 
 InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* event,
@@ -4906,32 +4933,10 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
 
             mLock.lock();
 
-            {
-                // Verify all injected streams, whether the injection is coming from apps or from
-                // input filter. Print an error if the stream becomes inconsistent with this event.
-                // An inconsistent injected event sent could cause a crash in the later stages of
-                // dispatching pipeline.
-                auto [it, _] =
-                        mInputFilterVerifiersByDisplay.try_emplace(displayId,
-                                                                   std::string("Injection on ") +
-                                                                           displayId.toString());
-                InputVerifier& verifier = it->second;
-
-                Result<void> result =
-                        verifier.processMovement(resolvedDeviceId, motionEvent.getSource(),
-                                                 motionEvent.getAction(),
-                                                 motionEvent.getPointerCount(),
-                                                 motionEvent.getPointerProperties(),
-                                                 motionEvent.getSamplePointerCoords(), flags);
-                if (!result.ok()) {
-                    logDispatchStateLocked();
-                    LOG(ERROR) << "Inconsistent event: " << motionEvent
-                               << ", reason: " << result.error();
-                    if (policyFlags & POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY) {
-                        mLock.unlock();
-                        return InputEventInjectionResult::FAILED;
-                    }
-                }
+            if (shouldRejectInjectedMotionLocked(motionEvent, resolvedDeviceId, displayId,
+                                                 targetUid, flags)) {
+                mLock.unlock();
+                return InputEventInjectionResult::FAILED;
             }
 
             const nsecs_t* sampleEventTimes = motionEvent.getSampleEventTimes();
@@ -5823,7 +5828,7 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
             }
             // Track the pointer id for drag window and generate the drag state.
             const size_t id = pointers.begin()->id;
-            mDragState = std::make_unique<DragState>(toWindowHandle, id);
+            mDragState = std::make_unique<DragState>(toWindowHandle, deviceId, id);
         }
 
         // Synthesize cancel for old window and down for new window.

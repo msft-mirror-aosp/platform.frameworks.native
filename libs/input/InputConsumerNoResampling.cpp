@@ -193,13 +193,29 @@ InputConsumerNoResampling::InputConsumerNoResampling(
 
 InputConsumerNoResampling::~InputConsumerNoResampling() {
     ensureCalledOnLooperThread(__func__);
-    consumeBatchedInputEvents(/*requestedFrameTime=*/std::nullopt);
     while (!mOutboundQueue.empty()) {
         processOutboundEvents();
         // This is our last chance to ack the events. If we don't ack them here, we will get an ANR,
         // so keep trying to send the events as long as they are present in the queue.
     }
+
     setFdEvents(0);
+    // If there are any remaining unread batches, send an ack for them and don't deliver
+    // them to callbacks.
+    for (auto& [_, batches] : mBatches) {
+        while (!batches.empty()) {
+            finishInputEvent(batches.front().header.seq, /*handled=*/false);
+            batches.pop();
+        }
+    }
+    // However, it is still up to the app to finish any events that have already been delivered
+    // to the callbacks. If we wanted to change that behaviour and auto-finish all unfinished events
+    // that were already sent to callbacks, we could potentially loop through "mConsumeTimes"
+    // instead. We can't use "mBatchedSequenceNumbers" for this purpose, because it only contains
+    // batchable (i.e., ACTION_MOVE) events that were sent to the callbacks.
+    const size_t unfinishedEvents = mConsumeTimes.size();
+    LOG_IF(INFO, unfinishedEvents != 0)
+            << getName() << " has " << unfinishedEvents << " unfinished event(s)";
 }
 
 int InputConsumerNoResampling::handleReceiveCallback(int events) {
@@ -341,7 +357,8 @@ void InputConsumerNoResampling::handleMessages(std::vector<InputMessage>&& messa
                 mBatches[deviceId].emplace(msg);
             } else {
                 // consume all pending batches for this device immediately
-                consumeBatchedInputEvents(deviceId, /*requestedFrameTime=*/std::nullopt);
+                consumeBatchedInputEvents(deviceId, /*requestedFrameTime=*/
+                                          std::numeric_limits<nsecs_t>::max());
                 if (canResample &&
                     (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_CANCEL)) {
                     LOG_IF(INFO, mResamplers.erase(deviceId) == 0)
@@ -464,7 +481,7 @@ void InputConsumerNoResampling::handleMessage(const InputMessage& msg) const {
 }
 
 std::pair<std::unique_ptr<MotionEvent>, std::optional<uint32_t>>
-InputConsumerNoResampling::createBatchedMotionEvent(const nsecs_t requestedFrameTime,
+InputConsumerNoResampling::createBatchedMotionEvent(const std::optional<nsecs_t> requestedFrameTime,
                                                     std::queue<InputMessage>& messages) {
     std::unique_ptr<MotionEvent> motionEvent;
     std::optional<uint32_t> firstSeqForBatch;
@@ -475,7 +492,11 @@ InputConsumerNoResampling::createBatchedMotionEvent(const nsecs_t requestedFrame
     const nanoseconds resampleLatency = (resampler != mResamplers.cend())
             ? resampler->second->getResampleLatency()
             : nanoseconds{0};
-    const nanoseconds adjustedFrameTime = nanoseconds{requestedFrameTime} - resampleLatency;
+    // When batching is not enabled, we want to consume all events. That's equivalent to having an
+    // infinite requestedFrameTime.
+    const nanoseconds adjustedFrameTime = (requestedFrameTime.has_value())
+            ? (nanoseconds{*requestedFrameTime} - resampleLatency)
+            : nanoseconds{std::numeric_limits<nsecs_t>::max()};
 
     while (!messages.empty() &&
            (messages.front().body.motion.eventTime <= adjustedFrameTime.count())) {
@@ -497,8 +518,9 @@ InputConsumerNoResampling::createBatchedMotionEvent(const nsecs_t requestedFrame
     if (!messages.empty()) {
         futureSample = &messages.front();
     }
-    if ((motionEvent != nullptr) && (resampler != mResamplers.cend())) {
-        resampler->second->resampleMotionEvent(nanoseconds{requestedFrameTime}, *motionEvent,
+    if ((motionEvent != nullptr) && (resampler != mResamplers.cend()) &&
+        (requestedFrameTime.has_value())) {
+        resampler->second->resampleMotionEvent(nanoseconds{*requestedFrameTime}, *motionEvent,
                                                futureSample);
     }
 
@@ -508,16 +530,13 @@ InputConsumerNoResampling::createBatchedMotionEvent(const nsecs_t requestedFrame
 bool InputConsumerNoResampling::consumeBatchedInputEvents(
         std::optional<DeviceId> deviceId, std::optional<nsecs_t> requestedFrameTime) {
     ensureCalledOnLooperThread(__func__);
-    // When batching is not enabled, we want to consume all events. That's equivalent to having an
-    // infinite requestedFrameTime.
-    requestedFrameTime = requestedFrameTime.value_or(std::numeric_limits<nsecs_t>::max());
     bool producedEvents = false;
 
     for (auto deviceIdIter = (deviceId.has_value()) ? (mBatches.find(*deviceId))
                                                     : (mBatches.begin());
          deviceIdIter != mBatches.cend(); ++deviceIdIter) {
         std::queue<InputMessage>& messages = deviceIdIter->second;
-        auto [motion, firstSeqForBatch] = createBatchedMotionEvent(*requestedFrameTime, messages);
+        auto [motion, firstSeqForBatch] = createBatchedMotionEvent(requestedFrameTime, messages);
         if (motion != nullptr) {
             LOG_ALWAYS_FATAL_IF(!firstSeqForBatch.has_value());
             mCallbacks.onMotionEvent(std::move(motion), *firstSeqForBatch);

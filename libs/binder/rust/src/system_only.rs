@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
+use crate::binder::AsNative;
+use crate::error::{status_result, Result};
 use crate::proxy::SpIBinder;
 use crate::sys;
 
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 
-use libc::sockaddr;
-use nix::sys::socket::{SockaddrLike, UnixAddr, VsockAddr};
+use libc::{sockaddr, sockaddr_un, sockaddr_vm, socklen_t};
 use std::sync::Arc;
-use std::{fmt, ptr};
+use std::{fmt, mem, ptr};
 
 /// Rust wrapper around ABinderRpc_Accessor objects for RPC binder service management.
 ///
@@ -42,9 +43,9 @@ impl fmt::Debug for Accessor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionInfo {
     /// For vsock connection
-    Vsock(VsockAddr),
+    Vsock(sockaddr_vm),
     /// For unix domain socket connection
-    Unix(UnixAddr),
+    Unix(sockaddr_un),
 }
 
 /// Safety: A `Accessor` is a wrapper around `ABinderRpc_Accessor` which is
@@ -146,13 +147,21 @@ impl Accessor {
         match connection {
             ConnectionInfo::Vsock(addr) => {
                 // Safety: The sockaddr is being copied in the NDK API
-                unsafe { sys::ABinderRpc_ConnectionInfo_new(addr.as_ptr(), addr.len()) }
+                unsafe {
+                    sys::ABinderRpc_ConnectionInfo_new(
+                        &addr as *const sockaddr_vm as *const sockaddr,
+                        mem::size_of::<sockaddr_vm>() as socklen_t,
+                    )
+                }
             }
             ConnectionInfo::Unix(addr) => {
                 // Safety: The sockaddr is being copied in the NDK API
                 // The cast is from sockaddr_un* to sockaddr*.
                 unsafe {
-                    sys::ABinderRpc_ConnectionInfo_new(addr.as_ptr() as *const sockaddr, addr.len())
+                    sys::ABinderRpc_ConnectionInfo_new(
+                        &addr as *const sockaddr_un as *const sockaddr,
+                        mem::size_of::<sockaddr_un>() as socklen_t,
+                    )
                 }
             }
         }
@@ -184,4 +193,28 @@ impl Drop for Accessor {
             sys::ABinderRpc_Accessor_delete(self.accessor);
         }
     }
+}
+
+/// Register a new service with the default service manager.
+///
+/// Registers the given binder object with the given identifier. If successful,
+/// this service can then be retrieved using that identifier.
+///
+/// This function will panic if the identifier contains a 0 byte (NUL).
+pub fn delegate_accessor(name: &str, mut binder: SpIBinder) -> Result<SpIBinder> {
+    let instance = CString::new(name).unwrap();
+    let mut delegator = ptr::null_mut();
+    let status =
+    // Safety: `AServiceManager_addService` expects valid `AIBinder` and C
+    // string pointers. Caller retains ownership of both pointers.
+    // `AServiceManager_addService` creates a new strong reference and copies
+    // the string, so both pointers need only be valid until the call returns.
+        unsafe { sys::ABinderRpc_Accessor_delegateAccessor(instance.as_ptr(),
+            binder.as_native_mut(), &mut delegator) };
+
+    status_result(status)?;
+
+    // Safety: `delegator` is either null or a valid, owned pointer at this
+    // point, so can be safely passed to `SpIBinder::from_raw`.
+    Ok(unsafe { SpIBinder::from_raw(delegator).expect("Expected valid binder at this point") })
 }

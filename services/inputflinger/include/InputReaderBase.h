@@ -96,6 +96,10 @@ struct InputReaderConfiguration {
         // The key remapping has changed.
         KEY_REMAPPING = 1u << 14,
 
+        // The mouse settings changed, this includes mouse reverse vertical scrolling and swap
+        // primary button.
+        MOUSE_SETTINGS = 1u << 15,
+
         // All devices must be reopened.
         MUST_REOPEN = 1u << 31,
     };
@@ -133,19 +137,18 @@ struct InputReaderConfiguration {
     ui::LogicalDisplayId defaultPointerDisplayId;
 
     // The mouse pointer speed, as a number from -7 (slowest) to 7 (fastest).
-    //
-    // Currently only used when the enable_new_mouse_pointer_ballistics flag is enabled.
     int32_t mousePointerSpeed;
 
     // Displays on which an acceleration curve shouldn't be applied for pointer movements from mice.
-    //
-    // Currently only used when the enable_new_mouse_pointer_ballistics flag is enabled.
     std::set<ui::LogicalDisplayId> displaysWithMousePointerAccelerationDisabled;
 
-    // Velocity control parameters for mouse pointer movements.
+    // Velocity control parameters for touchpad pointer movements on the old touchpad stack (based
+    // on TouchInputMapper).
     //
-    // If the enable_new_mouse_pointer_ballistics flag is enabled, these are ignored and the values
-    // of mousePointerSpeed and mousePointerAccelerationEnabled used instead.
+    // For mice, these are ignored and the values of mousePointerSpeed and
+    // mousePointerAccelerationEnabled used instead.
+    //
+    // TODO(b/281840344): remove this.
     VelocityControlParameters pointerVelocityControlParameters;
 
     // Velocity control parameters for mouse wheel movements.
@@ -239,6 +242,9 @@ struct InputReaderConfiguration {
     // context (a.k.a. "right") clicks.
     bool touchpadRightClickZoneEnabled;
 
+    // True to use three-finger tap as a customizable shortcut; false to use it as a middle-click.
+    bool touchpadThreeFingerTapShortcutEnabled;
+
     // The set of currently disabled input devices.
     std::set<int32_t> disabledDevices;
 
@@ -251,6 +257,15 @@ struct InputReaderConfiguration {
 
     // Keycodes to be remapped.
     std::map<int32_t /* fromKeyCode */, int32_t /* toKeyCode */> keyRemapping;
+
+    // True if the external mouse should have its vertical scrolling reversed, so that rotating the
+    // wheel downwards scrolls the content upwards.
+    bool mouseReverseVerticalScrollingEnabled;
+
+    // True if the connected mouse should have its primary button (default: left click) swapped,
+    // so that the right click will be the primary action button and the left click will be the
+    // secondary action.
+    bool mouseSwapPrimaryButtonEnabled;
 
     InputReaderConfiguration()
           : virtualKeyQuietTime(0),
@@ -281,8 +296,11 @@ struct InputReaderConfiguration {
             touchpadTapDraggingEnabled(false),
             shouldNotifyTouchpadHardwareState(false),
             touchpadRightClickZoneEnabled(false),
+            touchpadThreeFingerTapShortcutEnabled(false),
             stylusButtonMotionEventsEnabled(true),
-            stylusPointerIconEnabled(false) {}
+            stylusPointerIconEnabled(false),
+            mouseReverseVerticalScrollingEnabled(false),
+            mouseSwapPrimaryButtonEnabled(false) {}
 
     std::optional<DisplayViewport> getDisplayViewportByType(ViewportType type) const;
     std::optional<DisplayViewport> getDisplayViewportByUniqueId(const std::string& uniqueDisplayId)
@@ -411,6 +429,16 @@ public:
 
     /* Notifies that mouse cursor faded due to typing. */
     virtual void notifyMouseCursorFadedOnTyping() = 0;
+
+    /* Set whether the given input device can wake up the kernel from sleep
+     * when it generates input events. By default, usually only internal (built-in)
+     * input devices can wake the kernel from sleep. For an external input device
+     * that supports remote wakeup to be able to wake the kernel, this must be called
+     * after each time the device is connected/added.
+     *
+     * Returns true if setting power wakeup was successful.
+     */
+    virtual bool setKernelWakeEnabled(int32_t deviceId, bool enabled) = 0;
 };
 
 // --- TouchAffineTransformation ---
@@ -471,6 +499,9 @@ public:
 
     /* Sends the Info of gestures that happen on the touchpad. */
     virtual void notifyTouchpadGestureInfo(GestureType type, int32_t deviceId) = 0;
+
+    /* Notifies the policy that the user has performed a three-finger touchpad tap. */
+    virtual void notifyTouchpadThreeFingerTap() = 0;
 
     /* Gets the keyboard layout for a particular input device. */
     virtual std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(

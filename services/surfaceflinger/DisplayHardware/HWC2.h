@@ -20,6 +20,7 @@
 #include <android-base/thread_annotations.h>
 #include <ftl/expected.h>
 #include <ftl/future.h>
+#include <ftl/small_map.h>
 #include <gui/HdrMetadata.h>
 #include <math/mat4.h>
 #include <ui/HdrCapabilities.h>
@@ -45,7 +46,7 @@
 #include <aidl/android/hardware/graphics/composer3/Color.h>
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
-#include <aidl/android/hardware/graphics/composer3/Lut.h>
+#include <aidl/android/hardware/graphics/composer3/Luts.h>
 #include <aidl/android/hardware/graphics/composer3/OverlayProperties.h>
 #include <aidl/android/hardware/graphics/composer3/RefreshRateChangedDebugData.h>
 
@@ -106,6 +107,14 @@ public:
     virtual bool hasDisplayIdleTimerCapability() const = 0;
     virtual void onLayerDestroyed(hal::HWLayerId layerId) = 0;
     virtual std::optional<ui::Size> getPhysicalSizeInMm() const = 0;
+
+    static const int kLutFileDescriptorMapperSize = 20;
+    using LutOffsetAndProperties = std::vector<
+            std::pair<int32_t, aidl::android::hardware::graphics::composer3::LutProperties>>;
+    using LayerLuts =
+            ftl::SmallMap<HWC2::Layer*, LutOffsetAndProperties, kLutFileDescriptorMapperSize>;
+    using LutFileDescriptorMapper =
+            ftl::SmallMap<HWC2::Layer*, ndk::ScopedFileDescriptor, kLutFileDescriptorMapperSize>;
 
     [[nodiscard]] virtual hal::Error acceptChanges() = 0;
     [[nodiscard]] virtual base::expected<std::shared_ptr<HWC2::Layer>, hal::Error>
@@ -183,8 +192,7 @@ public:
             aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness*
                     outClientTargetProperty) = 0;
     [[nodiscard]] virtual hal::Error getRequestedLuts(
-            std::vector<aidl::android::hardware::graphics::composer3::DisplayLuts::LayerLut>*
-                    outLuts) = 0;
+            LayerLuts* outLuts, LutFileDescriptorMapper& lutFileDescriptorMapper) = 0;
     [[nodiscard]] virtual hal::Error getDisplayDecorationSupport(
             std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>*
                     support) = 0;
@@ -268,9 +276,8 @@ public:
     hal::Error getClientTargetProperty(
             aidl::android::hardware::graphics::composer3::ClientTargetPropertyWithBrightness*
                     outClientTargetProperty) override;
-    hal::Error getRequestedLuts(
-            std::vector<aidl::android::hardware::graphics::composer3::DisplayLuts::LayerLut>*
-                    outLuts) override;
+    hal::Error getRequestedLuts(LayerLuts* outLuts,
+                                LutFileDescriptorMapper& lutFileDescriptorMapper) override;
     hal::Error getDisplayDecorationSupport(
             std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>*
                     support) override;
@@ -369,7 +376,7 @@ public:
     [[nodiscard]] virtual hal::Error setBrightness(float brightness) = 0;
     [[nodiscard]] virtual hal::Error setBlockingRegion(const android::Region& region) = 0;
     [[nodiscard]] virtual hal::Error setLuts(
-            std::vector<aidl::android::hardware::graphics::composer3::Lut>& luts) = 0;
+            aidl::android::hardware::graphics::composer3::Luts& luts) = 0;
 };
 
 namespace impl {
@@ -420,8 +427,7 @@ public:
     // AIDL HAL
     hal::Error setBrightness(float brightness) override;
     hal::Error setBlockingRegion(const android::Region& region) override;
-    hal::Error setLuts(
-            std::vector<aidl::android::hardware::graphics::composer3::Lut>& luts) override;
+    hal::Error setLuts(aidl::android::hardware::graphics::composer3::Luts&) override;
 
 private:
     // These are references to data owned by HWComposer, which will outlive

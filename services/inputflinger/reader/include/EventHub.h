@@ -396,6 +396,13 @@ public:
     /* Sysfs node changed. Reopen the Eventhub device if any new Peripheral like Light, Battery,
      * etc. is detected. */
     virtual void sysfsNodeChanged(const std::string& sysfsNodePath) = 0;
+
+    /* Set whether the given input device can wake up the kernel from sleep
+     * when it generates input events. By default, usually only internal (built-in)
+     * input devices can wake the kernel from sleep. For an external input device
+     * that supports remote wakeup to be able to wake the kernel, this must be called
+     * after each time the device is connected/added. */
+    virtual bool setKernelWakeEnabled(int32_t deviceId, bool enabled) = 0;
 };
 
 template <std::size_t BITS>
@@ -603,6 +610,8 @@ public:
 
     void sysfsNodeChanged(const std::string& sysfsNodePath) override final;
 
+    bool setKernelWakeEnabled(int32_t deviceId, bool enabled) override final;
+
     ~EventHub() override;
 
 private:
@@ -680,6 +689,7 @@ private:
         void configureFd();
         void populateAbsoluteAxisStates();
         bool hasKeycodeLocked(int keycode) const;
+        bool hasKeycodeInternalLocked(int keycode) const;
         void loadConfigurationLocked();
         bool loadVirtualKeyMapLocked();
         status_t loadKeyMapLocked();

@@ -104,8 +104,8 @@ struct OnDeleteProviderHolder {
 };
 
 ABinderRpc_AccessorProvider* ABinderRpc_registerAccessorProvider(
-        ABinderRpc_AccessorProvider_getAccessorCallback provider, const char** instances,
-        size_t numInstances, void* data,
+        ABinderRpc_AccessorProvider_getAccessorCallback provider,
+        const char* const* const instances, size_t numInstances, void* data,
         ABinderRpc_AccessorProviderUserData_deleteCallback onDelete) {
     if (provider == nullptr) {
         ALOGE("Null provider passed to ABinderRpc_registerAccessorProvider");
@@ -255,7 +255,7 @@ ABinderRpc_Accessor* ABinderRpc_Accessor_new(
                     "new variant was added to the ABinderRpc_ConnectionInfo and this needs to be "
                     "updated.");
         }
-        return OK;
+        return STATUS_OK;
     };
     sp<IBinder> accessorBinder = android::createAccessor(String16(instance), std::move(generate));
     if (accessorBinder == nullptr) {
@@ -300,6 +300,28 @@ ABinderRpc_Accessor* ABinderRpc_Accessor_fromBinder(const char* instance, AIBind
               instance);
         return nullptr;
     }
+}
+
+binder_status_t ABinderRpc_Accessor_delegateAccessor(const char* instance, AIBinder* accessor,
+                                                     AIBinder** outDelegator) {
+    LOG_ALWAYS_FATAL_IF(outDelegator == nullptr, "The outDelegator argument is null");
+    if (instance == nullptr || accessor == nullptr) {
+        ALOGW("instance or accessor arguments to ABinderRpc_Accessor_delegateBinder are null");
+        *outDelegator = nullptr;
+        return STATUS_UNEXPECTED_NULL;
+    }
+    sp<IBinder> accessorBinder = accessor->getBinder();
+
+    sp<IBinder> delegator;
+    status_t status = android::delegateAccessor(String16(instance), accessorBinder, &delegator);
+    if (status != OK) {
+        return PruneStatusT(status);
+    }
+    sp<AIBinder> binder = ABpBinder::lookupOrCreateFromBinder(delegator);
+    // This AIBinder needs a strong ref to pass ownership to the caller
+    binder->incStrong(nullptr);
+    *outDelegator = binder.get();
+    return STATUS_OK;
 }
 
 ABinderRpc_ConnectionInfo* ABinderRpc_ConnectionInfo_new(const sockaddr* addr, socklen_t len) {

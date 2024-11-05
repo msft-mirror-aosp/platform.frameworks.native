@@ -242,6 +242,8 @@ public:
         sp<Fence> mFence;
         uint32_t mTransform{0};
         ui::Dataspace mDataspace{ui::Dataspace::UNKNOWN};
+        std::chrono::steady_clock::time_point mTimeSinceDataspaceUpdate =
+                std::chrono::steady_clock::time_point::min();
         Rect mCrop;
         PixelFormat mPixelFormat{PIXEL_FORMAT_NONE};
         bool mTransformToDisplayInverse{false};
@@ -257,8 +259,6 @@ public:
 
     bool fenceHasSignaled() const;
     void onPreComposition(nsecs_t refreshStartTime);
-    void onLayerDisplayed(ftl::SharedFuture<FenceResult>, ui::LayerStack layerStack,
-                          std::function<FenceResult(FenceResult)>&& continuation = nullptr);
 
     // Tracks mLastClientCompositionFence and gets the callback handle for this layer.
     sp<CallbackHandle> findCallbackHandle();
@@ -369,7 +369,7 @@ public:
 
     // See mPendingBufferTransactions
     void decrementPendingBufferCount();
-    std::atomic<int32_t>* getPendingBufferCounter() { return &mPendingBufferTransactions; }
+    std::atomic<int32_t>* getPendingBufferCounter() { return &mPendingBuffers; }
     std::string getPendingBufferCounterName() { return mBlastTransactionName; }
     void callReleaseBufferCallback(const sp<ITransactionCompletedListener>& listener,
                                    const sp<GraphicBuffer>& buffer, uint64_t framenumber,
@@ -386,20 +386,6 @@ public:
     // the release fences from the correct displays when we release the last buffer
     // from the layer.
     std::vector<ui::LayerStack> mPreviouslyPresentedLayerStacks;
-
-    struct FenceAndContinuation {
-        ftl::SharedFuture<FenceResult> future;
-        std::function<FenceResult(FenceResult)> continuation;
-
-        ftl::SharedFuture<FenceResult> chain() const {
-            if (continuation) {
-                return ftl::Future(future).then(continuation).share();
-            } else {
-                return future;
-            }
-        }
-    };
-    std::vector<FenceAndContinuation> mPreviousReleaseFenceAndContinuations;
 
     // Release fences for buffers that have not yet received a release
     // callback. A release callback may not be given when capturing
@@ -562,7 +548,7 @@ private:
     //     - If the integer increases, a buffer arrived at the server.
     //     - If the integer decreases in latchBuffer, that buffer was latched
     //     - If the integer decreases in setBuffer, a buffer was dropped
-    std::atomic<int32_t> mPendingBufferTransactions{0};
+    std::atomic<int32_t> mPendingBuffers{0};
 
     // Contains requested position and matrix updates. This will be applied if the client does
     // not specify a destination frame.
