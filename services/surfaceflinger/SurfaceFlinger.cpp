@@ -2785,12 +2785,43 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     const auto& displays = FTL_FAKE_GUARD(mStateLock, mDisplays);
     refreshArgs.outputs.reserve(displays.size());
 
+    // Track layer stacks of physical displays that might be added to CompositionEngine
+    // output. Layer stacks are not tracked in Display when we iterate through
+    // frameTargeters. Cross-referencing layer stacks allows us to filter out displays
+    // by ID with duplicate layer stacks before adding them to CompositionEngine output.
+    ui::DisplayMap<DisplayId, ui::LayerStack> physicalDisplayLayerStacks;
+    for (auto& [_, display] : displays) {
+        const auto id = PhysicalDisplayId::tryCast(display->getId());
+        if (id && frameTargeters.contains(*id)) {
+            physicalDisplayLayerStacks.try_emplace(*id, display->getLayerStack());
+        }
+    }
+
+    // Tracks layer stacks of displays that are added to CompositionEngine output.
+    ui::DisplayMap<ui::LayerStack, ftl::Unit> outputLayerStacks;
+    auto isOutputLayerStack = [&outputLayerStacks](DisplayId id, ui::LayerStack layerStack) {
+        if (FlagManager::getInstance().reject_dupe_layerstacks() &&
+            outputLayerStacks.contains(layerStack)) {
+            // TODO: remove log and DisplayId from params once reject_dupe_layerstacks flag is
+            // removed
+            ALOGD("Existing layer stack ID %d output to another display %" PRIu64
+                  ", dropping display from outputs",
+                  layerStack.id, id.value);
+            return true;
+        }
+        outputLayerStacks.try_emplace(layerStack);
+        return false;
+    };
+
     // Add outputs for physical displays.
     for (const auto& [id, targeter] : frameTargeters) {
         ftl::FakeGuard guard(mStateLock);
 
         if (const auto display = getCompositionDisplayLocked(id)) {
-            refreshArgs.outputs.push_back(display);
+            const auto layerStack = physicalDisplayLayerStacks.get(id)->get();
+            if (!isOutputLayerStack(display->getId(), layerStack)) {
+                refreshArgs.outputs.push_back(display);
+            }
         }
 
         refreshArgs.frameTargets.try_emplace(id, &targeter->target());
@@ -2807,7 +2838,9 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
 
             if (!refreshRate.isValid() ||
                 mScheduler->isVsyncInPhase(pacesetterTarget.frameBeginTime(), refreshRate)) {
-                refreshArgs.outputs.push_back(display->getCompositionDisplay());
+                if (!isOutputLayerStack(display->getId(), display->getLayerStack())) {
+                    refreshArgs.outputs.push_back(display->getCompositionDisplay());
+                }
             }
         }
     }
