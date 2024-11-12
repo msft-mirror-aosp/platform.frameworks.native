@@ -918,10 +918,14 @@ private:
     std::unique_ptr<const KeyEntry> afterKeyEventLockedInterruptable(
             const std::shared_ptr<Connection>& connection, DispatchEntry* dispatchEntry,
             bool handled) REQUIRES(mLock);
+    void findAndDispatchFallbackEvent(nsecs_t currentTime, std::shared_ptr<const KeyEntry> entry,
+                                      std::vector<InputTarget>& inputTargets) REQUIRES(mLock);
 
     // Statistics gathering.
     nsecs_t mLastStatisticPushTime = 0;
     std::unique_ptr<InputEventTimelineProcessor> mInputEventTimelineProcessor GUARDED_BY(mLock);
+    // Must outlive `mLatencyTracker`.
+    std::vector<InputDeviceInfo> mInputDevices;
     LatencyTracker mLatencyTracker GUARDED_BY(mLock);
     void traceInboundQueueLengthLocked() REQUIRES(mLock);
     void traceOutboundQueueLength(const Connection& connection);
