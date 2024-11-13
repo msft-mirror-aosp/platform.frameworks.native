@@ -64,11 +64,13 @@
 #include <ftl/concat.h>
 #include <ftl/fake_guard.h>
 #include <ftl/future.h>
+#include <ftl/small_map.h>
 #include <ftl/unit.h>
 #include <gui/AidlUtil.h>
 #include <gui/BufferQueue.h>
 #include <gui/DebugEGLImageTracker.h>
 #include <gui/IProducerListener.h>
+#include <gui/JankInfo.h>
 #include <gui/LayerMetadata.h>
 #include <gui/LayerState.h>
 #include <gui/Surface.h>
@@ -133,7 +135,6 @@
 #include "DisplayHardware/FramebufferSurface.h"
 #include "DisplayHardware/HWComposer.h"
 #include "DisplayHardware/Hal.h"
-#include "DisplayHardware/PowerAdvisor.h"
 #include "DisplayHardware/VirtualDisplaySurface.h"
 #include "DisplayRenderArea.h"
 #include "Effects/Daltonizer.h"
@@ -153,6 +154,7 @@
 #include "LayerVector.h"
 #include "MutexUtils.h"
 #include "NativeWindowSurface.h"
+#include "PowerAdvisor/PowerAdvisor.h"
 #include "RegionSamplingThread.h"
 #include "RenderAreaBuilder.h"
 #include "Scheduler/EventThread.h"
@@ -426,7 +428,11 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory, SkipInitializationTag)
         mEmulatedDisplayDensity(getDensityFromProperty("qemu.sf.lcd_density", false)),
         mInternalDisplayDensity(
                 getDensityFromProperty("ro.sf.lcd_density", !mEmulatedDisplayDensity)),
-        mPowerAdvisor(std::make_unique<Hwc2::impl::PowerAdvisor>(*this)),
+        mPowerAdvisor(std::make_unique<
+                      adpf::impl::PowerAdvisor>([this] { disableExpensiveRendering(); },
+                                                std::chrono::milliseconds(
+                                                        sysprop::display_update_imminent_timeout_ms(
+                                                                80)))),
         mWindowInfosListenerInvoker(sp<WindowInfosListenerInvoker>::make()),
         mSkipPowerOnForQuiescent(base::GetBoolProperty("ro.boot.quiescent"s, false)) {
     ALOGI("Using HWComposer service: %s", mHwcServiceName.c_str());
@@ -1354,7 +1360,8 @@ void SurfaceFlinger::setDesiredMode(display::DisplayModeRequest&& desiredMode) {
             mScheduler->updatePhaseConfiguration(displayId, mode.fps);
 
             if (emitEvent) {
-                mScheduler->onDisplayModeChanged(displayId, mode);
+                mScheduler->onDisplayModeChanged(displayId, mode,
+                                                 /*clearContentRequirements*/ false);
             }
             break;
         case DesiredModeAction::None:
@@ -1449,7 +1456,7 @@ void SurfaceFlinger::finalizeDisplayModeChange(PhysicalDisplayId displayId) {
     mScheduler->updatePhaseConfiguration(displayId, activeMode.fps);
 
     if (pendingModeOpt->emitEvent) {
-        mScheduler->onDisplayModeChanged(displayId, activeMode);
+        mScheduler->onDisplayModeChanged(displayId, activeMode, /*clearContentRequirements*/ true);
     }
 }
 
@@ -3067,11 +3074,39 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
 
     const TimePoint presentTime = TimePoint::now();
 
+    // The Uids of layer owners that are in buffer stuffing mode, and their elevated
+    // buffer counts. Messages to start recovery are sent exclusively to these Uids.
+    BufferStuffingMap bufferStuffedUids;
+
     // Set presentation information before calling Layer::releasePendingBuffer, such that jank
     // information from previous' frame classification is already available when sending jank info
     // to clients, so they get jank classification as early as possible.
     mFrameTimeline->setSfPresent(presentTime.ns(), pacesetterPresentFenceTime,
                                  pacesetterGpuCompositionDoneFenceTime);
+
+    // Find and register any layers that are in buffer stuffing mode
+    const auto& presentFrames = mFrameTimeline->getPresentFrames();
+
+    for (const auto& frame : presentFrames) {
+        const auto& layer = mLayerLifecycleManager.getLayerFromId(frame->getLayerId());
+        if (!layer) continue;
+        uint32_t numberQueuedBuffers = layer->pendingBuffers ? layer->pendingBuffers->load() : 0;
+        int32_t jankType = frame->getJankType().value_or(JankType::None);
+        if (jankType & JankType::BufferStuffing &&
+            layer->flags & layer_state_t::eRecoverableFromBufferStuffing) {
+            auto [it, wasEmplaced] =
+                    bufferStuffedUids.try_emplace(layer->ownerUid.val(), numberQueuedBuffers);
+            // Update with maximum number of queued buffers, allows clients drawing
+            // multiple windows to account for the most severely stuffed window
+            if (!wasEmplaced && it->second < numberQueuedBuffers) {
+                it->second = numberQueuedBuffers;
+            }
+        }
+    }
+
+    if (!bufferStuffedUids.empty()) {
+        mScheduler->addBufferStuffedUids(std::move(bufferStuffedUids));
+    }
 
     // We use the CompositionEngine::getLastFrameRefreshTimestamp() which might
     // be sampled a little later than when we started doing work for this frame,
@@ -3553,7 +3588,9 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
     }
     state.isProtected = true;
     state.displayName = std::move(info.name);
-
+    state.maxLayerPictureProfiles = getHwComposer().getMaxLayerPictureProfiles(displayId);
+    state.hasPictureProcessing =
+            getHwComposer().hasDisplayCapability(displayId, DisplayCapability::PICTURE_PROCESSING);
     mCurrentState.displays.add(token, state);
     ALOGI("Connecting %s", displayString);
     return activeModeId;
@@ -3714,6 +3751,8 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
     builder.setPixels(resolution);
     builder.setIsSecure(state.isSecure);
     builder.setIsProtected(state.isProtected);
+    builder.setHasPictureProcessing(state.hasPictureProcessing);
+    builder.setMaxLayerPictureProfiles(state.maxLayerPictureProfiles);
     builder.setPowerAdvisor(mPowerAdvisor.get());
     builder.setName(state.displayName);
     auto compositionDisplay = getCompositionEngine().createDisplay(builder.build());
@@ -4016,7 +4055,8 @@ void SurfaceFlinger::updateInputFlinger(VsyncId vsyncId, TimePoint frameTime) {
                                                       inputWindowCommands =
                                                               std::move(mInputWindowCommands),
                                                       inputFlinger = mInputFlinger, this,
-                                                      visibleWindowsChanged, vsyncId, frameTime]() {
+                                                      visibleWindowsChanged, vsyncId,
+                                                      frameTime]() mutable {
         SFTRACE_NAME("BackgroundExecutor::updateInputFlinger");
         if (updateWindowInfo) {
             mWindowInfosListenerInvoker
@@ -7649,7 +7689,8 @@ status_t SurfaceFlinger::applyRefreshRateSelectorPolicy(
     ALOGV("Setting desired display mode specs: %s", currentPolicy.toString().c_str());
 
     if (const bool isPacesetter =
-                mScheduler->onDisplayModeChanged(displayId, selector.getActiveMode())) {
+                mScheduler->onDisplayModeChanged(displayId, selector.getActiveMode(),
+                                                 /*clearContentRequirements*/ true)) {
         mDisplayModeController.updateKernelIdleTimer(displayId);
     }
 
