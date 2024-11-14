@@ -25,6 +25,7 @@
 #include <common/FlagManager.h>
 #include <common/trace.h>
 #include <ftl/small_map.h>
+#include <math/vec2.h>
 #include <ui/DisplayMap.h>
 #include <ui/FloatRect.h>
 
@@ -932,7 +933,8 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
 
     if (forceUpdate || snapshot.clientChanges & layer_state_t::eCornerRadiusChanged ||
         snapshot.changes.any(RequestedLayerState::Changes::Geometry |
-                             RequestedLayerState::Changes::BufferUsageFlags)) {
+                             RequestedLayerState::Changes::BufferUsageFlags) ||
+        snapshot.clientChanges & layer_state_t::eClientDrawnCornerRadiusChanged) {
         updateRoundedCorner(snapshot, requested, parentSnapshot, args);
     }
 
@@ -972,7 +974,7 @@ void LayerSnapshotBuilder::updateRoundedCorner(LayerSnapshot& snapshot,
     }
     snapshot.roundedCorner = RoundedCornerState();
     RoundedCornerState parentRoundedCorner;
-    if (parentSnapshot.roundedCorner.hasRoundedCorners()) {
+    if (parentSnapshot.roundedCorner.hasRequestedRadius()) {
         parentRoundedCorner = parentSnapshot.roundedCorner;
         ui::Transform t = snapshot.localTransform.inverse();
         parentRoundedCorner.cropRect = t.transform(parentRoundedCorner.cropRect);
@@ -981,10 +983,16 @@ void LayerSnapshotBuilder::updateRoundedCorner(LayerSnapshot& snapshot,
     }
 
     FloatRect layerCropRect = snapshot.croppedBufferSize;
-    const vec2 radius(requested.cornerRadius, requested.cornerRadius);
-    RoundedCornerState layerSettings(layerCropRect, radius);
-    const bool layerSettingsValid = layerSettings.hasRoundedCorners() && !layerCropRect.isEmpty();
-    const bool parentRoundedCornerValid = parentRoundedCorner.hasRoundedCorners();
+    const vec2 requestedRadius(requested.cornerRadius, requested.cornerRadius);
+    const vec2 clientDrawnRadius(requested.clientDrawnCornerRadius,
+                                 requested.clientDrawnCornerRadius);
+    RoundedCornerState layerSettings;
+    layerSettings.cropRect = layerCropRect;
+    layerSettings.requestedRadius = requestedRadius;
+    layerSettings.clientDrawnRadius = clientDrawnRadius;
+
+    const bool layerSettingsValid = layerSettings.hasRequestedRadius() && !layerCropRect.isEmpty();
+    const bool parentRoundedCornerValid = parentRoundedCorner.hasRequestedRadius();
     if (layerSettingsValid && parentRoundedCornerValid) {
         // If the parent and the layer have rounded corner settings, use the parent settings if
         // the parent crop is entirely inside the layer crop. This has limitations and cause
@@ -1001,6 +1009,14 @@ void LayerSnapshotBuilder::updateRoundedCorner(LayerSnapshot& snapshot,
         snapshot.roundedCorner = layerSettings;
     } else if (parentRoundedCornerValid) {
         snapshot.roundedCorner = parentRoundedCorner;
+    }
+
+    if (snapshot.roundedCorner.requestedRadius.x == requested.clientDrawnCornerRadius) {
+        // If the client drawn radius matches the requested radius, then surfaceflinger
+        // does not need to draw rounded corners for this layer
+        snapshot.roundedCorner.radius = vec2(0.f, 0.f);
+    } else {
+        snapshot.roundedCorner.radius = snapshot.roundedCorner.requestedRadius;
     }
 }
 

@@ -28,16 +28,23 @@ namespace android::surfaceflinger::frontend {
 
 struct RoundedCornerState {
     RoundedCornerState() = default;
-    RoundedCornerState(const FloatRect& cropRect, const vec2& radius)
-          : cropRect(cropRect), radius(radius) {}
 
     // Rounded rectangle in local layer coordinate space.
     FloatRect cropRect = FloatRect();
-    // Radius of the rounded rectangle.
+    // Radius of the rounded rectangle for composition
     vec2 radius;
+    // Requested radius of the rounded rectangle
+    vec2 requestedRadius;
+    // Radius drawn by client for the rounded rectangle
+    vec2 clientDrawnRadius;
+    bool hasClientDrawnRadius() const {
+        return clientDrawnRadius.x > 0.0f && clientDrawnRadius.y > 0.0f;
+    }
+    bool hasRequestedRadius() const { return requestedRadius.x > 0.0f && requestedRadius.y > 0.0f; }
     bool hasRoundedCorners() const { return radius.x > 0.0f && radius.y > 0.0f; }
     bool operator==(RoundedCornerState const& rhs) const {
-        return cropRect == rhs.cropRect && radius == rhs.radius;
+        return cropRect == rhs.cropRect && radius == rhs.radius &&
+                clientDrawnRadius == rhs.clientDrawnRadius;
     }
 };
 
