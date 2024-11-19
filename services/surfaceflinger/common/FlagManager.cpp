@@ -123,7 +123,6 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(frame_rate_category_mrr);
     DUMP_READ_ONLY_FLAG(misc1);
     DUMP_READ_ONLY_FLAG(vrr_config);
-    DUMP_READ_ONLY_FLAG(hotplug2);
     DUMP_READ_ONLY_FLAG(hdcp_level_hal);
     DUMP_READ_ONLY_FLAG(multithreaded_present);
     DUMP_READ_ONLY_FLAG(add_sf_skipped_frames_to_trace);
@@ -161,6 +160,7 @@ void FlagManager::dump(std::string& result) const {
     DUMP_READ_ONLY_FLAG(connected_display_hdr);
     DUMP_READ_ONLY_FLAG(deprecate_frame_tracker);
     DUMP_READ_ONLY_FLAG(skip_invisible_windows_in_input);
+    DUMP_READ_ONLY_FLAG(begone_bright_hlg);
 
 #undef DUMP_READ_ONLY_FLAG
 #undef DUMP_SERVER_FLAG
@@ -233,7 +233,6 @@ FLAG_MANAGER_READ_ONLY_FLAG(stable_edid_ids, "debug.sf.stable_edid_ids")
 FLAG_MANAGER_READ_ONLY_FLAG(frame_rate_category_mrr, "debug.sf.frame_rate_category_mrr")
 FLAG_MANAGER_READ_ONLY_FLAG(misc1, "")
 FLAG_MANAGER_READ_ONLY_FLAG(vrr_config, "debug.sf.enable_vrr_config")
-FLAG_MANAGER_READ_ONLY_FLAG(hotplug2, "")
 FLAG_MANAGER_READ_ONLY_FLAG(hdcp_level_hal, "")
 FLAG_MANAGER_READ_ONLY_FLAG(multithreaded_present, "debug.sf.multithreaded_present")
 FLAG_MANAGER_READ_ONLY_FLAG(add_sf_skipped_frames_to_trace, "")
@@ -270,6 +269,7 @@ FLAG_MANAGER_READ_ONLY_FLAG(display_config_error_hal, "");
 FLAG_MANAGER_READ_ONLY_FLAG(connected_display_hdr, "");
 FLAG_MANAGER_READ_ONLY_FLAG(deprecate_frame_tracker, "");
 FLAG_MANAGER_READ_ONLY_FLAG(skip_invisible_windows_in_input, "");
+FLAG_MANAGER_READ_ONLY_FLAG(begone_bright_hlg, "debug.sf.begone_bright_hlg");
 
 /// Trunk stable server flags ///
 FLAG_MANAGER_SERVER_FLAG(refresh_rate_overlay_on_external_display, "")

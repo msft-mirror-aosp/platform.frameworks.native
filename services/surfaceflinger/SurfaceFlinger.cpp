@@ -2248,12 +2248,10 @@ void SurfaceFlinger::onComposerHalHotplugEvent(hal::HWDisplayId hwcDisplayId,
         return;
     }
 
-    if (FlagManager::getInstance().hotplug2()) {
-        // TODO(b/311403559): use enum type instead of int
-        const auto errorCode = static_cast<int32_t>(event);
-        ALOGD("%s: Hotplug error %d for hwcDisplayId %" PRIu64, __func__, errorCode, hwcDisplayId);
-        mScheduler->dispatchHotplugError(errorCode);
-    }
+    // TODO(b/311403559): use enum type instead of int
+    const auto errorCode = static_cast<int32_t>(event);
+    ALOGD("%s: Hotplug error %d for hwcDisplayId %" PRIu64, __func__, errorCode, hwcDisplayId);
+    mScheduler->dispatchHotplugError(errorCode);
 }
 
 void SurfaceFlinger::onComposerHalVsyncPeriodTimingChanged(
@@ -2554,7 +2552,7 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
     }
 
     {
-        SFTRACE_NAME("LLM:commitChanges");
+        SFTRACE_NAME("LayerLifecycleManager:commitChanges");
         mLayerLifecycleManager.commitChanges();
     }
 
@@ -3203,7 +3201,15 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
                                             snapshot.desiredHdrSdrRatio < 1.f
                                             ? std::numeric_limits<float>::infinity()
                                             : snapshot.desiredHdrSdrRatio;
-                                    info.mergeDesiredRatio(desiredHdrSdrRatio);
+
+                                    float desiredRatio = desiredHdrSdrRatio;
+                                    if (FlagManager::getInstance().begone_bright_hlg() &&
+                                        desiredHdrSdrRatio ==
+                                                std::numeric_limits<float>::infinity()) {
+                                        desiredRatio = getIdealizedMaxHeadroom(snapshot.dataspace);
+                                    }
+
+                                    info.mergeDesiredRatio(desiredRatio);
                                     info.numberOfHdrLayers++;
                                     const auto displayFrame = outputLayer->getState().displayFrame;
                                     const int32_t area =
@@ -3483,10 +3489,8 @@ bool SurfaceFlinger::configureLocked() {
                         processHotplugConnect(displayId, hwcDisplayId, std::move(*info),
                                               displayString.c_str());
                 if (!activeModeIdOpt) {
-                    if (FlagManager::getInstance().hotplug2()) {
-                        mScheduler->dispatchHotplugError(
-                                static_cast<int32_t>(DisplayHotplugEvent::ERROR_UNKNOWN));
-                    }
+                    mScheduler->dispatchHotplugError(
+                            static_cast<int32_t>(DisplayHotplugEvent::ERROR_UNKNOWN));
                     getHwComposer().disconnectDisplay(displayId);
                     continue;
                 }
