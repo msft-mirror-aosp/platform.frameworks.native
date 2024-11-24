@@ -2873,6 +2873,11 @@ void SurfaceComposerClient::getDynamicDisplayInfoInternal(gui::DynamicDisplayInf
     outInfo->hasArrSupport = ginfo.hasArrSupport;
     outInfo->frameRateCategoryRate = ui::FrameRateCategoryRate(ginfo.frameRateCategoryRate.normal,
                                                                ginfo.frameRateCategoryRate.high);
+    outInfo->supportedRefreshRates.clear();
+    outInfo->supportedRefreshRates.reserve(ginfo.supportedRefreshRates.size());
+    for (const auto rate : ginfo.supportedRefreshRates) {
+        outInfo->supportedRefreshRates.push_back(static_cast<float>(rate));
+    }
 }
 
 status_t SurfaceComposerClient::getDynamicDisplayInfoFromId(int64_t displayId,
@@ -3054,6 +3059,14 @@ void SurfaceComposerClient::setGameContentType(const sp<IBinder>& display, bool 
 void SurfaceComposerClient::setDisplayPowerMode(const sp<IBinder>& token,
         int mode) {
     ComposerServiceAIDL::getComposerService()->setPowerMode(token, mode);
+}
+
+status_t SurfaceComposerClient::getMaxLayerPictureProfiles(const sp<IBinder>& token,
+                                                           int32_t* outMaxProfiles) {
+    binder::Status status =
+            ComposerServiceAIDL::getComposerService()->getMaxLayerPictureProfiles(token,
+                                                                                  outMaxProfiles);
+    return statusTFromBinderStatus(status);
 }
 
 status_t SurfaceComposerClient::getCompositionPreference(
@@ -3277,6 +3290,13 @@ status_t SurfaceComposerClient::removeHdrLayerInfoListener(
     binder::Status status =
             ComposerServiceAIDL::getComposerService()->removeHdrLayerInfoListener(displayToken,
                                                                                   listener);
+    return statusTFromBinderStatus(status);
+}
+
+status_t SurfaceComposerClient::setActivePictureListener(
+        const sp<gui::IActivePictureListener>& listener) {
+    binder::Status status =
+            ComposerServiceAIDL::getComposerService()->setActivePictureListener(listener);
     return statusTFromBinderStatus(status);
 }
 
