@@ -38,6 +38,7 @@
 #include <ui/EdgeExtensionEffect.h>
 #include <ui/FrameStats.h>
 #include <ui/GraphicTypes.h>
+#include <ui/PictureProfileHandle.h>
 #include <ui/PixelFormat.h>
 #include <ui/Rotation.h>
 #include <ui/StaticDisplayInfo.h>
@@ -297,6 +298,8 @@ public:
     static status_t removeHdrLayerInfoListener(const sp<IBinder>& displayToken,
                                                const sp<gui::IHdrLayerInfoListener>& listener);
 
+    static status_t setActivePictureListener(const sp<gui::IActivePictureListener>& listener);
+
     /*
      * Sends a power boost to the composer. This function is asynchronous.
      *
@@ -341,6 +344,15 @@ public:
     getDisplayDecorationSupport(const sp<IBinder>& displayToken);
 
     static bool flagEdgeExtensionEffectUseShader();
+
+    /**
+     * Returns how many picture profiles are supported by the display.
+     *
+     * displayToken
+     *      The token of the display.
+     */
+    static status_t getMaxLayerPictureProfiles(const sp<IBinder>& displayToken,
+                                               int32_t* outMaxProfiles);
 
     // ------------------------------------------------------------------------
     // surface creation / destruction
@@ -687,7 +699,8 @@ public:
         // ONLY FOR BLAST ADAPTER
         Transaction& notifyProducerDisconnect(const sp<SurfaceControl>& sc);
 
-        Transaction& setInputWindowInfo(const sp<SurfaceControl>& sc, const gui::WindowInfo& info);
+        Transaction& setInputWindowInfo(const sp<SurfaceControl>& sc,
+                                        sp<gui::WindowInfoHandle> info);
         Transaction& setFocusedWindow(const gui::FocusRequest& request);
 
         Transaction& addWindowInfosReportedListener(
@@ -774,6 +787,20 @@ public:
         Transaction& setBufferReleaseChannel(
                 const sp<SurfaceControl>& sc,
                 const std::shared_ptr<gui::BufferReleaseChannel::ProducerEndpoint>& channel);
+
+        /**
+         * Configures a surface control to use picture processing hardware, configured as specified
+         * by the picture profile, to enhance the quality of all subsequent buffer contents.
+         */
+        Transaction& setPictureProfileHandle(const sp<SurfaceControl>& sc,
+                                             const PictureProfileHandle& pictureProfileHandle);
+
+        /**
+         * Configures the relative importance of the contents of the layer with respect to the app's
+         * user experience. A lower priority value will give the layer preferred access to limited
+         * resources, such as picture processing, over a layer with a higher priority value.
+         */
+        Transaction& setContentPriority(const sp<SurfaceControl>& sc, int32_t contentPriority);
 
         status_t setDisplaySurface(const sp<IBinder>& token,
                 const sp<IGraphicBufferProducer>& bufferProducer);

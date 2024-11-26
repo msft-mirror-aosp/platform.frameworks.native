@@ -42,7 +42,6 @@
 #include <ui/DisplayId.h>
 #include <ui/DisplayMap.h>
 
-#include "Display/DisplayModeRequest.h"
 #include "EventThread.h"
 #include "FrameRateOverrideMappings.h"
 #include "ISchedulerCallback.h"
@@ -151,7 +150,8 @@ public:
     void dispatchHotplugError(int32_t errorCode);
 
     // Returns true if the PhysicalDisplayId is the pacesetter.
-    bool onDisplayModeChanged(PhysicalDisplayId, const FrameRateMode&) EXCLUDES(mPolicyLock);
+    bool onDisplayModeChanged(PhysicalDisplayId, const FrameRateMode&,
+                              bool clearContentRequirements) EXCLUDES(mPolicyLock);
 
     void enableSyntheticVsync(bool = true) REQUIRES(kMainThreadContext);
     void omitVsyncDispatching(bool) REQUIRES(kMainThreadContext);
@@ -332,6 +332,12 @@ public:
     void injectPacesetterDelay(float frameDurationFraction) REQUIRES(kMainThreadContext) {
         mPacesetterFrameDurationFractionToSkip = frameDurationFraction;
     }
+
+    // Propagates a flag to the EventThread indicating that buffer stuffing
+    // recovery should begin.
+    void addBufferStuffedUids(BufferStuffingMap bufferStuffedUids);
+
+    void setDebugPresentDelay(TimePoint delay) { mDebugPresentDelay = delay; }
 
 private:
     friend class TestableScheduler;
@@ -598,6 +604,8 @@ private:
 
     FrameRateOverrideMappings mFrameRateOverrideMappings;
     SmallAreaDetectionAllowMappings mSmallAreaDetectionAllowMappings;
+
+    std::atomic<std::optional<TimePoint>> mDebugPresentDelay;
 };
 
 } // namespace scheduler

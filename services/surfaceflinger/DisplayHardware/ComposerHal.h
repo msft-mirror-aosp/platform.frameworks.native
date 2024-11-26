@@ -29,11 +29,15 @@
 #include <math/mat4.h>
 #include <ui/DisplayedFrameStats.h>
 #include <ui/GraphicBuffer.h>
+#include <ui/PictureProfileHandle.h>
 #include <utils/StrongPointer.h>
+
+#include "DisplayHardware/Hal.h"
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
 #include <aidl/android/hardware/graphics/common/HdrConversionCapability.h>
 #include <aidl/android/hardware/graphics/common/HdrConversionStrategy.h>
+#include <aidl/android/hardware/graphics/common/Transform.h>
 #include <aidl/android/hardware/graphics/composer3/Capability.h>
 #include <aidl/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.h>
 #include <aidl/android/hardware/graphics/composer3/Color.h>
@@ -44,7 +48,6 @@
 #include <aidl/android/hardware/graphics/composer3/IComposerCallback.h>
 #include <aidl/android/hardware/graphics/composer3/OverlayProperties.h>
 
-#include <aidl/android/hardware/graphics/common/Transform.h>
 #include <optional>
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
@@ -72,9 +75,9 @@ using types::V1_2::ColorMode;
 using types::V1_2::Dataspace;
 using types::V1_2::PixelFormat;
 
+using hardware::graphics::composer::hal::Error;
 using V2_1::Config;
 using V2_1::Display;
-using V2_1::Error;
 using V2_1::Layer;
 using V2_4::CommandReaderBase;
 using V2_4::CommandWriterBase;
@@ -260,7 +263,7 @@ public:
             Display display, IComposerClient::DisplayConnectionType* outType) = 0;
     virtual V2_4::Error getDisplayVsyncPeriod(Display display,
                                               VsyncPeriodNanos* outVsyncPeriod) = 0;
-    virtual V2_4::Error setActiveConfigWithConstraints(
+    virtual Error setActiveConfigWithConstraints(
             Display display, Config config,
             const IComposerClient::VsyncPeriodChangeConstraints& vsyncPeriodChangeConstraints,
             VsyncPeriodChangeTimeline* outTimeline) = 0;
@@ -307,6 +310,9 @@ public:
     virtual Error getRequestedLuts(Display display, std::vector<Layer>* outLayers,
                                    std::vector<V3_0::DisplayLuts::LayerLut>* outLuts) = 0;
     virtual Error setLayerLuts(Display display, Layer layer, V3_0::Luts& luts) = 0;
+    virtual Error getMaxLayerPictureProfiles(Display display, int32_t* outMaxProfiles) = 0;
+    virtual Error setDisplayPictureProfileId(Display display, PictureProfileId id) = 0;
+    virtual Error setLayerPictureProfileId(Display display, Layer layer, PictureProfileId id) = 0;
 };
 
 } // namespace Hwc2

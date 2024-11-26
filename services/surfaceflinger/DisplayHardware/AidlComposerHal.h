@@ -206,7 +206,7 @@ public:
     V2_4::Error getDisplayConnectionType(Display display,
                                          IComposerClient::DisplayConnectionType* outType) override;
     V2_4::Error getDisplayVsyncPeriod(Display display, VsyncPeriodNanos* outVsyncPeriod) override;
-    V2_4::Error setActiveConfigWithConstraints(
+    Error setActiveConfigWithConstraints(
             Display display, Config config,
             const IComposerClient::VsyncPeriodChangeConstraints& vsyncPeriodChangeConstraints,
             VsyncPeriodChangeTimeline* outTimeline) override;
@@ -250,6 +250,9 @@ public:
             std::vector<aidl::android::hardware::graphics::composer3::DisplayLuts::LayerLut>*
                     outLuts) override;
     Error setLayerLuts(Display display, Layer layer, Luts& luts) override;
+    Error getMaxLayerPictureProfiles(Display, int32_t* outMaxProfiles) override;
+    Error setDisplayPictureProfileId(Display, PictureProfileId id) override;
+    Error setLayerPictureProfileId(Display, Layer, PictureProfileId id) override;
 
 private:
     // Many public functions above simply write a command into the command
