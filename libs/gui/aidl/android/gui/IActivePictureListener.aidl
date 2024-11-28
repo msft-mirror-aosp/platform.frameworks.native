@@ -1,6 +1,6 @@
 /*
- * Copyright 2018 The Android Open Source Project
-
+ * Copyright 2024 The Android Open Source Project
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,19 +14,17 @@
  * limitations under the License.
  */
 
-#include "MockHWComposer.h"
+package android.gui;
 
-namespace android {
+import android.gui.ActivePicture;
 
-// This will go away once HWComposer is moved into the "backend" library
-HWComposer::~HWComposer() = default;
-
-namespace mock {
-
-// The Google Mock documentation recommends explicit non-header instantiations
-// for better compile time performance.
-HWComposer::HWComposer() = default;
-HWComposer::~HWComposer() = default;
-
-} // namespace mock
-} // namespace android
+/**
+ * Receive callbacks whenever the visible content using picture profiles changes.
+ * @hide
+ */
+interface IActivePictureListener {
+    /**
+     * Callback reporting the visible content on the screen using picture profiles.
+     */
+    oneway void onActivePicturesChanged(in ActivePicture[] activePictures);
+}

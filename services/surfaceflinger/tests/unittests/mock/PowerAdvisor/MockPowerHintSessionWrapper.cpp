@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 The Android Open Source Project
+ * Copyright 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-// TODO(b/349936395): set to true for Trusty
-#define API_LEVEL_AT_LEAST(sdk_api_level, vendor_api_level) (false)
+#include "MockPowerHintSessionWrapper.h"
+
+namespace android::adpf::mock {
+
+// Explicit default instantiation is recommended.
+MockPowerHintSessionWrapper::MockPowerHintSessionWrapper()
+      : power::PowerHintSessionWrapper(nullptr) {}
+
+} // namespace android::adpf::mock

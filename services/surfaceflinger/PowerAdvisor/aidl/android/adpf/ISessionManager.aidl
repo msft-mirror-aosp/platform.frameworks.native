@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-#include "mock/DisplayHardware/MockPowerHintSessionWrapper.h"
+package android.adpf;
 
-namespace android::Hwc2::mock {
-
-// Explicit default instantiation is recommended.
-MockPowerHintSessionWrapper::MockPowerHintSessionWrapper()
-      : power::PowerHintSessionWrapper(nullptr) {}
-
-} // namespace android::Hwc2::mock
+/**
+ * Private service for SessionManager to use. Ideally this will
+ * eventually take the role of HintManagerService.
+ */
+interface ISessionManager {
+    oneway void associateSessionToLayers(in int sessionId, in int ownerUid, in IBinder[] layers);
+    oneway void trackedSessionsDied(in int[] sessionId);
+}

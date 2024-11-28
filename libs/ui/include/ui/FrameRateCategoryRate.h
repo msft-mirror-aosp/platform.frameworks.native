@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 The Android Open Source Project
+ * Copyright 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,22 @@
  * limitations under the License.
  */
 
-#include "MockPowerHalController.h"
+#pragma once
 
-namespace android::Hwc2::mock {
+namespace android::ui {
 
-MockPowerHalController::MockPowerHalController() = default;
-MockPowerHalController::~MockPowerHalController() = default;
+// Represents frame rate for FrameRateCategory Normal and High.
+class FrameRateCategoryRate {
+public:
+    FrameRateCategoryRate(float normal = 0, float high = 0) : mNormal(normal), mHigh(high) {}
 
-} // namespace android::Hwc2::mock
+    float getNormal() const { return mNormal; }
+
+    float getHigh() const { return mHigh; }
+
+private:
+    float mNormal;
+    float mHigh;
+};
+
+} // namespace android::ui

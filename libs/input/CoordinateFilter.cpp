@@ -1,6 +1,6 @@
-/*
- * Copyright 2019 The Android Open Source Project
-
+/**
+ * Copyright 2024 The Android Open Source Project
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,21 +14,18 @@
  * limitations under the License.
  */
 
-#include "MockPowerAdvisor.h"
+#define LOG_TAG "CoordinateFilter"
+
+#include <input/CoordinateFilter.h>
 
 namespace android {
-namespace Hwc2 {
 
-// This will go away once PowerAdvisor is moved into the "backend" library
-PowerAdvisor::~PowerAdvisor() = default;
+CoordinateFilter::CoordinateFilter(float minCutoffFreq, float beta)
+      : mXFilter{minCutoffFreq, beta}, mYFilter{minCutoffFreq, beta} {}
 
-namespace mock {
+void CoordinateFilter::filter(std::chrono::nanoseconds timestamp, PointerCoords& coords) {
+    coords.setAxisValue(AMOTION_EVENT_AXIS_X, mXFilter.filter(timestamp, coords.getX()));
+    coords.setAxisValue(AMOTION_EVENT_AXIS_Y, mYFilter.filter(timestamp, coords.getY()));
+}
 
-// The Google Mock documentation recommends explicit non-header instantiations
-// for better compile time performance.
-PowerAdvisor::PowerAdvisor() = default;
-PowerAdvisor::~PowerAdvisor() = default;
-
-} // namespace mock
-} // namespace Hwc2
 } // namespace android

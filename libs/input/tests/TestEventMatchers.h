@@ -17,6 +17,7 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
 #include <ostream>
 #include <vector>
 
@@ -75,12 +76,18 @@ public:
     using is_gtest_matcher = void;
     explicit WithMotionActionMatcher(int32_t action) : mAction(action) {}
 
-    bool MatchAndExplain(const MotionEvent& event, std::ostream*) const {
-        bool matches = mAction == event.getAction();
-        if (event.getAction() == AMOTION_EVENT_ACTION_CANCEL) {
-            matches &= (event.getFlags() & AMOTION_EVENT_FLAG_CANCELED) != 0;
+    bool MatchAndExplain(const MotionEvent& event, testing::MatchResultListener* listener) const {
+        if (mAction != event.getAction()) {
+            *listener << "expected " << MotionEvent::actionToString(mAction) << ", but got "
+                      << MotionEvent::actionToString(event.getAction());
+            return false;
         }
-        return matches;
+        if (event.getAction() == AMOTION_EVENT_ACTION_CANCEL &&
+            (event.getFlags() & AMOTION_EVENT_FLAG_CANCELED) == 0) {
+            *listener << "event with CANCEL action is missing FLAG_CANCELED";
+            return false;
+        }
+        return true;
     }
 
     void DescribeTo(std::ostream* os) const {
@@ -150,14 +157,18 @@ public:
              ++pointerIndex) {
             const PointerCoords& pointerCoords =
                     *(motionEvent.getHistoricalRawPointerCoords(pointerIndex, mSampleIndex));
-            if ((pointerCoords.getX() != mSample.pointers[pointerIndex].x) ||
-                (pointerCoords.getY() != mSample.pointers[pointerIndex].y)) {
+
+            if ((std::abs(pointerCoords.getX() - mSample.pointers[pointerIndex].x) >
+                 MotionEvent::ROUNDING_PRECISION) ||
+                (std::abs(pointerCoords.getY() - mSample.pointers[pointerIndex].y) >
+                 MotionEvent::ROUNDING_PRECISION)) {
                 *os << "sample coordinates mismatch at pointer index " << pointerIndex
                     << ". sample: (" << pointerCoords.getX() << ", " << pointerCoords.getY()
                     << ") expected: (" << mSample.pointers[pointerIndex].x << ", "
                     << mSample.pointers[pointerIndex].y << ")";
                 return false;
             }
+
             if (motionEvent.isResampled(pointerIndex, mSampleIndex) !=
                 mSample.pointers[pointerIndex].isResampled) {
                 *os << "resampling flag mismatch. sample: "

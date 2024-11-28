@@ -1,6 +1,6 @@
 /*
- * Copyright 2019 The Android Open Source Project
-
+ * Copyright (C) 2009 The Android Open Source Project
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,19 +14,16 @@
  * limitations under the License.
  */
 
-#include "MockHWC2.h"
+#include <ui/PictureProfileHandle.h>
 
-namespace android::HWC2 {
+#include <format>
 
-// This will go away once HWC2::Layer is moved into the "backend" library
-Layer::~Layer() = default;
+namespace android {
 
-namespace mock {
+const PictureProfileHandle PictureProfileHandle::NONE(0);
 
-// The Google Mock documentation recommends explicit non-header instantiations
-// for better compile time performance.
-Layer::Layer() = default;
-Layer::~Layer() = default;
+::std::string toString(const PictureProfileHandle& handle) {
+    return std::format("{:#010x}", handle.getId());
+}
 
-} // namespace mock
-} // namespace android::HWC2
+} // namespace android
