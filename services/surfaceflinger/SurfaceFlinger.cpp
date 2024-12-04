@@ -172,6 +172,7 @@
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
+#include <aidl/android/hardware/graphics/composer3/OutputType.h>
 #include <aidl/android/hardware/graphics/composer3/RenderIntent.h>
 
 #undef NO_THREAD_SAFETY_ANALYSIS
@@ -1543,9 +1544,15 @@ void SurfaceFlinger::initiateDisplayModeChanges() {
         constraints.seamlessRequired = false;
         hal::VsyncPeriodChangeTimeline outTimeline;
 
-        if (mDisplayModeController.initiateModeChange(displayId, std::move(*desiredModeOpt),
-                                                      constraints, outTimeline) !=
-            display::DisplayModeController::ModeChangeResult::Changed) {
+        const auto error =
+                mDisplayModeController.initiateModeChange(displayId, std::move(*desiredModeOpt),
+                                                          constraints, outTimeline);
+        if (error != display::DisplayModeController::ModeChangeResult::Changed) {
+            dropModeRequest(displayId);
+            if (FlagManager::getInstance().display_config_error_hal() &&
+                error == display::DisplayModeController::ModeChangeResult::Rejected) {
+                mScheduler->onDisplayModeRejected(displayId, desiredModeId);
+            }
             continue;
         }
 
@@ -3509,6 +3516,9 @@ std::pair<DisplayModes, DisplayModePtr> SurfaceFlinger::loadDisplayModes(
     DisplayModes newModes;
     for (const auto& hwcMode : hwcModes) {
         const auto id = nextModeId++;
+        OutputType hdrOutputType = FlagManager::getInstance().connected_display_hdr()
+                ? hwcMode.hdrOutputType
+                : OutputType::INVALID;
         newModes.try_emplace(id,
                              DisplayMode::Builder(hwcMode.hwcId)
                                      .setId(id)
@@ -3519,6 +3529,7 @@ std::pair<DisplayModes, DisplayModePtr> SurfaceFlinger::loadDisplayModes(
                                      .setDpiX(hwcMode.dpiX)
                                      .setDpiY(hwcMode.dpiY)
                                      .setGroup(hwcMode.configGroup)
+                                     .setHdrOutputType(hdrOutputType)
                                      .build());
     }
 
@@ -4399,7 +4410,7 @@ void SurfaceFlinger::sendNotifyExpectedPresentHint(PhysicalDisplayId displayId) 
     scheduleNotifyExpectedPresentHint(displayId);
 }
 
-void SurfaceFlinger::onCommitNotComposited(PhysicalDisplayId pacesetterDisplayId) {
+void SurfaceFlinger::onCommitNotComposited() {
     if (FlagManager::getInstance().commit_not_composited()) {
         mFrameTimeline->onCommitNotComposited();
     }
