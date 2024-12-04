@@ -131,6 +131,9 @@ public:
 
         // Currently latched frame number, 0 if invalid.
         uint64_t frameNumber = 0;
+
+        // layer serial number, -1 if invalid.
+        int32_t sequence = -1;
     };
 
     // Describes the states of the release fence. Checking the states allows checks
