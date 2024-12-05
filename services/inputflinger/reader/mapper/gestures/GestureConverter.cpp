@@ -99,6 +99,8 @@ std::string GestureConverter::dump() const {
     out << "Current classification: " << ftl::enum_string(mCurrentClassification) << "\n";
     out << "Is hovering: " << mIsHovering << "\n";
     out << "Enable Tap Timestamp: " << mWhenToEnableTapToClick << "\n";
+    out << "Three finger tap shortcut enabled: "
+        << (mThreeFingerTapShortcutEnabled ? "enabled" : "disabled") << "\n";
     return out.str();
 }
 
@@ -127,6 +129,15 @@ std::list<NotifyArgs> GestureConverter::reset(nsecs_t when) {
     }
     mCurrentClassification = MotionClassification::NONE;
     mDownTime = 0;
+    return out;
+}
+
+std::list<NotifyArgs> GestureConverter::setEnableSystemGestures(nsecs_t when, bool enable) {
+    std::list<NotifyArgs> out;
+    if (!enable && mCurrentClassification == MotionClassification::MULTI_FINGER_SWIPE) {
+        out += handleMultiFingerSwipeLift(when, when);
+    }
+    mEnableSystemGestures = enable;
     return out;
 }
 
@@ -459,6 +470,9 @@ std::list<NotifyArgs> GestureConverter::endScroll(nsecs_t when, nsecs_t readTime
                                                                              uint32_t fingerCount,
                                                                              float dx, float dy) {
     std::list<NotifyArgs> out = {};
+    if (!mEnableSystemGestures) {
+        return out;
+    }
 
     if (mCurrentClassification != MotionClassification::MULTI_FINGER_SWIPE) {
         // If the user changes the number of fingers mid-way through a swipe (e.g. they start with

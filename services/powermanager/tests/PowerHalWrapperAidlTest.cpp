@@ -28,16 +28,10 @@
 #include <unistd.h>
 #include <thread>
 
-using aidl::android::hardware::power::Boost;
-using aidl::android::hardware::power::ChannelConfig;
-using aidl::android::hardware::power::IPower;
-using aidl::android::hardware::power::IPowerHintSession;
-using aidl::android::hardware::power::Mode;
-using aidl::android::hardware::power::SessionConfig;
-using aidl::android::hardware::power::SessionTag;
-using aidl::android::hardware::power::SupportInfo;
+
 using android::binder::Status;
 
+using namespace aidl::android::hardware::power;
 using namespace android;
 using namespace android::power;
 using namespace std::chrono_literals;
@@ -71,6 +65,14 @@ public:
     MOCK_METHOD(ndk::ScopedAStatus, getInterfaceHash, (std::string * hash), (override));
     MOCK_METHOD(ndk::SpAIBinder, asBinder, (), (override));
     MOCK_METHOD(bool, isRemote, (), (override));
+    MOCK_METHOD(ndk::ScopedAStatus, getCpuHeadroom,
+                (const CpuHeadroomParams& params, CpuHeadroomResult* headroom), (override));
+    MOCK_METHOD(ndk::ScopedAStatus, getGpuHeadroom,
+                (const GpuHeadroomParams& params, GpuHeadroomResult* headroom), (override));
+    MOCK_METHOD(ndk::ScopedAStatus, sendCompositionData,
+                (const std::vector<CompositionData>& in_data), (override));
+    MOCK_METHOD(ndk::ScopedAStatus, sendCompositionUpdate,
+                (const CompositionUpdate& in_update), (override));
 };
 
 // -------------------------------------------------------------------------------------------------
