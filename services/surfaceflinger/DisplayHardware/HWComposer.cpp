@@ -27,6 +27,7 @@
 
 #include "HWComposer.h"
 
+#include <aidl/android/hardware/graphics/composer3/IComposerClient.h>
 #include <android-base/properties.h>
 #include <common/trace.h>
 #include <compositionengine/Output.h>
@@ -335,7 +336,8 @@ std::vector<HWComposer::HWCDisplayMode> HWComposer::getModesFromDisplayConfigura
                                       .height = config.height,
                                       .vsyncPeriod = config.vsyncPeriod,
                                       .configGroup = config.configGroup,
-                                      .vrrConfig = config.vrrConfig};
+                                      .vrrConfig = config.vrrConfig,
+                                      .hdrOutputType = config.hdrOutputType};
 
         const DisplayConfiguration::Dpi estimatedDPI =
                 getEstimatedDotsPerInchFromSize(hwcDisplayId, hwcMode);
@@ -733,7 +735,11 @@ status_t HWComposer::setActiveModeWithConstraints(
     auto error = mDisplayData[displayId].hwcDisplay->setActiveConfigWithConstraints(hwcModeId,
                                                                                     constraints,
                                                                                     outTimeline);
-    RETURN_IF_HWC_ERROR(error, displayId, UNKNOWN_ERROR);
+    if (error == hal::Error::CONFIG_FAILED) {
+        RETURN_IF_HWC_ERROR_FOR("setActiveConfigWithConstraints", error, displayId,
+                                FAILED_TRANSACTION);
+    }
+    RETURN_IF_HWC_ERROR_FOR("setActiveConfigWithConstraints", error, displayId, UNKNOWN_ERROR);
     return NO_ERROR;
 }
 
@@ -1019,6 +1025,24 @@ status_t HWComposer::setContentType(PhysicalDisplayId displayId, hal::ContentTyp
     }
     RETURN_IF_HWC_ERROR(error, displayId, UNKNOWN_ERROR);
 
+    return NO_ERROR;
+}
+
+int32_t HWComposer::getMaxLayerPictureProfiles(PhysicalDisplayId displayId) {
+    int32_t maxProfiles = 0;
+    RETURN_IF_INVALID_DISPLAY(displayId, 0);
+    const auto error = mDisplayData[displayId].hwcDisplay->getMaxLayerPictureProfiles(&maxProfiles);
+    RETURN_IF_HWC_ERROR(error, displayId, 0);
+    return maxProfiles;
+}
+
+status_t HWComposer::setDisplayPictureProfileHandle(PhysicalDisplayId displayId,
+                                                    const PictureProfileHandle& handle) {
+    RETURN_IF_INVALID_DISPLAY(displayId, BAD_INDEX);
+    const auto error = mDisplayData[displayId].hwcDisplay->setPictureProfileHandle(handle);
+    if (error != hal::Error::UNSUPPORTED) {
+        RETURN_IF_HWC_ERROR(error, displayId, INVALID_OPERATION);
+    }
     return NO_ERROR;
 }
 
