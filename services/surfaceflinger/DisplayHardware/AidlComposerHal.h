@@ -27,11 +27,6 @@
 #include <utility>
 #include <vector>
 
-// TODO(b/129481165): remove the #pragma below and fix conversion issues
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wconversion"
-#pragma clang diagnostic ignored "-Wextra"
-
 #include <android/hardware/graphics/composer/2.4/IComposer.h>
 #include <android/hardware/graphics/composer/2.4/IComposerClient.h>
 
@@ -42,9 +37,6 @@
 
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
-
-// TODO(b/129481165): remove the #pragma below and fix conversion issues
-#pragma clang diagnostic pop // ignored "-Wconversion -Wextra"
 
 namespace android::Hwc2 {
 
@@ -206,7 +198,7 @@ public:
     V2_4::Error getDisplayConnectionType(Display display,
                                          IComposerClient::DisplayConnectionType* outType) override;
     V2_4::Error getDisplayVsyncPeriod(Display display, VsyncPeriodNanos* outVsyncPeriod) override;
-    V2_4::Error setActiveConfigWithConstraints(
+    Error setActiveConfigWithConstraints(
             Display display, Config config,
             const IComposerClient::VsyncPeriodChangeConstraints& vsyncPeriodChangeConstraints,
             VsyncPeriodChangeTimeline* outTimeline) override;
@@ -250,6 +242,9 @@ public:
             std::vector<aidl::android::hardware::graphics::composer3::DisplayLuts::LayerLut>*
                     outLuts) override;
     Error setLayerLuts(Display display, Layer layer, Luts& luts) override;
+    Error getMaxLayerPictureProfiles(Display, int32_t* outMaxProfiles) override;
+    Error setDisplayPictureProfileId(Display, PictureProfileId id) override;
+    Error setLayerPictureProfileId(Display, Layer, PictureProfileId id) override;
 
 private:
     // Many public functions above simply write a command into the command
