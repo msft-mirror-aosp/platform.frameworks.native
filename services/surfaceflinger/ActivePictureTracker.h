@@ -27,7 +27,7 @@ class LayerFE;
 struct CompositionResult;
 
 // Keeps track of active pictures - layers that are undergoing picture processing.
-class ActivePictureUpdater {
+class ActivePictureTracker {
 public:
     // Called for each visible layer when SurfaceFlinger finishes composing.
     void onLayerComposed(const Layer& layer, const LayerFE& layerFE,

@@ -69,7 +69,7 @@
 #include <ui/FenceResult.h>
 
 #include <common/FlagManager.h>
-#include "ActivePictureUpdater.h"
+#include "ActivePictureTracker.h"
 #include "BackgroundExecutor.h"
 #include "Display/DisplayModeController.h"
 #include "Display/PhysicalDisplay.h"
@@ -1404,7 +1404,7 @@ private:
 
     sp<gui::IActivePictureListener> mActivePictureListener GUARDED_BY(mStateLock);
     bool mHaveNewActivePictureListener GUARDED_BY(mStateLock);
-    ActivePictureUpdater mActivePictureUpdater GUARDED_BY(kMainThreadContext);
+    ActivePictureTracker mActivePictureTracker GUARDED_BY(kMainThreadContext);
 
     std::atomic<ui::Transform::RotationFlags> mActiveDisplayTransformHint;
 

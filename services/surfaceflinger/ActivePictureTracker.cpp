@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "ActivePictureUpdater.h"
+#include "ActivePictureTracker.h"
 
 #include <algorithm>
 
@@ -23,7 +23,7 @@
 
 namespace android {
 
-void ActivePictureUpdater::onLayerComposed(const Layer& layer, const LayerFE& layerFE,
+void ActivePictureTracker::onLayerComposed(const Layer& layer, const LayerFE& layerFE,
                                            const CompositionResult& result) {
     if (result.wasPictureProfileCommitted) {
         gui::ActivePicture picture;
@@ -39,7 +39,7 @@ void ActivePictureUpdater::onLayerComposed(const Layer& layer, const LayerFE& la
     }
 }
 
-bool ActivePictureUpdater::updateAndHasChanged() {
+bool ActivePictureTracker::updateAndHasChanged() {
     bool hasChanged = true;
     if (mNewActivePictures.size() == mOldActivePictures.size()) {
         auto compare = [](const gui::ActivePicture& lhs, const gui::ActivePicture& rhs) -> int {
@@ -59,7 +59,7 @@ bool ActivePictureUpdater::updateAndHasChanged() {
     return hasChanged;
 }
 
-const std::vector<gui::ActivePicture>& ActivePictureUpdater::getActivePictures() const {
+const std::vector<gui::ActivePicture>& ActivePictureTracker::getActivePictures() const {
     return mOldActivePictures;
 }
 

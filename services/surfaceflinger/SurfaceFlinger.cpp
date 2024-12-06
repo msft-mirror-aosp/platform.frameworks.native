@@ -126,7 +126,7 @@
 #include <gui/SchedulingPolicy.h>
 #include <gui/SyncScreenCaptureListener.h>
 #include <ui/DisplayIdentification.h>
-#include "ActivePictureUpdater.h"
+#include "ActivePictureTracker.h"
 #include "BackgroundExecutor.h"
 #include "Client.h"
 #include "ClientCache.h"
@@ -2911,7 +2911,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
             layer->setWasClientComposed(compositionResult.lastClientCompositionFence);
         }
         if (com_android_graphics_libgui_flags_apply_picture_profiles()) {
-            mActivePictureUpdater.onLayerComposed(*layer, *layerFE, compositionResult);
+            mActivePictureTracker.onLayerComposed(*layer, *layerFE, compositionResult);
         }
     }
 
@@ -3314,10 +3314,10 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
     if (com_android_graphics_libgui_flags_apply_picture_profiles()) {
         // Track, update and notify changes to active pictures - layers that are undergoing picture
         // processing
-        if (mActivePictureUpdater.updateAndHasChanged() || haveNewActivePictureListener) {
+        if (mActivePictureTracker.updateAndHasChanged() || haveNewActivePictureListener) {
             if (activePictureListener) {
                 activePictureListener->onActivePicturesChanged(
-                        mActivePictureUpdater.getActivePictures());
+                        mActivePictureTracker.getActivePictures());
             }
         }
     }
