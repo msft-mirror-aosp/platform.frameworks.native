@@ -27,6 +27,7 @@
 #include <cinttypes>
 
 #include <android_os.h>
+#include <android_hardware_flags.h>
 #include <com_android_graphics_libgui_flags.h>
 #include <com_android_graphics_surfaceflinger_flags.h>
 #include <com_android_server_display_feature_flags.h>
@@ -119,6 +120,7 @@ void FlagManager::dump(std::string& result) const {
 
     /// Trunk stable readonly flags ///
     DUMP_ACONFIG_FLAG(adpf_fmq_sf);
+    DUMP_ACONFIG_FLAG(arr_setframerate_gte_enum);
     DUMP_ACONFIG_FLAG(connected_display);
     DUMP_ACONFIG_FLAG(enable_small_area_detection);
     DUMP_ACONFIG_FLAG(stable_edid_ids);
@@ -218,6 +220,7 @@ FLAG_MANAGER_LEGACY_SERVER_FLAG(use_skia_tracing, PROPERTY_SKIA_ATRACE_ENABLED,
 
 /// Trunk stable readonly flags ///
 FLAG_MANAGER_ACONFIG_FLAG(adpf_fmq_sf, "")
+FLAG_MANAGER_ACONFIG_FLAG(arr_setframerate_gte_enum, "debug.sf.arr_setframerate_gte_enum")
 FLAG_MANAGER_ACONFIG_FLAG(connected_display, "")
 FLAG_MANAGER_ACONFIG_FLAG(enable_small_area_detection, "")
 FLAG_MANAGER_ACONFIG_FLAG(stable_edid_ids, "debug.sf.stable_edid_ids")
@@ -257,7 +260,7 @@ FLAG_MANAGER_ACONFIG_FLAG(flush_buffer_slots_to_uncache, "");
 FLAG_MANAGER_ACONFIG_FLAG(force_compile_graphite_renderengine, "");
 FLAG_MANAGER_ACONFIG_FLAG(true_hdr_screenshots, "debug.sf.true_hdr_screenshots");
 FLAG_MANAGER_ACONFIG_FLAG(display_config_error_hal, "");
-FLAG_MANAGER_ACONFIG_FLAG(connected_display_hdr, "");
+FLAG_MANAGER_ACONFIG_FLAG(connected_display_hdr, "debug.sf.connected_display_hdr");
 FLAG_MANAGER_ACONFIG_FLAG(deprecate_frame_tracker, "");
 FLAG_MANAGER_ACONFIG_FLAG(skip_invisible_windows_in_input, "");
 FLAG_MANAGER_ACONFIG_FLAG(begone_bright_hlg, "debug.sf.begone_bright_hlg");
@@ -277,5 +280,6 @@ FLAG_MANAGER_ACONFIG_FLAG_IMPORTED(idle_screen_refresh_rate_timeout, "",
 FLAG_MANAGER_ACONFIG_FLAG_IMPORTED(adpf_use_fmq_channel_fixed, "", android::os)
 FLAG_MANAGER_ACONFIG_FLAG_IMPORTED(trace_frame_rate_override, "",
                                    com::android::graphics::libgui::flags);
-
+FLAG_MANAGER_ACONFIG_FLAG_IMPORTED(luts_api, "",
+                                   android::hardware::flags);
 } // namespace android
