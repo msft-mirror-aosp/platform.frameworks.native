@@ -5080,14 +5080,14 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, assignsDisplayProfileBasedOnLay
     InjectedLayer layer1;
     injectOutputLayer(layer1);
     PictureProfileHandle profileForLayer1(1);
-    EXPECT_CALL(*layer1.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(3));
+    EXPECT_CALL(*layer1.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(1));
     EXPECT_CALL(*layer1.outputLayer, getPictureProfileHandle())
             .WillRepeatedly(ReturnRef(profileForLayer1));
 
     InjectedLayer layer2;
     injectOutputLayer(layer2);
     PictureProfileHandle profileForLayer2(2);
-    EXPECT_CALL(*layer2.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(1));
+    EXPECT_CALL(*layer2.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(3));
     EXPECT_CALL(*layer2.outputLayer, getPictureProfileHandle())
             .WillRepeatedly(ReturnRef(profileForLayer2));
 
@@ -5143,14 +5143,14 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, assignsLayerProfileBasedOnLayer
     InjectedLayer layer1;
     injectOutputLayer(layer1);
     PictureProfileHandle profileForLayer1(1);
-    EXPECT_CALL(*layer1.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(3));
+    EXPECT_CALL(*layer1.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(1));
     EXPECT_CALL(*layer1.outputLayer, getPictureProfileHandle())
             .WillRepeatedly(ReturnRef(profileForLayer1));
 
     InjectedLayer layer2;
     injectOutputLayer(layer2);
     PictureProfileHandle profileForLayer2(2);
-    EXPECT_CALL(*layer2.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(1));
+    EXPECT_CALL(*layer2.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(3));
     EXPECT_CALL(*layer2.outputLayer, getPictureProfileHandle())
             .WillRepeatedly(ReturnRef(profileForLayer2));
 
