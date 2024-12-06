@@ -38,6 +38,8 @@ using surfaceflinger::frontend::LayerSnapshot;
 using testing::_;
 using testing::NiceMock;
 using testing::Return;
+using testing::SizeIs;
+using testing::StrictMock;
 
 class TestableLayerFE : public LayerFE {
 public:
@@ -48,8 +50,20 @@ public:
     LayerSnapshot& snapshot;
 };
 
+class MockActivePictureListener : public gui::BnActivePictureListener {
+public:
+    operator ActivePictureTracker::Listeners const() {
+        return {sp<IActivePictureListener>::fromExisting(this)};
+    }
+
+    MOCK_METHOD(binder::Status, onActivePicturesChanged, (const std::vector<ActivePicture>&),
+                (override));
+};
+
 class ActivePictureTrackerTest : public testing::Test {
 protected:
+    const static ActivePictureTracker::Listeners NO_LISTENERS;
+
     SurfaceFlinger* flinger() {
         if (!mFlingerSetup) {
             mFlinger.setupMockScheduler();
@@ -60,10 +74,25 @@ protected:
         return mFlinger.flinger();
     }
 
+    sp<NiceMock<MockLayer>> createMockLayer(int layerId, int ownerUid) {
+        auto layer = sp<NiceMock<MockLayer>>::make(flinger(), layerId);
+        EXPECT_CALL(*layer, getOwnerUid()).WillRepeatedly(Return(uid_t(ownerUid)));
+        return layer;
+    }
+
+    sp<StrictMock<MockActivePictureListener>> createMockListener() {
+        return sp<StrictMock<MockActivePictureListener>>::make();
+    }
+
+    ActivePictureTracker::Listeners mListenersToAdd;
+    ActivePictureTracker::Listeners mListenersToRemove;
+
 private:
     TestableSurfaceFlinger mFlinger;
     bool mFlingerSetup = false;
 };
+
+const ActivePictureTracker::Listeners ActivePictureTrackerTest::NO_LISTENERS;
 
 // Hack to workaround initializer lists not working for parcelables because parcelables inherit from
 // Parcelable, which has a virtual destructor.
@@ -85,121 +114,137 @@ void PrintTo(const ActivePicture& activePicture, std::ostream* os) {
 }
 
 TEST_F(ActivePictureTrackerTest, notCalledWithNoProfile) {
-    sp<NiceMock<MockLayer>> layer = sp<NiceMock<MockLayer>>::make(flinger(), 100);
+    auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
-    EXPECT_CALL(*layer, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
     ActivePictureTracker tracker;
     {
-        layerFE.snapshot.pictureProfileHandle = PictureProfileHandle::NONE;
+        layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
 
-        ASSERT_FALSE(tracker.updateAndHasChanged());
+        tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
+    }
+    {
+        auto listener = createMockListener();
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(0))).Times(1);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
 }
 
 TEST_F(ActivePictureTrackerTest, calledWhenLayerStartsUsingProfile) {
-    sp<NiceMock<MockLayer>> layer = sp<NiceMock<MockLayer>>::make(flinger(), 100);
+    auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
-    EXPECT_CALL(*layer, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
     ActivePictureTracker tracker;
+    auto listener = createMockListener();
     {
-        layerFE.snapshot.pictureProfileHandle = PictureProfileHandle::NONE;
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
 
-        ASSERT_FALSE(tracker.updateAndHasChanged());
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(0))).Times(1);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
     {
         layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(), UnorderedElementsAre({{100, 10, 1}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(_))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 1}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
     }
 }
 
 TEST_F(ActivePictureTrackerTest, notCalledWhenLayerContinuesUsingProfile) {
-    sp<NiceMock<MockLayer>> layer = sp<NiceMock<MockLayer>>::make(flinger(), 100);
+    auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
-    EXPECT_CALL(*layer, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
     ActivePictureTracker tracker;
+    auto listener = createMockListener();
     {
         layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(), UnorderedElementsAre({{100, 10, 1}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(1))).Times(1);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
     {
         layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
 
-        ASSERT_FALSE(tracker.updateAndHasChanged());
+        EXPECT_CALL(*listener, onActivePicturesChanged(_)).Times(0);
+        tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
     }
 }
 
 TEST_F(ActivePictureTrackerTest, calledWhenLayerStopsUsingProfile) {
-    sp<NiceMock<MockLayer>> layer = sp<NiceMock<MockLayer>>::make(flinger(), 100);
+    auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
-    EXPECT_CALL(*layer, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
     ActivePictureTracker tracker;
+    auto listener = createMockListener();
     {
         layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(), UnorderedElementsAre({{100, 10, 1}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(1))).Times(1);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
     {
         layerFE.snapshot.pictureProfileHandle = PictureProfileHandle::NONE;
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(), UnorderedElementsAre({}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(0))).Times(1);
+        tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
     }
 }
 
 TEST_F(ActivePictureTrackerTest, calledWhenLayerChangesProfile) {
-    sp<NiceMock<MockLayer>> layer = sp<NiceMock<MockLayer>>::make(flinger(), 100);
+    auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
-    EXPECT_CALL(*layer, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
     ActivePictureTracker tracker;
+    auto listener = createMockListener();
     {
         layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(), UnorderedElementsAre({{100, 10, 1}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(1)))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 1}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
     {
         layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(2);
         layerFE.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(), UnorderedElementsAre({{100, 10, 2}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(1)))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 2}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
     }
 }
 
 TEST_F(ActivePictureTrackerTest, notCalledWhenUncommittedLayerChangesProfile) {
-    sp<NiceMock<MockLayer>> layer1 = sp<NiceMock<MockLayer>>::make(flinger(), 100);
+    auto layer1 = createMockLayer(100, 10);
     TestableLayerFE layerFE1;
-    EXPECT_CALL(*layer1, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
-    sp<NiceMock<MockLayer>> layer2 = sp<NiceMock<MockLayer>>::make(flinger(), 200);
+    auto layer2 = createMockLayer(200, 20);
     TestableLayerFE layerFE2;
-    EXPECT_CALL(*layer2, getOwnerUid()).WillRepeatedly(Return(uid_t(20)));
 
     ActivePictureTracker tracker;
+    auto listener = createMockListener();
     {
         layerFE1.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE1.onPictureProfileCommitted();
@@ -208,8 +253,8 @@ TEST_F(ActivePictureTrackerTest, notCalledWhenUncommittedLayerChangesProfile) {
         layerFE2.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         tracker.onLayerComposed(*layer2, layerFE2, layerFE2.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(), UnorderedElementsAre({{100, 10, 1}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(1))).Times(1);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
     {
         layerFE1.snapshot.pictureProfileHandle = PictureProfileHandle(1);
@@ -219,20 +264,20 @@ TEST_F(ActivePictureTrackerTest, notCalledWhenUncommittedLayerChangesProfile) {
         layerFE2.snapshot.pictureProfileHandle = PictureProfileHandle(2);
         tracker.onLayerComposed(*layer2, layerFE2, layerFE2.stealCompositionResult());
 
-        ASSERT_FALSE(tracker.updateAndHasChanged());
+        EXPECT_CALL(*listener, onActivePicturesChanged(_)).Times(0);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
 }
 
 TEST_F(ActivePictureTrackerTest, calledWhenDifferentLayerUsesSameProfile) {
-    sp<NiceMock<MockLayer>> layer1 = sp<NiceMock<MockLayer>>::make(flinger(), 100);
+    auto layer1 = createMockLayer(100, 10);
     TestableLayerFE layerFE1;
-    EXPECT_CALL(*layer1, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
-    sp<NiceMock<MockLayer>> layer2 = sp<NiceMock<MockLayer>>::make(flinger(), 200);
+    auto layer2 = createMockLayer(200, 20);
     TestableLayerFE layerFE2;
-    EXPECT_CALL(*layer2, getOwnerUid()).WillRepeatedly(Return(uid_t(20)));
 
     ActivePictureTracker tracker;
+    auto listener = createMockListener();
     {
         layerFE1.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE1.onPictureProfileCommitted();
@@ -242,9 +287,12 @@ TEST_F(ActivePictureTrackerTest, calledWhenDifferentLayerUsesSameProfile) {
         layerFE2.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer2, layerFE2, layerFE2.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(),
-                    UnorderedElementsAre({{100, 10, 1}, {200, 20, 2}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(_))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 1}, {200, 20, 2}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
     {
         layerFE1.snapshot.pictureProfileHandle = PictureProfileHandle(2);
@@ -255,22 +303,24 @@ TEST_F(ActivePictureTrackerTest, calledWhenDifferentLayerUsesSameProfile) {
         layerFE2.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer2, layerFE2, layerFE2.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(),
-                    UnorderedElementsAre({{100, 10, 2}, {200, 20, 1}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(_))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 2}, {200, 20, 1}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
     }
 }
 
 TEST_F(ActivePictureTrackerTest, calledWhenSameUidUsesSameProfile) {
-    sp<NiceMock<MockLayer>> layer1 = sp<NiceMock<MockLayer>>::make(flinger(), 100);
+    auto layer1 = createMockLayer(100, 10);
     TestableLayerFE layerFE1;
-    EXPECT_CALL(*layer1, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
-    sp<NiceMock<MockLayer>> layer2 = sp<NiceMock<MockLayer>>::make(flinger(), 200);
+    auto layer2 = createMockLayer(200, 10);
     TestableLayerFE layerFE2;
-    EXPECT_CALL(*layer2, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
     ActivePictureTracker tracker;
+    auto listener = createMockListener();
     {
         layerFE1.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE1.onPictureProfileCommitted();
@@ -280,9 +330,12 @@ TEST_F(ActivePictureTrackerTest, calledWhenSameUidUsesSameProfile) {
         layerFE2.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer2, layerFE2, layerFE2.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(),
-                    UnorderedElementsAre({{100, 10, 1}, {200, 10, 2}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(_))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 1}, {200, 10, 2}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
     {
         layerFE1.snapshot.pictureProfileHandle = PictureProfileHandle(2);
@@ -293,31 +346,32 @@ TEST_F(ActivePictureTrackerTest, calledWhenSameUidUsesSameProfile) {
         layerFE2.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer2, layerFE2, layerFE2.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(),
-                    UnorderedElementsAre({{100, 10, 2}, {200, 10, 1}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(_))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 2}, {200, 10, 1}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
     }
 }
 
 TEST_F(ActivePictureTrackerTest, calledWhenNewLayerUsesSameProfile) {
-    sp<NiceMock<MockLayer>> layer1 = sp<NiceMock<MockLayer>>::make(flinger(), 100);
+    auto layer1 = createMockLayer(100, 10);
     TestableLayerFE layerFE1;
-    EXPECT_CALL(*layer1, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
 
     ActivePictureTracker tracker;
+    auto listener = createMockListener();
     {
         layerFE1.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE1.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer1, layerFE1, layerFE1.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(), UnorderedElementsAre({{100, 10, 1}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(1))).Times(1);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
     }
 
-    sp<NiceMock<MockLayer>> layer2 = sp<NiceMock<MockLayer>>::make(flinger(), 200);
+    auto layer2 = createMockLayer(200, 10);
     TestableLayerFE layerFE2;
-    EXPECT_CALL(*layer2, getOwnerUid()).WillRepeatedly(Return(uid_t(10)));
-
     {
         layerFE1.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         layerFE1.onPictureProfileCommitted();
@@ -327,9 +381,12 @@ TEST_F(ActivePictureTrackerTest, calledWhenNewLayerUsesSameProfile) {
         layerFE2.onPictureProfileCommitted();
         tracker.onLayerComposed(*layer2, layerFE2, layerFE2.stealCompositionResult());
 
-        ASSERT_TRUE(tracker.updateAndHasChanged());
-        EXPECT_THAT(tracker.getActivePictures(),
-                    UnorderedElementsAre({{100, 10, 1}, {200, 10, 1}}));
+        EXPECT_CALL(*listener, onActivePicturesChanged(_))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 1}, {200, 10, 1}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
     }
 }
 

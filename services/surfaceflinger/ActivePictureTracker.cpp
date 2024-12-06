@@ -23,6 +23,9 @@
 
 namespace android {
 
+using gui::ActivePicture;
+using gui::IActivePictureListener;
+
 void ActivePictureTracker::onLayerComposed(const Layer& layer, const LayerFE& layerFE,
                                            const CompositionResult& result) {
     if (result.wasPictureProfileCommitted) {
@@ -39,10 +42,47 @@ void ActivePictureTracker::onLayerComposed(const Layer& layer, const LayerFE& la
     }
 }
 
+void ActivePictureTracker::updateAndNotifyListeners(const Listeners& listenersToAdd,
+                                                    const Listeners& listenersToRemove) {
+    Listeners newListeners = updateListeners(listenersToAdd, listenersToRemove);
+    if (updateAndHasChanged()) {
+        for (auto listener : mListeners) {
+            listener->onActivePicturesChanged(getActivePictures());
+        }
+    } else {
+        for (auto listener : newListeners) {
+            listener->onActivePicturesChanged(getActivePictures());
+        }
+    }
+}
+
+ActivePictureTracker::Listeners ActivePictureTracker::updateListeners(
+        const Listeners& listenersToAdd, const Listeners& listenersToRemove) {
+    Listeners newListeners;
+    for (auto listener : listenersToRemove) {
+        std::erase_if(mListeners, [listener](const sp<IActivePictureListener>& otherListener) {
+            return IInterface::asBinder(listener) == IInterface::asBinder(otherListener);
+        });
+    }
+    for (auto listener : listenersToAdd) {
+        if (std::find_if(mListeners.begin(), mListeners.end(),
+                         [listener](const sp<IActivePictureListener>& otherListener) {
+                             return IInterface::asBinder(listener) ==
+                                     IInterface::asBinder(otherListener);
+                         }) == mListeners.end()) {
+            newListeners.push_back(listener);
+        }
+    }
+    for (auto listener : newListeners) {
+        mListeners.push_back(listener);
+    }
+    return newListeners;
+}
+
 bool ActivePictureTracker::updateAndHasChanged() {
     bool hasChanged = true;
     if (mNewActivePictures.size() == mOldActivePictures.size()) {
-        auto compare = [](const gui::ActivePicture& lhs, const gui::ActivePicture& rhs) -> int {
+        auto compare = [](const ActivePicture& lhs, const ActivePicture& rhs) -> int {
             if (lhs.layerId == rhs.layerId) {
                 return lhs.pictureProfileId < rhs.pictureProfileId;
             }
@@ -59,7 +99,7 @@ bool ActivePictureTracker::updateAndHasChanged() {
     return hasChanged;
 }
 
-const std::vector<gui::ActivePicture>& ActivePictureTracker::getActivePictures() const {
+const std::vector<ActivePicture>& ActivePictureTracker::getActivePictures() const {
     return mOldActivePictures;
 }
 

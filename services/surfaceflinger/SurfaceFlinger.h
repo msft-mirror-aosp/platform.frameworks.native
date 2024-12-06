@@ -667,7 +667,9 @@ private:
 
     void updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t connectedLevel, int32_t maxLevel);
 
-    void setActivePictureListener(const sp<gui::IActivePictureListener>& listener);
+    void addActivePictureListener(const sp<gui::IActivePictureListener>& listener);
+
+    void removeActivePictureListener(const sp<gui::IActivePictureListener>& listener);
 
     // IBinder::DeathRecipient overrides:
     void binderDied(const wp<IBinder>& who) override;
@@ -1402,9 +1404,9 @@ private:
     std::unordered_map<DisplayId, sp<HdrLayerInfoReporter>> mHdrLayerInfoListeners
             GUARDED_BY(mStateLock);
 
-    sp<gui::IActivePictureListener> mActivePictureListener GUARDED_BY(mStateLock);
-    bool mHaveNewActivePictureListener GUARDED_BY(mStateLock);
     ActivePictureTracker mActivePictureTracker GUARDED_BY(kMainThreadContext);
+    ActivePictureTracker::Listeners mActivePictureListenersToAdd GUARDED_BY(mStateLock);
+    ActivePictureTracker::Listeners mActivePictureListenersToRemove GUARDED_BY(mStateLock);
 
     std::atomic<ui::Transform::RotationFlags> mActiveDisplayTransformHint;
 
@@ -1641,8 +1643,8 @@ public:
     binder::Status flushJankData(int32_t layerId) override;
     binder::Status removeJankListener(int32_t layerId, const sp<gui::IJankListener>& listener,
                                       int64_t afterVsync) override;
-    binder::Status setActivePictureListener(const sp<gui::IActivePictureListener>& listener);
-    binder::Status clearActivePictureListener();
+    binder::Status addActivePictureListener(const sp<gui::IActivePictureListener>& listener);
+    binder::Status removeActivePictureListener(const sp<gui::IActivePictureListener>& listener);
 
 private:
     static const constexpr bool kUsePermissionCache = true;

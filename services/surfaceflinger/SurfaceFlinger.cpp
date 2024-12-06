@@ -126,7 +126,6 @@
 #include <gui/SchedulingPolicy.h>
 #include <gui/SyncScreenCaptureListener.h>
 #include <ui/DisplayIdentification.h>
-#include "ActivePictureTracker.h"
 #include "BackgroundExecutor.h"
 #include "Client.h"
 #include "ClientCache.h"
@@ -3223,8 +3222,8 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
     std::vector<std::pair<std::shared_ptr<compositionengine::Display>, sp<HdrLayerInfoReporter>>>
             hdrInfoListeners;
     bool haveNewHdrInfoListeners = false;
-    sp<gui::IActivePictureListener> activePictureListener;
-    bool haveNewActivePictureListener = false;
+    ActivePictureTracker::Listeners activePictureListenersToAdd;
+    ActivePictureTracker::Listeners activePictureListenersToRemove;
     {
         Mutex::Autolock lock(mStateLock);
         if (mFpsReporter) {
@@ -3246,9 +3245,8 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
         haveNewHdrInfoListeners = mAddingHDRLayerInfoListener; // grab this with state lock
         mAddingHDRLayerInfoListener = false;
 
-        activePictureListener = mActivePictureListener;
-        haveNewActivePictureListener = mHaveNewActivePictureListener;
-        mHaveNewActivePictureListener = false;
+        std::swap(activePictureListenersToAdd, mActivePictureListenersToAdd);
+        std::swap(activePictureListenersToRemove, mActivePictureListenersToRemove);
     }
 
     if (haveNewHdrInfoListeners || mHdrLayerInfoChanged) {
@@ -3312,14 +3310,10 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
     mHdrLayerInfoChanged = false;
 
     if (com_android_graphics_libgui_flags_apply_picture_profiles()) {
-        // Track, update and notify changes to active pictures - layers that are undergoing picture
-        // processing
-        if (mActivePictureTracker.updateAndHasChanged() || haveNewActivePictureListener) {
-            if (activePictureListener) {
-                activePictureListener->onActivePicturesChanged(
-                        mActivePictureTracker.getActivePictures());
-            }
-        }
+        // Track, update and notify changes to active pictures - layers that are undergoing
+        // picture processing
+        mActivePictureTracker.updateAndNotifyListeners(activePictureListenersToAdd,
+                                                       activePictureListenersToRemove);
     }
 
     mTransactionCallbackInvoker.sendCallbacks(false /* onCommitOnly */);
@@ -8171,12 +8165,20 @@ void SurfaceFlinger::updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t con
     }));
 }
 
-void SurfaceFlinger::setActivePictureListener(const sp<gui::IActivePictureListener>& listener) {
-    if (com_android_graphics_libgui_flags_apply_picture_profiles()) {
-        Mutex::Autolock lock(mStateLock);
-        mActivePictureListener = listener;
-        mHaveNewActivePictureListener = listener != nullptr;
-    }
+void SurfaceFlinger::addActivePictureListener(const sp<gui::IActivePictureListener>& listener) {
+    Mutex::Autolock lock(mStateLock);
+    std::erase_if(mActivePictureListenersToRemove, [listener](const auto& otherListener) {
+        return IInterface::asBinder(listener) == IInterface::asBinder(otherListener);
+    });
+    mActivePictureListenersToAdd.push_back(listener);
+}
+
+void SurfaceFlinger::removeActivePictureListener(const sp<gui::IActivePictureListener>& listener) {
+    Mutex::Autolock lock(mStateLock);
+    std::erase_if(mActivePictureListenersToAdd, [listener](const auto& otherListener) {
+        return IInterface::asBinder(listener) == IInterface::asBinder(otherListener);
+    });
+    mActivePictureListenersToRemove.push_back(listener);
 }
 
 std::shared_ptr<renderengine::ExternalTexture> SurfaceFlinger::getExternalTextureFromBufferData(
@@ -9129,11 +9131,20 @@ binder::Status SurfaceComposerAIDL::removeHdrLayerInfoListener(
     return binderStatusFromStatusT(status);
 }
 
-binder::Status SurfaceComposerAIDL::setActivePictureListener(
+binder::Status SurfaceComposerAIDL::addActivePictureListener(
         const sp<gui::IActivePictureListener>& listener) {
     status_t status = checkObservePictureProfilesPermission();
     if (status == OK) {
-        mFlinger->setActivePictureListener(listener);
+        mFlinger->addActivePictureListener(listener);
+    }
+    return binderStatusFromStatusT(status);
+}
+
+binder::Status SurfaceComposerAIDL::removeActivePictureListener(
+        const sp<gui::IActivePictureListener>& listener) {
+    status_t status = checkObservePictureProfilesPermission();
+    if (status == OK) {
+        mFlinger->removeActivePictureListener(listener);
     }
     return binderStatusFromStatusT(status);
 }
