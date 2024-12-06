@@ -14,12 +14,19 @@
  * limitations under the License.
  */
 
-#include "mock/DisplayHardware/MockPowerHintSessionWrapper.h"
+package android.gui;
 
-namespace android::Hwc2::mock {
+/**
+ * Visible content that is using picture processing.
+ * @hide
+ */
+parcelable ActivePicture {
+    /** The layer ID that is using picture processing. */
+    int layerId;
 
-// Explicit default instantiation is recommended.
-MockPowerHintSessionWrapper::MockPowerHintSessionWrapper()
-      : power::PowerHintSessionWrapper(nullptr) {}
+    /** UID that owns layer using picture processing. */
+    int ownerUid;
 
-} // namespace android::Hwc2::mock
+    /** ID of the picture profile that was used to configure the picture processing. */
+    long pictureProfileId;
+}

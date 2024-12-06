@@ -47,20 +47,23 @@ public:
     bool use_adpf_cpu_hint() const;
     bool use_skia_tracing() const;
 
-    /// Trunk stable server flags ///
+    /// Trunk stable server (R/W) flags ///
     bool refresh_rate_overlay_on_external_display() const;
     bool adpf_gpu_sf() const;
     bool adpf_use_fmq_channel() const;
+    bool adpf_native_session_manager() const;
     bool adpf_use_fmq_channel_fixed() const;
+    bool graphite_renderengine_preview_rollout() const;
 
     /// Trunk stable readonly flags ///
+    bool arr_setframerate_gte_enum() const;
     bool adpf_fmq_sf() const;
     bool connected_display() const;
     bool frame_rate_category_mrr() const;
     bool enable_small_area_detection() const;
+    bool stable_edid_ids() const;
     bool misc1() const;
     bool vrr_config() const;
-    bool hotplug2() const;
     bool hdcp_level_hal() const;
     bool multithreaded_present() const;
     bool add_sf_skipped_frames_to_trace() const;
@@ -77,6 +80,7 @@ public:
     bool renderable_buffer_usage() const;
     bool restore_blur_step() const;
     bool dont_skip_on_early_ro() const;
+    bool no_vsyncs_on_screen_off() const;
     bool protected_if_client() const;
     bool idle_screen_refresh_rate_timeout() const;
     bool graphite_renderengine() const;
@@ -94,6 +98,11 @@ public:
     bool trace_frame_rate_override() const;
     bool true_hdr_screenshots() const;
     bool display_config_error_hal() const;
+    bool connected_display_hdr() const;
+    bool deprecate_frame_tracker() const;
+    bool skip_invisible_windows_in_input() const;
+    bool begone_bright_hlg() const;
+    bool luts_api() const;
 
 protected:
     // overridden for unit tests
