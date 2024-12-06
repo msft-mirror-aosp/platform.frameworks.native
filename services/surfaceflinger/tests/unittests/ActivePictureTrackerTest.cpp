@@ -113,7 +113,27 @@ void PrintTo(const ActivePicture& activePicture, std::ostream* os) {
     *os << activePicture.toString();
 }
 
-TEST_F(ActivePictureTrackerTest, notCalledWithNoProfile) {
+TEST_F(ActivePictureTrackerTest, whenListenerAdded_called) {
+    ActivePictureTracker tracker;
+    auto listener = createMockListener();
+    EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(0))).Times(1);
+    tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
+}
+
+TEST_F(ActivePictureTrackerTest, whenListenerAdded_withListenerAlreadyAdded_notCalled) {
+    ActivePictureTracker tracker;
+    auto listener = createMockListener();
+    {
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(0))).Times(1);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
+    }
+    {
+        EXPECT_CALL(*listener, onActivePicturesChanged(_)).Times(0);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
+    }
+}
+
+TEST_F(ActivePictureTrackerTest, whenListenerAdded_withUncommittedProfile_calledWithNone) {
     auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
 
@@ -121,7 +141,6 @@ TEST_F(ActivePictureTrackerTest, notCalledWithNoProfile) {
     {
         layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
         tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
-
         tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
     }
     {
@@ -131,7 +150,27 @@ TEST_F(ActivePictureTrackerTest, notCalledWithNoProfile) {
     }
 }
 
-TEST_F(ActivePictureTrackerTest, calledWhenLayerStartsUsingProfile) {
+TEST_F(ActivePictureTrackerTest, whenListenerAdded_withCommittedProfile_calledWithActivePicture) {
+    auto layer = createMockLayer(100, 10);
+    TestableLayerFE layerFE;
+
+    ActivePictureTracker tracker;
+    {
+        layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
+        layerFE.onPictureProfileCommitted();
+        tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
+
+        auto listener = createMockListener();
+        EXPECT_CALL(*listener, onActivePicturesChanged(_))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 1}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
+    }
+}
+
+TEST_F(ActivePictureTrackerTest, whenProfileAdded_calledWithActivePicture) {
     auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
 
@@ -157,7 +196,7 @@ TEST_F(ActivePictureTrackerTest, calledWhenLayerStartsUsingProfile) {
     }
 }
 
-TEST_F(ActivePictureTrackerTest, notCalledWhenLayerContinuesUsingProfile) {
+TEST_F(ActivePictureTrackerTest, whenContinuesUsingProfile_notCalled) {
     auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
 
@@ -181,7 +220,7 @@ TEST_F(ActivePictureTrackerTest, notCalledWhenLayerContinuesUsingProfile) {
     }
 }
 
-TEST_F(ActivePictureTrackerTest, calledWhenLayerStopsUsingProfile) {
+TEST_F(ActivePictureTrackerTest, whenProfileIsRemoved_calledWithNoActivePictures) {
     auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
 
@@ -204,7 +243,30 @@ TEST_F(ActivePictureTrackerTest, calledWhenLayerStopsUsingProfile) {
     }
 }
 
-TEST_F(ActivePictureTrackerTest, calledWhenLayerChangesProfile) {
+TEST_F(ActivePictureTrackerTest, whenProfileIsNotCommitted_calledWithNoActivePictures) {
+    auto layer = createMockLayer(100, 10);
+    TestableLayerFE layerFE;
+
+    ActivePictureTracker tracker;
+    auto listener = createMockListener();
+    {
+        layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
+        layerFE.onPictureProfileCommitted();
+        tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
+
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(1))).Times(1);
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
+    }
+    {
+        layerFE.snapshot.pictureProfileHandle = PictureProfileHandle(1);
+        tracker.onLayerComposed(*layer, layerFE, layerFE.stealCompositionResult());
+
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(0))).Times(1);
+        tracker.updateAndNotifyListeners(NO_LISTENERS, NO_LISTENERS);
+    }
+}
+
+TEST_F(ActivePictureTrackerTest, whenProfileChanges_calledWithDifferentProfile) {
     auto layer = createMockLayer(100, 10);
     TestableLayerFE layerFE;
 
@@ -236,7 +298,34 @@ TEST_F(ActivePictureTrackerTest, calledWhenLayerChangesProfile) {
     }
 }
 
-TEST_F(ActivePictureTrackerTest, notCalledWhenUncommittedLayerChangesProfile) {
+TEST_F(ActivePictureTrackerTest, whenMultipleCommittedProfiles_calledWithMultipleActivePictures) {
+    auto layer1 = createMockLayer(100, 10);
+    TestableLayerFE layerFE1;
+
+    auto layer2 = createMockLayer(200, 20);
+    TestableLayerFE layerFE2;
+
+    ActivePictureTracker tracker;
+    auto listener = createMockListener();
+    {
+        layerFE1.snapshot.pictureProfileHandle = PictureProfileHandle(1);
+        layerFE1.onPictureProfileCommitted();
+        tracker.onLayerComposed(*layer1, layerFE1, layerFE1.stealCompositionResult());
+
+        layerFE2.snapshot.pictureProfileHandle = PictureProfileHandle(2);
+        layerFE2.onPictureProfileCommitted();
+        tracker.onLayerComposed(*layer2, layerFE2, layerFE2.stealCompositionResult());
+
+        EXPECT_CALL(*listener, onActivePicturesChanged(SizeIs(2)))
+                .WillOnce([](const std::vector<gui::ActivePicture>& activePictures) {
+                    EXPECT_THAT(activePictures, UnorderedElementsAre({{100, 10, 1}, {200, 20, 2}}));
+                    return binder::Status::ok();
+                });
+        tracker.updateAndNotifyListeners(*listener, NO_LISTENERS);
+    }
+}
+
+TEST_F(ActivePictureTrackerTest, whenNonCommittedProfileChanges_notCalled) {
     auto layer1 = createMockLayer(100, 10);
     TestableLayerFE layerFE1;
 
@@ -269,7 +358,7 @@ TEST_F(ActivePictureTrackerTest, notCalledWhenUncommittedLayerChangesProfile) {
     }
 }
 
-TEST_F(ActivePictureTrackerTest, calledWhenDifferentLayerUsesSameProfile) {
+TEST_F(ActivePictureTrackerTest, whenDifferentLayerUsesSameProfile_called) {
     auto layer1 = createMockLayer(100, 10);
     TestableLayerFE layerFE1;
 
@@ -312,7 +401,7 @@ TEST_F(ActivePictureTrackerTest, calledWhenDifferentLayerUsesSameProfile) {
     }
 }
 
-TEST_F(ActivePictureTrackerTest, calledWhenSameUidUsesSameProfile) {
+TEST_F(ActivePictureTrackerTest, whenSameUidDifferentLayerUsesSameProfile_called) {
     auto layer1 = createMockLayer(100, 10);
     TestableLayerFE layerFE1;
 
@@ -355,7 +444,7 @@ TEST_F(ActivePictureTrackerTest, calledWhenSameUidUsesSameProfile) {
     }
 }
 
-TEST_F(ActivePictureTrackerTest, calledWhenNewLayerUsesSameProfile) {
+TEST_F(ActivePictureTrackerTest, whenNewLayerUsesSameProfile_called) {
     auto layer1 = createMockLayer(100, 10);
     TestableLayerFE layerFE1;
 
