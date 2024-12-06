@@ -56,12 +56,15 @@ RequestedLayerState::RequestedLayerState(const LayerCreationArgs& args)
         ownerUid(args.ownerUid),
         ownerPid(args.ownerPid),
         parentId(args.parentId),
-        layerIdToMirror(args.layerIdToMirror) {
+        layerIdToMirror(args.layerIdToMirror),
+        pendingBuffers(args.pendingBuffers) {
     layerId = static_cast<int32_t>(args.sequence);
     changes |= RequestedLayerState::Changes::Created;
     metadata.merge(args.metadata);
     changes |= RequestedLayerState::Changes::Metadata;
     handleAlive = true;
+    // TODO: b/305254099 remove once we don't pass invisible windows to input
+    windowInfoHandle = nullptr;
     if (parentId != UNASSIGNED_LAYER_ID) {
         canBeRoot = false;
     }
@@ -94,7 +97,7 @@ RequestedLayerState::RequestedLayerState(const LayerCreationArgs& args)
     LLOGV(layerId, "Created %s flags=%d", getDebugString().c_str(), flags);
     color.a = 1.0f;
 
-    crop.makeInvalid();
+    crop = {0, 0, -1, -1};
     z = 0;
     layerStack = ui::DEFAULT_LAYER_STACK;
     transformToDisplayInverse = false;
@@ -160,7 +163,7 @@ void RequestedLayerState::merge(const ResolvedComposerState& resolvedComposerSta
     uint64_t clientChanges = what | layer_state_t::diff(clientState);
     layer_state_t::merge(clientState);
     what = clientChanges;
-    LLOGV(layerId, "requested=%" PRIu64 "flags=%" PRIu64, clientState.what, clientChanges);
+    LLOGV(layerId, "requested=%" PRIu64 " flags=%" PRIu64 " ", clientState.what, clientChanges);
 
     if (clientState.what & layer_state_t::eFlagsChanged) {
         if ((oldFlags ^ flags) &
@@ -471,10 +474,10 @@ Rect RequestedLayerState::getBufferSize(uint32_t displayRotationFlags) const {
     return Rect(0, 0, static_cast<int32_t>(bufWidth), static_cast<int32_t>(bufHeight));
 }
 
-Rect RequestedLayerState::getCroppedBufferSize(const Rect& bufferSize) const {
-    Rect size = bufferSize;
+FloatRect RequestedLayerState::getCroppedBufferSize(const Rect& bufferSize) const {
+    FloatRect size = bufferSize.toFloatRect();
     if (!crop.isEmpty() && size.isValid()) {
-        size.intersect(crop, &size);
+        size = size.intersect(crop);
     } else if (!crop.isEmpty()) {
         size = crop;
     }
@@ -553,6 +556,24 @@ bool RequestedLayerState::hasInputInfo() const {
             windowInfo->inputConfig.test(gui::WindowInfo::InputConfig::NO_INPUT_CHANNEL);
 }
 
+bool RequestedLayerState::needsInputInfo() const {
+    if (potentialCursor) {
+        return false;
+    }
+
+    if ((sidebandStream != nullptr) || (externalTexture != nullptr)) {
+        return true;
+    }
+
+    if (!windowInfoHandle) {
+        return false;
+    }
+
+    const auto windowInfo = windowInfoHandle->getInfo();
+    return windowInfo->token != nullptr ||
+            windowInfo->inputConfig.test(gui::WindowInfo::InputConfig::NO_INPUT_CHANNEL);
+}
+
 bool RequestedLayerState::hasBlur() const {
     return backgroundBlurRadius > 0 || blurRegions.size() > 0;
 }
@@ -612,7 +633,7 @@ bool RequestedLayerState::isSimpleBufferUpdate(const layer_state_t& s) const {
             layer_state_t::eEdgeExtensionChanged | layer_state_t::eBufferCropChanged |
             layer_state_t::eDestinationFrameChanged | layer_state_t::eDimmingEnabledChanged |
             layer_state_t::eExtendedRangeBrightnessChanged |
-            layer_state_t::eDesiredHdrHeadroomChanged |
+            layer_state_t::eDesiredHdrHeadroomChanged | layer_state_t::eLutsChanged |
             (FlagManager::getInstance().latch_unsignaled_with_auto_refresh_changed()
                      ? layer_state_t::eFlagsChanged
                      : 0);

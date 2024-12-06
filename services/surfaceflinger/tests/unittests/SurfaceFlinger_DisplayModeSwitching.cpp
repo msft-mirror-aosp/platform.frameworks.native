@@ -34,7 +34,7 @@ using namespace com::android::graphics::surfaceflinger;
                                                static_cast<hal::HWConfigId>(        \
                                                        ftl::to_underlying(modeId)), \
                                                _, _))                               \
-            .WillOnce(DoAll(SetArgPointee<3>(timeline), Return(Error::NONE)))
+            .WillOnce(DoAll(SetArgPointee<3>(timeline), Return(hal::Error::NONE)))
 
 namespace android {
 namespace {
@@ -186,16 +186,6 @@ void DisplayModeSwitchingTest::setupScheduler(
     auto eventThread = std::make_unique<mock::EventThread>();
     mAppEventThread = eventThread.get();
     auto sfEventThread = std::make_unique<mock::EventThread>();
-
-    EXPECT_CALL(*eventThread, registerDisplayEventConnection(_));
-    EXPECT_CALL(*eventThread, createEventConnection(_, _))
-            .WillOnce(Return(sp<EventThreadConnection>::make(eventThread.get(),
-                                                             mock::EventThread::kCallingUid)));
-
-    EXPECT_CALL(*sfEventThread, registerDisplayEventConnection(_));
-    EXPECT_CALL(*sfEventThread, createEventConnection(_, _))
-            .WillOnce(Return(sp<EventThreadConnection>::make(sfEventThread.get(),
-                                                             mock::EventThread::kCallingUid)));
 
     auto vsyncController = std::make_unique<mock::VsyncController>();
     auto vsyncTracker = std::make_shared<mock::VSyncTracker>();

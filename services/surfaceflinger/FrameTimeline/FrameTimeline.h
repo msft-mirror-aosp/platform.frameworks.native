@@ -85,16 +85,20 @@ enum class FrameStartMetadata : int8_t {
  */
 struct TimelineItem {
     TimelineItem(const nsecs_t startTime = 0, const nsecs_t endTime = 0,
-                 const nsecs_t presentTime = 0)
-          : startTime(startTime), endTime(endTime), presentTime(presentTime) {}
+                 const nsecs_t presentTime = 0, const nsecs_t desiredPresentTime = 0)
+          : startTime(startTime),
+            endTime(endTime),
+            presentTime(presentTime),
+            desiredPresentTime(desiredPresentTime) {}
 
     nsecs_t startTime;
     nsecs_t endTime;
     nsecs_t presentTime;
+    nsecs_t desiredPresentTime;
 
     bool operator==(const TimelineItem& other) const {
         return startTime == other.startTime && endTime == other.endTime &&
-                presentTime == other.presentTime;
+                presentTime == other.presentTime && desiredPresentTime != other.desiredPresentTime;
     }
 
     bool operator!=(const TimelineItem& other) const { return !(*this == other); }
@@ -183,6 +187,7 @@ public:
     void setActualStartTime(nsecs_t actualStartTime);
     void setActualQueueTime(nsecs_t actualQueueTime);
     void setAcquireFenceTime(nsecs_t acquireFenceTime);
+    void setDesiredPresentTime(nsecs_t desiredPresentTime);
     void setDropTime(nsecs_t dropTime);
     void setPresentState(PresentState presentState, nsecs_t lastLatchTime = 0);
     void setRenderRate(Fps renderRate);
@@ -214,7 +219,8 @@ public:
     // enabled. The displayFrameToken is needed to link the SurfaceFrame to the corresponding
     // DisplayFrame at the trace processor side. monoBootOffset is the difference
     // between SYSTEM_TIME_BOOTTIME and SYSTEM_TIME_MONOTONIC.
-    void trace(int64_t displayFrameToken, nsecs_t monoBootOffset) const;
+    void trace(int64_t displayFrameToken, nsecs_t monoBootOffset,
+               bool filterFramesBeforeTraceStarts) const;
 
     // Getter functions used only by FrameTimelineTests and SurfaceFrame internally
     TimelineItem getActuals() const;
@@ -234,8 +240,10 @@ public:
             std::chrono::duration_cast<std::chrono::nanoseconds>(2ms).count();
 
 private:
-    void tracePredictions(int64_t displayFrameToken, nsecs_t monoBootOffset) const;
-    void traceActuals(int64_t displayFrameToken, nsecs_t monoBootOffset) const;
+    void tracePredictions(int64_t displayFrameToken, nsecs_t monoBootOffset,
+                          bool filterFramesBeforeTraceStarts) const;
+    void traceActuals(int64_t displayFrameToken, nsecs_t monoBootOffset,
+                      bool filterFramesBeforeTraceStarts) const;
     void classifyJankLocked(int32_t displayFrameJankType, const Fps& refreshRate,
                             Fps displayFrameRenderRate, nsecs_t* outDeadlineDelta) REQUIRES(mMutex);
 
@@ -320,6 +328,11 @@ public:
     virtual void setSfPresent(nsecs_t sfPresentTime, const std::shared_ptr<FenceTime>& presentFence,
                               const std::shared_ptr<FenceTime>& gpuFence) = 0;
 
+    // Provides surface frames that have already been jank classified in the most recent
+    // flush of pending present fences. This allows buffer stuffing detection from SF.
+    virtual const std::vector<std::shared_ptr<frametimeline::SurfaceFrame>>& getPresentFrames()
+            const = 0;
+
     // Tells FrameTimeline that a frame was committed but not composited. This is used to flush
     // all the associated surface frames.
     virtual void onCommitNotComposited() = 0;
@@ -337,6 +350,9 @@ public:
     // The fps is compted from the linear timeline of present timestamps for DisplayFrames
     // containing at least one layer ID.
     virtual float computeFps(const std::unordered_set<int32_t>& layerIds) = 0;
+
+    // Supports the legacy FrameStats interface
+    virtual void generateFrameStats(int32_t layer, size_t count, FrameStats* outStats) const = 0;
 
     // Restores the max number of display frames to default. Called by SF backdoor.
     virtual void reset() = 0;
@@ -367,9 +383,15 @@ private:
 class FrameTimeline : public android::frametimeline::FrameTimeline {
 public:
     class FrameTimelineDataSource : public perfetto::DataSource<FrameTimelineDataSource> {
-        void OnSetup(const SetupArgs&) override{};
-        void OnStart(const StartArgs&) override{};
-        void OnStop(const StopArgs&) override{};
+    public:
+        nsecs_t getStartTime() const { return mTraceStartTime; }
+
+    private:
+        void OnSetup(const SetupArgs&) override {};
+        void OnStart(const StartArgs&) override { mTraceStartTime = systemTime(); };
+        void OnStop(const StopArgs&) override {};
+
+        nsecs_t mTraceStartTime = 0;
     };
 
     /*
@@ -390,7 +412,8 @@ public:
         // is enabled. monoBootOffset is the difference between SYSTEM_TIME_BOOTTIME
         // and SYSTEM_TIME_MONOTONIC.
         nsecs_t trace(pid_t surfaceFlingerPid, nsecs_t monoBootOffset,
-                      nsecs_t previousPredictionPresentTime) const;
+                      nsecs_t previousPredictionPresentTime,
+                      bool filterFramesBeforeTraceStarts) const;
         // Sets the token, vsyncPeriod, predictions and SF start time.
         void onSfWakeUp(int64_t token, Fps refreshRate, Fps renderRate,
                         std::optional<TimelineItem> predictions, nsecs_t wakeUpTime);
@@ -424,10 +447,13 @@ public:
 
     private:
         void dump(std::string& result, nsecs_t baseTime) const;
-        void tracePredictions(pid_t surfaceFlingerPid, nsecs_t monoBootOffset) const;
-        void traceActuals(pid_t surfaceFlingerPid, nsecs_t monoBootOffset) const;
+        void tracePredictions(pid_t surfaceFlingerPid, nsecs_t monoBootOffset,
+                              bool filterFramesBeforeTraceStarts) const;
+        void traceActuals(pid_t surfaceFlingerPid, nsecs_t monoBootOffset,
+                          bool filterFramesBeforeTraceStarts) const;
         void addSkippedFrame(pid_t surfaceFlingerPid, nsecs_t monoBootOffset,
-                             nsecs_t previousActualPresentTime) const;
+                             nsecs_t previousActualPresentTime,
+                             bool filterFramesBeforeTraceStarts) const;
         void classifyJank(nsecs_t& deadlineDelta, nsecs_t& deltaToVsync,
                           nsecs_t previousPresentTime);
 
@@ -471,7 +497,8 @@ public:
     };
 
     FrameTimeline(std::shared_ptr<TimeStats> timeStats, pid_t surfaceFlingerPid,
-                  JankClassificationThresholds thresholds = {}, bool useBootTimeClock = true);
+                  JankClassificationThresholds thresholds = {}, bool useBootTimeClock = true,
+                  bool filterFramesBeforeTraceStarts = true);
     ~FrameTimeline() = default;
 
     frametimeline::TokenManager* getTokenManager() override { return &mTokenManager; }
@@ -483,10 +510,13 @@ public:
     void setSfWakeUp(int64_t token, nsecs_t wakeupTime, Fps refreshRate, Fps renderRate) override;
     void setSfPresent(nsecs_t sfPresentTime, const std::shared_ptr<FenceTime>& presentFence,
                       const std::shared_ptr<FenceTime>& gpuFence = FenceTime::NO_FENCE) override;
+    const std::vector<std::shared_ptr<frametimeline::SurfaceFrame>>& getPresentFrames()
+            const override;
     void onCommitNotComposited() override;
     void parseArgs(const Vector<String16>& args, std::string& result) override;
     void setMaxDisplayFrames(uint32_t size) override;
     float computeFps(const std::unordered_set<int32_t>& layerIds) override;
+    void generateFrameStats(int32_t layer, size_t count, FrameStats* outStats) const override;
     void reset() override;
 
     // Sets up the perfetto tracing backend and data source.
@@ -516,6 +546,7 @@ private:
     TraceCookieCounter mTraceCookieCounter;
     mutable std::mutex mMutex;
     const bool mUseBootTimeClock;
+    const bool mFilterFramesBeforeTraceStarts;
     uint32_t mMaxDisplayFrames;
     std::shared_ptr<TimeStats> mTimeStats;
     const pid_t mSurfaceFlingerPid;
@@ -528,6 +559,9 @@ private:
     // display frame, this is a good starting size for the vector so that we can avoid the
     // internal vector resizing that happens with push_back.
     static constexpr uint32_t kNumSurfaceFramesInitial = 10;
+    // Presented surface frames that have been jank classified and can
+    // indicate of potential buffer stuffing.
+    std::vector<std::shared_ptr<frametimeline::SurfaceFrame>> mPresentFrames;
 };
 
 } // namespace impl

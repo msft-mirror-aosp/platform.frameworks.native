@@ -38,7 +38,6 @@
 #include <FrameTimeline/FrameTimeline.h>
 #include <scheduler/interface/ICompositor.h>
 
-#include <algorithm>
 #include <cinttypes>
 #include <cstdint>
 #include <functional>
@@ -46,16 +45,15 @@
 #include <numeric>
 
 #include <common/FlagManager.h>
-#include "../Layer.h"
 #include "EventThread.h"
 #include "FrameRateOverrideMappings.h"
 #include "FrontEnd/LayerHandle.h"
+#include "Layer.h"
 #include "OneShotTimer.h"
 #include "RefreshRateStats.h"
 #include "SurfaceFlingerFactory.h"
 #include "SurfaceFlingerProperties.h"
 #include "TimeStats/TimeStats.h"
-#include "VSyncTracker.h"
 #include "VsyncConfiguration.h"
 #include "VsyncController.h"
 #include "VsyncSchedule.h"
@@ -205,12 +203,16 @@ void Scheduler::run() {
 
 void Scheduler::onFrameSignal(ICompositor& compositor, VsyncId vsyncId,
                               TimePoint expectedVsyncTime) {
+    const auto debugPresentDelay = mDebugPresentDelay.load();
+    mDebugPresentDelay.store(std::nullopt);
+
     const FrameTargeter::BeginFrameArgs beginFrameArgs =
             {.frameBeginTime = SchedulerClock::now(),
              .vsyncId = vsyncId,
              .expectedVsyncTime = expectedVsyncTime,
              .sfWorkDuration = mVsyncModulator->getVsyncConfig().sfWorkDuration,
-             .hwcMinWorkDuration = mVsyncConfiguration->getCurrentConfigs().hwcMinWorkDuration};
+             .hwcMinWorkDuration = mVsyncConfiguration->getCurrentConfigs().hwcMinWorkDuration,
+             .debugPresentTimeDelay = debugPresentDelay};
 
     ftl::NonNull<const Display*> pacesetterPtr = pacesetterPtrLocked();
     pacesetterPtr->targeterPtr->beginFrame(beginFrameArgs, *pacesetterPtr->schedulePtr);
@@ -240,7 +242,7 @@ void Scheduler::onFrameSignal(ICompositor& compositor, VsyncId vsyncId,
             if (FlagManager::getInstance().vrr_config()) {
                 compositor.sendNotifyExpectedPresentHint(pacesetterPtr->displayId);
             }
-            mSchedulerCallback.onCommitNotComposited(pacesetterPtr->displayId);
+            mSchedulerCallback.onCommitNotComposited();
             return;
         }
     }
@@ -361,10 +363,8 @@ void Scheduler::createEventThread(Cycle cycle, frametimeline::TokenManager* toke
 
     if (cycle == Cycle::Render) {
         mRenderEventThread = std::move(eventThread);
-        mRenderEventConnection = mRenderEventThread->createEventConnection();
     } else {
         mLastCompositeEventThread = std::move(eventThread);
-        mLastCompositeEventConnection = mLastCompositeEventThread->createEventConnection();
     }
 }
 
@@ -409,6 +409,14 @@ void Scheduler::enableSyntheticVsync(bool enable) {
     eventThreadFor(Cycle::Render).enableSyntheticVsync(enable);
 }
 
+void Scheduler::omitVsyncDispatching(bool omitted) {
+    eventThreadFor(Cycle::Render).omitVsyncDispatching(omitted);
+    // Note: If we don't couple Cycle::LastComposite event thread, there is a black screen
+    // after boot. This is most likely sysui or system_server dependency on sf instance
+    // Choreographer
+    eventThreadFor(Cycle::LastComposite).omitVsyncDispatching(omitted);
+}
+
 void Scheduler::onFrameRateOverridesChanged() {
     const auto [pacesetterId, supportsFrameRateOverrideByContent] = [this] {
         std::scoped_lock lock(mDisplayLock);
@@ -430,7 +438,10 @@ void Scheduler::onHdcpLevelsChanged(Cycle cycle, PhysicalDisplayId displayId,
     eventThreadFor(cycle).onHdcpLevelsChanged(displayId, connectedLevel, maxLevel);
 }
 
-bool Scheduler::onDisplayModeChanged(PhysicalDisplayId displayId, const FrameRateMode& mode) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-value" // b/369277774
+bool Scheduler::onDisplayModeChanged(PhysicalDisplayId displayId, const FrameRateMode& mode,
+                                     bool clearContentRequirements) {
     const bool isPacesetter =
             FTL_FAKE_GUARD(kMainThreadContext,
                            (std::scoped_lock(mDisplayLock), displayId == mPacesetterDisplayId));
@@ -439,9 +450,11 @@ bool Scheduler::onDisplayModeChanged(PhysicalDisplayId displayId, const FrameRat
         std::lock_guard<std::mutex> lock(mPolicyLock);
         mPolicy.emittedModeOpt = mode;
 
-        // Invalidate content based refresh rate selection so it could be calculated
-        // again for the new refresh rate.
-        mPolicy.contentRequirements.clear();
+        if (clearContentRequirements) {
+            // Invalidate content based refresh rate selection so it could be calculated
+            // again for the new refresh rate.
+            mPolicy.contentRequirements.clear();
+        }
     }
 
     if (hasEventThreads()) {
@@ -449,6 +462,13 @@ bool Scheduler::onDisplayModeChanged(PhysicalDisplayId displayId, const FrameRat
     }
 
     return isPacesetter;
+}
+#pragma clang diagnostic pop
+
+void Scheduler::onDisplayModeRejected(PhysicalDisplayId displayId, DisplayModeId modeId) {
+    if (hasEventThreads()) {
+        eventThreadFor(Cycle::Render).onModeRejected(displayId, modeId);
+    }
 }
 
 void Scheduler::emitModeChangeIfNeeded() {
@@ -487,6 +507,8 @@ void Scheduler::setDuration(Cycle cycle, std::chrono::nanoseconds workDuration,
     }
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-value" // b/369277774
 void Scheduler::updatePhaseConfiguration(PhysicalDisplayId displayId, Fps refreshRate) {
     const bool isPacesetter =
             FTL_FAKE_GUARD(kMainThreadContext,
@@ -498,6 +520,7 @@ void Scheduler::updatePhaseConfiguration(PhysicalDisplayId displayId, Fps refres
     setVsyncConfig(mVsyncModulator->setVsyncConfigSet(mVsyncConfiguration->getCurrentConfigs()),
                    refreshRate.getPeriod());
 }
+#pragma clang diagnostic pop
 
 void Scheduler::setActiveDisplayPowerModeForRefreshRateStats(hal::PowerMode powerMode) {
     mRefreshRateStats->setPowerMode(powerMode);
@@ -913,6 +936,8 @@ void Scheduler::dumpVsync(std::string& out) const {
     }
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-value" // b/369277774
 void Scheduler::updateFrameRateOverrides(GlobalSignals consideredSignals, Fps displayRefreshRate) {
     const bool changed = (std::scoped_lock(mPolicyLock),
                           updateFrameRateOverridesLocked(consideredSignals, displayRefreshRate));
@@ -921,6 +946,7 @@ void Scheduler::updateFrameRateOverrides(GlobalSignals consideredSignals, Fps di
         onFrameRateOverridesChanged();
     }
 }
+#pragma clang diagnostic pop
 
 bool Scheduler::updateFrameRateOverridesLocked(GlobalSignals consideredSignals,
                                                Fps displayRefreshRate) {
@@ -933,6 +959,11 @@ bool Scheduler::updateFrameRateOverridesLocked(GlobalSignals consideredSignals,
     // Note that RefreshRateSelector::supportsFrameRateOverrideByContent is checked when querying
     // the FrameRateOverrideMappings rather than here.
     return mFrameRateOverrideMappings.updateFrameRateOverridesByContent(frameRateOverrides);
+}
+
+void Scheduler::addBufferStuffedUids(BufferStuffingMap bufferStuffedUids) {
+    if (!mRenderEventThread) return;
+    mRenderEventThread->addBufferStuffedUids(std::move(bufferStuffedUids));
 }
 
 void Scheduler::promotePacesetterDisplay(PhysicalDisplayId pacesetterId, PromotionParams params) {

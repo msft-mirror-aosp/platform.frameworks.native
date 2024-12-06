@@ -708,7 +708,7 @@ status_t SensorService::dump(int fd, const Vector<String16>& args) {
                         SENSOR_REGISTRATIONS_BUF_SIZE;
                     continue;
                 }
-                result.appendFormat("%s\n", reg_info.dump().c_str());
+                result.appendFormat("%s\n", reg_info.dump(this).c_str());
                 currentIndex = (currentIndex - 1 + SENSOR_REGISTRATIONS_BUF_SIZE) %
                         SENSOR_REGISTRATIONS_BUF_SIZE;
             } while(startIndex != currentIndex);
@@ -2049,9 +2049,10 @@ status_t SensorService::enable(const sp<SensorEventConnection>& connection,
     }
 
     ConnectionSafeAutolock connLock = mConnectionHolder.lock(mLock);
-    if (mCurrentOperatingMode != NORMAL && mCurrentOperatingMode != REPLAY_DATA_INJECTION &&
-           !isAllowListedPackage(connection->getPackageName())) {
-        return INVALID_OPERATION;
+    if (mCurrentOperatingMode != NORMAL &&
+        !isInjectionMode(mCurrentOperatingMode) &&
+        !isAllowListedPackage(connection->getPackageName())) {
+      return INVALID_OPERATION;
     }
 
     SensorRecord* rec = mActiveSensors.valueFor(handle);
@@ -2167,17 +2168,17 @@ status_t SensorService::enable(const sp<SensorEventConnection>& connection,
                 sensor->getSensor().getRequiredAppOp() >= 0) {
             connection->mHandleToAppOp[handle] = sensor->getSensor().getRequiredAppOp();
         }
-
-        mLastNSensorRegistrations.editItemAt(mNextSensorRegIndex) =
-                SensorRegistrationInfo(handle, connection->getPackageName(),
-                                       samplingPeriodNs, maxBatchReportLatencyNs, true);
-        mNextSensorRegIndex = (mNextSensorRegIndex + 1) % SENSOR_REGISTRATIONS_BUF_SIZE;
     }
 
     if (err != NO_ERROR) {
         // batch/activate has failed, reset our state.
         cleanupWithoutDisableLocked(connection, handle);
     }
+
+    mLastNSensorRegistrations.editItemAt(mNextSensorRegIndex) =
+            SensorRegistrationInfo(handle, connection->getPackageName(), samplingPeriodNs,
+                                   maxBatchReportLatencyNs, /*activate=*/ true, err);
+    mNextSensorRegIndex = (mNextSensorRegIndex + 1) % SENSOR_REGISTRATIONS_BUF_SIZE;
     return err;
 }
 
@@ -2190,13 +2191,10 @@ status_t SensorService::disable(const sp<SensorEventConnection>& connection, int
     if (err == NO_ERROR) {
         std::shared_ptr<SensorInterface> sensor = getSensorInterfaceFromHandle(handle);
         err = sensor != nullptr ? sensor->activate(connection.get(), false) : status_t(BAD_VALUE);
-
     }
-    if (err == NO_ERROR) {
-        mLastNSensorRegistrations.editItemAt(mNextSensorRegIndex) =
-                SensorRegistrationInfo(handle, connection->getPackageName(), 0, 0, false);
-        mNextSensorRegIndex = (mNextSensorRegIndex + 1) % SENSOR_REGISTRATIONS_BUF_SIZE;
-    }
+    mLastNSensorRegistrations.editItemAt(mNextSensorRegIndex) =
+            SensorRegistrationInfo(handle, connection->getPackageName(), 0, 0, /*activate=*/ false, err);
+    mNextSensorRegIndex = (mNextSensorRegIndex + 1) % SENSOR_REGISTRATIONS_BUF_SIZE;
     return err;
 }
 
