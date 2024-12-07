@@ -1804,6 +1804,15 @@ restart_write:
         return finishWrite(sizeof(flat_binder_object));
     }
 
+    if (mOwner) {
+        // continueWrite does have the logic to convert this from an
+        // owned to an unowned Parcel. However, this is pretty inefficient,
+        // and it's really strange to need to do so, so prefer to avoid
+        // these paths than try to support them.
+        ALOGE("writing objects not supported on owned Parcels");
+        return PERMISSION_DENIED;
+    }
+
     if (!enoughData) {
         const status_t err = growData(sizeof(val));
         if (err != NO_ERROR) return err;
