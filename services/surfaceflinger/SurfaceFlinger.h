@@ -730,7 +730,11 @@ private:
                                        Fps maxFps);
 
     void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) REQUIRES(mStateLock);
-    void finalizeDisplayModeChange(PhysicalDisplayId) REQUIRES(kMainThreadContext)
+
+    // Returns whether the commit stage should proceed. The return value is ignored when finalizing
+    // immediate mode changes, which happen toward the end of the commit stage.
+    // TODO: b/355427258 - Remove the return value once the `synced_resolution_switch` flag is live.
+    bool finalizeDisplayModeChange(PhysicalDisplayId) REQUIRES(kMainThreadContext)
             REQUIRES(mStateLock);
 
     void dropModeRequest(PhysicalDisplayId) REQUIRES(kMainThreadContext);

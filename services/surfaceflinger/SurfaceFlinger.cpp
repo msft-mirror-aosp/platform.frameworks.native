@@ -1444,14 +1444,14 @@ status_t SurfaceFlinger::setActiveModeFromBackdoor(const sp<display::DisplayToke
     return future.get();
 }
 
-void SurfaceFlinger::finalizeDisplayModeChange(PhysicalDisplayId displayId) {
+bool SurfaceFlinger::finalizeDisplayModeChange(PhysicalDisplayId displayId) {
     SFTRACE_NAME(ftl::Concat(__func__, ' ', displayId.value).c_str());
 
     const auto pendingModeOpt = mDisplayModeController.getPendingMode(displayId);
     if (!pendingModeOpt) {
         // There is no pending mode change. This can happen if the active
         // display changed and the mode change happened on a different display.
-        return;
+        return true;
     }
 
     const auto& activeMode = pendingModeOpt->mode;
@@ -1466,8 +1466,8 @@ void SurfaceFlinger::finalizeDisplayModeChange(PhysicalDisplayId displayId) {
         state.physical->activeMode = activeMode.modePtr.get();
         processDisplayChangesLocked();
 
-        // processDisplayChangesLocked will update all necessary components so we're done here.
-        return;
+        // The DisplayDevice has been destroyed, so abort the commit for the now dead FrameTargeter.
+        return false;
     }
 
     mDisplayModeController.finalizeModeChange(displayId, activeMode.modePtr->getId(),
@@ -1478,6 +1478,8 @@ void SurfaceFlinger::finalizeDisplayModeChange(PhysicalDisplayId displayId) {
     if (pendingModeOpt->emitEvent) {
         mScheduler->onDisplayModeChanged(displayId, activeMode, /*clearContentRequirements*/ true);
     }
+
+    return true;
 }
 
 void SurfaceFlinger::dropModeRequest(PhysicalDisplayId displayId) {
@@ -2659,7 +2661,10 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
 
         for (const auto [displayId, _] : frameTargets) {
             if (mDisplayModeController.isModeSetPending(displayId)) {
-                finalizeDisplayModeChange(displayId);
+                if (!finalizeDisplayModeChange(displayId)) {
+                    mScheduler->scheduleFrame();
+                    return false;
+                }
             }
         }
     }
