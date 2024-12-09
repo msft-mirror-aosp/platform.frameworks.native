@@ -132,7 +132,6 @@ bool BinderCacheWithInvalidation::isClientSideCachingEnabled(const std::string& 
               serviceName.c_str());
         return false;
     }
-    if (kRemoveStaticList) return true;
     for (const char* name : kStaticCachableList) {
         if (name == serviceName) {
             return true;
@@ -176,7 +175,7 @@ Status BackendUnifiedServiceManager::updateCache(const std::string& serviceName,
                                       "isBinderAlive_false");
     }
     // If we reach here with kRemoveStaticList=true then we know service isn't lazy
-    else if (mCacheForGetService->isClientSideCachingEnabled(serviceName)) {
+    else if (kRemoveStaticList || mCacheForGetService->isClientSideCachingEnabled(serviceName)) {
         binder::ScopedTrace aidlTrace(ATRACE_TAG_AIDL,
                                       "BinderCacheWithInvalidation::updateCache successful");
         return mCacheForGetService->setItem(serviceName, binder);
