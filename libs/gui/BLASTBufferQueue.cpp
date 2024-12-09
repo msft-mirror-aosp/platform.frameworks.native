@@ -1021,7 +1021,7 @@ void BLASTBufferQueue::mergeWithNextTransaction(SurfaceComposerClient::Transacti
     std::lock_guard _lock{mMutex};
     if (mLastAcquiredFrameNumber >= frameNumber) {
         // Apply the transaction since we have already acquired the desired frame.
-        t->apply();
+        t->setApplyToken(mApplyToken).apply();
     } else {
         mPendingTransactions.emplace_back(frameNumber, *t);
         // Clear the transaction so it can't be applied elsewhere.
