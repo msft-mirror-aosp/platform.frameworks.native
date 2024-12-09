@@ -242,7 +242,7 @@ void Scheduler::onFrameSignal(ICompositor& compositor, VsyncId vsyncId,
             if (FlagManager::getInstance().vrr_config()) {
                 compositor.sendNotifyExpectedPresentHint(pacesetterPtr->displayId);
             }
-            mSchedulerCallback.onCommitNotComposited(pacesetterPtr->displayId);
+            mSchedulerCallback.onCommitNotComposited();
             return;
         }
     }
@@ -464,6 +464,12 @@ bool Scheduler::onDisplayModeChanged(PhysicalDisplayId displayId, const FrameRat
     return isPacesetter;
 }
 #pragma clang diagnostic pop
+
+void Scheduler::onDisplayModeRejected(PhysicalDisplayId displayId, DisplayModeId modeId) {
+    if (hasEventThreads()) {
+        eventThreadFor(Cycle::Render).onModeRejected(displayId, modeId);
+    }
+}
 
 void Scheduler::emitModeChangeIfNeeded() {
     if (!mPolicy.modeOpt || !mPolicy.emittedModeOpt) {

@@ -31,6 +31,7 @@ flag {
   description: "New SDK Surface#setFrameRate API and Surface.FrameRateParams for Android 16"
   bug: "356987016"
   is_fixed_read_only: true
+  is_exported: true
 } # arr_setframerate_api
 
 flag {
@@ -47,6 +48,7 @@ flag {
   description: "New SDK SurfaceControl.Transaction#setFrameRate API for Android 16"
   bug: "356987016"
   is_fixed_read_only: true
+  is_exported: true
 } # arr_surfacecontrol_setframerate_api
 
 flag {
@@ -292,5 +294,12 @@ flag {
     purpose: PURPOSE_BUGFIX
   }
 } # vrr_bugfix_dropped_frame
+
+flag {
+  name: "window_blur_kawase2"
+  namespace: "core_graphics"
+  description: "Flag for using Kawase2 algorithm for window blur"
+  bug: "353826438"
+} # window_blur_kawase2
 
 # IMPORTANT - please keep alphabetize to reduce merge conflicts
