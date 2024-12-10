@@ -2348,12 +2348,12 @@ public:
             case BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_OWNED_TRANSACTION: {
                 unique_fd fd1(memfd_create("memfd1", MFD_CLOEXEC));
                 if (!fd1.ok()) {
-                    PLOGE("memfd_create failed");
+                    PLOG(ERROR) << "memfd_create failed";
                     return UNKNOWN_ERROR;
                 }
                 unique_fd fd2(memfd_create("memfd2", MFD_CLOEXEC));
                 if (!fd2.ok()) {
-                    PLOGE("memfd_create failed");
+                    PLOG(ERROR) << "memfd_create failed";
                     return UNKNOWN_ERROR;
                 }
                 status_t ret;
