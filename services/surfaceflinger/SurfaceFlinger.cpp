@@ -172,6 +172,7 @@
 
 #include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
+#include <aidl/android/hardware/graphics/composer3/OutputType.h>
 #include <aidl/android/hardware/graphics/composer3/RenderIntent.h>
 
 #undef NO_THREAD_SAFETY_ANALYSIS
@@ -649,11 +650,12 @@ void SurfaceFlinger::enableHalVirtualDisplays(bool enable) {
     }
 }
 
-VirtualDisplayId SurfaceFlinger::acquireVirtualDisplay(ui::Size resolution,
-                                                       ui::PixelFormat format) {
+VirtualDisplayId SurfaceFlinger::acquireVirtualDisplay(ui::Size resolution, ui::PixelFormat format,
+                                                       const std::string& uniqueId) {
     if (auto& generator = mVirtualDisplayIdGenerators.hal) {
         if (const auto id = generator->generateId()) {
             if (getHwComposer().allocateVirtualDisplay(*id, resolution, &format)) {
+                acquireVirtualDisplaySnapshot(*id, uniqueId);
                 return *id;
             }
 
@@ -667,6 +669,7 @@ VirtualDisplayId SurfaceFlinger::acquireVirtualDisplay(ui::Size resolution,
 
     const auto id = mVirtualDisplayIdGenerators.gpu.generateId();
     LOG_ALWAYS_FATAL_IF(!id, "Failed to generate ID for GPU virtual display");
+    acquireVirtualDisplaySnapshot(*id, uniqueId);
     return *id;
 }
 
@@ -674,6 +677,7 @@ void SurfaceFlinger::releaseVirtualDisplay(VirtualDisplayId displayId) {
     if (const auto id = HalVirtualDisplayId::tryCast(displayId)) {
         if (auto& generator = mVirtualDisplayIdGenerators.hal) {
             generator->releaseId(*id);
+            releaseVirtualDisplaySnapshot(*id);
         }
         return;
     }
@@ -681,6 +685,14 @@ void SurfaceFlinger::releaseVirtualDisplay(VirtualDisplayId displayId) {
     const auto id = GpuVirtualDisplayId::tryCast(displayId);
     LOG_ALWAYS_FATAL_IF(!id);
     mVirtualDisplayIdGenerators.gpu.releaseId(*id);
+    releaseVirtualDisplaySnapshot(*id);
+}
+
+void SurfaceFlinger::releaseVirtualDisplaySnapshot(VirtualDisplayId displayId) {
+    std::lock_guard lock(mVirtualDisplaysMutex);
+    if (!mVirtualDisplays.erase(displayId)) {
+        ALOGW("%s: Virtual display snapshot was not removed", __func__);
+    }
 }
 
 std::vector<PhysicalDisplayId> SurfaceFlinger::getPhysicalDisplayIdsLocked() const {
@@ -865,6 +877,9 @@ renderengine::RenderEngine::BlurAlgorithm chooseBlurAlgorithm(bool supportsBlur)
     } else if (algorithm == "kawase2") {
         return renderengine::RenderEngine::BlurAlgorithm::KAWASE_DUAL_FILTER;
     } else {
+        if (FlagManager::getInstance().window_blur_kawase2()) {
+            return renderengine::RenderEngine::BlurAlgorithm::KAWASE_DUAL_FILTER;
+        }
         return renderengine::RenderEngine::BlurAlgorithm::KAWASE;
     }
 }
@@ -1532,9 +1547,15 @@ void SurfaceFlinger::initiateDisplayModeChanges() {
         constraints.seamlessRequired = false;
         hal::VsyncPeriodChangeTimeline outTimeline;
 
-        if (mDisplayModeController.initiateModeChange(displayId, std::move(*desiredModeOpt),
-                                                      constraints, outTimeline) !=
-            display::DisplayModeController::ModeChangeResult::Changed) {
+        const auto error =
+                mDisplayModeController.initiateModeChange(displayId, std::move(*desiredModeOpt),
+                                                          constraints, outTimeline);
+        if (error != display::DisplayModeController::ModeChangeResult::Changed) {
+            dropModeRequest(displayId);
+            if (FlagManager::getInstance().display_config_error_hal() &&
+                error == display::DisplayModeController::ModeChangeResult::Rejected) {
+                mScheduler->onDisplayModeRejected(displayId, desiredModeId);
+            }
             continue;
         }
 
@@ -3498,6 +3519,9 @@ std::pair<DisplayModes, DisplayModePtr> SurfaceFlinger::loadDisplayModes(
     DisplayModes newModes;
     for (const auto& hwcMode : hwcModes) {
         const auto id = nextModeId++;
+        OutputType hdrOutputType = FlagManager::getInstance().connected_display_hdr()
+                ? hwcMode.hdrOutputType
+                : OutputType::INVALID;
         newModes.try_emplace(id,
                              DisplayMode::Builder(hwcMode.hwcId)
                                      .setId(id)
@@ -3508,6 +3532,7 @@ std::pair<DisplayModes, DisplayModePtr> SurfaceFlinger::loadDisplayModes(
                                      .setDpiX(hwcMode.dpiX)
                                      .setDpiY(hwcMode.dpiY)
                                      .setGroup(hwcMode.configGroup)
+                                     .setHdrOutputType(hdrOutputType)
                                      .build());
     }
 
@@ -3798,7 +3823,7 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
     if (const auto& physical = state.physical) {
         builder.setId(physical->id);
     } else {
-        builder.setId(acquireVirtualDisplay(resolution, pixelFormat));
+        builder.setId(acquireVirtualDisplay(resolution, pixelFormat, state.uniqueId));
     }
 
     builder.setPixels(resolution);
@@ -4388,7 +4413,7 @@ void SurfaceFlinger::sendNotifyExpectedPresentHint(PhysicalDisplayId displayId) 
     scheduleNotifyExpectedPresentHint(displayId);
 }
 
-void SurfaceFlinger::onCommitNotComposited(PhysicalDisplayId pacesetterDisplayId) {
+void SurfaceFlinger::onCommitNotComposited() {
     if (FlagManager::getInstance().commit_not_composited()) {
         mFrameTimeline->onCommitNotComposited();
     }
@@ -4541,6 +4566,7 @@ void SurfaceFlinger::setTransactionFlags(uint32_t mask, TransactionSchedule sche
     SFTRACE_INT("mTransactionFlags", transactionFlags);
 
     if (const bool scheduled = transactionFlags & mask; !scheduled) {
+        mScheduler->resync();
         scheduleCommit(frameHint);
     } else if (frameHint == FrameHint::kActive) {
         // Even if the next frame is already scheduled, we should reset the idle timer
@@ -5785,6 +5811,14 @@ void SurfaceFlinger::dumpDisplays(std::string& result) const {
             utils::Dumper::Section section(dumper,
                                            ftl::Concat("Virtual Display ", displayId.value).str());
             display->dump(dumper);
+
+            if (const auto virtualIdOpt = VirtualDisplayId::tryCast(displayId)) {
+                std::lock_guard lock(mVirtualDisplaysMutex);
+                const auto virtualSnapshotIt = mVirtualDisplays.find(virtualIdOpt.value());
+                if (virtualSnapshotIt != mVirtualDisplays.end()) {
+                    virtualSnapshotIt->second.dump(dumper);
+                }
+            }
         }
     }
 }
