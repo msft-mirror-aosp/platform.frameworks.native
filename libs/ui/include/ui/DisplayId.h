@@ -81,10 +81,15 @@ struct PhysicalDisplayId : DisplayId {
         return PhysicalDisplayId(id);
     }
 
-    // Returns a stable ID based on EDID information.
+    // Returns a stable ID based on EDID and port information.
     static constexpr PhysicalDisplayId fromEdid(uint8_t port, uint16_t manufacturerId,
                                                 uint32_t modelHash) {
         return PhysicalDisplayId(FLAG_STABLE, port, manufacturerId, modelHash);
+    }
+
+    // Returns a stable and consistent ID based exclusively on EDID information.
+    static constexpr PhysicalDisplayId fromEdidHash(uint64_t hashedEdid) {
+        return PhysicalDisplayId(hashedEdid);
     }
 
     // Returns an unstable ID. If EDID is available using "fromEdid" is preferred.
@@ -102,6 +107,8 @@ struct PhysicalDisplayId : DisplayId {
 private:
     // Flag indicating that the ID is stable across reboots.
     static constexpr uint64_t FLAG_STABLE = 1ULL << 62;
+
+    using DisplayId::DisplayId;
 
     constexpr PhysicalDisplayId(uint64_t flags, uint8_t port, uint16_t manufacturerId,
                                 uint32_t modelHash)
