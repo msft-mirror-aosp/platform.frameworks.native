@@ -103,6 +103,7 @@ cc_defaults {
         "librenderengine_deps",
         "libsurfaceflinger_common_test_deps",
         "libsurfaceflinger_proto_deps",
+        "poweradvisor_deps",
     ],
     static_libs: [
         "android.hardware.common-V2-ndk",
