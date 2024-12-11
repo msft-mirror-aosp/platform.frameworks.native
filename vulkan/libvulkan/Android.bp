@@ -71,11 +71,6 @@ cc_library_shared {
         "-fstandalone-debug",
 
         //"-DLOG_NDEBUG=0",
-
-        // Keep -D_FORTIFY_SOURCE=2 in libvulkan.
-        // See b/291762537
-        "-U_FORTIFY_SOURCE",
-        "-D_FORTIFY_SOURCE=2",
     ],
 
     cppflags: [
