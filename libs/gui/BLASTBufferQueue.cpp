@@ -1232,6 +1232,11 @@ public:
             return OK;
         }
 
+        // Provide a callback for Choreographer to start buffer stuffing recovery when blocked
+        // on buffer release.
+        std::function<void()> callbackCopy = bbq->getWaitForBufferReleaseCallback();
+        if (callbackCopy) callbackCopy();
+
         // BufferQueue has already checked if we have a free buffer. If there's an unread interrupt,
         // we want to ignore it. This must be done before unlocking the BufferQueue lock to ensure
         // we don't miss an interrupt.
@@ -1342,6 +1347,16 @@ void BLASTBufferQueue::setTransactionHangCallback(
 void BLASTBufferQueue::setApplyToken(sp<IBinder> applyToken) {
     std::lock_guard _lock{mMutex};
     mApplyToken = std::move(applyToken);
+}
+
+void BLASTBufferQueue::setWaitForBufferReleaseCallback(std::function<void()> callback) {
+    std::lock_guard _lock{mWaitForBufferReleaseMutex};
+    mWaitForBufferReleaseCallback = std::move(callback);
+}
+
+std::function<void()> BLASTBufferQueue::getWaitForBufferReleaseCallback() const {
+    std::lock_guard _lock{mWaitForBufferReleaseMutex};
+    return mWaitForBufferReleaseCallback;
 }
 
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)

@@ -103,6 +103,8 @@ public:
     bool skip_invisible_windows_in_input() const;
     bool begone_bright_hlg() const;
     bool luts_api() const;
+    bool window_blur_kawase2() const;
+    bool reject_dupe_layerstacks() const;
 
 protected:
     // overridden for unit tests

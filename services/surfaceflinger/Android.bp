@@ -42,12 +42,12 @@ cc_defaults {
     name: "libsurfaceflinger_defaults",
     defaults: [
         "android.hardware.graphics.composer3-ndk_shared",
-        "android.hardware.power-ndk_shared",
         "librenderengine_deps",
         "libtimestats_deps",
         "libsurfaceflinger_common_deps",
         "surfaceflinger_defaults",
         "libsurfaceflinger_proto_deps",
+        "poweradvisor_deps",
     ],
     cflags: [
         "-DLOG_TAG=\"SurfaceFlinger\"",
@@ -79,7 +79,6 @@ cc_defaults {
         "libhidlbase",
         "liblog",
         "libnativewindow",
-        "libpowermanager",
         "libprocessgroup",
         "libprotobuf-cpp-lite",
         "libstatslog_surfaceflinger",
