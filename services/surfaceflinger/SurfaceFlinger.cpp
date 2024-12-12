@@ -7185,8 +7185,7 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
                                                  displayWeak, options),
                         getLayerSnapshotsFn, reqSize,
                         static_cast<ui::PixelFormat>(captureArgs.pixelFormat),
-                        captureArgs.allowProtected, captureArgs.grayscale,
-                        captureArgs.attachGainmap, captureListener);
+                        captureArgs.allowProtected, captureArgs.grayscale, captureListener);
 }
 
 void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args,
@@ -7243,7 +7242,7 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
                                                  static_cast<ui::Dataspace>(args.dataspace),
                                                  displayWeak, options),
                         getLayerSnapshotsFn, size, static_cast<ui::PixelFormat>(args.pixelFormat),
-                        kAllowProtected, kGrayscale, args.attachGainmap, captureListener);
+                        kAllowProtected, kGrayscale, captureListener);
 }
 
 ScreenCaptureResults SurfaceFlinger::captureLayersSync(const LayerCaptureArgs& args) {
@@ -7354,8 +7353,7 @@ void SurfaceFlinger::captureLayers(const LayerCaptureArgs& args,
                                                  options),
                         getLayerSnapshotsFn, reqSize,
                         static_cast<ui::PixelFormat>(captureArgs.pixelFormat),
-                        captureArgs.allowProtected, captureArgs.grayscale,
-                        captureArgs.attachGainmap, captureListener);
+                        captureArgs.allowProtected, captureArgs.grayscale, captureListener);
 }
 
 // Creates a Future release fence for a layer and keeps track of it in a list to
@@ -7413,7 +7411,7 @@ std::optional<SurfaceFlinger::OutputCompositionState> SurfaceFlinger::getSnapsho
 void SurfaceFlinger::captureScreenCommon(RenderAreaBuilderVariant renderAreaBuilder,
                                          GetLayerSnapshotsFunction getLayerSnapshotsFn,
                                          ui::Size bufferSize, ui::PixelFormat reqPixelFormat,
-                                         bool allowProtected, bool grayscale, bool attachGainmap,
+                                         bool allowProtected, bool grayscale,
                                          const sp<IScreenCaptureListener>& captureListener) {
     SFTRACE_CALL();
 
@@ -7427,6 +7425,10 @@ void SurfaceFlinger::captureScreenCommon(RenderAreaBuilderVariant renderAreaBuil
 
     std::vector<std::pair<Layer*, sp<LayerFE>>> layers;
     auto displayState = getSnapshotsFromMainThread(renderAreaBuilder, getLayerSnapshotsFn, layers);
+
+    const bool hasHdrLayer = std::any_of(layers.cbegin(), layers.cend(), [this](const auto& layer) {
+        return isHdrLayer(*(layer.second->mSnapshot.get()));
+    });
 
     const bool supportsProtected = getRenderEngine().supportsProtectedContent();
     bool hasProtectedLayer = false;
@@ -7456,9 +7458,51 @@ void SurfaceFlinger::captureScreenCommon(RenderAreaBuilderVariant renderAreaBuil
             renderengine::impl::ExternalTexture>(buffer, getRenderEngine(),
                                                  renderengine::impl::ExternalTexture::Usage::
                                                          WRITEABLE);
-    auto futureFence =
-            captureScreenshot(renderAreaBuilder, texture, false /* regionSampling */, grayscale,
-                              isProtected, attachGainmap, captureListener, displayState, layers);
+
+    std::shared_ptr<renderengine::impl::ExternalTexture> hdrTexture;
+    std::shared_ptr<renderengine::impl::ExternalTexture> gainmapTexture;
+
+    bool hintForSeamless = std::visit(
+            [](auto&& arg) {
+                return arg.options.test(RenderArea::Options::HINT_FOR_SEAMLESS_TRANSITION);
+            },
+            renderAreaBuilder);
+    if (hasHdrLayer && !hintForSeamless && FlagManager::getInstance().true_hdr_screenshots()) {
+        const auto hdrBuffer =
+                getFactory().createGraphicBuffer(buffer->getWidth(), buffer->getHeight(),
+                                                 HAL_PIXEL_FORMAT_RGBA_FP16, 1 /* layerCount */,
+                                                 buffer->getUsage(), "screenshot-hdr");
+        const auto gainmapBuffer =
+                getFactory().createGraphicBuffer(buffer->getWidth(), buffer->getHeight(),
+                                                 buffer->getPixelFormat(), 1 /* layerCount */,
+                                                 buffer->getUsage(), "screenshot-gainmap");
+
+        const status_t hdrBufferStatus = hdrBuffer->initCheck();
+        const status_t gainmapBufferStatus = gainmapBuffer->initCheck();
+
+        if (hdrBufferStatus != OK || gainmapBufferStatus != -OK) {
+            if (hdrBufferStatus != OK) {
+                ALOGW("%s: Buffer failed to allocate for hdr: %d. Screenshoting SDR instead.",
+                      __func__, hdrBufferStatus);
+            } else {
+                ALOGW("%s: Buffer failed to allocate for gainmap: %d. Screenshoting SDR instead.",
+                      __func__, gainmapBufferStatus);
+            }
+        } else {
+            hdrTexture = std::make_shared<
+                    renderengine::impl::ExternalTexture>(hdrBuffer, getRenderEngine(),
+                                                         renderengine::impl::ExternalTexture::
+                                                                 Usage::WRITEABLE);
+            gainmapTexture = std::make_shared<
+                    renderengine::impl::ExternalTexture>(gainmapBuffer, getRenderEngine(),
+                                                         renderengine::impl::ExternalTexture::
+                                                                 Usage::WRITEABLE);
+        }
+    }
+
+    auto futureFence = captureScreenshot(renderAreaBuilder, texture, false /* regionSampling */,
+                                         grayscale, isProtected, captureListener, displayState,
+                                         layers, hdrTexture, gainmapTexture);
     futureFence.get();
 }
 
@@ -7501,10 +7545,11 @@ SurfaceFlinger::getDisplayStateFromRenderAreaBuilder(RenderAreaBuilderVariant& r
 ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
         const RenderAreaBuilderVariant& renderAreaBuilder,
         const std::shared_ptr<renderengine::ExternalTexture>& buffer, bool regionSampling,
-        bool grayscale, bool isProtected, bool attachGainmap,
-        const sp<IScreenCaptureListener>& captureListener,
-        std::optional<OutputCompositionState>& displayState,
-        std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) {
+        bool grayscale, bool isProtected, const sp<IScreenCaptureListener>& captureListener,
+        const std::optional<OutputCompositionState>& displayState,
+        const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers,
+        const std::shared_ptr<renderengine::ExternalTexture>& hdrBuffer,
+        const std::shared_ptr<renderengine::ExternalTexture>& gainmapBuffer) {
     SFTRACE_CALL();
 
     ScreenCaptureResults captureResults;
@@ -7520,74 +7565,40 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
         }
         return ftl::yield<FenceResult>(base::unexpected(NO_ERROR)).share();
     }
+
     float displayBrightnessNits = displayState.value().displayBrightnessNits;
     float sdrWhitePointNits = displayState.value().sdrWhitePointNits;
 
-    ftl::SharedFuture<FenceResult> renderFuture =
-            renderScreenImpl(renderArea.get(), buffer, regionSampling, grayscale, isProtected,
-                             captureResults, displayState, layers);
+    ftl::SharedFuture<FenceResult> renderFuture;
 
-    if (captureResults.capturedHdrLayers && attachGainmap &&
-        FlagManager::getInstance().true_hdr_screenshots()) {
-        sp<GraphicBuffer> hdrBuffer =
-                getFactory().createGraphicBuffer(buffer->getWidth(), buffer->getHeight(),
-                                                 HAL_PIXEL_FORMAT_RGBA_FP16, 1 /* layerCount */,
-                                                 buffer->getUsage(), "screenshot-hdr");
-        sp<GraphicBuffer> gainmapBuffer =
-                getFactory().createGraphicBuffer(buffer->getWidth(), buffer->getHeight(),
-                                                 buffer->getPixelFormat(), 1 /* layerCount */,
-                                                 buffer->getUsage(), "screenshot-gainmap");
+    if (hdrBuffer && gainmapBuffer) {
+        ftl::SharedFuture<FenceResult> hdrRenderFuture =
+                renderScreenImpl(renderArea.get(), hdrBuffer, regionSampling, grayscale,
+                                 isProtected, captureResults, displayState, layers);
+        captureResults.buffer = buffer->getBuffer();
+        captureResults.optionalGainMap = gainmapBuffer->getBuffer();
 
-        const status_t bufferStatus = hdrBuffer->initCheck();
-        const status_t gainmapBufferStatus = gainmapBuffer->initCheck();
+        renderFuture =
+                ftl::Future(std::move(hdrRenderFuture))
+                        .then([&, displayBrightnessNits, sdrWhitePointNits,
+                               dataspace = captureResults.capturedDataspace, buffer, hdrBuffer,
+                               gainmapBuffer](FenceResult fenceResult) -> FenceResult {
+                            if (!fenceResult.ok()) {
+                                return fenceResult;
+                            }
 
-        if (bufferStatus != OK) {
-            ALOGW("%s: Buffer failed to allocate for hdr: %d. Screenshoting SDR instead.", __func__,
-                  bufferStatus);
-        } else if (gainmapBufferStatus != OK) {
-            ALOGW("%s: Buffer failed to allocate for gainmap: %d. Screenshoting SDR instead.",
-                  __func__, gainmapBufferStatus);
-        } else {
-            captureResults.optionalGainMap = gainmapBuffer;
-            const auto hdrTexture = std::make_shared<
-                    renderengine::impl::ExternalTexture>(hdrBuffer, getRenderEngine(),
-                                                         renderengine::impl::ExternalTexture::
-                                                                 Usage::WRITEABLE);
-            const auto gainmapTexture = std::make_shared<
-                    renderengine::impl::ExternalTexture>(gainmapBuffer, getRenderEngine(),
-                                                         renderengine::impl::ExternalTexture::
-                                                                 Usage::WRITEABLE);
-            ScreenCaptureResults unusedResults;
-            ftl::SharedFuture<FenceResult> hdrRenderFuture =
-                    renderScreenImpl(renderArea.get(), hdrTexture, regionSampling, grayscale,
-                                     isProtected, unusedResults, displayState, layers);
-
-            renderFuture =
-                    ftl::Future(std::move(renderFuture))
-                            .then([&, hdrRenderFuture = std::move(hdrRenderFuture),
-                                   displayBrightnessNits, sdrWhitePointNits,
-                                   dataspace = captureResults.capturedDataspace, buffer, hdrTexture,
-                                   gainmapTexture](FenceResult fenceResult) -> FenceResult {
-                                if (!fenceResult.ok()) {
-                                    return fenceResult;
-                                }
-
-                                auto hdrFenceResult = hdrRenderFuture.get();
-
-                                if (!hdrFenceResult.ok()) {
-                                    return hdrFenceResult;
-                                }
-
-                                return getRenderEngine()
-                                        .drawGainmap(buffer, fenceResult.value()->get(), hdrTexture,
-                                                     hdrFenceResult.value()->get(),
-                                                     displayBrightnessNits / sdrWhitePointNits,
-                                                     static_cast<ui::Dataspace>(dataspace),
-                                                     gainmapTexture)
-                                        .get();
-                            })
-                            .share();
-        };
+                            return getRenderEngine()
+                                    .tonemapAndDrawGainmap(hdrBuffer, fenceResult.value()->get(),
+                                                           displayBrightnessNits /
+                                                                   sdrWhitePointNits,
+                                                           static_cast<ui::Dataspace>(dataspace),
+                                                           buffer, gainmapBuffer)
+                                    .get();
+                        })
+                        .share();
+    } else {
+        renderFuture = renderScreenImpl(renderArea.get(), buffer, regionSampling, grayscale,
+                                        isProtected, captureResults, displayState, layers);
     }
 
     if (captureListener) {
@@ -7609,8 +7620,8 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
 ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
         const RenderArea* renderArea, const std::shared_ptr<renderengine::ExternalTexture>& buffer,
         bool regionSampling, bool grayscale, bool isProtected, ScreenCaptureResults& captureResults,
-        std::optional<OutputCompositionState>& displayState,
-        std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) {
+        const std::optional<OutputCompositionState>& displayState,
+        const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) {
     SFTRACE_CALL();
 
     for (auto& [_, layerFE] : layers) {
@@ -7678,9 +7689,8 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
     }
 
     auto present = [this, buffer = capturedBuffer, dataspace = captureResults.capturedDataspace,
-                    sdrWhitePointNits, displayBrightnessNits, grayscale, isProtected,
-                    layers = std::move(layers), layerStack, regionSampling,
-                    renderArea = std::move(renderArea), renderIntent,
+                    sdrWhitePointNits, displayBrightnessNits, grayscale, isProtected, layers,
+                    layerStack, regionSampling, renderArea = std::move(renderArea), renderIntent,
                     enableLocalTonemapping]() -> FenceResult {
         std::unique_ptr<compositionengine::CompositionEngine> compositionEngine =
                 mFactory.createCompositionEngine();
