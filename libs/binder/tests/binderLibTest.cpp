@@ -43,6 +43,7 @@
 #include <input/BlockingQueue.h>
 #include <processgroup/processgroup.h>
 #include <utils/Flattenable.h>
+#include <utils/SystemClock.h>
 
 #include <linux/sched.h>
 #include <sys/epoll.h>
@@ -343,7 +344,12 @@ class BinderLibTest : public ::testing::Test {
         }
 
         bool checkFreezeSupport() {
-            std::ifstream freezer_file("/sys/fs/cgroup/uid_0/cgroup.freeze");
+            std::string path;
+            if (!CgroupGetAttributePathForTask("FreezerState", getpid(), &path)) {
+                return false;
+            }
+
+            std::ifstream freezer_file(path);
             // Pass test on devices where the cgroup v2 freezer is not supported
             if (freezer_file.fail()) {
                 return false;
@@ -1837,14 +1843,6 @@ TEST_F(BinderLibTest, ThreadPoolStarted) {
     EXPECT_TRUE(reply.readBool());
 }
 
-size_t epochMillis() {
-    using std::chrono::duration_cast;
-    using std::chrono::milliseconds;
-    using std::chrono::seconds;
-    using std::chrono::system_clock;
-    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-}
-
 TEST_F(BinderLibTest, HangingServices) {
     Parcel data, reply;
     sp<IBinder> server = addServer();
@@ -1853,7 +1851,7 @@ TEST_F(BinderLibTest, HangingServices) {
     data.writeInt32(delay);
     // b/266537959 - must take before taking lock, since countdown is started in the remote
     // process there.
-    size_t epochMsBefore = epochMillis();
+    int64_t timeBefore = uptimeMillis();
     EXPECT_THAT(server->transact(BINDER_LIB_TEST_PROCESS_TEMPORARY_LOCK, data, &reply), NO_ERROR);
     std::vector<std::thread> ts;
     for (size_t i = 0; i < kKernelThreads + 1; i++) {
@@ -1867,10 +1865,10 @@ TEST_F(BinderLibTest, HangingServices) {
     for (auto &t : ts) {
         t.join();
     }
-    size_t epochMsAfter = epochMillis();
+    int64_t timeAfter = uptimeMillis();
 
     // deadlock occurred and threads only finished after 1s passed.
-    EXPECT_GE(epochMsAfter, epochMsBefore + delay);
+    EXPECT_GE(timeAfter, timeBefore + delay);
 }
 
 TEST_F(BinderLibTest, BinderProxyCount) {
