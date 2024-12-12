@@ -877,6 +877,9 @@ renderengine::RenderEngine::BlurAlgorithm chooseBlurAlgorithm(bool supportsBlur)
     } else if (algorithm == "kawase2") {
         return renderengine::RenderEngine::BlurAlgorithm::KAWASE_DUAL_FILTER;
     } else {
+        if (FlagManager::getInstance().window_blur_kawase2()) {
+            return renderengine::RenderEngine::BlurAlgorithm::KAWASE_DUAL_FILTER;
+        }
         return renderengine::RenderEngine::BlurAlgorithm::KAWASE;
     }
 }
@@ -3631,10 +3634,13 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
             deviceProductInfo = snapshot.deviceProductInfo();
         }
 
+        // Use the cached port via snapshot because we are updating an existing
+        // display on reconnect.
         const auto it =
                 mPhysicalDisplays.try_replace(displayId, display.token(), displayId,
-                                              snapshot.connectionType(), std::move(displayModes),
-                                              std::move(colorModes), std::move(deviceProductInfo));
+                                              snapshot.port(), snapshot.connectionType(),
+                                              std::move(displayModes), std::move(colorModes),
+                                              std::move(deviceProductInfo));
 
         auto& state = mCurrentState.displays.editValueFor(it->second.token());
         state.sequenceId = DisplayDeviceState{}.sequenceId; // Generate new sequenceId.
@@ -3647,7 +3653,7 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
     const ui::DisplayConnectionType connectionType =
             getHwComposer().getDisplayConnectionType(displayId);
 
-    mPhysicalDisplays.try_emplace(displayId, token, displayId, connectionType,
+    mPhysicalDisplays.try_emplace(displayId, token, displayId, info.port, connectionType,
                                   std::move(displayModes), std::move(colorModes),
                                   std::move(info.deviceProductInfo));
 
@@ -4563,6 +4569,7 @@ void SurfaceFlinger::setTransactionFlags(uint32_t mask, TransactionSchedule sche
     SFTRACE_INT("mTransactionFlags", transactionFlags);
 
     if (const bool scheduled = transactionFlags & mask; !scheduled) {
+        mScheduler->resync();
         scheduleCommit(frameHint);
     } else if (frameHint == FrameHint::kActive) {
         // Even if the next frame is already scheduled, we should reset the idle timer
