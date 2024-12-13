@@ -810,7 +810,7 @@ void Output::commitPictureProfilesToCompositionState() {
     }
     auto compare = [](const ::android::compositionengine::OutputLayer* lhs,
                       const ::android::compositionengine::OutputLayer* rhs) {
-        return lhs->getPictureProfilePriority() > rhs->getPictureProfilePriority();
+        return lhs->getPictureProfilePriority() < rhs->getPictureProfilePriority();
     };
     std::priority_queue<::android::compositionengine::OutputLayer*,
                         std::vector<::android::compositionengine::OutputLayer*>, decltype(compare)>
