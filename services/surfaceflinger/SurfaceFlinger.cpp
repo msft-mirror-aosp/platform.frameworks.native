@@ -37,6 +37,7 @@
 #include <android/hardware/configstore/1.1/types.h>
 #include <android/native_window.h>
 #include <android/os/IInputFlinger.h>
+#include <android_os.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
 #include <binder/PermissionCache.h>
@@ -741,7 +742,10 @@ void SurfaceFlinger::bootFinished() {
     mBootFinished = true;
     FlagManager::getMutableInstance().markBootCompleted();
 
-    ::tracing_perfetto::registerWithPerfetto();
+    if (android::os::perfetto_sdk_tracing()) {
+        ::tracing_perfetto::registerWithPerfetto();
+    }
+
     mInitBootPropsFuture.wait();
     mRenderEnginePrimeCacheFuture.wait();
 
