@@ -672,7 +672,7 @@ private:
 
     status_t            finishWrite(size_t len);
     void                releaseObjects();
-    void                acquireObjects();
+    void reacquireObjects(size_t objectSize);
     status_t            growData(size_t len);
     // Clear the Parcel and set the capacity to `desired`.
     // Doesn't reset the RPC session association.

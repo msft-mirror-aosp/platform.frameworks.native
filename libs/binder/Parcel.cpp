@@ -156,7 +156,7 @@ enum {
 
 #ifdef BINDER_WITH_KERNEL_IPC
 static void acquire_object(const sp<ProcessState>& proc, const flat_binder_object& obj,
-                           const void* who) {
+                           const void* who, bool tagFds) {
     switch (obj.hdr.type) {
         case BINDER_TYPE_BINDER:
             if (obj.binder) {
@@ -173,7 +173,7 @@ static void acquire_object(const sp<ProcessState>& proc, const flat_binder_objec
             return;
         }
         case BINDER_TYPE_FD: {
-            if (obj.cookie != 0) { // owned
+            if (tagFds && obj.cookie != 0) { // owned
                 FdTag(obj.handle, nullptr, who);
             }
             return;
@@ -611,7 +611,7 @@ status_t Parcel::appendFrom(const Parcel* parcel, size_t offset, size_t len) {
                     }
                 }
 
-                acquire_object(proc, *flat, this);
+                acquire_object(proc, *flat, this, true /*tagFds*/);
             }
         }
 #else
@@ -1797,7 +1797,7 @@ restart_write:
         // Need to write meta-data?
         if (nullMetaData || val.binder != 0) {
             kernelFields->mObjects[kernelFields->mObjectsSize] = mDataPos;
-            acquire_object(ProcessState::self(), val, this);
+            acquire_object(ProcessState::self(), val, this, true /*tagFds*/);
             kernelFields->mObjectsSize++;
         }
 
@@ -2883,15 +2883,17 @@ void Parcel::releaseObjects()
 #endif // BINDER_WITH_KERNEL_IPC
 }
 
-void Parcel::acquireObjects()
-{
+void Parcel::reacquireObjects(size_t objectsSize) {
     auto* kernelFields = maybeKernelFields();
     if (kernelFields == nullptr) {
         return;
     }
 
 #ifdef BINDER_WITH_KERNEL_IPC
-    size_t i = kernelFields->mObjectsSize;
+    LOG_ALWAYS_FATAL_IF(objectsSize > kernelFields->mObjectsSize,
+                        "Object size %zu out of range of %zu", objectsSize,
+                        kernelFields->mObjectsSize);
+    size_t i = objectsSize;
     if (i == 0) {
         return;
     }
@@ -2901,8 +2903,10 @@ void Parcel::acquireObjects()
     while (i > 0) {
         i--;
         const flat_binder_object* flat = reinterpret_cast<flat_binder_object*>(data + objects[i]);
-        acquire_object(proc, *flat, this);
+        acquire_object(proc, *flat, this, false /*tagFds*/); // they are already tagged
     }
+#else
+    (void) objectsSize;
 #endif // BINDER_WITH_KERNEL_IPC
 }
 
@@ -3119,12 +3123,8 @@ status_t Parcel::continueWrite(size_t desired)
                 return NO_MEMORY;
             }
 
-            // Little hack to only acquire references on objects
-            // we will be keeping.
-            size_t oldObjectsSize = kernelFields->mObjectsSize;
-            kernelFields->mObjectsSize = objectsSize;
-            acquireObjects();
-            kernelFields->mObjectsSize = oldObjectsSize;
+            // only acquire references on objects we are keeping
+            reacquireObjects(objectsSize);
         }
         if (rpcFields) {
             if (status_t status = truncateRpcObjects(objectsSize); status != OK) {
