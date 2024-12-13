@@ -166,6 +166,7 @@ void FlagManager::dump(std::string& result) const {
     DUMP_ACONFIG_FLAG(skip_invisible_windows_in_input);
     DUMP_ACONFIG_FLAG(begone_bright_hlg);
     DUMP_ACONFIG_FLAG(window_blur_kawase2);
+    DUMP_ACONFIG_FLAG(reject_dupe_layerstacks);
 
 #undef DUMP_ACONFIG_FLAG
 #undef DUMP_LEGACY_SERVER_FLAG
@@ -266,6 +267,7 @@ FLAG_MANAGER_ACONFIG_FLAG(deprecate_frame_tracker, "");
 FLAG_MANAGER_ACONFIG_FLAG(skip_invisible_windows_in_input, "");
 FLAG_MANAGER_ACONFIG_FLAG(begone_bright_hlg, "debug.sf.begone_bright_hlg");
 FLAG_MANAGER_ACONFIG_FLAG(window_blur_kawase2, "");
+FLAG_MANAGER_ACONFIG_FLAG(reject_dupe_layerstacks, "");
 
 /// Trunk stable server (R/W) flags ///
 FLAG_MANAGER_ACONFIG_FLAG(refresh_rate_overlay_on_external_display, "")
