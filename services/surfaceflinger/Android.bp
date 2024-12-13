@@ -67,6 +67,7 @@ cc_defaults {
         "android.hardware.graphics.composer@2.2",
         "android.hardware.graphics.composer@2.3",
         "android.hardware.graphics.composer@2.4",
+        "android.os.flags-aconfig-cc-host",
         "libbase",
         "libbinder",
         "libbinder_ndk",
