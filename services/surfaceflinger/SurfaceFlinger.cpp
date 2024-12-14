@@ -37,6 +37,7 @@
 #include <android/hardware/configstore/1.1/types.h>
 #include <android/native_window.h>
 #include <android/os/IInputFlinger.h>
+#include <android_os.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
 #include <binder/PermissionCache.h>
@@ -741,7 +742,10 @@ void SurfaceFlinger::bootFinished() {
     mBootFinished = true;
     FlagManager::getMutableInstance().markBootCompleted();
 
-    ::tracing_perfetto::registerWithPerfetto();
+    if (android::os::perfetto_sdk_tracing()) {
+        ::tracing_perfetto::registerWithPerfetto();
+    }
+
     mInitBootPropsFuture.wait();
     mRenderEnginePrimeCacheFuture.wait();
 
@@ -4601,7 +4605,6 @@ void SurfaceFlinger::setTransactionFlags(uint32_t mask, TransactionSchedule sche
     SFTRACE_INT("mTransactionFlags", transactionFlags);
 
     if (const bool scheduled = transactionFlags & mask; !scheduled) {
-        mScheduler->resync();
         scheduleCommit(frameHint);
     } else if (frameHint == FrameHint::kActive) {
         // Even if the next frame is already scheduled, we should reset the idle timer

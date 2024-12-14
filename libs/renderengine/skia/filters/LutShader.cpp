@@ -187,10 +187,16 @@ sk_sp<SkShader> LutShader::generateLutShader(sk_sp<SkShader> input,
     SkBitmap bitmap;
     bitmap.allocPixels(info);
     if (!bitmap.installPixels(info, buffer.data(), info.minRowBytes())) {
-        LOG_ALWAYS_FATAL("unable to install pixels");
+        ALOGW("bitmap.installPixels failed, skip this Lut!");
+        return input;
     }
 
     sk_sp<SkImage> lutImage = SkImages::RasterFromBitmap(bitmap);
+    if (!lutImage) {
+        ALOGW("Got a nullptr from SkImages::RasterFromBitmap, skip this Lut!");
+        return input;
+    }
+
     mBuilder->child("image") = input;
     mBuilder->child("lut") =
             lutImage->makeRawShader(SkTileMode::kClamp, SkTileMode::kClamp,

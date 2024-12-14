@@ -55,6 +55,7 @@
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayLuts.h>
 #include <aidl/android/hardware/graphics/composer3/LutProperties.h>
+#include <aidl/android/hardware/graphics/composer3/Luts.h>
 #include <aidl/android/hardware/graphics/composer3/OutputType.h>
 #include <aidl/android/hardware/graphics/composer3/OverlayProperties.h>
 
@@ -324,6 +325,8 @@ public:
     virtual int32_t getMaxLayerPictureProfiles(PhysicalDisplayId) = 0;
     virtual status_t setDisplayPictureProfileHandle(PhysicalDisplayId,
                                                     const PictureProfileHandle& handle) = 0;
+    virtual status_t getLuts(PhysicalDisplayId, const std::vector<sp<GraphicBuffer>>&,
+                             std::vector<aidl::android::hardware::graphics::composer3::Luts>*) = 0;
 };
 
 static inline bool operator==(const android::HWComposer::DeviceRequestedChanges& lhs,
@@ -491,6 +494,8 @@ public:
     int32_t getMaxLayerPictureProfiles(PhysicalDisplayId) override;
     status_t setDisplayPictureProfileHandle(PhysicalDisplayId,
                                             const android::PictureProfileHandle& profile) override;
+    status_t getLuts(PhysicalDisplayId, const std::vector<sp<GraphicBuffer>>&,
+                     std::vector<aidl::android::hardware::graphics::composer3::Luts>*) override;
 
     // for debugging ----------------------------------------------------------
     void dump(std::string& out) const override;
