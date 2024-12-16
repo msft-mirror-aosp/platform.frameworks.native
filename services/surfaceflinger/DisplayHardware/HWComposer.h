@@ -55,6 +55,8 @@
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayLuts.h>
 #include <aidl/android/hardware/graphics/composer3/LutProperties.h>
+#include <aidl/android/hardware/graphics/composer3/Luts.h>
+#include <aidl/android/hardware/graphics/composer3/OutputType.h>
 #include <aidl/android/hardware/graphics/composer3/OverlayProperties.h>
 
 namespace android {
@@ -112,12 +114,14 @@ public:
         float dpiY = -1.f;
         int32_t configGroup = -1;
         std::optional<hal::VrrConfig> vrrConfig;
+        OutputType hdrOutputType;
 
         friend std::ostream& operator<<(std::ostream& os, const HWCDisplayMode& mode) {
             return os << "id=" << mode.hwcId << " res=" << mode.width << "x" << mode.height
                       << " vsyncPeriod=" << mode.vsyncPeriod << " dpi=" << mode.dpiX << "x"
                       << mode.dpiY << " group=" << mode.configGroup
-                      << " vrrConfig=" << to_string(mode.vrrConfig).c_str();
+                      << " vrrConfig=" << to_string(mode.vrrConfig).c_str()
+                      << " hdrOutputType=" << toString(mode.hdrOutputType);
         }
     };
 
@@ -321,6 +325,8 @@ public:
     virtual int32_t getMaxLayerPictureProfiles(PhysicalDisplayId) = 0;
     virtual status_t setDisplayPictureProfileHandle(PhysicalDisplayId,
                                                     const PictureProfileHandle& handle) = 0;
+    virtual status_t getLuts(PhysicalDisplayId, const std::vector<sp<GraphicBuffer>>&,
+                             std::vector<aidl::android::hardware::graphics::composer3::Luts>*) = 0;
 };
 
 static inline bool operator==(const android::HWComposer::DeviceRequestedChanges& lhs,
@@ -488,6 +494,8 @@ public:
     int32_t getMaxLayerPictureProfiles(PhysicalDisplayId) override;
     status_t setDisplayPictureProfileHandle(PhysicalDisplayId,
                                             const android::PictureProfileHandle& profile) override;
+    status_t getLuts(PhysicalDisplayId, const std::vector<sp<GraphicBuffer>>&,
+                     std::vector<aidl::android::hardware::graphics::composer3::Luts>*) override;
 
     // for debugging ----------------------------------------------------------
     void dump(std::string& out) const override;

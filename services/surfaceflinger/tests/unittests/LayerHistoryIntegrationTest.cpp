@@ -584,7 +584,7 @@ TEST_F(LayerHistoryIntegrationTest, oneLayerExplicitGte_vrr) {
 
     auto layer = createLegacyAndFrontedEndLayer(1);
     showLayer(1);
-    setFrameRate(1, (33_Hz).getValue(), ANATIVEWINDOW_FRAME_RATE_GTE,
+    setFrameRate(1, (33_Hz).getValue(), ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_GTE,
                  ANATIVEWINDOW_CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS);
     setFrameRateCategory(1, 0);
 
@@ -623,7 +623,7 @@ TEST_F(LayerHistoryIntegrationTest, oneLayerExplicitGte_nonVrr) {
 
     auto layer = createLegacyAndFrontedEndLayer(1);
     showLayer(1);
-    setFrameRate(1, (33_Hz).getValue(), ANATIVEWINDOW_FRAME_RATE_GTE,
+    setFrameRate(1, (33_Hz).getValue(), ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_GTE,
                  ANATIVEWINDOW_CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS);
     setFrameRateCategory(1, 0);
 
@@ -652,6 +652,72 @@ TEST_F(LayerHistoryIntegrationTest, oneLayerExplicitGte_nonVrr) {
     EXPECT_EQ(LayerHistory::LayerVoteType::Max, summarizeLayerHistory(time)[0].vote);
     EXPECT_EQ(0_Hz, summarizeLayerHistory(time)[0].desiredRefreshRate);
     EXPECT_EQ(FrameRateCategory::Default, summarizeLayerHistory(time)[0].frameRateCategory);
+}
+
+TEST_F(LayerHistoryIntegrationTest, oneLayerGteNoVote_arr) {
+    SET_FLAG_FOR_TEST(flags::arr_setframerate_gte_enum, true);
+    // Set the test to be on a vrr mode.
+    SET_FLAG_FOR_TEST(flags::vrr_config, true);
+    mSelector->setActiveMode(kVrrModeId, HI_FPS);
+
+    auto layer = createLegacyAndFrontedEndLayer(1);
+    showLayer(1);
+    setFrameRate(1, (0_Hz).getValue(), ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_GTE,
+                 ANATIVEWINDOW_CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS);
+
+    EXPECT_EQ(1u, layerCount());
+    EXPECT_EQ(0u, activeLayerCount());
+
+    nsecs_t time = systemTime();
+    for (size_t i = 0; i < PRESENT_TIME_HISTORY_SIZE; i++) {
+        setBufferWithPresentTime(layer, time);
+        time += HI_FPS_PERIOD;
+    }
+
+    // Layer is active but GTE with 0 should be considered NoVote, thus nothing from summarize.
+    ASSERT_EQ(0u, summarizeLayerHistory(time).size());
+    EXPECT_EQ(1u, activeLayerCount());
+    EXPECT_EQ(1, frequentLayerCount(time));
+
+    // layer became inactive.
+    setDefaultLayerVote(layer.get(), LayerHistory::LayerVoteType::Heuristic);
+    time += MAX_ACTIVE_LAYER_PERIOD_NS.count();
+    ASSERT_EQ(0u, summarizeLayerHistory(time).size());
+    EXPECT_EQ(0u, activeLayerCount());
+    EXPECT_EQ(0, frequentLayerCount(time));
+}
+
+TEST_F(LayerHistoryIntegrationTest, oneLayerGteNoVote_mrr) {
+    SET_FLAG_FOR_TEST(flags::arr_setframerate_gte_enum, true);
+    // True by default on MRR devices as well, but the device is not set to VRR mode.
+    SET_FLAG_FOR_TEST(flags::vrr_config, true);
+
+    auto layer = createLegacyAndFrontedEndLayer(1);
+    showLayer(1);
+    setFrameRate(1, (0_Hz).getValue(), ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_GTE,
+                 ANATIVEWINDOW_CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS);
+    setFrameRateCategory(1, 0);
+
+    EXPECT_EQ(1u, layerCount());
+    EXPECT_EQ(0u, activeLayerCount());
+
+    nsecs_t time = systemTime();
+    for (size_t i = 0; i < PRESENT_TIME_HISTORY_SIZE; i++) {
+        setBufferWithPresentTime(layer, time);
+        time += HI_FPS_PERIOD;
+    }
+
+    // Layer is active but GTE with 0 should be considered NoVote, thus nothing from summarize.
+    ASSERT_EQ(0u, summarizeLayerHistory(time).size());
+    EXPECT_EQ(1u, activeLayerCount());
+    EXPECT_EQ(1, frequentLayerCount(time));
+
+    // layer became inactive.
+    setDefaultLayerVote(layer.get(), LayerHistory::LayerVoteType::Heuristic);
+    time += MAX_ACTIVE_LAYER_PERIOD_NS.count();
+    ASSERT_EQ(0u, summarizeLayerHistory(time).size());
+    EXPECT_EQ(0u, activeLayerCount());
+    EXPECT_EQ(0, frequentLayerCount(time));
 }
 
 TEST_F(LayerHistoryIntegrationTest, oneLayerExplicitVoteWithCategory_vrrFeatureOff) {

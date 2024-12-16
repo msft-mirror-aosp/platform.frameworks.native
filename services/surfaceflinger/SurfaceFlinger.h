@@ -69,10 +69,11 @@
 #include <ui/FenceResult.h>
 
 #include <common/FlagManager.h>
-#include "ActivePictureUpdater.h"
+#include "ActivePictureTracker.h"
 #include "BackgroundExecutor.h"
 #include "Display/DisplayModeController.h"
 #include "Display/PhysicalDisplay.h"
+#include "Display/VirtualDisplaySnapshot.h"
 #include "DisplayDevice.h"
 #include "DisplayHardware/HWC2.h"
 #include "DisplayIdGenerator.h"
@@ -666,7 +667,9 @@ private:
 
     void updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t connectedLevel, int32_t maxLevel);
 
-    void setActivePictureListener(const sp<gui::IActivePictureListener>& listener);
+    void addActivePictureListener(const sp<gui::IActivePictureListener>& listener);
+
+    void removeActivePictureListener(const sp<gui::IActivePictureListener>& listener);
 
     // IBinder::DeathRecipient overrides:
     void binderDied(const wp<IBinder>& who) override;
@@ -700,7 +703,7 @@ private:
     void onChoreographerAttached() override;
     void onExpectedPresentTimePosted(TimePoint expectedPresentTime, ftl::NonNull<DisplayModePtr>,
                                      Fps renderRate) override;
-    void onCommitNotComposited(PhysicalDisplayId pacesetterDisplayId) override
+    void onCommitNotComposited() override
             REQUIRES(kMainThreadContext);
     void vrrDisplayIdle(bool idle) override;
 
@@ -729,7 +732,11 @@ private:
                                        Fps maxFps);
 
     void initiateDisplayModeChanges() REQUIRES(kMainThreadContext) REQUIRES(mStateLock);
-    void finalizeDisplayModeChange(PhysicalDisplayId) REQUIRES(kMainThreadContext)
+
+    // Returns whether the commit stage should proceed. The return value is ignored when finalizing
+    // immediate mode changes, which happen toward the end of the commit stage.
+    // TODO: b/355427258 - Remove the return value once the `synced_resolution_switch` flag is live.
+    bool finalizeDisplayModeChange(PhysicalDisplayId) REQUIRES(kMainThreadContext)
             REQUIRES(mStateLock);
 
     void dropModeRequest(PhysicalDisplayId) REQUIRES(kMainThreadContext);
@@ -871,7 +878,7 @@ private:
 
     void captureScreenCommon(RenderAreaBuilderVariant, GetLayerSnapshotsFunction,
                              ui::Size bufferSize, ui::PixelFormat, bool allowProtected,
-                             bool grayscale, bool attachGainmap, const sp<IScreenCaptureListener>&);
+                             bool grayscale, const sp<IScreenCaptureListener>&);
 
     std::optional<OutputCompositionState> getDisplayStateFromRenderAreaBuilder(
             RenderAreaBuilderVariant& renderAreaBuilder) REQUIRES(kMainThreadContext);
@@ -879,16 +886,17 @@ private:
     ftl::SharedFuture<FenceResult> captureScreenshot(
             const RenderAreaBuilderVariant& renderAreaBuilder,
             const std::shared_ptr<renderengine::ExternalTexture>& buffer, bool regionSampling,
-            bool grayscale, bool isProtected, bool attachGainmap,
-            const sp<IScreenCaptureListener>& captureListener,
-            std::optional<OutputCompositionState>& displayState,
-            std::vector<std::pair<Layer*, sp<LayerFE>>>& layers);
+            bool grayscale, bool isProtected, const sp<IScreenCaptureListener>& captureListener,
+            const std::optional<OutputCompositionState>& displayState,
+            const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers,
+            const std::shared_ptr<renderengine::ExternalTexture>& hdrBuffer = nullptr,
+            const std::shared_ptr<renderengine::ExternalTexture>& gainmapBuffer = nullptr);
 
     ftl::SharedFuture<FenceResult> renderScreenImpl(
             const RenderArea*, const std::shared_ptr<renderengine::ExternalTexture>&,
             bool regionSampling, bool grayscale, bool isProtected, ScreenCaptureResults&,
-            std::optional<OutputCompositionState>& displayState,
-            std::vector<std::pair<Layer*, sp<LayerFE>>>& layers);
+            const std::optional<OutputCompositionState>& displayState,
+            const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers);
 
     void readPersistentProperties();
 
@@ -1075,8 +1083,20 @@ private:
     void enableHalVirtualDisplays(bool);
 
     // Virtual display lifecycle for ID generation and HAL allocation.
-    VirtualDisplayId acquireVirtualDisplay(ui::Size, ui::PixelFormat) REQUIRES(mStateLock);
+    VirtualDisplayId acquireVirtualDisplay(ui::Size, ui::PixelFormat, const std::string& uniqueId)
+            REQUIRES(mStateLock);
+    template <typename ID>
+    void acquireVirtualDisplaySnapshot(ID displayId, const std::string& uniqueId) {
+        std::lock_guard lock(mVirtualDisplaysMutex);
+        const bool emplace_success =
+                mVirtualDisplays.try_emplace(displayId, displayId, uniqueId).second;
+        if (!emplace_success) {
+            ALOGW("%s: Virtual display snapshot with the same ID already exists", __func__);
+        }
+    }
+
     void releaseVirtualDisplay(VirtualDisplayId);
+    void releaseVirtualDisplaySnapshot(VirtualDisplayId displayId);
 
     // Returns a display other than `mActiveDisplayId` that can be activated, if any.
     sp<DisplayDevice> getActivatableDisplay() const REQUIRES(mStateLock, kMainThreadContext);
@@ -1277,6 +1297,10 @@ private:
 
     display::PhysicalDisplays mPhysicalDisplays GUARDED_BY(mStateLock);
 
+    mutable std::mutex mVirtualDisplaysMutex;
+    ftl::SmallMap<VirtualDisplayId, const display::VirtualDisplaySnapshot, 2> mVirtualDisplays
+            GUARDED_BY(mVirtualDisplaysMutex);
+
     // The inner or outer display for foldables, while unfolded or folded, respectively.
     std::atomic<PhysicalDisplayId> mActiveDisplayId;
 
@@ -1385,9 +1409,9 @@ private:
     std::unordered_map<DisplayId, sp<HdrLayerInfoReporter>> mHdrLayerInfoListeners
             GUARDED_BY(mStateLock);
 
-    sp<gui::IActivePictureListener> mActivePictureListener GUARDED_BY(mStateLock);
-    bool mHaveNewActivePictureListener GUARDED_BY(mStateLock);
-    ActivePictureUpdater mActivePictureUpdater GUARDED_BY(kMainThreadContext);
+    ActivePictureTracker mActivePictureTracker GUARDED_BY(kMainThreadContext);
+    ActivePictureTracker::Listeners mActivePictureListenersToAdd GUARDED_BY(mStateLock);
+    ActivePictureTracker::Listeners mActivePictureListenersToRemove GUARDED_BY(mStateLock);
 
     std::atomic<ui::Transform::RotationFlags> mActiveDisplayTransformHint;
 
@@ -1624,8 +1648,8 @@ public:
     binder::Status flushJankData(int32_t layerId) override;
     binder::Status removeJankListener(int32_t layerId, const sp<gui::IJankListener>& listener,
                                       int64_t afterVsync) override;
-    binder::Status setActivePictureListener(const sp<gui::IActivePictureListener>& listener);
-    binder::Status clearActivePictureListener();
+    binder::Status addActivePictureListener(const sp<gui::IActivePictureListener>& listener);
+    binder::Status removeActivePictureListener(const sp<gui::IActivePictureListener>& listener);
 
 private:
     static const constexpr bool kUsePermissionCache = true;

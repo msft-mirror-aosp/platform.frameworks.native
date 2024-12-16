@@ -27,11 +27,6 @@
 #include <utility>
 #include <vector>
 
-// TODO(b/129481165): remove the #pragma below and fix conversion issues
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wconversion"
-#pragma clang diagnostic ignored "-Wextra"
-
 #include <android/hardware/graphics/composer/2.4/IComposer.h>
 #include <android/hardware/graphics/composer/2.4/IComposerClient.h>
 
@@ -42,9 +37,6 @@
 
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
-
-// TODO(b/129481165): remove the #pragma below and fix conversion issues
-#pragma clang diagnostic pop // ignored "-Wconversion -Wextra"
 
 namespace android::Hwc2 {
 
@@ -253,6 +245,8 @@ public:
     Error getMaxLayerPictureProfiles(Display, int32_t* outMaxProfiles) override;
     Error setDisplayPictureProfileId(Display, PictureProfileId id) override;
     Error setLayerPictureProfileId(Display, Layer, PictureProfileId id) override;
+    Error getLuts(Display, const std::vector<sp<GraphicBuffer>>&,
+                  std::vector<aidl::android::hardware::graphics::composer3::Luts>*) override;
 
 private:
     // Many public functions above simply write a command into the command

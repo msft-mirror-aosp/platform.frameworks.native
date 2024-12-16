@@ -449,7 +449,8 @@ void OutputLayer::commitPictureProfileToCompositionState() {
 }
 
 void OutputLayer::writeStateToHWC(bool includeGeometry, bool skipLayer, uint32_t z,
-                                  bool zIsOverridden, bool isPeekingThrough) {
+                                  bool zIsOverridden, bool isPeekingThrough,
+                                  bool hasLutsProperties) {
     const auto& state = getState();
     // Skip doing this if there is no HWC interface
     if (!state.hwc) {
@@ -491,8 +492,9 @@ void OutputLayer::writeStateToHWC(bool includeGeometry, bool skipLayer, uint32_t
 
     writeCompositionTypeToHWC(hwcLayer.get(), requestedCompositionType, isPeekingThrough,
                               skipLayer);
-
-    writeLutToHWC(hwcLayer.get(), *outputIndependentState);
+    if (hasLutsProperties) {
+        writeLutToHWC(hwcLayer.get(), *outputIndependentState);
+    }
 
     if (requestedCompositionType == Composition::SOLID_COLOR) {
         writeSolidColorStateToHWC(hwcLayer.get(), *outputIndependentState);
@@ -600,14 +602,13 @@ void OutputLayer::writeLutToHWC(HWC2::Layer* hwcLayer,
         std::vector<LutProperties> aidlProperties;
         aidlProperties.reserve(lutProperties.size());
         for (size_t i = 0; i < lutOffsets.size(); i++) {
-            LutProperties properties;
-            properties.dimension = static_cast<LutProperties::Dimension>(lutProperties[i].dimension);
-            properties.size = lutProperties[i].size;
-            properties.samplingKeys = {
-                    static_cast<LutProperties::SamplingKey>(lutProperties[i].samplingKey)};
-            aidlProperties.emplace_back(properties);
+            aidlProperties.emplace_back(
+                    LutProperties{.dimension = static_cast<LutProperties::Dimension>(
+                                          lutProperties[i].dimension),
+                                  .size = lutProperties[i].size,
+                                  .samplingKeys = {static_cast<LutProperties::SamplingKey>(
+                                          lutProperties[i].samplingKey)}});
         }
-
 
         luts.pfd = ndk::ScopedFileDescriptor(dup(lutFileDescriptor.get()));
         luts.offsets = lutOffsets;
