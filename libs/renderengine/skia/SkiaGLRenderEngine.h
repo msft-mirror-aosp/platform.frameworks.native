@@ -20,9 +20,10 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
-#include <GrDirectContext.h>
 #include <SkSurface.h>
 #include <android-base/thread_annotations.h>
+#include <include/gpu/ganesh/GrContextOptions.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
 #include <renderengine/ExternalTexture.h>
 #include <renderengine/RenderEngine.h>
 #include <sys/types.h>
@@ -32,7 +33,6 @@
 
 #include "AutoBackendTexture.h"
 #include "EGL/egl.h"
-#include "GrContextOptions.h"
 #include "SkImageInfo.h"
 #include "SkiaRenderEngine.h"
 #include "android-base/macros.h"
@@ -59,11 +59,11 @@ public:
 protected:
     // Implementations of abstract SkiaRenderEngine functions specific to
     // rendering backend
-    virtual SkiaRenderEngine::Contexts createDirectContexts(const GrContextOptions& options);
+    virtual SkiaRenderEngine::Contexts createContexts();
     bool supportsProtectedContentImpl() const override;
     bool useProtectedContextImpl(GrProtected isProtected) override;
-    void waitFence(GrDirectContext* grContext, base::borrowed_fd fenceFd) override;
-    base::unique_fd flushAndSubmit(GrDirectContext* context) override;
+    void waitFence(SkiaGpuContext* context, base::borrowed_fd fenceFd) override;
+    base::unique_fd flushAndSubmit(SkiaGpuContext* context, sk_sp<SkSurface> dstSurface) override;
     void appendBackendSpecificInfoToDump(std::string& result) override;
 
 private:
@@ -71,7 +71,7 @@ private:
                        EGLSurface placeholder, EGLContext protectedContext,
                        EGLSurface protectedPlaceholder);
     bool waitGpuFence(base::borrowed_fd fenceFd);
-    base::unique_fd flush();
+    base::unique_fd flushGL();
     static EGLConfig chooseEglConfig(EGLDisplay display, int format, bool logConfig);
     static EGLContext createEglContext(EGLDisplay display, EGLConfig config,
                                        EGLContext shareContext,

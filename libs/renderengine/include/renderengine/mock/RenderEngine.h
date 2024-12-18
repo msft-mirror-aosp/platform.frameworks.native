@@ -33,7 +33,7 @@ public:
     RenderEngine();
     ~RenderEngine() override;
 
-    MOCK_METHOD1(primeCache, std::future<void>(bool));
+    MOCK_METHOD1(primeCache, std::future<void>(PrimeCacheConfig));
     MOCK_METHOD1(dump, void(std::string&));
     MOCK_CONST_METHOD0(getMaxTextureSize, size_t());
     MOCK_CONST_METHOD0(getMaxViewportDims, size_t());
@@ -46,6 +46,17 @@ public:
                  ftl::Future<FenceResult>(const DisplaySettings&, const std::vector<LayerSettings>&,
                                           const std::shared_ptr<ExternalTexture>&,
                                           base::unique_fd&&));
+    MOCK_METHOD7(drawGainmap,
+                 ftl::Future<FenceResult>(const std::shared_ptr<ExternalTexture>&,
+                                          base::borrowed_fd&&,
+                                          const std::shared_ptr<ExternalTexture>&,
+                                          base::borrowed_fd&&, float, ui::Dataspace,
+                                          const std::shared_ptr<ExternalTexture>&));
+    MOCK_METHOD8(drawGainmapInternal,
+                 void(const std::shared_ptr<std::promise<FenceResult>>&&,
+                      const std::shared_ptr<ExternalTexture>&, base::borrowed_fd&&,
+                      const std::shared_ptr<ExternalTexture>&, base::borrowed_fd&&, float,
+                      ui::Dataspace, const std::shared_ptr<ExternalTexture>&));
     MOCK_METHOD5(drawLayersInternal,
                  void(const std::shared_ptr<std::promise<FenceResult>>&&, const DisplaySettings&,
                       const std::vector<LayerSettings>&, const std::shared_ptr<ExternalTexture>&,

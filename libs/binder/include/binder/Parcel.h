@@ -92,7 +92,7 @@ public:
 
     LIBBINDER_EXPORTED status_t appendFrom(const Parcel* parcel, size_t start, size_t len);
 
-    LIBBINDER_EXPORTED int compareData(const Parcel& other);
+    LIBBINDER_EXPORTED int compareData(const Parcel& other) const;
     LIBBINDER_EXPORTED status_t compareDataInRange(size_t thisOffset, const Parcel& other,
                                                    size_t otherOffset, size_t length,
                                                    int* result) const;
@@ -637,9 +637,6 @@ public:
 
     LIBBINDER_EXPORTED const flat_binder_object* readObject(bool nullMetaData) const;
 
-    // Explicitly close all file descriptors in the parcel.
-    LIBBINDER_EXPORTED void closeFileDescriptors();
-
     // Debugging: get metrics on current allocations.
     LIBBINDER_EXPORTED static size_t getGlobalAllocSize();
     LIBBINDER_EXPORTED static size_t getGlobalAllocCount();
@@ -652,6 +649,9 @@ public:
     LIBBINDER_EXPORTED void print(std::ostream& to, uint32_t flags = 0) const;
 
 private:
+    // Explicitly close all file descriptors in the parcel.
+    void closeFileDescriptors();
+
     // `objects` and `objectsSize` always 0 for RPC Parcels.
     typedef void (*release_func)(const uint8_t* data, size_t dataSize, const binder_size_t* objects,
                                  size_t objectsSize);
@@ -1240,7 +1240,7 @@ private:
             if (__builtin_mul_overflow(size, sizeof(T), &dataLen)) {
                 return -EOVERFLOW;
             }
-            auto data = reinterpret_cast<const T*>(readInplace(dataLen));
+            auto data = readInplace(dataLen);
             if (data == nullptr) return BAD_VALUE;
             // std::vector::insert and similar methods will require type-dependent
             // byte alignment when inserting from a const iterator such as `data`,

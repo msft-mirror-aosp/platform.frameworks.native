@@ -15,6 +15,7 @@
  */
 
 #include <android-base/stringprintf.h>
+#include <common/trace.h>
 #include <compositionengine/CompositionEngine.h>
 #include <compositionengine/CompositionRefreshArgs.h>
 #include <compositionengine/DisplayCreationArgs.h>
@@ -25,9 +26,6 @@
 #include <compositionengine/impl/DumpHelpers.h>
 #include <compositionengine/impl/OutputLayer.h>
 #include <compositionengine/impl/RenderSurface.h>
-#include <gui/TraceUtils.h>
-
-#include <utils/Trace.h>
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
@@ -79,7 +77,7 @@ void Display::setSecure(bool secure) {
 }
 
 bool Display::isVirtual() const {
-    return VirtualDisplayId::tryCast(mId).has_value();
+    return mId.isVirtual();
 }
 
 std::optional<DisplayId> Display::getDisplayId() const {
@@ -235,7 +233,7 @@ void Display::beginFrame() {
 
 bool Display::chooseCompositionStrategy(
         std::optional<android::HWComposer::DeviceRequestedChanges>* outChanges) {
-    ATRACE_FORMAT("%s for %s", __func__, getNamePlusId().c_str());
+    SFTRACE_FORMAT("%s for %s", __func__, getNamePlusId().c_str());
     ALOGV(__FUNCTION__);
 
     if (mIsDisconnected) {
@@ -251,10 +249,6 @@ bool Display::chooseCompositionStrategy(
     // Get any composition changes requested by the HWC device, and apply them.
     auto& hwc = getCompositionEngine().getHwComposer();
     const bool requiresClientComposition = anyLayersRequireClientComposition();
-
-    if (isPowerHintSessionEnabled()) {
-        mPowerAdvisor->setRequiresClientComposition(mId, requiresClientComposition);
-    }
 
     const TimePoint hwcValidateStartTime = TimePoint::now();
 
@@ -365,6 +359,15 @@ void Display::applyClientTargetRequests(const ClientTargetProperty& clientTarget
             static_cast<ui::PixelFormat>(clientTargetProperty.clientTargetProperty.pixelFormat));
 }
 
+void Display::executeCommands() {
+    const auto halDisplayIdOpt = HalDisplayId::tryCast(mId);
+    if (mIsDisconnected || !halDisplayIdOpt) {
+        return;
+    }
+
+    getCompositionEngine().getHwComposer().executeCommands(*halDisplayIdOpt);
+}
+
 compositionengine::Output::FrameFences Display::presentFrame() {
     auto fences = impl::Output::presentFrame();
 
@@ -416,8 +419,22 @@ bool Display::isPowerHintSessionEnabled() {
     return mPowerAdvisor != nullptr && mPowerAdvisor->usePowerHintSession();
 }
 
+bool Display::isPowerHintSessionGpuReportingEnabled() {
+    return mPowerAdvisor != nullptr && mPowerAdvisor->supportsGpuReporting();
+}
+
+// For ADPF GPU v0 this is expected to set start time to when the GPU commands are submitted with
+// fence returned, i.e. when RenderEngine flushes the commands and returns the draw fence.
+void Display::setHintSessionGpuStart(TimePoint startTime) {
+    mPowerAdvisor->setGpuStartTime(mId, startTime);
+}
+
 void Display::setHintSessionGpuFence(std::unique_ptr<FenceTime>&& gpuFence) {
     mPowerAdvisor->setGpuFenceTime(mId, std::move(gpuFence));
+}
+
+void Display::setHintSessionRequiresRenderEngine(bool requiresRenderEngine) {
+    mPowerAdvisor->setRequiresRenderEngine(mId, requiresRenderEngine);
 }
 
 void Display::finishFrame(GpuCompositionResult&& result) {

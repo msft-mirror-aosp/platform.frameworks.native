@@ -16,13 +16,17 @@ cc_test {
         "BlockingQueue_test.cpp",
         "IdGenerator_test.cpp",
         "InputChannel_test.cpp",
+        "InputConsumer_test.cpp",
         "InputDevice_test.cpp",
         "InputEvent_test.cpp",
         "InputPublisherAndConsumer_test.cpp",
+        "InputPublisherAndConsumerNoResampling_test.cpp",
         "InputVerifier_test.cpp",
         "MotionPredictor_test.cpp",
         "MotionPredictorMetricsManager_test.cpp",
+        "Resampler_test.cpp",
         "RingBuffer_test.cpp",
+        "TestInputChannel.cpp",
         "TfLiteMotionPredictor_test.cpp",
         "TouchResampling_test.cpp",
         "TouchVideoFrame_test.cpp",
@@ -35,6 +39,7 @@ cc_test {
         "tensorflow_headers",
     ],
     static_libs: [
+        "libflagtest",
         "libgmock",
         "libgui_window_info_static",
         "libinput",
@@ -63,6 +68,7 @@ cc_test {
         "libcutils",
         "liblog",
         "libPlatformProperties",
+        "libstatslog",
         "libtinyxml2",
         "libutils",
         "server_configurable_flags",
@@ -76,20 +82,19 @@ cc_test {
     },
     test_suites: ["device-tests"],
     target: {
+        android: {
+            static_libs: [
+                "libstatslog_libinput",
+                "libstatssocket_lazy",
+            ],
+        },
         host: {
             sanitize: {
                 address: true,
             },
         },
-        android: {
-            static_libs: [
-                // Stats logging library and its dependencies.
-                "libstatslog_libinput",
-                "libstatsbootstrap",
-                "android.os.statsbootstrap_aidl-cpp",
-            ],
-        },
     },
+    native_coverage: false,
 }
 
 // NOTE: This is a compile time test, and does not need to be

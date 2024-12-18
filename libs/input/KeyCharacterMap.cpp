@@ -19,16 +19,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef __linux__
-#include <binder/Parcel.h>
-#endif
 #include <android/keycodes.h>
 #include <attestation/HmacKeyManager.h>
+#include <binder/Parcel.h>
 #include <input/InputEventLabels.h>
 #include <input/KeyCharacterMap.h>
 #include <input/Keyboard.h>
 
-#include <gui/constants.h>
 #include <utils/Errors.h>
 #include <utils/Log.h>
 #include <utils/Timers.h>
@@ -320,19 +317,8 @@ bool KeyCharacterMap::getEvents(int32_t deviceId, const char16_t* chars, size_t 
     return true;
 }
 
-void KeyCharacterMap::addKeyRemapping(int32_t fromKeyCode, int32_t toKeyCode) {
-    if (fromKeyCode == toKeyCode) {
-        mKeyRemapping.erase(fromKeyCode);
-#if DEBUG_MAPPING
-        ALOGD("addKeyRemapping: Cleared remapping forKeyCode=%d ~ Result Successful.", fromKeyCode);
-#endif
-        return;
-    }
-    mKeyRemapping.insert_or_assign(fromKeyCode, toKeyCode);
-#if DEBUG_MAPPING
-    ALOGD("addKeyRemapping: fromKeyCode=%d, toKeyCode=%d ~ Result Successful.", fromKeyCode,
-          toKeyCode);
-#endif
+void KeyCharacterMap::setKeyRemapping(const std::map<int32_t, int32_t>& keyRemapping) {
+    mKeyRemapping = keyRemapping;
 }
 
 status_t KeyCharacterMap::mapKey(int32_t scanCode, int32_t usageCode, int32_t* outKeyCode) const {
@@ -496,13 +482,14 @@ bool KeyCharacterMap::findKey(char16_t ch, int32_t* outKeyCode, int32_t* outMeta
     return false;
 }
 
-void KeyCharacterMap::addKey(Vector<KeyEvent>& outEvents,
-        int32_t deviceId, int32_t keyCode, int32_t metaState, bool down, nsecs_t time) {
+void KeyCharacterMap::addKey(Vector<KeyEvent>& outEvents, int32_t deviceId, int32_t keyCode,
+                             int32_t metaState, bool down, nsecs_t time) {
     outEvents.push();
     KeyEvent& event = outEvents.editTop();
-    event.initialize(InputEvent::nextId(), deviceId, AINPUT_SOURCE_KEYBOARD, ADISPLAY_ID_NONE,
-                     INVALID_HMAC, down ? AKEY_EVENT_ACTION_DOWN : AKEY_EVENT_ACTION_UP, 0, keyCode,
-                     0, metaState, 0, time, time);
+    event.initialize(InputEvent::nextId(), deviceId, AINPUT_SOURCE_KEYBOARD,
+                     ui::LogicalDisplayId::INVALID, INVALID_HMAC,
+                     down ? AKEY_EVENT_ACTION_DOWN : AKEY_EVENT_ACTION_UP, 0, keyCode, 0, metaState,
+                     0, time, time);
 }
 
 void KeyCharacterMap::addMetaKeys(Vector<KeyEvent>& outEvents,
@@ -612,7 +599,6 @@ void KeyCharacterMap::addLockedMetaKey(Vector<KeyEvent>& outEvents,
     }
 }
 
-#ifdef __linux__
 std::unique_ptr<KeyCharacterMap> KeyCharacterMap::readFromParcel(Parcel* parcel) {
     if (parcel == nullptr) {
         ALOGE("%s: Null parcel", __func__);
@@ -745,7 +731,6 @@ void KeyCharacterMap::writeToParcel(Parcel* parcel) const {
         parcel->writeInt32(toAndroidKeyCode);
     }
 }
-#endif // __linux__
 
 // --- KeyCharacterMap::Parser ---
 

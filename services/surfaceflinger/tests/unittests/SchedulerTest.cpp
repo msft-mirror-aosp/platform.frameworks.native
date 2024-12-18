@@ -34,6 +34,7 @@
 #include "mock/MockSchedulerCallback.h"
 
 #include <FrontEnd/LayerHierarchy.h>
+#include <scheduler/FrameTime.h>
 
 #include <com_android_graphics_surfaceflinger_flags.h>
 #include "FpsOps.h"
@@ -57,6 +58,11 @@ using LayerHierarchy = surfaceflinger::frontend::LayerHierarchy;
 using LayerHierarchyBuilder = surfaceflinger::frontend::LayerHierarchyBuilder;
 using RequestedLayerState = surfaceflinger::frontend::RequestedLayerState;
 
+class ZeroClock : public Clock {
+public:
+    nsecs_t now() const override { return 0; }
+};
+
 class SchedulerTest : public testing::Test {
 protected:
     class MockEventThreadConnection : public android::EventThreadConnection {
@@ -72,12 +78,17 @@ protected:
 
     SchedulerTest();
 
+    static constexpr RefreshRateSelector::LayerRequirement kLayer = {.weight = 1.f};
+
     static constexpr PhysicalDisplayId kDisplayId1 = PhysicalDisplayId::fromPort(255u);
     static inline const ftl::NonNull<DisplayModePtr> kDisplay1Mode60 =
             ftl::as_non_null(createDisplayMode(kDisplayId1, DisplayModeId(0), 60_Hz));
     static inline const ftl::NonNull<DisplayModePtr> kDisplay1Mode120 =
             ftl::as_non_null(createDisplayMode(kDisplayId1, DisplayModeId(1), 120_Hz));
     static inline const DisplayModes kDisplay1Modes = makeModes(kDisplay1Mode60, kDisplay1Mode120);
+
+    static inline FrameRateMode kDisplay1Mode60_60{60_Hz, kDisplay1Mode60};
+    static inline FrameRateMode kDisplay1Mode120_120{120_Hz, kDisplay1Mode120};
 
     static constexpr PhysicalDisplayId kDisplayId2 = PhysicalDisplayId::fromPort(254u);
     static inline const ftl::NonNull<DisplayModePtr> kDisplay2Mode60 =
@@ -113,10 +124,11 @@ SchedulerTest::SchedulerTest() {
 
     // createConnection call to scheduler makes a createEventConnection call to EventThread. Make
     // sure that call gets executed and returns an EventThread::Connection object.
-    EXPECT_CALL(*mEventThread, createEventConnection(_, _))
+    EXPECT_CALL(*mEventThread, createEventConnection(_))
             .WillRepeatedly(Return(mEventThreadConnection));
 
     mScheduler->setEventThread(Cycle::Render, std::move(eventThread));
+    mScheduler->setEventThread(Cycle::LastComposite, std::make_unique<MockEventThread>());
 
     mFlinger.resetScheduler(mScheduler);
 }
@@ -156,7 +168,17 @@ TEST_F(SchedulerTest, chooseRefreshRateForContentIsNoopWhenModeSwitchingIsNotSup
 
     // recordLayerHistory should be a noop
     ASSERT_EQ(0u, mScheduler->getNumActiveLayers());
-    mScheduler->recordLayerHistory(layer->getSequence(), layer->getLayerProps(), 0, 0,
+    scheduler::LayerProps layerProps = {
+            .visible = true,
+            .bounds = {0, 0, 100, 100},
+            .transform = {},
+            .setFrameRateVote = {},
+            .frameRateSelectionPriority = Layer::PRIORITY_UNSET,
+            .isSmallDirty = false,
+            .isFrontBuffered = false,
+    };
+
+    mScheduler->recordLayerHistory(layer->getSequence(), layerProps, 0, 0,
                                    LayerHistory::LayerUpdateType::Buffer);
     ASSERT_EQ(0u, mScheduler->getNumActiveLayers());
 
@@ -182,16 +204,53 @@ TEST_F(SchedulerTest, updateDisplayModes) {
                                                                       kDisplay1Mode60->getId()));
 
     ASSERT_EQ(0u, mScheduler->getNumActiveLayers());
-    mScheduler->recordLayerHistory(layer->getSequence(), layer->getLayerProps(), 0, 0,
+    scheduler::LayerProps layerProps = {
+            .visible = true,
+            .bounds = {0, 0, 100, 100},
+            .transform = {},
+            .setFrameRateVote = {},
+            .frameRateSelectionPriority = Layer::PRIORITY_UNSET,
+            .isSmallDirty = false,
+            .isFrontBuffered = false,
+    };
+    mScheduler->recordLayerHistory(layer->getSequence(), layerProps, 0, 0,
                                    LayerHistory::LayerUpdateType::Buffer);
     ASSERT_EQ(1u, mScheduler->getNumActiveLayers());
 }
 
-TEST_F(SchedulerTest, dispatchCachedReportedMode) {
-    mScheduler->clearCachedReportedMode();
+TEST_F(SchedulerTest, emitModeChangeEvent) {
+    const auto selectorPtr =
+            std::make_shared<RefreshRateSelector>(kDisplay1Modes, kDisplay1Mode120->getId());
+    mScheduler->registerDisplay(kDisplayId1, selectorPtr);
+    mScheduler->onDisplayModeChanged(kDisplayId1, kDisplay1Mode120_120);
 
+    mScheduler->setContentRequirements({kLayer});
+
+    // No event is emitted in response to idle.
     EXPECT_CALL(*mEventThread, onModeChanged(_)).Times(0);
-    EXPECT_NO_FATAL_FAILURE(mScheduler->dispatchCachedReportedMode());
+
+    using TimerState = TestableScheduler::TimerState;
+
+    mScheduler->idleTimerCallback(TimerState::Expired);
+    selectorPtr->setActiveMode(kDisplay1Mode60->getId(), 60_Hz);
+
+    auto layer = kLayer;
+    layer.vote = RefreshRateSelector::LayerVoteType::ExplicitExact;
+    layer.desiredRefreshRate = 60_Hz;
+    mScheduler->setContentRequirements({layer});
+
+    // An event is emitted implicitly despite choosing the same mode as when idle.
+    EXPECT_CALL(*mEventThread, onModeChanged(kDisplay1Mode60_60)).Times(1);
+
+    mScheduler->idleTimerCallback(TimerState::Reset);
+
+    mScheduler->setContentRequirements({kLayer});
+
+    // An event is emitted explicitly for the mode change.
+    EXPECT_CALL(*mEventThread, onModeChanged(kDisplay1Mode120_120)).Times(1);
+
+    mScheduler->touchTimerCallback(TimerState::Reset);
+    mScheduler->onDisplayModeChanged(kDisplayId1, kDisplay1Mode120_120);
 }
 
 TEST_F(SchedulerTest, calculateMaxAcquiredBufferCount) {
@@ -219,9 +278,16 @@ TEST_F(SchedulerTest, chooseRefreshRateForContentSelectsMaxRefreshRate) {
                                                                       kDisplay1Mode60->getId()));
 
     const sp<MockLayer> layer = sp<MockLayer>::make(mFlinger.flinger());
-    EXPECT_CALL(*layer, isVisible()).WillOnce(Return(true));
-
-    mScheduler->recordLayerHistory(layer->getSequence(), layer->getLayerProps(), 0, systemTime(),
+    scheduler::LayerProps layerProps = {
+            .visible = true,
+            .bounds = {0, 0, 0, 0},
+            .transform = {},
+            .setFrameRateVote = {},
+            .frameRateSelectionPriority = Layer::PRIORITY_UNSET,
+            .isSmallDirty = false,
+            .isFrontBuffered = false,
+    };
+    mScheduler->recordLayerHistory(layer->getSequence(), layerProps, 0, systemTime(),
                                    LayerHistory::LayerUpdateType::Buffer);
 
     constexpr hal::PowerMode kPowerModeOn = hal::PowerMode::ON;
@@ -240,14 +306,12 @@ TEST_F(SchedulerTest, chooseRefreshRateForContentSelectsMaxRefreshRate) {
                                             /*updateAttachedChoreographer*/ false);
 }
 
-TEST_F(SchedulerTest, chooseDisplayModesSingleDisplay) {
+TEST_F(SchedulerTest, chooseDisplayModes) {
     mScheduler->registerDisplay(kDisplayId1,
                                 std::make_shared<RefreshRateSelector>(kDisplay1Modes,
                                                                       kDisplay1Mode60->getId()));
 
-    std::vector<RefreshRateSelector::LayerRequirement> layers =
-            std::vector<RefreshRateSelector::LayerRequirement>({{.weight = 1.f}, {.weight = 1.f}});
-    mScheduler->setContentRequirements(layers);
+    mScheduler->setContentRequirements({kLayer, kLayer});
     GlobalSignals globalSignals = {.idle = true};
     mScheduler->setTouchStateAndIdleTimerPolicy(globalSignals);
 
@@ -282,15 +346,14 @@ TEST_F(SchedulerTest, chooseDisplayModesSingleDisplay) {
     EXPECT_EQ(choice->get(), DisplayModeChoice({120_Hz, kDisplay1Mode120}, globalSignals));
 }
 
-TEST_F(SchedulerTest, chooseDisplayModesSingleDisplayHighHintTouchSignal) {
+TEST_F(SchedulerTest, chooseDisplayModesHighHintTouchSignal) {
     mScheduler->registerDisplay(kDisplayId1,
                                 std::make_shared<RefreshRateSelector>(kDisplay1Modes,
                                                                       kDisplay1Mode60->getId()));
 
     using DisplayModeChoice = TestableScheduler::DisplayModeChoice;
 
-    std::vector<RefreshRateSelector::LayerRequirement> layers =
-            std::vector<RefreshRateSelector::LayerRequirement>({{.weight = 1.f}, {.weight = 1.f}});
+    std::vector<RefreshRateSelector::LayerRequirement> layers = {kLayer, kLayer};
     auto& lr1 = layers[0];
     auto& lr2 = layers[1];
 
@@ -338,12 +401,18 @@ TEST_F(SchedulerTest, chooseDisplayModesSingleDisplayHighHintTouchSignal) {
 }
 
 TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
+    constexpr PhysicalDisplayId kActiveDisplayId = kDisplayId1;
     mScheduler->registerDisplay(kDisplayId1,
                                 std::make_shared<RefreshRateSelector>(kDisplay1Modes,
-                                                                      kDisplay1Mode60->getId()));
+                                                                      kDisplay1Mode60->getId()),
+                                kActiveDisplayId);
     mScheduler->registerDisplay(kDisplayId2,
                                 std::make_shared<RefreshRateSelector>(kDisplay2Modes,
-                                                                      kDisplay2Mode60->getId()));
+                                                                      kDisplay2Mode60->getId()),
+                                kActiveDisplayId);
+
+    mScheduler->setDisplayPowerMode(kDisplayId1, hal::PowerMode::ON);
+    mScheduler->setDisplayPowerMode(kDisplayId2, hal::PowerMode::ON);
 
     using DisplayModeChoice = TestableScheduler::DisplayModeChoice;
     TestableScheduler::DisplayModeChoiceMap expectedChoices;
@@ -357,11 +426,9 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
                                                   globalSignals)(kDisplayId2,
                                                                  FrameRateMode{60_Hz,
                                                                                kDisplay2Mode60},
-                                                                 globalSignals);
+                                                                 GlobalSignals{});
 
-        std::vector<RefreshRateSelector::LayerRequirement> layers = {{.weight = 1.f},
-                                                                     {.weight = 1.f}};
-        mScheduler->setContentRequirements(layers);
+        mScheduler->setContentRequirements({kLayer, kLayer});
         mScheduler->setTouchStateAndIdleTimerPolicy(globalSignals);
 
         const auto actualChoices = mScheduler->chooseDisplayModes();
@@ -376,7 +443,7 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
                                                   globalSignals)(kDisplayId2,
                                                                  FrameRateMode{120_Hz,
                                                                                kDisplay2Mode120},
-                                                                 globalSignals);
+                                                                 GlobalSignals{});
 
         mScheduler->setTouchStateAndIdleTimerPolicy(globalSignals);
 
@@ -395,7 +462,7 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
                                                   globalSignals)(kDisplayId2,
                                                                  FrameRateMode{120_Hz,
                                                                                kDisplay2Mode120},
-                                                                 globalSignals);
+                                                                 GlobalSignals{});
 
         const auto actualChoices = mScheduler->chooseDisplayModes();
         EXPECT_EQ(expectedChoices, actualChoices);
@@ -403,10 +470,11 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
     {
         // The kDisplayId3 does not support 120Hz, The pacesetter display rate is chosen to be 120
         // Hz. In this case only the display kDisplayId3 choose 60Hz as it does not support 120Hz.
-        mScheduler
-                ->registerDisplay(kDisplayId3,
-                                  std::make_shared<RefreshRateSelector>(kDisplay3Modes,
-                                                                        kDisplay3Mode60->getId()));
+        mScheduler->registerDisplay(kDisplayId3,
+                                    std::make_shared<RefreshRateSelector>(kDisplay3Modes,
+                                                                          kDisplay3Mode60->getId()),
+                                    kActiveDisplayId);
+        mScheduler->setDisplayPowerMode(kDisplayId3, hal::PowerMode::ON);
 
         const GlobalSignals globalSignals = {.touch = true};
         mScheduler->replaceTouchTimer(10);
@@ -417,10 +485,10 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
                 DisplayModeChoice>(kDisplayId1, FrameRateMode{120_Hz, kDisplay1Mode120},
                                    globalSignals)(kDisplayId2,
                                                   FrameRateMode{120_Hz, kDisplay2Mode120},
-                                                  globalSignals)(kDisplayId3,
-                                                                 FrameRateMode{60_Hz,
-                                                                               kDisplay3Mode60},
-                                                                 globalSignals);
+                                                  GlobalSignals{})(kDisplayId3,
+                                                                   FrameRateMode{60_Hz,
+                                                                                 kDisplay3Mode60},
+                                                                   GlobalSignals{});
 
         const auto actualChoices = mScheduler->chooseDisplayModes();
         EXPECT_EQ(expectedChoices, actualChoices);
@@ -435,12 +503,12 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
         expectedChoices = ftl::init::map<
                 const PhysicalDisplayId&,
                 DisplayModeChoice>(kDisplayId1, FrameRateMode{60_Hz, kDisplay1Mode60},
-                                   globalSignals)(kDisplayId2,
-                                                  FrameRateMode{60_Hz, kDisplay2Mode60},
-                                                  globalSignals)(kDisplayId3,
-                                                                 FrameRateMode{60_Hz,
-                                                                               kDisplay3Mode60},
-                                                                 globalSignals);
+                                   GlobalSignals{})(kDisplayId2,
+                                                    FrameRateMode{60_Hz, kDisplay2Mode60},
+                                                    GlobalSignals{})(kDisplayId3,
+                                                                     FrameRateMode{60_Hz,
+                                                                                   kDisplay3Mode60},
+                                                                     globalSignals);
 
         const auto actualChoices = mScheduler->chooseDisplayModes();
         EXPECT_EQ(expectedChoices, actualChoices);
@@ -448,12 +516,15 @@ TEST_F(SchedulerTest, chooseDisplayModesMultipleDisplays) {
 }
 
 TEST_F(SchedulerTest, onFrameSignalMultipleDisplays) {
+    constexpr PhysicalDisplayId kActiveDisplayId = kDisplayId1;
     mScheduler->registerDisplay(kDisplayId1,
                                 std::make_shared<RefreshRateSelector>(kDisplay1Modes,
-                                                                      kDisplay1Mode60->getId()));
+                                                                      kDisplay1Mode60->getId()),
+                                kActiveDisplayId);
     mScheduler->registerDisplay(kDisplayId2,
                                 std::make_shared<RefreshRateSelector>(kDisplay2Modes,
-                                                                      kDisplay2Mode60->getId()));
+                                                                      kDisplay2Mode60->getId()),
+                                kActiveDisplayId);
 
     using VsyncIds = std::vector<std::pair<PhysicalDisplayId, VsyncId>>;
 
@@ -564,7 +635,7 @@ TEST_F(SchedulerTest, nextFrameIntervalTest) {
                                  hal::VrrConfig{.minFrameIntervalNs = static_cast<int32_t>(
                                                         frameRate.getPeriodNsecs())}));
     std::shared_ptr<VSyncPredictor> vrrTracker =
-            std::make_shared<VSyncPredictor>(std::make_unique<SystemClock>(), kMode, kHistorySize,
+            std::make_shared<VSyncPredictor>(std::make_unique<ZeroClock>(), kMode, kHistorySize,
                                              kMinimumSamplesForPrediction,
                                              kOutlierTolerancePercent);
     std::shared_ptr<RefreshRateSelector> vrrSelectorPtr =
@@ -576,9 +647,10 @@ TEST_F(SchedulerTest, nextFrameIntervalTest) {
                                 mFlinger.getTimeStats(),
                                 mSchedulerCallback};
 
-    scheduler.registerDisplay(kMode->getPhysicalDisplayId(), vrrSelectorPtr, vrrTracker);
+    scheduler.registerDisplay(kMode->getPhysicalDisplayId(), vrrSelectorPtr, std::nullopt,
+                              vrrTracker);
     vrrSelectorPtr->setActiveMode(kMode->getId(), frameRate);
-    scheduler.setRenderRate(kMode->getPhysicalDisplayId(), frameRate);
+    scheduler.setRenderRate(kMode->getPhysicalDisplayId(), frameRate, /*applyImmediately*/ false);
     vrrTracker->addVsyncTimestamp(0);
     // Set 1000 as vsync seq #0
     vrrTracker->nextAnticipatedVSyncTimeFrom(700);
@@ -591,23 +663,22 @@ TEST_F(SchedulerTest, nextFrameIntervalTest) {
                                              TimePoint::fromNs(2000)));
 
     // Not crossing the min frame period
+    vrrTracker->onFrameBegin(TimePoint::fromNs(2000),
+                             {TimePoint::fromNs(1500), TimePoint::fromNs(1500)});
     EXPECT_EQ(Fps::fromPeriodNsecs(1000),
               scheduler.getNextFrameInterval(kMode->getPhysicalDisplayId(),
                                              TimePoint::fromNs(2500)));
     // Change render rate
     frameRate = Fps::fromPeriodNsecs(2000);
     vrrSelectorPtr->setActiveMode(kMode->getId(), frameRate);
-    scheduler.setRenderRate(kMode->getPhysicalDisplayId(), frameRate);
-
-    // Set 2000 as vsync seq #0
-    vrrTracker->nextAnticipatedVSyncTimeFrom(1700);
+    scheduler.setRenderRate(kMode->getPhysicalDisplayId(), frameRate, /*applyImmediately*/ false);
 
     EXPECT_EQ(Fps::fromPeriodNsecs(2000),
               scheduler.getNextFrameInterval(kMode->getPhysicalDisplayId(),
-                                             TimePoint::fromNs(2000)));
+                                             TimePoint::fromNs(5500)));
     EXPECT_EQ(Fps::fromPeriodNsecs(2000),
               scheduler.getNextFrameInterval(kMode->getPhysicalDisplayId(),
-                                             TimePoint::fromNs(4000)));
+                                             TimePoint::fromNs(7500)));
 }
 
 TEST_F(SchedulerTest, resyncAllToHardwareVsync) FTL_FAKE_GUARD(kMainThreadContext) {
@@ -726,7 +797,7 @@ TEST_F(AttachedChoreographerTest, registerMultipleOnSameLayer) {
 
     const auto mockConnection1 = sp<MockEventThreadConnection>::make(mEventThread);
     const auto mockConnection2 = sp<MockEventThreadConnection>::make(mEventThread);
-    EXPECT_CALL(*mEventThread, createEventConnection(_, _))
+    EXPECT_CALL(*mEventThread, createEventConnection(_))
             .WillOnce(Return(mockConnection1))
             .WillOnce(Return(mockConnection2));
 
@@ -813,7 +884,6 @@ TEST_F(AttachedChoreographerTest, removedWhenLayerIsGone) {
             mScheduler->createDisplayEventConnection(Cycle::Render, {}, layer->getHandle());
 
     layer.clear();
-    mFlinger.mutableLayersPendingRemoval().clear();
     EXPECT_TRUE(mScheduler->mutableAttachedChoreographers().empty());
 }
 

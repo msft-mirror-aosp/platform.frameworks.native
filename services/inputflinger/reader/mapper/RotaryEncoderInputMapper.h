@@ -39,7 +39,7 @@ public:
                                                     const InputReaderConfiguration& config,
                                                     ConfigurationChanges changes) override;
     [[nodiscard]] std::list<NotifyArgs> reset(nsecs_t when) override;
-    [[nodiscard]] std::list<NotifyArgs> process(const RawEvent* rawEvent) override;
+    [[nodiscard]] std::list<NotifyArgs> process(const RawEvent& rawEvent) override;
 
 private:
     CursorScrollAccumulator mRotaryEncoderScrollAccumulator;
@@ -47,6 +47,7 @@ private:
     int32_t mSource;
     float mScalingFactor;
     ui::Rotation mOrientation;
+    ui::LogicalDisplayId mDisplayId = ui::LogicalDisplayId::INVALID;
     std::unique_ptr<SlopController> mSlopController;
 
     explicit RotaryEncoderInputMapper(InputDeviceContext& deviceContext,

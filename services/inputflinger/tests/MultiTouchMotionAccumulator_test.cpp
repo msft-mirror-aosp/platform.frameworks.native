@@ -23,10 +23,7 @@ class MultiTouchMotionAccumulatorTest : public InputMapperUnitTest {
 protected:
     static constexpr size_t SLOT_COUNT = 8;
 
-    void SetUp() override {
-        InputMapperUnitTest::SetUp();
-        createDevice();
-    }
+    void SetUp() override { InputMapperUnitTest::SetUp(); }
 
     MultiTouchMotionAccumulator mMotionAccumulator;
 
@@ -38,7 +35,7 @@ protected:
         event.type = type;
         event.code = code;
         event.value = value;
-        mMotionAccumulator.process(&event);
+        mMotionAccumulator.process(event);
     }
 };
 

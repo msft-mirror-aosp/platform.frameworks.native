@@ -46,6 +46,7 @@
 #include "android/binder_ibinder.h"
 
 using namespace android;
+using namespace std::chrono_literals;
 
 constexpr char kExistingNonNdkService[] = "SurfaceFlinger";
 constexpr char kBinderNdkUnitTestService[] = "BinderNdkUnitTest";
@@ -54,7 +55,7 @@ constexpr char kForcePersistNdkUnitTestService[] = "ForcePersistNdkUnitTestServi
 constexpr char kActiveServicesNdkUnitTestService[] = "ActiveServicesNdkUnitTestService";
 constexpr char kBinderNdkUnitTestServiceFlagged[] = "BinderNdkUnitTestFlagged";
 
-constexpr unsigned int kShutdownWaitTime = 11;
+constexpr auto kShutdownWaitTime = 30s;
 constexpr uint64_t kContextTestValue = 0xb4e42fb4d9a1d715;
 
 class MyTestFoo : public IFoo {
@@ -253,12 +254,22 @@ int lazyService(const char* instance) {
 }
 
 bool isServiceRunning(const char* serviceName) {
-    AIBinder* binder = AServiceManager_checkService(serviceName);
-    if (binder == nullptr) {
-        return false;
+    static const sp<android::IServiceManager> sm(android::defaultServiceManager());
+    const Vector<String16> services = sm->listServices();
+    for (const auto service : services) {
+        if (service == String16(serviceName)) return true;
     }
-    AIBinder_decStrong(binder);
+    return false;
+}
 
+bool isServiceShutdownWithWait(const char* serviceName) {
+    LOG(INFO) << "About to check and wait for shutdown of " << std::string(serviceName);
+    const auto before = std::chrono::steady_clock::now();
+    while (isServiceRunning(serviceName)) {
+        sleep(1);
+        const auto after = std::chrono::steady_clock::now();
+        if (after - before >= kShutdownWaitTime) return false;
+    }
     return true;
 }
 
@@ -450,8 +461,8 @@ TEST(NdkBinder, CheckLazyServiceShutDown) {
     service = nullptr;
     IPCThreadState::self()->flushCommands();
     // Make sure the service is dead after some time of no use
-    sleep(kShutdownWaitTime);
-    ASSERT_EQ(nullptr, AServiceManager_checkService(kLazyBinderNdkUnitTestService));
+    ASSERT_TRUE(isServiceShutdownWithWait(kLazyBinderNdkUnitTestService))
+            << "Service failed to shut down";
 }
 
 TEST(NdkBinder, ForcedPersistenceTest) {
@@ -466,14 +477,12 @@ TEST(NdkBinder, ForcedPersistenceTest) {
         service = nullptr;
         IPCThreadState::self()->flushCommands();
 
-        sleep(kShutdownWaitTime);
-
-        bool isRunning = isServiceRunning(kForcePersistNdkUnitTestService);
-
         if (i == 0) {
-            ASSERT_TRUE(isRunning) << "Service shut down when it shouldn't have.";
+            ASSERT_TRUE(isServiceRunning(kForcePersistNdkUnitTestService))
+                    << "Service shut down when it shouldn't have.";
         } else {
-            ASSERT_FALSE(isRunning) << "Service failed to shut down.";
+            ASSERT_TRUE(isServiceShutdownWithWait(kForcePersistNdkUnitTestService))
+                    << "Service failed to shut down";
         }
     }
 }
@@ -491,10 +500,7 @@ TEST(NdkBinder, ActiveServicesCallbackTest) {
     service = nullptr;
     IPCThreadState::self()->flushCommands();
 
-    LOG(INFO) << "ActiveServicesCallbackTest about to sleep";
-    sleep(kShutdownWaitTime);
-
-    ASSERT_FALSE(isServiceRunning(kActiveServicesNdkUnitTestService))
+    ASSERT_TRUE(isServiceShutdownWithWait(kActiveServicesNdkUnitTestService))
             << "Service failed to shut down.";
 }
 
@@ -536,6 +542,7 @@ TEST(NdkBinder, DeathRecipient) {
     bool deathReceived = false;
 
     std::function<void(void)> onDeath = [&] {
+        std::unique_lock<std::mutex> lockDeath(deathMutex);
         std::cerr << "Binder died (as requested)." << std::endl;
         deathReceived = true;
         deathCv.notify_one();
@@ -547,6 +554,7 @@ TEST(NdkBinder, DeathRecipient) {
     bool wasDeathReceivedFirst = false;
 
     std::function<void(void)> onUnlink = [&] {
+        std::unique_lock<std::mutex> lockUnlink(unlinkMutex);
         std::cerr << "Binder unlinked (as requested)." << std::endl;
         wasDeathReceivedFirst = deathReceived;
         unlinkReceived = true;
@@ -560,7 +568,6 @@ TEST(NdkBinder, DeathRecipient) {
 
     EXPECT_EQ(STATUS_OK, AIBinder_linkToDeath(binder, recipient, static_cast<void*>(cookie)));
 
-    // the binder driver should return this if the service dies during the transaction
     EXPECT_EQ(STATUS_DEAD_OBJECT, foo->die());
 
     foo = nullptr;
@@ -577,6 +584,173 @@ TEST(NdkBinder, DeathRecipient) {
     AIBinder_DeathRecipient_delete(recipient);
     AIBinder_decStrong(binder);
     binder = nullptr;
+}
+
+TEST(NdkBinder, DeathRecipientDropBinderNoDeath) {
+    using namespace std::chrono_literals;
+
+    std::mutex deathMutex;
+    std::condition_variable deathCv;
+    bool deathReceived = false;
+
+    std::function<void(void)> onDeath = [&] {
+        std::unique_lock<std::mutex> lockDeath(deathMutex);
+        std::cerr << "Binder died (as requested)." << std::endl;
+        deathReceived = true;
+        deathCv.notify_one();
+    };
+
+    std::mutex unlinkMutex;
+    std::condition_variable unlinkCv;
+    bool unlinkReceived = false;
+    bool wasDeathReceivedFirst = false;
+
+    std::function<void(void)> onUnlink = [&] {
+        std::unique_lock<std::mutex> lockUnlink(unlinkMutex);
+        std::cerr << "Binder unlinked (as requested)." << std::endl;
+        wasDeathReceivedFirst = deathReceived;
+        unlinkReceived = true;
+        unlinkCv.notify_one();
+    };
+
+    // keep the death recipient around
+    ndk::ScopedAIBinder_DeathRecipient recipient(AIBinder_DeathRecipient_new(LambdaOnDeath));
+    AIBinder_DeathRecipient_setOnUnlinked(recipient.get(), LambdaOnUnlink);
+
+    {
+        AIBinder* binder;
+        sp<IFoo> foo = IFoo::getService(IFoo::kInstanceNameToDieFor2, &binder);
+        ASSERT_NE(nullptr, foo.get());
+        ASSERT_NE(nullptr, binder);
+
+        DeathRecipientCookie* cookie = new DeathRecipientCookie{&onDeath, &onUnlink};
+
+        EXPECT_EQ(STATUS_OK,
+                  AIBinder_linkToDeath(binder, recipient.get(), static_cast<void*>(cookie)));
+        // let the sp<IFoo> and AIBinder fall out of scope
+        AIBinder_decStrong(binder);
+        binder = nullptr;
+    }
+
+    {
+        std::unique_lock<std::mutex> lockDeath(deathMutex);
+        EXPECT_FALSE(deathCv.wait_for(lockDeath, 100ms, [&] { return deathReceived; }));
+        EXPECT_FALSE(deathReceived);
+    }
+
+    {
+        std::unique_lock<std::mutex> lockUnlink(unlinkMutex);
+        EXPECT_TRUE(deathCv.wait_for(lockUnlink, 1s, [&] { return unlinkReceived; }));
+        EXPECT_TRUE(unlinkReceived);
+        EXPECT_FALSE(wasDeathReceivedFirst);
+    }
+}
+
+TEST(NdkBinder, DeathRecipientDropBinderOnDied) {
+    using namespace std::chrono_literals;
+
+    std::mutex deathMutex;
+    std::condition_variable deathCv;
+    bool deathReceived = false;
+
+    sp<IFoo> foo;
+    AIBinder* binder;
+    std::function<void(void)> onDeath = [&] {
+        std::unique_lock<std::mutex> lockDeath(deathMutex);
+        std::cerr << "Binder died (as requested)." << std::endl;
+        deathReceived = true;
+        AIBinder_decStrong(binder);
+        binder = nullptr;
+        deathCv.notify_one();
+    };
+
+    std::mutex unlinkMutex;
+    std::condition_variable unlinkCv;
+    bool unlinkReceived = false;
+    bool wasDeathReceivedFirst = false;
+
+    std::function<void(void)> onUnlink = [&] {
+        std::unique_lock<std::mutex> lockUnlink(unlinkMutex);
+        std::cerr << "Binder unlinked (as requested)." << std::endl;
+        wasDeathReceivedFirst = deathReceived;
+        unlinkReceived = true;
+        unlinkCv.notify_one();
+    };
+
+    ndk::ScopedAIBinder_DeathRecipient recipient(AIBinder_DeathRecipient_new(LambdaOnDeath));
+    AIBinder_DeathRecipient_setOnUnlinked(recipient.get(), LambdaOnUnlink);
+
+    foo = IFoo::getService(IFoo::kInstanceNameToDieFor2, &binder);
+    ASSERT_NE(nullptr, foo.get());
+    ASSERT_NE(nullptr, binder);
+
+    DeathRecipientCookie* cookie = new DeathRecipientCookie{&onDeath, &onUnlink};
+    EXPECT_EQ(STATUS_OK, AIBinder_linkToDeath(binder, recipient.get(), static_cast<void*>(cookie)));
+
+    EXPECT_EQ(STATUS_DEAD_OBJECT, foo->die());
+
+    {
+        std::unique_lock<std::mutex> lockDeath(deathMutex);
+        EXPECT_TRUE(deathCv.wait_for(lockDeath, 1s, [&] { return deathReceived; }));
+        EXPECT_TRUE(deathReceived);
+    }
+
+    {
+        std::unique_lock<std::mutex> lockUnlink(unlinkMutex);
+        EXPECT_TRUE(deathCv.wait_for(lockUnlink, 100ms, [&] { return unlinkReceived; }));
+        EXPECT_TRUE(unlinkReceived);
+        EXPECT_TRUE(wasDeathReceivedFirst);
+    }
+}
+
+void LambdaOnUnlinkMultiple(void* cookie) {
+    auto funcs = static_cast<DeathRecipientCookie*>(cookie);
+    (*funcs->onUnlink)();
+}
+
+TEST(NdkBinder, DeathRecipientMultipleLinks) {
+    using namespace std::chrono_literals;
+
+    ndk::SpAIBinder binder;
+    sp<IFoo> foo = IFoo::getService(IFoo::kSomeInstanceName, binder.getR());
+    ASSERT_NE(nullptr, foo.get());
+    ASSERT_NE(nullptr, binder);
+
+    std::function<void(void)> onDeath = [&] {};
+
+    std::mutex unlinkMutex;
+    std::condition_variable unlinkCv;
+    bool unlinkReceived = false;
+    constexpr uint32_t kNumberOfLinksToDeath = 4;
+    uint32_t countdown = kNumberOfLinksToDeath;
+
+    std::function<void(void)> onUnlink = [&] {
+        std::unique_lock<std::mutex> lockUnlink(unlinkMutex);
+        countdown--;
+        if (countdown == 0) {
+            unlinkReceived = true;
+            unlinkCv.notify_one();
+        }
+    };
+
+    DeathRecipientCookie* cookie = new DeathRecipientCookie{&onDeath, &onUnlink};
+
+    ndk::ScopedAIBinder_DeathRecipient recipient(AIBinder_DeathRecipient_new(LambdaOnDeath));
+    AIBinder_DeathRecipient_setOnUnlinked(recipient.get(), LambdaOnUnlinkMultiple);
+
+    for (uint32_t i = 0; i < kNumberOfLinksToDeath; i++) {
+        EXPECT_EQ(STATUS_OK,
+                  AIBinder_linkToDeath(binder.get(), recipient.get(), static_cast<void*>(cookie)));
+    }
+
+    foo = nullptr;
+    binder = nullptr;
+
+    std::unique_lock<std::mutex> lockUnlink(unlinkMutex);
+    EXPECT_TRUE(unlinkCv.wait_for(lockUnlink, 5s, [&] { return unlinkReceived; }))
+            << "countdown: " << countdown;
+    EXPECT_TRUE(unlinkReceived);
+    EXPECT_EQ(countdown, 0u);
 }
 
 TEST(NdkBinder, RetrieveNonNdkService) {
@@ -934,12 +1108,47 @@ TEST(NdkBinder_ScopedAResource, Release) {
     EXPECT_EQ(deleteCount, 0);
 }
 
+void* EmptyOnCreate(void* args) {
+    return args;
+}
+void EmptyOnDestroy(void* /*userData*/) {}
+binder_status_t EmptyOnTransact(AIBinder* /*binder*/, transaction_code_t /*code*/,
+                                const AParcel* /*in*/, AParcel* /*out*/) {
+    return STATUS_OK;
+}
+
+TEST(NdkBinder_DeathTest, SetCodeMapTwice) {
+    const char* codeToFunction1[] = {"function-1", "function-2", "function-3"};
+    const char* codeToFunction2[] = {"function-4", "function-5"};
+    const char* interfaceName = "interface_descriptor";
+    AIBinder_Class* clazz =
+            AIBinder_Class_define(interfaceName, EmptyOnCreate, EmptyOnDestroy, EmptyOnTransact);
+    AIBinder_Class_setTransactionCodeToFunctionNameMap(clazz, codeToFunction1, 3);
+    // Reset/clear is not allowed
+    EXPECT_DEATH(AIBinder_Class_setTransactionCodeToFunctionNameMap(clazz, codeToFunction2, 2), "");
+}
+
+TEST(NdkBinder_DeathTest, SetNullCodeMap) {
+    const char* codeToFunction[] = {"function-1", "function-2", "function-3"};
+    const char* interfaceName = "interface_descriptor";
+    AIBinder_Class* clazz =
+            AIBinder_Class_define(interfaceName, EmptyOnCreate, EmptyOnDestroy, EmptyOnTransact);
+    EXPECT_DEATH(AIBinder_Class_setTransactionCodeToFunctionNameMap(nullptr, codeToFunction, 3),
+                 "");
+    EXPECT_DEATH(AIBinder_Class_setTransactionCodeToFunctionNameMap(clazz, nullptr, 0), "");
+    EXPECT_DEATH(AIBinder_Class_setTransactionCodeToFunctionNameMap(nullptr, nullptr, 0), "");
+}
+
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
 
     if (fork() == 0) {
         prctl(PR_SET_PDEATHSIG, SIGHUP);
         return manualThreadPoolService(IFoo::kInstanceNameToDieFor);
+    }
+    if (fork() == 0) {
+        prctl(PR_SET_PDEATHSIG, SIGHUP);
+        return manualThreadPoolService(IFoo::kInstanceNameToDieFor2);
     }
     if (fork() == 0) {
         prctl(PR_SET_PDEATHSIG, SIGHUP);

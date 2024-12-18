@@ -42,8 +42,8 @@ import android.gui.ISurfaceComposerClient;
 import android.gui.ITunnelModeEnabledListener;
 import android.gui.IWindowInfosListener;
 import android.gui.IWindowInfosPublisher;
+import android.gui.IJankListener;
 import android.gui.LayerCaptureArgs;
-import android.gui.LayerDebugInfo;
 import android.gui.OverlayProperties;
 import android.gui.PullAtomData;
 import android.gui.ScreenCaptureResults;
@@ -73,7 +73,7 @@ interface ISurfaceComposer {
     void bootFinished();
 
     /**
-     * Create a display event connection
+     * Create a display event connection.
      *
      * layerHandle
      *     Optional binder handle representing a Layer in SF to associate the new
@@ -90,12 +90,14 @@ interface ISurfaceComposer {
     @nullable ISurfaceComposerClient createConnection();
 
     /**
-     * Create a virtual display
+     * Create a virtual display.
      *
      * displayName
-     *     The name of the virtual display
-     * secure
-     *     Whether this virtual display is secure
+     *     The name of the virtual display.
+     * isSecure
+     *     Whether this virtual display is secure.
+     * uniqueId
+     *     The unique ID for the display.
      * requestedRefreshRate
      *     The refresh rate, frames per second, to request on the virtual display.
      *     This is just a request, the actual rate may be adjusted to align well
@@ -104,14 +106,14 @@ interface ISurfaceComposer {
      *
      * requires ACCESS_SURFACE_FLINGER permission.
      */
-    @nullable IBinder createDisplay(@utf8InCpp String displayName, boolean secure,
-            float requestedRefreshRate);
+    @nullable IBinder createVirtualDisplay(@utf8InCpp String displayName, boolean isSecure,
+            @utf8InCpp String uniqueId, float requestedRefreshRate);
 
     /**
-     * Destroy a virtual display
+     * Destroy a virtual display.
      * requires ACCESS_SURFACE_FLINGER permission.
      */
-    void destroyDisplay(IBinder display);
+    void destroyVirtualDisplay(IBinder displayToken);
 
     /**
      * Get stable IDs for connected physical displays.
@@ -287,13 +289,6 @@ interface ISurfaceComposer {
      * Requires the calling uid be from system server.
      */
     PullAtomData onPullAtom(int atomId);
-
-    /**
-     * Gets the list of active layers in Z order for debugging purposes
-     *
-     * Requires the ACCESS_SURFACE_FLINGER permission.
-     */
-    List<LayerDebugInfo> getLayerDebugInfo();
 
     /**
      * Gets the composition preference of the default data space and default pixel format,
@@ -579,4 +574,29 @@ interface ISurfaceComposer {
     @nullable StalledTransactionInfo getStalledTransactionInfo(int pid);
 
     SchedulingPolicy getSchedulingPolicy();
+
+    /**
+     * Notifies the SurfaceFlinger that the ShutdownThread is running. When it is called,
+     * transaction traces will be captured and writted into a file.
+     * This method should not block the ShutdownThread therefore it's handled asynchronously.
+     */
+    oneway void notifyShutdown();
+
+    /**
+     * Registers the jank listener on the given layer to receive jank data of future frames.
+     */
+    void addJankListener(IBinder layer, IJankListener listener);
+
+    /**
+     * Flushes any pending jank data on the given layer to any registered listeners on that layer.
+     */
+    oneway void flushJankData(int layerId);
+
+    /**
+     * Schedules the removal of the jank listener from the given layer after the VSync with the
+     * specified ID. Use a value <= 0 for afterVsync to remove the listener immediately. The given
+     * listener will not be removed before the given VSync, but may still receive data for frames
+     * past the provided VSync.
+     */
+    oneway void removeJankListener(int layerId, IJankListener listener, long afterVsync);
 }

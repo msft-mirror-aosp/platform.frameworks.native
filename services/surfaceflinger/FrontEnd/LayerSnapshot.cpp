@@ -127,9 +127,8 @@ LayerSnapshot::LayerSnapshot(const RequestedLayerState& state,
     pid = state.ownerPid;
     changes = RequestedLayerState::Changes::Created;
     clientChanges = 0;
-    mirrorRootPath = path.variant == LayerHierarchy::Variant::Mirror
-            ? path
-            : LayerHierarchy::TraversalPath::ROOT;
+    mirrorRootPath =
+            LayerHierarchy::isMirror(path.variant) ? path : LayerHierarchy::TraversalPath::ROOT;
     reachablilty = LayerSnapshot::Reachablilty::Unreachable;
     frameRateSelectionPriority = state.frameRateSelectionPriority;
     layerMetadata = state.metadata;
@@ -323,6 +322,10 @@ std::ostream& operator<<(std::ostream& out, const LayerSnapshot& obj) {
             << touchableRegion.bottom << "," << touchableRegion.right << "}"
             << "}";
     }
+
+    if (obj.edgeExtensionEffect.hasEffect()) {
+        out << obj.edgeExtensionEffect;
+    }
     return out;
 }
 
@@ -472,13 +475,14 @@ void LayerSnapshot::merge(const RequestedLayerState& requested, bool forceUpdate
         geomContentCrop = requested.getBufferCrop();
     }
 
-    if (forceUpdate ||
-        requested.what &
-                (layer_state_t::eFlagsChanged | layer_state_t::eDestinationFrameChanged |
-                 layer_state_t::ePositionChanged | layer_state_t::eMatrixChanged |
-                 layer_state_t::eBufferTransformChanged |
-                 layer_state_t::eTransformToDisplayInverseChanged) ||
-        requested.changes.test(RequestedLayerState::Changes::BufferSize) || displayChanges) {
+    if ((forceUpdate ||
+         requested.what &
+                 (layer_state_t::eFlagsChanged | layer_state_t::eDestinationFrameChanged |
+                  layer_state_t::ePositionChanged | layer_state_t::eMatrixChanged |
+                  layer_state_t::eBufferTransformChanged |
+                  layer_state_t::eTransformToDisplayInverseChanged) ||
+         requested.changes.test(RequestedLayerState::Changes::BufferSize) || displayChanges) &&
+        !ignoreLocalTransform) {
         localTransform = requested.getTransform(displayRotationFlags);
         localTransformInverse = localTransform.inverse();
     }
@@ -492,8 +496,10 @@ void LayerSnapshot::merge(const RequestedLayerState& requested, bool forceUpdate
         requested.what &
                 (layer_state_t::eBufferChanged | layer_state_t::eDataspaceChanged |
                  layer_state_t::eApiChanged | layer_state_t::eShadowRadiusChanged |
-                 layer_state_t::eBlurRegionsChanged | layer_state_t::eStretchChanged)) {
-        forceClientComposition = shadowSettings.length > 0 || stretchEffect.hasEffect();
+                 layer_state_t::eBlurRegionsChanged | layer_state_t::eStretchChanged |
+                 layer_state_t::eEdgeExtensionChanged)) {
+        forceClientComposition = shadowSettings.length > 0 || stretchEffect.hasEffect() ||
+                edgeExtensionEffect.hasEffect();
     }
 
     if (forceUpdate ||

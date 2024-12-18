@@ -16,7 +16,7 @@
 
 #define LOG_TAG "VibratorHalControllerTest"
 
-#include <android/hardware/vibrator/IVibrator.h>
+#include <aidl/android/hardware/vibrator/IVibrator.h>
 #include <cutils/atomic.h>
 
 #include <gmock/gmock.h>
@@ -29,10 +29,11 @@
 #include <vibratorservice/VibratorHalController.h>
 #include <vibratorservice/VibratorHalWrapper.h>
 
+#include "test_mocks.h"
 #include "test_utils.h"
 
-using android::hardware::vibrator::Effect;
-using android::hardware::vibrator::EffectStrength;
+using aidl::android::hardware::vibrator::Effect;
+using aidl::android::hardware::vibrator::EffectStrength;
 
 using std::chrono::milliseconds;
 
@@ -46,41 +47,12 @@ static const auto PING_FN = [](vibrator::HalWrapper* hal) { return hal->ping(); 
 
 // -------------------------------------------------------------------------------------------------
 
-class MockHalWrapper : public vibrator::HalWrapper {
-public:
-    MockHalWrapper(std::shared_ptr<vibrator::CallbackScheduler> scheduler)
-          : HalWrapper(scheduler) {}
-    virtual ~MockHalWrapper() = default;
-
-    MOCK_METHOD(vibrator::HalResult<void>, ping, (), (override));
-    MOCK_METHOD(void, tryReconnect, (), (override));
-    MOCK_METHOD(vibrator::HalResult<void>, on,
-                (milliseconds timeout, const std::function<void()>& completionCallback),
-                (override));
-    MOCK_METHOD(vibrator::HalResult<void>, off, (), (override));
-    MOCK_METHOD(vibrator::HalResult<void>, setAmplitude, (float amplitude), (override));
-    MOCK_METHOD(vibrator::HalResult<void>, setExternalControl, (bool enabled), (override));
-    MOCK_METHOD(vibrator::HalResult<void>, alwaysOnEnable,
-                (int32_t id, Effect effect, EffectStrength strength), (override));
-    MOCK_METHOD(vibrator::HalResult<void>, alwaysOnDisable, (int32_t id), (override));
-    MOCK_METHOD(vibrator::HalResult<milliseconds>, performEffect,
-                (Effect effect, EffectStrength strength,
-                 const std::function<void()>& completionCallback),
-                (override));
-    MOCK_METHOD(vibrator::HalResult<vibrator::Capabilities>, getCapabilitiesInternal, (),
-                (override));
-
-    vibrator::CallbackScheduler* getCallbackScheduler() { return mCallbackScheduler.get(); }
-};
-
-// -------------------------------------------------------------------------------------------------
-
 class VibratorHalControllerTest : public Test {
 public:
     void SetUp() override {
         mConnectCounter = 0;
         auto callbackScheduler = std::make_shared<vibrator::CallbackScheduler>();
-        mMockHal = std::make_shared<StrictMock<MockHalWrapper>>(callbackScheduler);
+        mMockHal = std::make_shared<StrictMock<vibrator::MockHalWrapper>>(callbackScheduler);
         mController = std::make_unique<
                 vibrator::HalController>(std::move(callbackScheduler),
                                          [&](std::shared_ptr<vibrator::CallbackScheduler>) {
@@ -92,7 +64,7 @@ public:
 
 protected:
     int32_t mConnectCounter;
-    std::shared_ptr<MockHalWrapper> mMockHal;
+    std::shared_ptr<vibrator::MockHalWrapper> mMockHal;
     std::unique_ptr<vibrator::HalController> mController;
 };
 
@@ -255,16 +227,17 @@ TEST_F(VibratorHalControllerTest, TestScheduledCallbackSurvivesReconnection) {
                 .WillRepeatedly(Return(vibrator::HalResult<void>::transactionFailed("message")));
     }
 
-    std::unique_ptr<int32_t> callbackCounter = std::make_unique<int32_t>();
-    auto callback = vibrator::TestFactory::createCountingCallback(callbackCounter.get());
+    auto counter = vibrator::TestCounter(0);
 
-    auto onFn = [&](vibrator::HalWrapper* hal) { return hal->on(10ms, callback); };
+    auto onFn = [&](vibrator::HalWrapper* hal) {
+        return hal->on(10ms, [&counter] { counter.increment(); });
+    };
     ASSERT_TRUE(mController->doWithRetry<void>(onFn, "on").isOk());
     ASSERT_TRUE(mController->doWithRetry<void>(PING_FN, "ping").isFailed());
     mMockHal.reset();
-    ASSERT_EQ(0, *callbackCounter.get());
+    ASSERT_EQ(0, counter.get());
 
     // Callback triggered even after HalWrapper was reconnected.
-    std::this_thread::sleep_for(15ms);
-    ASSERT_EQ(1, *callbackCounter.get());
+    counter.tryWaitUntilCountIsAtLeast(1, 500ms);
+    ASSERT_EQ(1, counter.get());
 }

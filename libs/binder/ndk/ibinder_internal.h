@@ -51,6 +51,8 @@ struct AIBinder : public virtual ::android::RefBase {
         ::android::sp<::android::IBinder> binder = const_cast<AIBinder*>(this)->getBinder();
         return binder->remoteBinder() != nullptr;
     }
+    virtual void addDeathRecipient(const ::android::sp<AIBinder_DeathRecipient>& recipient,
+                                   void* cookie) = 0;
 
    private:
     // AIBinder instance is instance of this class for a local object. In order to transact on a
@@ -78,6 +80,8 @@ struct ABBinder : public AIBinder, public ::android::BBinder {
     ::android::status_t dump(int fd, const ::android::Vector<::android::String16>& args) override;
     ::android::status_t onTransact(uint32_t code, const ::android::Parcel& data,
                                    ::android::Parcel* reply, binder_flags_t flags) override;
+    void addDeathRecipient(const ::android::sp<AIBinder_DeathRecipient>& /* recipient */,
+                           void* /* cookie */) override;
 
    private:
     ABBinder(const AIBinder_Class* clazz, void* userData);
@@ -106,12 +110,20 @@ struct ABpBinder : public AIBinder {
 
     bool isServiceFuzzing() const { return mServiceFuzzing; }
     void setServiceFuzzing() { mServiceFuzzing = true; }
+    void addDeathRecipient(const ::android::sp<AIBinder_DeathRecipient>& recipient,
+                           void* cookie) override;
 
    private:
     friend android::sp<ABpBinder>;
     explicit ABpBinder(const ::android::sp<::android::IBinder>& binder);
     ::android::sp<::android::IBinder> mRemote;
     bool mServiceFuzzing = false;
+    struct DeathRecipientInfo {
+        android::wp<AIBinder_DeathRecipient> recipient;
+        void* cookie;
+    };
+    std::mutex mDeathRecipientsMutex;
+    std::vector<DeathRecipientInfo> mDeathRecipients;
 };
 
 struct AIBinder_Class {
@@ -120,6 +132,9 @@ struct AIBinder_Class {
 
     const ::android::String16& getInterfaceDescriptor() const { return mWideInterfaceDescriptor; }
     const char* getInterfaceDescriptorUtf8() const { return mInterfaceDescriptor.c_str(); }
+    bool setTransactionCodeMap(const char** transactionCodeMap, size_t transactionCodeMapSize);
+    const char* getFunctionName(transaction_code_t code) const;
+    size_t getTransactionCodeToFunctionLength() const { return mTransactionCodeToFunctionLength; }
 
     // whether a transaction header should be written
     bool writeHeader = true;
@@ -139,6 +154,10 @@ struct AIBinder_Class {
     // This must be a String16 since BBinder virtual getInterfaceDescriptor returns a reference to
     // one.
     const ::android::String16 mWideInterfaceDescriptor;
+    // Array which holds names of the functions
+    const char** mTransactionCodeToFunction = nullptr;
+    // length of mmTransactionCodeToFunctionLength array
+    size_t mTransactionCodeToFunctionLength = 0;
 };
 
 // Ownership is like this (when linked to death):
@@ -183,6 +202,7 @@ struct AIBinder_DeathRecipient : ::android::RefBase {
     binder_status_t linkToDeath(const ::android::sp<::android::IBinder>&, void* cookie);
     binder_status_t unlinkToDeath(const ::android::sp<::android::IBinder>& binder, void* cookie);
     void setOnUnlinked(AIBinder_DeathRecipient_onBinderUnlinked onUnlinked);
+    void pruneThisTransferEntry(const ::android::sp<::android::IBinder>&, void* cookie);
 
    private:
     // When the user of this API deletes a Bp object but not the death recipient, the

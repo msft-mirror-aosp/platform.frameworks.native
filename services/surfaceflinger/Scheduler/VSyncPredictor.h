@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <android-base/thread_annotations.h>
+#include <scheduler/FrameTime.h>
 #include <scheduler/TimeKeeper.h>
 #include <ui/DisplayId.h>
 
@@ -68,9 +69,16 @@ public:
 
     void setDisplayModePtr(ftl::NonNull<DisplayModePtr>) final EXCLUDES(mMutex);
 
-    void setRenderRate(Fps) final EXCLUDES(mMutex);
+    bool isCurrentMode(const ftl::NonNull<DisplayModePtr>& modePtr) const EXCLUDES(mMutex) {
+        std::lock_guard lock(mMutex);
+        return mDisplayModePtr->getId() == modePtr->getId() &&
+                mDisplayModePtr->getVsyncRate().getPeriodNsecs() ==
+                mRateMap.find(idealPeriod())->second.slope;
+    }
 
-    void onFrameBegin(TimePoint expectedPresentTime, TimePoint lastConfirmedPresentTime) final
+    void setRenderRate(Fps, bool applyImmediately) final EXCLUDES(mMutex);
+
+    void onFrameBegin(TimePoint expectedPresentTime, FrameTime lastSignaledFrameTime) final
             EXCLUDES(mMutex);
     void onFrameMissed(TimePoint expectedPresentTime) final EXCLUDES(mMutex);
 
@@ -83,34 +91,43 @@ private:
     };
 
     struct MissedVsync {
-        TimePoint vsync;
+        TimePoint vsync = TimePoint::fromNs(0);
         Duration fixup = Duration::fromNs(0);
     };
 
     class VsyncTimeline {
     public:
-        VsyncTimeline(Period idealPeriod, std::optional<Fps> renderRateOpt);
+        VsyncTimeline(TimePoint knownVsync, Period idealPeriod, std::optional<Fps> renderRateOpt);
         std::optional<TimePoint> nextAnticipatedVSyncTimeFrom(
-                Model model, Period minFramePeriod, nsecs_t vsyncTime, MissedVsync lastMissedVsync,
-                std::optional<nsecs_t> lastVsyncOpt = {});
+                Model model, std::optional<Period> minFramePeriodOpt, nsecs_t vsyncTime,
+                MissedVsync lastMissedVsync, std::optional<nsecs_t> lastVsyncOpt = {});
         void freeze(TimePoint lastVsync);
         std::optional<TimePoint> validUntil() const { return mValidUntil; }
         bool isVSyncInPhase(Model, nsecs_t vsync, Fps frameRate);
-        void shiftVsyncSequence(Duration phase);
+        void shiftVsyncSequence(Duration phase, Period minFramePeriod);
+        void setRenderRate(std::optional<Fps> renderRateOpt) { mRenderRateOpt = renderRateOpt; }
+
+        enum class VsyncOnTimeline {
+            Unique,  // Within timeline, not shared with next timeline.
+            Shared,  // Within timeline, shared with next timeline.
+            Outside, // Outside of the timeline.
+        };
+        VsyncOnTimeline isWithin(TimePoint vsync);
 
     private:
         nsecs_t snapToVsyncAlignedWithRenderRate(Model model, nsecs_t vsync);
         VsyncSequence getVsyncSequenceLocked(Model, nsecs_t vsync);
+        std::optional<VsyncSequence> makeVsyncSequence(TimePoint knownVsync);
 
         const Period mIdealPeriod = Duration::fromNs(0);
-        const std::optional<Fps> mRenderRateOpt;
+        std::optional<Fps> mRenderRateOpt;
         std::optional<TimePoint> mValidUntil;
         std::optional<VsyncSequence> mLastVsyncSequence;
     };
 
     VSyncPredictor(VSyncPredictor const&) = delete;
     VSyncPredictor& operator=(VSyncPredictor const&) = delete;
-    void clearTimestamps() REQUIRES(mMutex);
+    void clearTimestamps(bool clearTimelines) REQUIRES(mMutex);
 
     const std::unique_ptr<Clock> mClock;
     const PhysicalDisplayId mId;
@@ -143,6 +160,7 @@ private:
     std::vector<nsecs_t> mTimestamps GUARDED_BY(mMutex);
 
     ftl::NonNull<DisplayModePtr> mDisplayModePtr GUARDED_BY(mMutex);
+    int mNumVsyncsForFrame GUARDED_BY(mMutex);
 
     std::deque<TimePoint> mPastExpectedPresentTimes GUARDED_BY(mMutex);
 

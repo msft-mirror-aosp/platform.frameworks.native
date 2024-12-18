@@ -52,6 +52,7 @@
 #include <aidl/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.h>
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayLuts.h>
 #include <aidl/android/hardware/graphics/composer3/OverlayProperties.h>
 
 namespace android {
@@ -133,7 +134,8 @@ public:
     // supported by the HWC can be queried in advance, but allocation may fail for other reasons.
     virtual bool allocateVirtualDisplay(HalVirtualDisplayId, ui::Size, ui::PixelFormat*) = 0;
 
-    virtual void allocatePhysicalDisplay(hal::HWDisplayId, PhysicalDisplayId) = 0;
+    virtual void allocatePhysicalDisplay(hal::HWDisplayId, PhysicalDisplayId,
+                                         std::optional<ui::Size> physicalSize) = 0;
 
     // Attempts to create a new layer on this display
     virtual std::shared_ptr<HWC2::Layer> createLayer(HalDisplayId) = 0;
@@ -159,6 +161,8 @@ public:
     virtual status_t presentAndGetReleaseFences(
             HalDisplayId,
             std::optional<std::chrono::steady_clock::time_point> earliestPresentTime) = 0;
+
+    virtual status_t executeCommands(HalDisplayId) = 0;
 
     // set power mode
     virtual status_t setPowerMode(PhysicalDisplayId, hal::PowerMode) = 0;
@@ -269,6 +273,8 @@ public:
 
     virtual void dump(std::string& out) const = 0;
 
+    virtual void dumpOverlayProperties(std::string& out) const = 0;
+
     virtual Hwc2::Composer* getComposer() const = 0;
 
     // Returns the first display connected at boot. Its connection via HWComposer::onHotplug,
@@ -305,6 +311,11 @@ public:
     virtual status_t setRefreshRateChangedCallbackDebugEnabled(PhysicalDisplayId, bool enabled) = 0;
     virtual status_t notifyExpectedPresent(PhysicalDisplayId, TimePoint expectedPresentTime,
                                            Fps frameInterval) = 0;
+
+    // Composer 4.0
+    virtual status_t getRequestedLuts(
+            PhysicalDisplayId,
+            std::vector<aidl::android::hardware::graphics::composer3::DisplayLuts::LayerLut>*) = 0;
 };
 
 static inline bool operator==(const android::HWComposer::DeviceRequestedChanges& lhs,
@@ -339,7 +350,8 @@ public:
     bool allocateVirtualDisplay(HalVirtualDisplayId, ui::Size, ui::PixelFormat*) override;
 
     // Called from SurfaceFlinger, when the state for a new physical display needs to be recreated.
-    void allocatePhysicalDisplay(hal::HWDisplayId, PhysicalDisplayId) override;
+    void allocatePhysicalDisplay(hal::HWDisplayId, PhysicalDisplayId,
+                                 std::optional<ui::Size> physicalSize) override;
 
     // Attempts to create a new layer on this display
     std::shared_ptr<HWC2::Layer> createLayer(HalDisplayId) override;
@@ -358,6 +370,8 @@ public:
     status_t presentAndGetReleaseFences(
             HalDisplayId,
             std::optional<std::chrono::steady_clock::time_point> earliestPresentTime) override;
+
+    status_t executeCommands(HalDisplayId) override;
 
     // set power mode
     status_t setPowerMode(PhysicalDisplayId, hal::PowerMode mode) override;
@@ -466,8 +480,15 @@ public:
     status_t notifyExpectedPresent(PhysicalDisplayId, TimePoint expectedPresentTime,
                                    Fps frameInterval) override;
 
+    // Composer 4.0
+    status_t getRequestedLuts(
+            PhysicalDisplayId,
+            std::vector<aidl::android::hardware::graphics::composer3::DisplayLuts::LayerLut>*)
+            override;
+
     // for debugging ----------------------------------------------------------
     void dump(std::string& out) const override;
+    void dumpOverlayProperties(std::string& out) const override;
 
     Hwc2::Composer* getComposer() const override { return mComposer.get(); }
 
@@ -513,6 +534,13 @@ private:
     std::optional<DisplayIdentificationInfo> onHotplugDisconnect(hal::HWDisplayId);
     bool shouldIgnoreHotplugConnect(hal::HWDisplayId, bool hasDisplayIdentificationData) const;
 
+    aidl::android::hardware::graphics::composer3::DisplayConfiguration::Dpi
+    getEstimatedDotsPerInchFromSize(uint64_t hwcDisplayId, const HWCDisplayMode& hwcMode) const;
+
+    aidl::android::hardware::graphics::composer3::DisplayConfiguration::Dpi correctedDpiIfneeded(
+            aidl::android::hardware::graphics::composer3::DisplayConfiguration::Dpi dpi,
+            aidl::android::hardware::graphics::composer3::DisplayConfiguration::Dpi estimatedDpi)
+            const;
     std::vector<HWCDisplayMode> getModesFromDisplayConfigurations(uint64_t hwcDisplayId,
                                                                   int32_t maxFrameIntervalNs) const;
     std::vector<HWCDisplayMode> getModesFromLegacyDisplayConfigs(uint64_t hwcDisplayId) const;

@@ -34,7 +34,9 @@
 #include <vector>
 
 #include "PointerControllerInterface.h"
+#include "TouchpadHardwareState.h"
 #include "VibrationElement.h"
+#include "include/gestures.h"
 
 // Maximum supported size of a vibration pattern.
 // Must be at least 2.
@@ -60,9 +62,6 @@ struct InputReaderConfiguration {
 
         // The display size or orientation changed.
         DISPLAY_INFO = 1u << 2,
-
-        // The visible touches option changed.
-        SHOW_TOUCHES = 1u << 3,
 
         // The keyboard layouts must be reloaded.
         KEYBOARD_LAYOUTS = 1u << 4,
@@ -94,6 +93,9 @@ struct InputReaderConfiguration {
         // The touchpad settings changed.
         TOUCHPAD_SETTINGS = 1u << 13,
 
+        // The key remapping has changed.
+        KEY_REMAPPING = 1u << 14,
+
         // All devices must be reopened.
         MUST_REOPEN = 1u << 31,
     };
@@ -109,11 +111,15 @@ struct InputReaderConfiguration {
 
     // The associations between input ports and display ports.
     // Used to determine which DisplayViewport should be tied to which InputDevice.
-    std::unordered_map<std::string, uint8_t> portAssociations;
+    std::unordered_map<std::string, uint8_t> inputPortToDisplayPortAssociations;
 
-    // The associations between input device physical port locations and display unique ids.
+    // The associations between input device ports and display unique ids.
     // Used to determine which DisplayViewport should be tied to which InputDevice.
-    std::unordered_map<std::string, std::string> uniqueIdAssociations;
+    std::unordered_map<std::string, std::string> inputPortToDisplayUniqueIdAssociations;
+
+    // The associations between input device descriptor and display unique ids.
+    // Used to determine which DisplayViewport should be tied to which InputDevice.
+    std::unordered_map<std::string, std::string> inputDeviceDescriptorToDisplayUniqueIdAssociations;
 
     // The associations between input device ports device types.
     // This is used to determine which device type and source should be tied to which InputDevice.
@@ -124,7 +130,7 @@ struct InputReaderConfiguration {
     std::unordered_map<std::string, KeyboardLayoutInfo> keyboardLayoutAssociations;
 
     // The suggested display ID to show the cursor.
-    int32_t defaultPointerDisplayId;
+    ui::LogicalDisplayId defaultPointerDisplayId;
 
     // The mouse pointer speed, as a number from -7 (slowest) to 7 (fastest).
     //
@@ -134,7 +140,7 @@ struct InputReaderConfiguration {
     // Displays on which an acceleration curve shouldn't be applied for pointer movements from mice.
     //
     // Currently only used when the enable_new_mouse_pointer_ballistics flag is enabled.
-    std::set<int32_t> displaysWithMousePointerAccelerationDisabled;
+    std::set<ui::LogicalDisplayId> displaysWithMousePointerAccelerationDisabled;
 
     // Velocity control parameters for mouse pointer movements.
     //
@@ -210,9 +216,6 @@ struct InputReaderConfiguration {
     // will cover this portion of the display diagonal.
     float pointerGestureZoomSpeedRatio;
 
-    // True to show the location of touches on the touch screen as spots.
-    bool showTouches;
-
     // The latest request to enable or disable Pointer Capture.
     PointerCaptureRequest pointerCaptureRequest;
 
@@ -229,6 +232,9 @@ struct InputReaderConfiguration {
     // True to enable tap dragging on touchpads.
     bool touchpadTapDraggingEnabled;
 
+    // True if hardware state update notifications should be sent to the policy.
+    bool shouldNotifyTouchpadHardwareState;
+
     // True to enable a zone on the right-hand side of touchpads where clicks will be turned into
     // context (a.k.a. "right") clicks.
     bool touchpadRightClickZoneEnabled;
@@ -243,8 +249,12 @@ struct InputReaderConfiguration {
     // True if a pointer icon should be shown for direct stylus pointers.
     bool stylusPointerIconEnabled;
 
+    // Keycodes to be remapped.
+    std::map<int32_t /* fromKeyCode */, int32_t /* toKeyCode */> keyRemapping;
+
     InputReaderConfiguration()
           : virtualKeyQuietTime(0),
+            defaultPointerDisplayId(ui::LogicalDisplayId::DEFAULT),
             mousePointerSpeed(0),
             displaysWithMousePointerAccelerationDisabled(),
             pointerVelocityControlParameters(1.0f, 500.0f, 3000.0f,
@@ -264,12 +274,12 @@ struct InputReaderConfiguration {
             pointerGestureSwipeMaxWidthRatio(0.25f),
             pointerGestureMovementSpeedRatio(0.8f),
             pointerGestureZoomSpeedRatio(0.3f),
-            showTouches(false),
             pointerCaptureRequest(),
             touchpadPointerSpeed(0),
             touchpadNaturalScrollingEnabled(true),
             touchpadTapToClickEnabled(true),
             touchpadTapDraggingEnabled(false),
+            shouldNotifyTouchpadHardwareState(false),
             touchpadRightClickZoneEnabled(false),
             stylusButtonMotionEventsEnabled(true),
             stylusPointerIconEnabled(false) {}
@@ -278,7 +288,7 @@ struct InputReaderConfiguration {
     std::optional<DisplayViewport> getDisplayViewportByUniqueId(const std::string& uniqueDisplayId)
             const;
     std::optional<DisplayViewport> getDisplayViewportByPort(uint8_t physicalPort) const;
-    std::optional<DisplayViewport> getDisplayViewportById(int32_t displayId) const;
+    std::optional<DisplayViewport> getDisplayViewportById(ui::LogicalDisplayId displayId) const;
     void setDisplayViewports(const std::vector<DisplayViewport>& viewports);
 
     void dump(std::string& dump) const;
@@ -312,9 +322,6 @@ public:
     /* Called by the heartbeat to ensures that the reader has not deadlocked. */
     virtual void monitor() = 0;
 
-    /* Returns true if the input device is enabled. */
-    virtual bool isInputDeviceEnabled(int32_t deviceId) = 0;
-
     /* Makes the reader start processing events from the kernel. */
     virtual status_t start() = 0;
 
@@ -331,9 +338,6 @@ public:
     virtual int32_t getScanCodeState(int32_t deviceId, uint32_t sourceMask, int32_t scanCode) = 0;
     virtual int32_t getKeyCodeState(int32_t deviceId, uint32_t sourceMask, int32_t keyCode) = 0;
     virtual int32_t getSwitchState(int32_t deviceId, uint32_t sourceMask, int32_t sw) = 0;
-
-    virtual void addKeyRemapping(int32_t deviceId, int32_t fromKeyCode,
-                                 int32_t toKeyCode) const = 0;
 
     virtual int32_t getKeyCodeForKeyLocation(int32_t deviceId, int32_t locationKeyCode) const = 0;
 
@@ -368,8 +372,10 @@ public:
 
     virtual std::vector<InputDeviceSensorInfo> getSensors(int32_t deviceId) = 0;
 
+    virtual std::optional<HardwareProperties> getTouchpadHardwareProperties(int32_t deviceId) = 0;
+
     /* Return true if the device can send input events to the specified display. */
-    virtual bool canDispatchToDisplay(int32_t deviceId, int32_t displayId) = 0;
+    virtual bool canDispatchToDisplay(int32_t deviceId, ui::LogicalDisplayId displayId) = 0;
 
     /* Enable sensor in input reader mapper. */
     virtual bool enableSensor(int32_t deviceId, InputDeviceSensorType sensorType,
@@ -396,6 +402,15 @@ public:
 
     /* Sysfs node change reported. Recreate device if required to incorporate the new sysfs nodes */
     virtual void sysfsNodeChanged(const std::string& sysfsNodePath) = 0;
+
+    /* Get the ID of the InputDevice that was used most recently.
+     *
+     * Returns ReservedInputDeviceId::INVALID_INPUT_DEVICE_ID if no device has been used since boot.
+     */
+    virtual DeviceId getLastUsedInputDeviceId() = 0;
+
+    /* Notifies that mouse cursor faded due to typing. */
+    virtual void notifyMouseCursorFadedOnTyping() = 0;
 };
 
 // --- TouchAffineTransformation ---
@@ -445,14 +460,17 @@ public:
     /* Gets the input reader configuration. */
     virtual void getReaderConfiguration(InputReaderConfiguration* outConfig) = 0;
 
-    /* Gets a pointer controller associated with the specified cursor device (ie. a mouse). */
-    virtual std::shared_ptr<PointerControllerInterface> obtainPointerController(
-            int32_t deviceId) = 0;
-
     /* Notifies the input reader policy that some input devices have changed
      * and provides information about all current input devices.
      */
     virtual void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>& inputDevices) = 0;
+
+    /* Sends the hardware state of a connected touchpad */
+    virtual void notifyTouchpadHardwareState(const SelfContainedHardwareState& schs,
+                                             int32_t deviceId) = 0;
+
+    /* Sends the Info of gestures that happen on the touchpad. */
+    virtual void notifyTouchpadGestureInfo(GestureType type, int32_t deviceId) = 0;
 
     /* Gets the keyboard layout for a particular input device. */
     virtual std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(
@@ -478,7 +496,7 @@ public:
      * be used as the range of possible values for pointing devices, like mice and touchpads.
      */
     virtual std::optional<DisplayViewport> getPointerViewportForAssociatedDisplay(
-            int32_t associatedDisplayId = ADISPLAY_ID_NONE) = 0;
+            ui::LogicalDisplayId associatedDisplayId = ui::LogicalDisplayId::INVALID) = 0;
 };
 
 } // namespace android

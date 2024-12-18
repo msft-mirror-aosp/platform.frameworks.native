@@ -16,6 +16,7 @@
 
 #include "FakeInputReaderPolicy.h"
 
+#include <android-base/properties.h>
 #include <android-base/thread_annotations.h>
 #include <gtest/gtest.h>
 
@@ -24,20 +25,30 @@
 
 namespace android {
 
+namespace {
+
+static const int HW_TIMEOUT_MULTIPLIER = base::GetIntProperty("ro.hw_timeout_multiplier", 1);
+
+} // namespace
+
 void FakeInputReaderPolicy::assertInputDevicesChanged() {
-    waitForInputDevices([](bool devicesChanged) {
-        if (!devicesChanged) {
-            FAIL() << "Timed out waiting for notifyInputDevicesChanged() to be called.";
-        }
-    });
+    waitForInputDevices(
+            [](bool devicesChanged) {
+                if (!devicesChanged) {
+                    FAIL() << "Timed out waiting for notifyInputDevicesChanged() to be called.";
+                }
+            },
+            ADD_INPUT_DEVICE_TIMEOUT);
 }
 
 void FakeInputReaderPolicy::assertInputDevicesNotChanged() {
-    waitForInputDevices([](bool devicesChanged) {
-        if (devicesChanged) {
-            FAIL() << "Expected notifyInputDevicesChanged() to not be called.";
-        }
-    });
+    waitForInputDevices(
+            [](bool devicesChanged) {
+                if (devicesChanged) {
+                    FAIL() << "Expected notifyInputDevicesChanged() to not be called.";
+                }
+            },
+            INPUT_DEVICES_DIDNT_CHANGE_TIMEOUT);
 }
 
 void FakeInputReaderPolicy::assertStylusGestureNotified(int32_t deviceId) {
@@ -56,6 +67,17 @@ void FakeInputReaderPolicy::assertStylusGestureNotified(int32_t deviceId) {
 void FakeInputReaderPolicy::assertStylusGestureNotNotified() {
     std::scoped_lock lock(mLock);
     ASSERT_FALSE(mDeviceIdOfNotifiedStylusGesture);
+}
+
+void FakeInputReaderPolicy::assertTouchpadHardwareStateNotified() {
+    std::unique_lock lock(mLock);
+    base::ScopedLockAssertion assumeLocked(mLock);
+
+    const bool success =
+            mTouchpadHardwareStateNotified.wait_for(lock, WAIT_TIMEOUT, [this]() REQUIRES(mLock) {
+                return mTouchpadHardwareState.has_value();
+            });
+    ASSERT_TRUE(success) << "Timed out waiting for hardware state to be notified";
 }
 
 void FakeInputReaderPolicy::clearViewports() {
@@ -82,9 +104,9 @@ void FakeInputReaderPolicy::addDisplayViewport(DisplayViewport viewport) {
     mConfig.setDisplayViewports(mViewports);
 }
 
-void FakeInputReaderPolicy::addDisplayViewport(int32_t displayId, int32_t width, int32_t height,
-                                               ui::Rotation orientation, bool isActive,
-                                               const std::string& uniqueId,
+void FakeInputReaderPolicy::addDisplayViewport(ui::LogicalDisplayId displayId, int32_t width,
+                                               int32_t height, ui::Rotation orientation,
+                                               bool isActive, const std::string& uniqueId,
                                                std::optional<uint8_t> physicalPort,
                                                ViewportType type) {
     const bool isRotated = orientation == ui::ROTATION_90 || orientation == ui::ROTATION_270;
@@ -129,7 +151,7 @@ void FakeInputReaderPolicy::addExcludedDeviceName(const std::string& deviceName)
 
 void FakeInputReaderPolicy::addInputPortAssociation(const std::string& inputPort,
                                                     uint8_t displayPort) {
-    mConfig.portAssociations.insert({inputPort, displayPort});
+    mConfig.inputPortToDisplayPortAssociations.insert({inputPort, displayPort});
 }
 
 void FakeInputReaderPolicy::addDeviceTypeAssociation(const std::string& inputPort,
@@ -139,7 +161,7 @@ void FakeInputReaderPolicy::addDeviceTypeAssociation(const std::string& inputPor
 
 void FakeInputReaderPolicy::addInputUniqueIdAssociation(const std::string& inputUniqueId,
                                                         const std::string& displayUniqueId) {
-    mConfig.uniqueIdAssociations.insert({inputUniqueId, displayUniqueId});
+    mConfig.inputPortToDisplayUniqueIdAssociations.insert({inputUniqueId, displayUniqueId});
 }
 
 void FakeInputReaderPolicy::addKeyboardLayoutAssociation(const std::string& inputUniqueId,
@@ -153,11 +175,6 @@ void FakeInputReaderPolicy::addDisabledDevice(int32_t deviceId) {
 
 void FakeInputReaderPolicy::removeDisabledDevice(int32_t deviceId) {
     mConfig.disabledDevices.erase(deviceId);
-}
-
-void FakeInputReaderPolicy::setPointerController(
-        std::shared_ptr<FakePointerController> controller) {
-    mPointerController = std::move(controller);
 }
 
 const InputReaderConfiguration& FakeInputReaderPolicy::getReaderConfiguration() const {
@@ -178,16 +195,12 @@ void FakeInputReaderPolicy::setTouchAffineTransformation(const TouchAffineTransf
     transform = t;
 }
 
-PointerCaptureRequest FakeInputReaderPolicy::setPointerCapture(bool enabled) {
-    mConfig.pointerCaptureRequest = {enabled, mNextPointerCaptureSequenceNumber++};
+PointerCaptureRequest FakeInputReaderPolicy::setPointerCapture(const sp<IBinder>& window) {
+    mConfig.pointerCaptureRequest = {window, mNextPointerCaptureSequenceNumber++};
     return mConfig.pointerCaptureRequest;
 }
 
-void FakeInputReaderPolicy::setShowTouches(bool enabled) {
-    mConfig.showTouches = enabled;
-}
-
-void FakeInputReaderPolicy::setDefaultPointerDisplayId(int32_t pointerDisplayId) {
+void FakeInputReaderPolicy::setDefaultPointerDisplayId(ui::LogicalDisplayId pointerDisplayId) {
     mConfig.defaultPointerDisplayId = pointerDisplayId;
 }
 
@@ -228,17 +241,23 @@ void FakeInputReaderPolicy::getReaderConfiguration(InputReaderConfiguration* out
     *outConfig = mConfig;
 }
 
-std::shared_ptr<PointerControllerInterface> FakeInputReaderPolicy::obtainPointerController(
-        int32_t /*deviceId*/) {
-    return mPointerController;
-}
-
 void FakeInputReaderPolicy::notifyInputDevicesChanged(
         const std::vector<InputDeviceInfo>& inputDevices) {
     std::scoped_lock lock(mLock);
     mInputDevices = inputDevices;
     mInputDevicesChanged = true;
     mDevicesChangedCondition.notify_all();
+}
+
+void FakeInputReaderPolicy::notifyTouchpadHardwareState(const SelfContainedHardwareState& schs,
+                                                        int32_t deviceId) {
+    std::scoped_lock lock(mLock);
+    mTouchpadHardwareState = schs;
+    mTouchpadHardwareStateNotified.notify_all();
+}
+
+void FakeInputReaderPolicy::notifyTouchpadGestureInfo(GestureType type, int32_t deviceId) {
+    std::scoped_lock lock(mLock);
 }
 
 std::shared_ptr<KeyCharacterMap> FakeInputReaderPolicy::getKeyboardLayoutOverlay(
@@ -250,14 +269,16 @@ std::string FakeInputReaderPolicy::getDeviceAlias(const InputDeviceIdentifier&) 
     return "";
 }
 
-void FakeInputReaderPolicy::waitForInputDevices(std::function<void(bool)> processDevicesChanged) {
+void FakeInputReaderPolicy::waitForInputDevices(std::function<void(bool)> processDevicesChanged,
+                                                std::chrono::milliseconds timeout) {
     std::unique_lock<std::mutex> lock(mLock);
     base::ScopedLockAssertion assumeLocked(mLock);
 
     const bool devicesChanged =
-            mDevicesChangedCondition.wait_for(lock, WAIT_TIMEOUT, [this]() REQUIRES(mLock) {
-                return mInputDevicesChanged;
-            });
+            mDevicesChangedCondition.wait_for(lock, timeout * HW_TIMEOUT_MULTIPLIER,
+                                              [this]() REQUIRES(mLock) {
+                                                  return mInputDevicesChanged;
+                                              });
     ASSERT_NO_FATAL_FAILURE(processDevicesChanged(devicesChanged));
     mInputDevicesChanged = false;
 }
@@ -269,8 +290,8 @@ void FakeInputReaderPolicy::notifyStylusGestureStarted(int32_t deviceId, nsecs_t
 }
 
 std::optional<DisplayViewport> FakeInputReaderPolicy::getPointerViewportForAssociatedDisplay(
-        int32_t associatedDisplayId) {
-    if (associatedDisplayId == ADISPLAY_ID_NONE) {
+        ui::LogicalDisplayId associatedDisplayId) {
+    if (!associatedDisplayId.isValid()) {
         associatedDisplayId = mConfig.defaultPointerDisplayId;
     }
     for (auto& viewport : mViewports) {

@@ -21,6 +21,7 @@
 
 #include <scheduler/Fps.h>
 #include <scheduler/FrameRateMode.h>
+#include <scheduler/FrameTime.h>
 
 #include "VSyncDispatch.h"
 
@@ -71,6 +72,11 @@ public:
      */
     virtual Period minFramePeriod() const = 0;
 
+    /**
+     * Checks if the sourced mode is equal to the mode in the tracker.
+     */
+    virtual bool isCurrentMode(const ftl::NonNull<DisplayModePtr>& modePtr) const = 0;
+
     /* Inform the tracker that the samples it has are not accurate for prediction. */
     virtual void resetModel() = 0;
 
@@ -102,11 +108,12 @@ public:
      * when a display is running at 120Hz but the render frame rate is 60Hz.
      *
      * \param [in] Fps   The render rate the tracker should operate at.
+     * \param [in] applyImmediately Whether to apply the new render rate immediately regardless of
+     *                              already committed vsyncs.
      */
-    virtual void setRenderRate(Fps) = 0;
+    virtual void setRenderRate(Fps, bool applyImmediately) = 0;
 
-    virtual void onFrameBegin(TimePoint expectedPresentTime,
-                              TimePoint lastConfirmedPresentTime) = 0;
+    virtual void onFrameBegin(TimePoint expectedPresentTime, FrameTime lastSignaledFrameTime) = 0;
 
     virtual void onFrameMissed(TimePoint expectedPresentTime) = 0;
 

@@ -555,8 +555,7 @@ PixelFormat GetNativePixelFormat(VkFormat format) {
     return native_format;
 }
 
-DataSpace GetNativeDataspace(VkColorSpaceKHR colorspace,
-                             PixelFormat pixelFormat) {
+DataSpace GetNativeDataspace(VkColorSpaceKHR colorspace, VkFormat format) {
     switch (colorspace) {
         case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR:
             return DataSpace::SRGB;
@@ -575,7 +574,7 @@ DataSpace GetNativeDataspace(VkColorSpaceKHR colorspace,
         case VK_COLOR_SPACE_BT709_NONLINEAR_EXT:
             return DataSpace::SRGB;
         case VK_COLOR_SPACE_BT2020_LINEAR_EXT:
-            if (pixelFormat == PixelFormat::RGBA_FP16) {
+            if (format == VK_FORMAT_R16G16B16A16_SFLOAT) {
                 return DataSpace::BT2020_LINEAR_EXTENDED;
             } else {
                 return DataSpace::BT2020_LINEAR;
@@ -764,21 +763,20 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
         {VK_FORMAT_R8G8B8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
     };
 
+    VkFormat format = VK_FORMAT_UNDEFINED;
     if (colorspace_ext) {
         for (VkColorSpaceKHR colorSpace :
              colorSpaceSupportedByVkEXTSwapchainColorspace) {
-            if (GetNativeDataspace(colorSpace, GetNativePixelFormat(
-                                                   VK_FORMAT_R8G8B8A8_UNORM)) !=
-                DataSpace::UNKNOWN) {
+            format = VK_FORMAT_R8G8B8A8_UNORM;
+            if (GetNativeDataspace(colorSpace, format) != DataSpace::UNKNOWN) {
                 all_formats.emplace_back(
-                    VkSurfaceFormatKHR{VK_FORMAT_R8G8B8A8_UNORM, colorSpace});
+                    VkSurfaceFormatKHR{format, colorSpace});
             }
 
-            if (GetNativeDataspace(colorSpace, GetNativePixelFormat(
-                                                   VK_FORMAT_R8G8B8A8_SRGB)) !=
-                DataSpace::UNKNOWN) {
+            format = VK_FORMAT_R8G8B8A8_SRGB;
+            if (GetNativeDataspace(colorSpace, format) != DataSpace::UNKNOWN) {
                 all_formats.emplace_back(
-                    VkSurfaceFormatKHR{VK_FORMAT_R8G8B8A8_SRGB, colorSpace});
+                    VkSurfaceFormatKHR{format, colorSpace});
             }
         }
     }
@@ -787,78 +785,73 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
     // Android users.  This includes the ANGLE team (a layered implementation of
     // OpenGL-ES).
 
+    format = VK_FORMAT_R5G6B5_UNORM_PACK16;
     desc.format = AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM;
     if (AHardwareBuffer_isSupported(&desc)) {
-        all_formats.emplace_back(VkSurfaceFormatKHR{
-            VK_FORMAT_R5G6B5_UNORM_PACK16, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
+        all_formats.emplace_back(
+            VkSurfaceFormatKHR{format, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
         if (colorspace_ext) {
             for (VkColorSpaceKHR colorSpace :
                  colorSpaceSupportedByVkEXTSwapchainColorspace) {
-                if (GetNativeDataspace(
-                        colorSpace,
-                        GetNativePixelFormat(VK_FORMAT_R5G6B5_UNORM_PACK16)) !=
+                if (GetNativeDataspace(colorSpace, format) !=
                     DataSpace::UNKNOWN) {
-                    all_formats.emplace_back(VkSurfaceFormatKHR{
-                        VK_FORMAT_R5G6B5_UNORM_PACK16, colorSpace});
+                    all_formats.emplace_back(
+                        VkSurfaceFormatKHR{format, colorSpace});
                 }
             }
         }
     }
 
+    format = VK_FORMAT_R16G16B16A16_SFLOAT;
     desc.format = AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT;
     if (AHardwareBuffer_isSupported(&desc)) {
-        all_formats.emplace_back(VkSurfaceFormatKHR{
-            VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
+        all_formats.emplace_back(
+            VkSurfaceFormatKHR{format, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
         if (colorspace_ext) {
             for (VkColorSpaceKHR colorSpace :
                  colorSpaceSupportedByVkEXTSwapchainColorspace) {
-                if (GetNativeDataspace(
-                        colorSpace,
-                        GetNativePixelFormat(VK_FORMAT_R16G16B16A16_SFLOAT)) !=
+                if (GetNativeDataspace(colorSpace, format) !=
                     DataSpace::UNKNOWN) {
-                    all_formats.emplace_back(VkSurfaceFormatKHR{
-                        VK_FORMAT_R16G16B16A16_SFLOAT, colorSpace});
+                    all_formats.emplace_back(
+                        VkSurfaceFormatKHR{format, colorSpace});
                 }
             }
 
             for (
                 VkColorSpaceKHR colorSpace :
                 colorSpaceSupportedByVkEXTSwapchainColorspaceOnFP16SurfaceOnly) {
-                if (GetNativeDataspace(
-                        colorSpace,
-                        GetNativePixelFormat(VK_FORMAT_R16G16B16A16_SFLOAT)) !=
+                if (GetNativeDataspace(colorSpace, format) !=
                     DataSpace::UNKNOWN) {
-                    all_formats.emplace_back(VkSurfaceFormatKHR{
-                        VK_FORMAT_R16G16B16A16_SFLOAT, colorSpace});
+                    all_formats.emplace_back(
+                        VkSurfaceFormatKHR{format, colorSpace});
                 }
             }
         }
     }
 
+    format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
     desc.format = AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM;
     if (AHardwareBuffer_isSupported(&desc)) {
         all_formats.emplace_back(
-            VkSurfaceFormatKHR{VK_FORMAT_A2B10G10R10_UNORM_PACK32,
-                               VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
+            VkSurfaceFormatKHR{format, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
         if (colorspace_ext) {
             for (VkColorSpaceKHR colorSpace :
                  colorSpaceSupportedByVkEXTSwapchainColorspace) {
-                if (GetNativeDataspace(
-                        colorSpace, GetNativePixelFormat(
-                                        VK_FORMAT_A2B10G10R10_UNORM_PACK32)) !=
+                if (GetNativeDataspace(colorSpace, format) !=
                     DataSpace::UNKNOWN) {
-                    all_formats.emplace_back(VkSurfaceFormatKHR{
-                        VK_FORMAT_A2B10G10R10_UNORM_PACK32, colorSpace});
+                    all_formats.emplace_back(
+                        VkSurfaceFormatKHR{format, colorSpace});
                 }
             }
         }
     }
 
+    format = VK_FORMAT_R8_UNORM;
     desc.format = AHARDWAREBUFFER_FORMAT_R8_UNORM;
     if (AHardwareBuffer_isSupported(&desc)) {
         if (colorspace_ext) {
-            all_formats.emplace_back(VkSurfaceFormatKHR{
-                VK_FORMAT_R8_UNORM, VK_COLOR_SPACE_PASS_THROUGH_EXT});
+            all_formats.emplace_back(
+                VkSurfaceFormatKHR{format, VK_COLOR_SPACE_PASS_THROUGH_EXT});
         }
     }
 
@@ -877,22 +870,18 @@ VkResult GetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice pdev,
             rgba10x6_formats_ext = true;
         }
     }
+    format = VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16;
     desc.format = AHARDWAREBUFFER_FORMAT_R10G10B10A10_UNORM;
     if (AHardwareBuffer_isSupported(&desc) && rgba10x6_formats_ext) {
         all_formats.emplace_back(
-            VkSurfaceFormatKHR{VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16,
-                               VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
+            VkSurfaceFormatKHR{format, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
         if (colorspace_ext) {
             for (VkColorSpaceKHR colorSpace :
                  colorSpaceSupportedByVkEXTSwapchainColorspace) {
-                if (GetNativeDataspace(
-                        colorSpace,
-                        GetNativePixelFormat(
-                            VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16)) !=
+                if (GetNativeDataspace(colorSpace, format) !=
                     DataSpace::UNKNOWN) {
-                    all_formats.emplace_back(VkSurfaceFormatKHR{
-                        VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16,
-                        colorSpace});
+                    all_formats.emplace_back(
+                        VkSurfaceFormatKHR{format, colorSpace});
                 }
             }
         }
@@ -1185,7 +1174,8 @@ VkResult GetPhysicalDeviceSurfaceFormats2KHR(
                             pSurfaceFormat);
 
                     if (surfaceCompressionProps &&
-                        driver.GetPhysicalDeviceImageFormatProperties2KHR) {
+                        (driver.GetPhysicalDeviceImageFormatProperties2KHR ||
+                         driver.GetPhysicalDeviceImageFormatProperties2)) {
                         VkPhysicalDeviceImageFormatInfo2 imageFormatInfo = {};
                         imageFormatInfo.sType =
                             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
@@ -1216,7 +1206,7 @@ VkResult GetPhysicalDeviceSurfaceFormats2KHR(
                         imageFormatProps.pNext = &compressionProps;
 
                         VkResult compressionRes =
-                            driver.GetPhysicalDeviceImageFormatProperties2KHR(
+                            GetPhysicalDeviceImageFormatProperties2(
                                 physicalDevice, &imageFormatInfo,
                                 &imageFormatProps);
                         if (compressionRes == VK_SUCCESS) {
@@ -1225,8 +1215,15 @@ VkResult GetPhysicalDeviceSurfaceFormats2KHR(
                             surfaceCompressionProps
                                 ->imageCompressionFixedRateFlags =
                                 compressionProps.imageCompressionFixedRateFlags;
-                        } else {
+                        } else if (compressionRes ==
+                                       VK_ERROR_OUT_OF_HOST_MEMORY ||
+                                   compressionRes ==
+                                       VK_ERROR_OUT_OF_DEVICE_MEMORY) {
                             return compressionRes;
+                        } else {
+                            // For any of the *_NOT_SUPPORTED errors we continue
+                            // onto the next format
+                            continue;
                         }
                     }
                 } break;
@@ -1475,6 +1472,12 @@ static VkResult getProducerUsage(const VkDevice& device,
             .flags = create_protected_swapchain ? VK_IMAGE_CREATE_PROTECTED_BIT : 0u,
         };
 
+        // If supporting mutable format swapchain add the mutable format flag
+        if (create_info->flags & VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR) {
+            image_format_info.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+            image_format_info.flags |= VK_IMAGE_CREATE_EXTENDED_USAGE_BIT_KHR;
+        }
+
         VkAndroidHardwareBufferUsageANDROID ahb_usage;
         ahb_usage.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_USAGE_ANDROID;
         ahb_usage.pNext = nullptr;
@@ -1483,23 +1486,14 @@ static VkResult getProducerUsage(const VkDevice& device,
         image_format_properties.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
         image_format_properties.pNext = &ahb_usage;
 
-        if (instance_dispatch.GetPhysicalDeviceImageFormatProperties2) {
-            VkResult result = instance_dispatch.GetPhysicalDeviceImageFormatProperties2(
-                pdev, &image_format_info, &image_format_properties);
-            if (result != VK_SUCCESS) {
-                ALOGE("VkGetPhysicalDeviceImageFormatProperties2 for AHB usage failed: %d", result);
-                return VK_ERROR_SURFACE_LOST_KHR;
-            }
-        }
-        else {
-            VkResult result = instance_dispatch.GetPhysicalDeviceImageFormatProperties2KHR(
-                pdev, &image_format_info,
-                &image_format_properties);
-            if (result != VK_SUCCESS) {
-                ALOGE("VkGetPhysicalDeviceImageFormatProperties2KHR for AHB usage failed: %d",
-                    result);
-                return VK_ERROR_SURFACE_LOST_KHR;
-            }
+        VkResult result = GetPhysicalDeviceImageFormatProperties2(
+            pdev, &image_format_info, &image_format_properties);
+        if (result != VK_SUCCESS) {
+            ALOGE(
+                "VkGetPhysicalDeviceImageFormatProperties2 for AHB usage "
+                "failed: %d",
+                result);
+            return VK_ERROR_SURFACE_LOST_KHR;
         }
 
         // Determine if USAGE_FRONT_BUFFER is needed.
@@ -1670,8 +1664,8 @@ VkResult CreateSwapchainKHR(VkDevice device,
 
     PixelFormat native_pixel_format =
         GetNativePixelFormat(create_info->imageFormat);
-    DataSpace native_dataspace =
-        GetNativeDataspace(create_info->imageColorSpace, native_pixel_format);
+    DataSpace native_dataspace = GetNativeDataspace(
+        create_info->imageColorSpace, create_info->imageFormat);
     if (native_dataspace == DataSpace::UNKNOWN) {
         ALOGE(
             "CreateSwapchainKHR(VkSwapchainCreateInfoKHR.imageColorSpace = %d) "
@@ -1902,6 +1896,11 @@ VkResult CreateSwapchainKHR(VkDevice device,
         num_images = 1;
     }
 
+    VkImageFormatListCreateInfo extra_mutable_formats = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO_KHR,
+    };
+    VkImageFormatListCreateInfo* extra_mutable_formats_ptr;
+
     // Look through the create_info pNext chain passed to createSwapchainKHR
     // for an image compression control struct.
     // if one is found AND the appropriate extensions are enabled, create a
@@ -1920,7 +1919,29 @@ VkResult CreateSwapchainKHR(VkDevice device,
                 image_compression.pNext = nullptr;
                 usage_info_pNext = &image_compression;
             } break;
-
+            case VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO: {
+                const VkImageFormatListCreateInfo* format_list =
+                    reinterpret_cast<const VkImageFormatListCreateInfo*>(
+                        create_infos);
+                if (create_info->flags &
+                    VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR) {
+                    if (format_list && format_list->viewFormatCount > 0 &&
+                        format_list->pViewFormats) {
+                        extra_mutable_formats.viewFormatCount =
+                            format_list->viewFormatCount;
+                        extra_mutable_formats.pViewFormats =
+                            format_list->pViewFormats;
+                        extra_mutable_formats_ptr = &extra_mutable_formats;
+                    } else {
+                        ALOGE(
+                            "vk_swapchain_create_mutable_format_bit_khr was "
+                            "set during swapchain creation but no valid "
+                            "vkimageformatlistcreateinfo was found in the "
+                            "pnext chain");
+                        return VK_ERROR_INITIALIZATION_FAILED;
+                    }
+                }
+            } break;
             default:
                 // Ignore all other info structs
                 break;
@@ -2016,6 +2037,11 @@ VkResult CreateSwapchainKHR(VkDevice device,
         .pQueueFamilyIndices = create_info->pQueueFamilyIndices,
     };
 
+    if (create_info->flags & VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR) {
+        image_create.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+        image_create.flags |= VK_IMAGE_CREATE_EXTENDED_USAGE_BIT_KHR;
+    }
+
     // Note: don't do deferred allocation for shared present modes. There's only one buffer
     // involved so very little benefit.
     if ((create_info->flags & VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT) &&
@@ -2025,7 +2051,7 @@ VkResult CreateSwapchainKHR(VkDevice device,
         // AcquireNextImage.
         VkImageSwapchainCreateInfoKHR image_swapchain_create = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_SWAPCHAIN_CREATE_INFO_KHR,
-            .pNext = nullptr,
+            .pNext = extra_mutable_formats_ptr,
             .swapchain = HandleFromSwapchain(swapchain),
         };
         image_create.pNext = &image_swapchain_create;
@@ -2076,6 +2102,11 @@ VkResult CreateSwapchainKHR(VkDevice device,
             image_native_buffer.ahb =
                 ANativeWindowBuffer_getHardwareBuffer(img.buffer.get());
             image_create.pNext = &image_native_buffer;
+
+            if (extra_mutable_formats_ptr) {
+                extra_mutable_formats_ptr->pNext = image_create.pNext;
+                image_create.pNext = extra_mutable_formats_ptr;
+            }
 
             ATRACE_BEGIN("CreateImage");
             result =

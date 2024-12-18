@@ -22,19 +22,23 @@
 
 #include <android-base/stringprintf.h>
 #include <common/FlagManager.h>
+#include <common/trace.h>
 #include <utils/Log.h>
-#include <utils/Trace.h>
 
 #include <chrono>
 #include <cinttypes>
 #include <numeric>
 #include <unordered_set>
 
+#include "../Jank/JankTracker.h"
+
 namespace android::frametimeline {
 
 using base::StringAppendF;
 using FrameTimelineEvent = perfetto::protos::pbzero::FrameTimelineEvent;
 using FrameTimelineDataSource = impl::FrameTimeline::FrameTimelineDataSource;
+
+namespace {
 
 void dumpTable(std::string& result, TimelineItem predictions, TimelineItem actuals,
                const std::string& indent, PredictionState predictionState, nsecs_t baseTime) {
@@ -317,6 +321,16 @@ nsecs_t getMinTime(PredictionState predictionState, TimelineItem predictions,
     return minTime;
 }
 
+bool shouldTraceForDataSource(const FrameTimelineDataSource::TraceContext& ctx, nsecs_t timestamp) {
+    if (auto ds = ctx.GetDataSourceLocked(); ds && ds->getStartTime() > timestamp) {
+        return false;
+    }
+
+    return true;
+}
+
+} // namespace
+
 int64_t TraceCookieCounter::getCookieForTracing() {
     return ++mTraceCookie;
 }
@@ -357,7 +371,11 @@ void SurfaceFrame::setActualQueueTime(nsecs_t actualQueueTime) {
 
 void SurfaceFrame::setAcquireFenceTime(nsecs_t acquireFenceTime) {
     std::scoped_lock lock(mMutex);
-    mActuals.endTime = std::max(acquireFenceTime, mActualQueueTime);
+    if (CC_UNLIKELY(acquireFenceTime == Fence::SIGNAL_TIME_PENDING)) {
+        mActuals.endTime = mActualQueueTime;
+    } else {
+        mActuals.endTime = std::max(acquireFenceTime, mActualQueueTime);
+    }
 }
 
 void SurfaceFrame::setDropTime(nsecs_t dropTime) {
@@ -543,12 +561,14 @@ std::string SurfaceFrame::miniDump() const {
 }
 
 void SurfaceFrame::classifyJankLocked(int32_t displayFrameJankType, const Fps& refreshRate,
-                                      Fps displayFrameRenderRate, nsecs_t& deadlineDelta) {
+                                      Fps displayFrameRenderRate, nsecs_t* outDeadlineDelta) {
     if (mActuals.presentTime == Fence::SIGNAL_TIME_INVALID) {
         // Cannot do any classification for invalid present time.
         mJankType = JankType::Unknown;
         mJankSeverityType = JankSeverityType::Unknown;
-        deadlineDelta = -1;
+        if (outDeadlineDelta) {
+            *outDeadlineDelta = -1;
+        }
         return;
     }
 
@@ -559,7 +579,9 @@ void SurfaceFrame::classifyJankLocked(int32_t displayFrameJankType, const Fps& r
         mJankType = mPresentState != PresentState::Presented ? JankType::Dropped
                                                              : JankType::AppDeadlineMissed;
         mJankSeverityType = JankSeverityType::Unknown;
-        deadlineDelta = -1;
+        if (outDeadlineDelta) {
+            *outDeadlineDelta = -1;
+        }
         return;
     }
 
@@ -568,11 +590,14 @@ void SurfaceFrame::classifyJankLocked(int32_t displayFrameJankType, const Fps& r
         return;
     }
 
-    deadlineDelta = mActuals.endTime - mPredictions.endTime;
     const nsecs_t presentDelta = mActuals.presentTime - mPredictions.presentTime;
     const nsecs_t deltaToVsync = refreshRate.getPeriodNsecs() > 0
             ? std::abs(presentDelta) % refreshRate.getPeriodNsecs()
             : 0;
+    const nsecs_t deadlineDelta = mActuals.endTime - mPredictions.endTime;
+    if (outDeadlineDelta) {
+        *outDeadlineDelta = deadlineDelta;
+    }
 
     if (deadlineDelta > mJankClassificationThresholds.deadlineThreshold) {
         mFrameReadyMetadata = FrameReadyMetadata::LateFinish;
@@ -671,25 +696,66 @@ void SurfaceFrame::onPresent(nsecs_t presentTime, int32_t displayFrameJankType, 
     mActuals.presentTime = presentTime;
     nsecs_t deadlineDelta = 0;
 
-    classifyJankLocked(displayFrameJankType, refreshRate, displayFrameRenderRate, deadlineDelta);
+    classifyJankLocked(displayFrameJankType, refreshRate, displayFrameRenderRate, &deadlineDelta);
 
     if (mPredictionState != PredictionState::None) {
         // Only update janky frames if the app used vsync predictions
         mTimeStats->incrementJankyFrames({refreshRate, mRenderRate, mOwnerUid, mLayerName,
                                           mGameMode, mJankType, displayDeadlineDelta,
                                           displayPresentDelta, deadlineDelta});
+
+        gui::JankData jd;
+        jd.frameVsyncId = mToken;
+        jd.jankType = mJankType;
+        jd.frameIntervalNs =
+                (mRenderRate ? *mRenderRate : mDisplayFrameRenderRate).getPeriodNsecs();
+
+        if (mPredictionState == PredictionState::Valid) {
+            jd.scheduledAppFrameTimeNs = mPredictions.endTime - mPredictions.startTime;
+
+            // Using expected start, rather than actual, to measure the entire frame time. That is
+            // if the application starts the frame later than scheduled, include that delay in the
+            // frame time, as it usually means main thread being busy with non-rendering work.
+            if (mPresentState == PresentState::Dropped) {
+                jd.actualAppFrameTimeNs = mDropTime - mPredictions.startTime;
+            } else {
+                jd.actualAppFrameTimeNs = mActuals.endTime - mPredictions.startTime;
+            }
+        } else {
+            jd.scheduledAppFrameTimeNs = 0;
+            jd.actualAppFrameTimeNs = 0;
+        }
+
+        JankTracker::onJankData(mLayerId, jd);
     }
 }
 
-void SurfaceFrame::tracePredictions(int64_t displayFrameToken, nsecs_t monoBootOffset) const {
+void SurfaceFrame::onCommitNotComposited(Fps refreshRate, Fps displayFrameRenderRate) {
+    std::scoped_lock lock(mMutex);
+
+    mDisplayFrameRenderRate = displayFrameRenderRate;
+    mActuals.presentTime = mPredictions.presentTime;
+    classifyJankLocked(JankType::None, refreshRate, displayFrameRenderRate, nullptr);
+}
+
+void SurfaceFrame::tracePredictions(int64_t displayFrameToken, nsecs_t monoBootOffset,
+                                    bool filterFramesBeforeTraceStarts) const {
     int64_t expectedTimelineCookie = mTraceCookieCounter.getCookieForTracing();
+    bool traced = false;
 
     // Expected timeline start
     FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+        const auto timestamp = mPredictions.startTime;
+        if (filterFramesBeforeTraceStarts && !shouldTraceForDataSource(ctx, timestamp)) {
+            // Do not trace packets started before tracing starts.
+            return;
+        }
+        traced = true;
+
         std::scoped_lock lock(mMutex);
         auto packet = ctx.NewTracePacket();
         packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
-        packet->set_timestamp(static_cast<uint64_t>(mPredictions.startTime + monoBootOffset));
+        packet->set_timestamp(static_cast<uint64_t>(timestamp + monoBootOffset));
 
         auto* event = packet->set_frame_timeline_event();
         auto* expectedSurfaceFrameStartEvent = event->set_expected_surface_frame_start();
@@ -703,42 +769,54 @@ void SurfaceFrame::tracePredictions(int64_t displayFrameToken, nsecs_t monoBootO
         expectedSurfaceFrameStartEvent->set_layer_name(mDebugName);
     });
 
-    // Expected timeline end
-    FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
-        std::scoped_lock lock(mMutex);
-        auto packet = ctx.NewTracePacket();
-        packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
-        packet->set_timestamp(static_cast<uint64_t>(mPredictions.endTime + monoBootOffset));
+    if (traced) {
+        // Expected timeline end
+        FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+            std::scoped_lock lock(mMutex);
+            auto packet = ctx.NewTracePacket();
+            packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
+            packet->set_timestamp(static_cast<uint64_t>(mPredictions.endTime + monoBootOffset));
 
-        auto* event = packet->set_frame_timeline_event();
-        auto* expectedSurfaceFrameEndEvent = event->set_frame_end();
+            auto* event = packet->set_frame_timeline_event();
+            auto* expectedSurfaceFrameEndEvent = event->set_frame_end();
 
-        expectedSurfaceFrameEndEvent->set_cookie(expectedTimelineCookie);
-    });
+            expectedSurfaceFrameEndEvent->set_cookie(expectedTimelineCookie);
+        });
+    }
 }
 
-void SurfaceFrame::traceActuals(int64_t displayFrameToken, nsecs_t monoBootOffset) const {
+void SurfaceFrame::traceActuals(int64_t displayFrameToken, nsecs_t monoBootOffset,
+                                bool filterFramesBeforeTraceStarts) const {
     int64_t actualTimelineCookie = mTraceCookieCounter.getCookieForTracing();
+    bool traced = false;
 
     // Actual timeline start
     FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+        const auto timestamp = [&]() {
+            std::scoped_lock lock(mMutex);
+            // Actual start time is not yet available, so use expected start instead
+            if (mPredictionState == PredictionState::Expired) {
+                // If prediction is expired, we can't use the predicted start time. Instead, just
+                // use a start time a little earlier than the end time so that we have some info
+                // about this frame in the trace.
+                nsecs_t endTime =
+                        (mPresentState == PresentState::Dropped ? mDropTime : mActuals.endTime);
+                return endTime - kPredictionExpiredStartTimeDelta;
+            }
+
+            return mActuals.startTime == 0 ? mPredictions.startTime : mActuals.startTime;
+        }();
+
+        if (filterFramesBeforeTraceStarts && !shouldTraceForDataSource(ctx, timestamp)) {
+            // Do not trace packets started before tracing starts.
+            return;
+        }
+        traced = true;
+
         std::scoped_lock lock(mMutex);
         auto packet = ctx.NewTracePacket();
         packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
-        // Actual start time is not yet available, so use expected start instead
-        if (mPredictionState == PredictionState::Expired) {
-            // If prediction is expired, we can't use the predicted start time. Instead, just use a
-            // start time a little earlier than the end time so that we have some info about this
-            // frame in the trace.
-            nsecs_t endTime =
-                    (mPresentState == PresentState::Dropped ? mDropTime : mActuals.endTime);
-            const auto timestamp = endTime - kPredictionExpiredStartTimeDelta;
-            packet->set_timestamp(static_cast<uint64_t>(timestamp + monoBootOffset));
-        } else {
-            const auto timestamp =
-                    mActuals.startTime == 0 ? mPredictions.startTime : mActuals.startTime;
-            packet->set_timestamp(static_cast<uint64_t>(timestamp + monoBootOffset));
-        }
+        packet->set_timestamp(static_cast<uint64_t>(timestamp + monoBootOffset));
 
         auto* event = packet->set_frame_timeline_event();
         auto* actualSurfaceFrameStartEvent = event->set_actual_surface_frame_start();
@@ -767,28 +845,31 @@ void SurfaceFrame::traceActuals(int64_t displayFrameToken, nsecs_t monoBootOffse
         actualSurfaceFrameStartEvent->set_jank_severity_type(toProto(mJankSeverityType));
     });
 
-    // Actual timeline end
-    FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
-        std::scoped_lock lock(mMutex);
-        auto packet = ctx.NewTracePacket();
-        packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
-        if (mPresentState == PresentState::Dropped) {
-            packet->set_timestamp(static_cast<uint64_t>(mDropTime + monoBootOffset));
-        } else {
-            packet->set_timestamp(static_cast<uint64_t>(mActuals.endTime + monoBootOffset));
-        }
+    if (traced) {
+        // Actual timeline end
+        FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+            std::scoped_lock lock(mMutex);
+            auto packet = ctx.NewTracePacket();
+            packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
+            if (mPresentState == PresentState::Dropped) {
+                packet->set_timestamp(static_cast<uint64_t>(mDropTime + monoBootOffset));
+            } else {
+                packet->set_timestamp(static_cast<uint64_t>(mActuals.endTime + monoBootOffset));
+            }
 
-        auto* event = packet->set_frame_timeline_event();
-        auto* actualSurfaceFrameEndEvent = event->set_frame_end();
+            auto* event = packet->set_frame_timeline_event();
+            auto* actualSurfaceFrameEndEvent = event->set_frame_end();
 
-        actualSurfaceFrameEndEvent->set_cookie(actualTimelineCookie);
-    });
+            actualSurfaceFrameEndEvent->set_cookie(actualTimelineCookie);
+        });
+    }
 }
 
 /**
  * TODO(b/178637512): add inputEventId to the perfetto trace.
  */
-void SurfaceFrame::trace(int64_t displayFrameToken, nsecs_t monoBootOffset) const {
+void SurfaceFrame::trace(int64_t displayFrameToken, nsecs_t monoBootOffset,
+                         bool filterFramesBeforeTraceStarts) const {
     if (mToken == FrameTimelineInfo::INVALID_VSYNC_ID ||
         displayFrameToken == FrameTimelineInfo::INVALID_VSYNC_ID) {
         // No packets can be traced with a missing token.
@@ -797,15 +878,15 @@ void SurfaceFrame::trace(int64_t displayFrameToken, nsecs_t monoBootOffset) cons
     if (getPredictionState() != PredictionState::Expired) {
         // Expired predictions have zeroed timestamps. This cannot be used in any meaningful way in
         // a trace.
-        tracePredictions(displayFrameToken, monoBootOffset);
+        tracePredictions(displayFrameToken, monoBootOffset, filterFramesBeforeTraceStarts);
     }
-    traceActuals(displayFrameToken, monoBootOffset);
+    traceActuals(displayFrameToken, monoBootOffset, filterFramesBeforeTraceStarts);
 }
 
 namespace impl {
 
 int64_t TokenManager::generateTokenForPredictions(TimelineItem&& predictions) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     std::scoped_lock lock(mMutex);
     while (mPredictions.size() >= kMaxTokens) {
         mPredictions.erase(mPredictions.begin());
@@ -825,8 +906,12 @@ std::optional<TimelineItem> TokenManager::getPredictionsForToken(int64_t token) 
 }
 
 FrameTimeline::FrameTimeline(std::shared_ptr<TimeStats> timeStats, pid_t surfaceFlingerPid,
-                             JankClassificationThresholds thresholds, bool useBootTimeClock)
+                             JankClassificationThresholds thresholds, bool useBootTimeClock,
+                             bool filterFramesBeforeTraceStarts)
       : mUseBootTimeClock(useBootTimeClock),
+        mFilterFramesBeforeTraceStarts(
+                FlagManager::getInstance().filter_frames_before_trace_starts() &&
+                filterFramesBeforeTraceStarts),
         mMaxDisplayFrames(kDefaultMaxDisplayFrames),
         mTimeStats(std::move(timeStats)),
         mSurfaceFlingerPid(surfaceFlingerPid),
@@ -851,7 +936,7 @@ void FrameTimeline::registerDataSource() {
 std::shared_ptr<SurfaceFrame> FrameTimeline::createSurfaceFrameForToken(
         const FrameTimelineInfo& frameTimelineInfo, pid_t ownerPid, uid_t ownerUid, int32_t layerId,
         std::string layerName, std::string debugName, bool isBuffer, GameMode gameMode) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     if (frameTimelineInfo.vsyncId == FrameTimelineInfo::INVALID_VSYNC_ID) {
         return std::make_shared<SurfaceFrame>(frameTimelineInfo, ownerPid, ownerUid, layerId,
                                               std::move(layerName), std::move(debugName),
@@ -887,14 +972,14 @@ FrameTimeline::DisplayFrame::DisplayFrame(std::shared_ptr<TimeStats> timeStats,
 }
 
 void FrameTimeline::addSurfaceFrame(std::shared_ptr<SurfaceFrame> surfaceFrame) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     std::scoped_lock lock(mMutex);
     mCurrentDisplayFrame->addSurfaceFrame(surfaceFrame);
 }
 
 void FrameTimeline::setSfWakeUp(int64_t token, nsecs_t wakeUpTime, Fps refreshRate,
                                 Fps renderRate) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     std::scoped_lock lock(mMutex);
     mCurrentDisplayFrame->onSfWakeUp(token, refreshRate, renderRate,
                                      mTokenManager.getPredictionsForToken(token), wakeUpTime);
@@ -903,13 +988,22 @@ void FrameTimeline::setSfWakeUp(int64_t token, nsecs_t wakeUpTime, Fps refreshRa
 void FrameTimeline::setSfPresent(nsecs_t sfPresentTime,
                                  const std::shared_ptr<FenceTime>& presentFence,
                                  const std::shared_ptr<FenceTime>& gpuFence) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     std::scoped_lock lock(mMutex);
     mCurrentDisplayFrame->setActualEndTime(sfPresentTime);
     mCurrentDisplayFrame->setGpuFence(gpuFence);
     mPendingPresentFences.emplace_back(std::make_pair(presentFence, mCurrentDisplayFrame));
     flushPendingPresentFences();
     finalizeCurrentDisplayFrame();
+}
+
+void FrameTimeline::onCommitNotComposited() {
+    SFTRACE_CALL();
+    std::scoped_lock lock(mMutex);
+    mCurrentDisplayFrame->onCommitNotComposited();
+    mCurrentDisplayFrame.reset();
+    mCurrentDisplayFrame = std::make_shared<DisplayFrame>(mTimeStats, mJankClassificationThresholds,
+                                                          &mTraceCookieCounter);
 }
 
 void FrameTimeline::DisplayFrame::addSurfaceFrame(std::shared_ptr<SurfaceFrame> surfaceFrame) {
@@ -1094,16 +1188,29 @@ void FrameTimeline::DisplayFrame::onPresent(nsecs_t signalTime, nsecs_t previous
     }
 }
 
-void FrameTimeline::DisplayFrame::tracePredictions(pid_t surfaceFlingerPid,
-                                                   nsecs_t monoBootOffset) const {
+void FrameTimeline::DisplayFrame::onCommitNotComposited() {
+    for (auto& surfaceFrame : mSurfaceFrames) {
+        surfaceFrame->onCommitNotComposited(mRefreshRate, mRenderRate);
+    }
+}
+
+void FrameTimeline::DisplayFrame::tracePredictions(pid_t surfaceFlingerPid, nsecs_t monoBootOffset,
+                                                   bool filterFramesBeforeTraceStarts) const {
     int64_t expectedTimelineCookie = mTraceCookieCounter.getCookieForTracing();
+    bool traced = false;
 
     // Expected timeline start
     FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+        const auto timestamp = mSurfaceFlingerPredictions.startTime;
+        if (filterFramesBeforeTraceStarts && !shouldTraceForDataSource(ctx, timestamp)) {
+            // Do not trace packets started before tracing starts.
+            return;
+        }
+        traced = true;
+
         auto packet = ctx.NewTracePacket();
         packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
-        packet->set_timestamp(
-                static_cast<uint64_t>(mSurfaceFlingerPredictions.startTime + monoBootOffset));
+        packet->set_timestamp(static_cast<uint64_t>(timestamp + monoBootOffset));
 
         auto* event = packet->set_frame_timeline_event();
         auto* expectedDisplayFrameStartEvent = event->set_expected_display_frame_start();
@@ -1114,22 +1221,25 @@ void FrameTimeline::DisplayFrame::tracePredictions(pid_t surfaceFlingerPid,
         expectedDisplayFrameStartEvent->set_pid(surfaceFlingerPid);
     });
 
-    // Expected timeline end
-    FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
-        auto packet = ctx.NewTracePacket();
-        packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
-        packet->set_timestamp(
-                static_cast<uint64_t>(mSurfaceFlingerPredictions.endTime + monoBootOffset));
+    if (traced) {
+        // Expected timeline end
+        FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+            auto packet = ctx.NewTracePacket();
+            packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
+            packet->set_timestamp(
+                    static_cast<uint64_t>(mSurfaceFlingerPredictions.endTime + monoBootOffset));
 
-        auto* event = packet->set_frame_timeline_event();
-        auto* expectedDisplayFrameEndEvent = event->set_frame_end();
+            auto* event = packet->set_frame_timeline_event();
+            auto* expectedDisplayFrameEndEvent = event->set_frame_end();
 
-        expectedDisplayFrameEndEvent->set_cookie(expectedTimelineCookie);
-    });
+            expectedDisplayFrameEndEvent->set_cookie(expectedTimelineCookie);
+        });
+    }
 }
 
 void FrameTimeline::DisplayFrame::addSkippedFrame(pid_t surfaceFlingerPid, nsecs_t monoBootOffset,
-                                                  nsecs_t previousPredictionPresentTime) const {
+                                                  nsecs_t previousPredictionPresentTime,
+                                                  bool filterFramesBeforeTraceStarts) const {
     nsecs_t skippedFrameStartTime = 0, skippedFramePresentTime = 0;
     const constexpr float kThresh = 0.5f;
     const constexpr float kRange = 1.5f;
@@ -1142,10 +1252,10 @@ void FrameTimeline::DisplayFrame::addSkippedFrame(pid_t surfaceFlingerPid, nsecs
                     (static_cast<float>(mSurfaceFlingerPredictions.presentTime) -
                      kThresh * static_cast<float>(mRenderRate.getPeriodNsecs())) &&
             static_cast<float>(surfaceFrame->getPredictions().presentTime) >=
-                    (static_cast<float>(previousPredictionPresentTime) -
+                    (static_cast<float>(previousPredictionPresentTime) +
                      kThresh * static_cast<float>(mRenderRate.getPeriodNsecs())) &&
             // sf skipped frame is not considered if app is self janked
-            !surfaceFrame->isSelfJanky()) {
+            surfaceFrame->getJankType() != JankType::None && !surfaceFrame->isSelfJanky()) {
             skippedFrameStartTime = surfaceFrame->getPredictions().endTime;
             skippedFramePresentTime = surfaceFrame->getPredictions().presentTime;
             break;
@@ -1155,9 +1265,17 @@ void FrameTimeline::DisplayFrame::addSkippedFrame(pid_t surfaceFlingerPid, nsecs
     // add slice
     if (skippedFrameStartTime != 0 && skippedFramePresentTime != 0) {
         int64_t actualTimelineCookie = mTraceCookieCounter.getCookieForTracing();
+        bool traced = false;
 
         // Actual timeline start
         FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+            if (filterFramesBeforeTraceStarts &&
+                !shouldTraceForDataSource(ctx, skippedFrameStartTime)) {
+                // Do not trace packets started before tracing starts.
+                return;
+            }
+            traced = true;
+
             auto packet = ctx.NewTracePacket();
             packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
             packet->set_timestamp(static_cast<uint64_t>(skippedFrameStartTime + monoBootOffset));
@@ -1178,30 +1296,40 @@ void FrameTimeline::DisplayFrame::addSkippedFrame(pid_t surfaceFlingerPid, nsecs
             actualDisplayFrameStartEvent->set_jank_severity_type(toProto(JankSeverityType::None));
         });
 
-        // Actual timeline end
-        FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
-            auto packet = ctx.NewTracePacket();
-            packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
-            packet->set_timestamp(static_cast<uint64_t>(skippedFramePresentTime + monoBootOffset));
+        if (traced) {
+            // Actual timeline end
+            FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+                auto packet = ctx.NewTracePacket();
+                packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
+                packet->set_timestamp(
+                        static_cast<uint64_t>(skippedFramePresentTime + monoBootOffset));
 
-            auto* event = packet->set_frame_timeline_event();
-            auto* actualDisplayFrameEndEvent = event->set_frame_end();
+                auto* event = packet->set_frame_timeline_event();
+                auto* actualDisplayFrameEndEvent = event->set_frame_end();
 
-            actualDisplayFrameEndEvent->set_cookie(actualTimelineCookie);
-        });
+                actualDisplayFrameEndEvent->set_cookie(actualTimelineCookie);
+            });
+        }
     }
 }
 
-void FrameTimeline::DisplayFrame::traceActuals(pid_t surfaceFlingerPid,
-                                               nsecs_t monoBootOffset) const {
+void FrameTimeline::DisplayFrame::traceActuals(pid_t surfaceFlingerPid, nsecs_t monoBootOffset,
+                                               bool filterFramesBeforeTraceStarts) const {
     int64_t actualTimelineCookie = mTraceCookieCounter.getCookieForTracing();
+    bool traced = false;
 
     // Actual timeline start
     FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+        const auto timestamp = mSurfaceFlingerActuals.startTime;
+        if (filterFramesBeforeTraceStarts && !shouldTraceForDataSource(ctx, timestamp)) {
+            // Do not trace packets started before tracing starts.
+            return;
+        }
+        traced = true;
+
         auto packet = ctx.NewTracePacket();
         packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
-        packet->set_timestamp(
-                static_cast<uint64_t>(mSurfaceFlingerActuals.startTime + monoBootOffset));
+        packet->set_timestamp(static_cast<uint64_t>(timestamp + monoBootOffset));
 
         auto* event = packet->set_frame_timeline_event();
         auto* actualDisplayFrameStartEvent = event->set_actual_display_frame_start();
@@ -1220,22 +1348,25 @@ void FrameTimeline::DisplayFrame::traceActuals(pid_t surfaceFlingerPid,
         actualDisplayFrameStartEvent->set_jank_severity_type(toProto(mJankSeverityType));
     });
 
-    // Actual timeline end
-    FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
-        auto packet = ctx.NewTracePacket();
-        packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
-        packet->set_timestamp(
-                static_cast<uint64_t>(mSurfaceFlingerActuals.presentTime + monoBootOffset));
+    if (traced) {
+        // Actual timeline end
+        FrameTimelineDataSource::Trace([&](FrameTimelineDataSource::TraceContext ctx) {
+            auto packet = ctx.NewTracePacket();
+            packet->set_timestamp_clock_id(perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME);
+            packet->set_timestamp(
+                    static_cast<uint64_t>(mSurfaceFlingerActuals.presentTime + monoBootOffset));
 
-        auto* event = packet->set_frame_timeline_event();
-        auto* actualDisplayFrameEndEvent = event->set_frame_end();
+            auto* event = packet->set_frame_timeline_event();
+            auto* actualDisplayFrameEndEvent = event->set_frame_end();
 
-        actualDisplayFrameEndEvent->set_cookie(actualTimelineCookie);
-    });
+            actualDisplayFrameEndEvent->set_cookie(actualTimelineCookie);
+        });
+    }
 }
 
 nsecs_t FrameTimeline::DisplayFrame::trace(pid_t surfaceFlingerPid, nsecs_t monoBootOffset,
-                                           nsecs_t previousPredictionPresentTime) const {
+                                           nsecs_t previousPredictionPresentTime,
+                                           bool filterFramesBeforeTraceStarts) const {
     if (mSurfaceFrames.empty()) {
         // We don't want to trace display frames without any surface frames updates as this cannot
         // be janky
@@ -1251,16 +1382,17 @@ nsecs_t FrameTimeline::DisplayFrame::trace(pid_t surfaceFlingerPid, nsecs_t mono
     if (mPredictionState == PredictionState::Valid) {
         // Expired and unknown predictions have zeroed timestamps. This cannot be used in any
         // meaningful way in a trace.
-        tracePredictions(surfaceFlingerPid, monoBootOffset);
+        tracePredictions(surfaceFlingerPid, monoBootOffset, filterFramesBeforeTraceStarts);
     }
-    traceActuals(surfaceFlingerPid, monoBootOffset);
+    traceActuals(surfaceFlingerPid, monoBootOffset, filterFramesBeforeTraceStarts);
 
     for (auto& surfaceFrame : mSurfaceFrames) {
-        surfaceFrame->trace(mToken, monoBootOffset);
+        surfaceFrame->trace(mToken, monoBootOffset, filterFramesBeforeTraceStarts);
     }
 
     if (FlagManager::getInstance().add_sf_skipped_frames_to_trace()) {
-        addSkippedFrame(surfaceFlingerPid, monoBootOffset, previousPredictionPresentTime);
+        addSkippedFrame(surfaceFlingerPid, monoBootOffset, previousPredictionPresentTime,
+                        filterFramesBeforeTraceStarts);
     }
     return mSurfaceFlingerPredictions.presentTime;
 }
@@ -1354,8 +1486,9 @@ void FrameTimeline::flushPendingPresentFences() {
         const nsecs_t signalTime = Fence::SIGNAL_TIME_INVALID;
         auto& displayFrame = pendingPresentFence.second;
         displayFrame->onPresent(signalTime, mPreviousActualPresentTime);
-        mPreviousPredictionPresentTime = displayFrame->trace(mSurfaceFlingerPid, monoBootOffset,
-                                                             mPreviousPredictionPresentTime);
+        mPreviousPredictionPresentTime =
+                displayFrame->trace(mSurfaceFlingerPid, monoBootOffset,
+                                    mPreviousPredictionPresentTime, mFilterFramesBeforeTraceStarts);
         mPendingPresentFences.erase(mPendingPresentFences.begin());
     }
 
@@ -1371,8 +1504,9 @@ void FrameTimeline::flushPendingPresentFences() {
 
         auto& displayFrame = pendingPresentFence.second;
         displayFrame->onPresent(signalTime, mPreviousActualPresentTime);
-        mPreviousPredictionPresentTime = displayFrame->trace(mSurfaceFlingerPid, monoBootOffset,
-                                                             mPreviousPredictionPresentTime);
+        mPreviousPredictionPresentTime =
+                displayFrame->trace(mSurfaceFlingerPid, monoBootOffset,
+                                    mPreviousPredictionPresentTime, mFilterFramesBeforeTraceStarts);
         mPreviousActualPresentTime = signalTime;
 
         mPendingPresentFences.erase(mPendingPresentFences.begin() + static_cast<int>(i));
@@ -1477,7 +1611,7 @@ void FrameTimeline::dumpJank(std::string& result) {
 }
 
 void FrameTimeline::parseArgs(const Vector<String16>& args, std::string& result) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     std::unordered_map<std::string, bool> argsMap;
     for (size_t i = 0; i < args.size(); i++) {
         argsMap[std::string(String8(args[i]).c_str())] = true;

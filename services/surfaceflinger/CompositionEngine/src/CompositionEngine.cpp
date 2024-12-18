@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <common/trace.h>
 #include <compositionengine/CompositionRefreshArgs.h>
 #include <compositionengine/LayerFE.h>
 #include <compositionengine/LayerFECompositionState.h>
@@ -23,7 +24,6 @@
 #include <ui/DisplayMap.h>
 
 #include <renderengine/RenderEngine.h>
-#include <utils/Trace.h>
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
@@ -128,7 +128,7 @@ void offloadOutputs(Outputs& outputs) {
 } // namespace
 
 void CompositionEngine::present(CompositionRefreshArgs& args) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     ALOGV(__FUNCTION__);
 
     preComposition(args);
@@ -155,13 +155,14 @@ void CompositionEngine::present(CompositionRefreshArgs& args) {
     }
 
     {
-        ATRACE_NAME("Waiting on HWC");
+        SFTRACE_NAME("Waiting on HWC");
         for (auto& future : presentFutures) {
             // TODO(b/185536303): Call ftl::Future::wait() once it exists, since
             // we do not need the return value of get().
             future.get();
         }
     }
+    postComposition(args);
 }
 
 void CompositionEngine::updateCursorAsync(CompositionRefreshArgs& args) {
@@ -176,20 +177,48 @@ void CompositionEngine::updateCursorAsync(CompositionRefreshArgs& args) {
 }
 
 void CompositionEngine::preComposition(CompositionRefreshArgs& args) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
     ALOGV(__FUNCTION__);
 
     bool needsAnotherUpdate = false;
 
-    mRefreshStartTime = systemTime(SYSTEM_TIME_MONOTONIC);
+    mRefreshStartTime = args.refreshStartTime;
 
     for (auto& layer : args.layers) {
-        if (layer->onPreComposition(mRefreshStartTime, args.updatingOutputGeometryThisFrame)) {
+        if (layer->onPreComposition(args.updatingOutputGeometryThisFrame)) {
             needsAnotherUpdate = true;
         }
     }
 
     mNeedsAnotherUpdate = needsAnotherUpdate;
+}
+
+// If a buffer is latched but the layer is not presented, such as when
+// obscured by another layer, the previous buffer needs to be released. We find
+// these buffers and fire a NO_FENCE to release it. This ensures that all
+// promises for buffer releases are fulfilled at the end of composition.
+void CompositionEngine::postComposition(CompositionRefreshArgs& args) {
+    if (FlagManager::getInstance().ce_fence_promise()) {
+        SFTRACE_CALL();
+        ALOGV(__FUNCTION__);
+
+        for (auto& layerFE : args.layers) {
+            if (layerFE->getReleaseFencePromiseStatus() ==
+                LayerFE::ReleaseFencePromiseStatus::INITIALIZED) {
+                layerFE->setReleaseFence(Fence::NO_FENCE);
+            }
+        }
+
+        // List of layersWithQueuedFrames does not necessarily overlap with
+        // list of layers, so those layersWithQueuedFrames also need any
+        // unfulfilled promises to be resolved for completeness.
+        for (auto& layerFE : args.layersWithQueuedFrames) {
+            if (layerFE->getReleaseFencePromiseStatus() ==
+                LayerFE::ReleaseFencePromiseStatus::INITIALIZED) {
+                layerFE->setReleaseFence(Fence::NO_FENCE);
+            }
+        }
+    }
 }
 
 FeatureFlags CompositionEngine::getFeatureFlags() const {

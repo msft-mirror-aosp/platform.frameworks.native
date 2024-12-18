@@ -20,11 +20,10 @@
 //#define LOG_NDEBUG 0
 
 #include <assert.h>
+#include <common/trace.h>
 #include <cutils/properties.h>
 #include <ftl/concat.h>
-#include <gui/TraceUtils.h>
 #include <log/log.h>
-#include <utils/Trace.h>
 
 #include "../TracedOrdinal.h"
 #include "VSyncDispatch.h"
@@ -53,7 +52,7 @@ VSyncReactor::VSyncReactor(PhysicalDisplayId id, std::unique_ptr<Clock> clock,
 VSyncReactor::~VSyncReactor() = default;
 
 bool VSyncReactor::addPresentFence(std::shared_ptr<FenceTime> fence) {
-    ATRACE_CALL();
+    SFTRACE_CALL();
 
     if (!fence) {
         return false;
@@ -66,8 +65,8 @@ bool VSyncReactor::addPresentFence(std::shared_ptr<FenceTime> fence) {
 
     std::lock_guard lock(mMutex);
     if (mExternalIgnoreFences || mInternalIgnoreFences) {
-        ATRACE_FORMAT_INSTANT("mExternalIgnoreFences=%d mInternalIgnoreFences=%d",
-            mExternalIgnoreFences, mInternalIgnoreFences);
+        SFTRACE_FORMAT_INSTANT("mExternalIgnoreFences=%d mInternalIgnoreFences=%d",
+                               mExternalIgnoreFences, mInternalIgnoreFences);
         return true;
     }
 
@@ -121,7 +120,7 @@ void VSyncReactor::updateIgnorePresentFencesInternal() {
 }
 
 void VSyncReactor::startPeriodTransitionInternal(ftl::NonNull<DisplayModePtr> modePtr) {
-    ATRACE_FORMAT("%s %" PRIu64, __func__, mId.value);
+    SFTRACE_FORMAT("%s %" PRIu64, __func__, mId.value);
     mPeriodConfirmationInProgress = true;
     mModePtrTransitioningTo = modePtr.get();
     mMoreSamplesNeeded = true;
@@ -129,20 +128,21 @@ void VSyncReactor::startPeriodTransitionInternal(ftl::NonNull<DisplayModePtr> mo
 }
 
 void VSyncReactor::endPeriodTransition() {
-    ATRACE_FORMAT("%s %" PRIu64, __func__, mId.value);
+    SFTRACE_FORMAT("%s %" PRIu64, __func__, mId.value);
     mModePtrTransitioningTo.reset();
     mPeriodConfirmationInProgress = false;
     mLastHwVsync.reset();
 }
 
 void VSyncReactor::onDisplayModeChanged(ftl::NonNull<DisplayModePtr> modePtr, bool force) {
-    ATRACE_INT64(ftl::Concat("VSR-", __func__, " ", mId.value).c_str(),
-                 modePtr->getVsyncRate().getPeriodNsecs());
+    SFTRACE_INT64(ftl::Concat("VSR-", __func__, " ", mId.value).c_str(),
+                  modePtr->getVsyncRate().getPeriodNsecs());
     std::lock_guard lock(mMutex);
     mLastHwVsync.reset();
 
-    if (!mSupportKernelIdleTimer &&
-        modePtr->getVsyncRate().getPeriodNsecs() == mTracker.currentPeriod() && !force) {
+    // kernel idle timer is not applicable for VRR
+    const bool supportKernelIdleTimer = mSupportKernelIdleTimer && !modePtr->getVrrConfig();
+    if (!supportKernelIdleTimer && mTracker.isCurrentMode(modePtr) && !force) {
         endPeriodTransition();
         setIgnorePresentFencesInternal(false);
         mMoreSamplesNeeded = false;
@@ -192,7 +192,7 @@ bool VSyncReactor::addHwVsyncTimestamp(nsecs_t timestamp, std::optional<nsecs_t>
 
     std::lock_guard lock(mMutex);
     if (periodConfirmed(timestamp, hwcVsyncPeriod)) {
-        ATRACE_FORMAT("VSR %" PRIu64 ": period confirmed", mId.value);
+        SFTRACE_FORMAT("VSR %" PRIu64 ": period confirmed", mId.value);
         if (mModePtrTransitioningTo) {
             mTracker.setDisplayModePtr(ftl::as_non_null(mModePtrTransitioningTo));
             *periodFlushed = true;
@@ -206,15 +206,20 @@ bool VSyncReactor::addHwVsyncTimestamp(nsecs_t timestamp, std::optional<nsecs_t>
         endPeriodTransition();
         mMoreSamplesNeeded = mTracker.needsMoreSamples();
     } else if (mPeriodConfirmationInProgress) {
-        ATRACE_FORMAT("VSR %" PRIu64 ": still confirming period", mId.value);
+        SFTRACE_FORMAT("VSR %" PRIu64 ": still confirming period", mId.value);
         mLastHwVsync = timestamp;
         mMoreSamplesNeeded = true;
         *periodFlushed = false;
     } else {
-        ATRACE_FORMAT("VSR %" PRIu64 ": adding sample", mId.value);
+        SFTRACE_FORMAT("VSR %" PRIu64 ": adding sample", mId.value);
         *periodFlushed = false;
         mTracker.addVsyncTimestamp(timestamp);
         mMoreSamplesNeeded = mTracker.needsMoreSamples();
+    }
+
+    if (mExternalIgnoreFences) {
+      // keep HWVSync on as long as we ignore present fences.
+      mMoreSamplesNeeded = true;
     }
 
     if (!mMoreSamplesNeeded) {

@@ -35,15 +35,10 @@ NotifyInputDevicesChangedArgs::NotifyInputDevicesChangedArgs(int32_t id,
                                                              std::vector<InputDeviceInfo> infos)
       : id(id), inputDeviceInfos(std::move(infos)) {}
 
-// --- NotifyConfigurationChangedArgs ---
-
-NotifyConfigurationChangedArgs::NotifyConfigurationChangedArgs(int32_t id, nsecs_t eventTime)
-      : id(id), eventTime(eventTime) {}
-
 // --- NotifyKeyArgs ---
 
 NotifyKeyArgs::NotifyKeyArgs(int32_t id, nsecs_t eventTime, nsecs_t readTime, int32_t deviceId,
-                             uint32_t source, int32_t displayId, uint32_t policyFlags,
+                             uint32_t source, ui::LogicalDisplayId displayId, uint32_t policyFlags,
                              int32_t action, int32_t flags, int32_t keyCode, int32_t scanCode,
                              int32_t metaState, nsecs_t downTime)
       : id(id),
@@ -64,7 +59,7 @@ NotifyKeyArgs::NotifyKeyArgs(int32_t id, nsecs_t eventTime, nsecs_t readTime, in
 
 NotifyMotionArgs::NotifyMotionArgs(
         int32_t id, nsecs_t eventTime, nsecs_t readTime, int32_t deviceId, uint32_t source,
-        int32_t displayId, uint32_t policyFlags, int32_t action, int32_t actionButton,
+        ui::LogicalDisplayId displayId, uint32_t policyFlags, int32_t action, int32_t actionButton,
         int32_t flags, int32_t metaState, int32_t buttonState, MotionClassification classification,
         int32_t edgeFlags, uint32_t pointerCount, const PointerProperties* pointerProperties,
         const PointerCoords* pointerCoords, float xPrecision, float yPrecision,
@@ -198,7 +193,6 @@ Visitor(V...) -> Visitor<V...>;
 const char* toString(const NotifyArgs& args) {
     Visitor toStringVisitor{
             [&](const NotifyInputDevicesChangedArgs&) { return "NotifyInputDevicesChangedArgs"; },
-            [&](const NotifyConfigurationChangedArgs&) { return "NotifyConfigurationChangedArgs"; },
             [&](const NotifyKeyArgs&) { return "NotifyKeyArgs"; },
             [&](const NotifyMotionArgs&) { return "NotifyMotionArgs"; },
             [&](const NotifySensorArgs&) { return "NotifySensorArgs"; },

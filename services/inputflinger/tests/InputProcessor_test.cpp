@@ -16,7 +16,6 @@
 
 #include "../InputProcessor.h"
 #include <gtest/gtest.h>
-#include <gui/constants.h>
 
 #include "TestInputListener.h"
 
@@ -45,7 +44,7 @@ static NotifyMotionArgs generateBasicMotionArgs() {
     coords.setAxisValue(AMOTION_EVENT_AXIS_Y, 1);
     static constexpr nsecs_t downTime = 2;
     NotifyMotionArgs motionArgs(/*sequenceNum=*/1, /*eventTime=*/downTime, /*readTime=*/2,
-                                /*deviceId=*/3, AINPUT_SOURCE_ANY, ADISPLAY_ID_DEFAULT,
+                                /*deviceId=*/3, AINPUT_SOURCE_ANY, ui::LogicalDisplayId::DEFAULT,
                                 /*policyFlags=*/4, AMOTION_EVENT_ACTION_DOWN, /*actionButton=*/0,
                                 /*flags=*/0, AMETA_NONE, /*buttonState=*/0,
                                 MotionClassification::NONE, AMOTION_EVENT_EDGE_FLAG_NONE,
@@ -64,24 +63,10 @@ protected:
     void SetUp() override { mProcessor = std::make_unique<InputProcessor>(mTestListener); }
 };
 
-/**
- * Create a basic configuration change and send it to input processor.
- * Expect that the event is received by the next input stage, unmodified.
- */
-TEST_F(InputProcessorTest, SendToNextStage_NotifyConfigurationChangedArgs) {
-    // Create a basic configuration change and send to processor
-    NotifyConfigurationChangedArgs args(/*sequenceNum=*/1, /*eventTime=*/2);
-
-    mProcessor->notifyConfigurationChanged(args);
-    NotifyConfigurationChangedArgs outArgs;
-    ASSERT_NO_FATAL_FAILURE(mTestListener.assertNotifyConfigurationChangedWasCalled(&outArgs));
-    ASSERT_EQ(args, outArgs);
-}
-
 TEST_F(InputProcessorTest, SendToNextStage_NotifyKeyArgs) {
     // Create a basic key event and send to processor
     NotifyKeyArgs args(/*sequenceNum=*/1, /*eventTime=*/2, /*readTime=*/21, /*deviceId=*/3,
-                       AINPUT_SOURCE_KEYBOARD, ADISPLAY_ID_DEFAULT, /*policyFlags=*/0,
+                       AINPUT_SOURCE_KEYBOARD, ui::LogicalDisplayId::DEFAULT, /*policyFlags=*/0,
                        AKEY_EVENT_ACTION_DOWN, /*flags=*/4, AKEYCODE_HOME, /*scanCode=*/5,
                        AMETA_NONE, /*downTime=*/6);
 
