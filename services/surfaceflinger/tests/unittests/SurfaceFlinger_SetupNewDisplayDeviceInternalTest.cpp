@@ -239,7 +239,9 @@ void SetupNewDisplayDeviceInternalTest::setupNewDisplayDeviceInternalTest() {
         ASSERT_TRUE(displayId);
         const auto hwcDisplayId = Case::Display::HWC_DISPLAY_ID_OPT::value;
         ASSERT_TRUE(hwcDisplayId);
-        mFlinger.getHwComposer().allocatePhysicalDisplay(*hwcDisplayId, *displayId);
+        const auto port = Case::Display::PORT::value;
+        ASSERT_TRUE(port);
+        mFlinger.getHwComposer().allocatePhysicalDisplay(*hwcDisplayId, *displayId, std::nullopt);
         DisplayModePtr activeMode = DisplayMode::Builder(Case::Display::HWC_ACTIVE_CONFIG_ID)
                                             .setResolution(Case::Display::RESOLUTION)
                                             .setVsyncPeriod(DEFAULT_VSYNC_PERIOD)
@@ -258,7 +260,7 @@ void SetupNewDisplayDeviceInternalTest::setupNewDisplayDeviceInternalTest() {
         }
 
         const auto it = mFlinger.mutablePhysicalDisplays()
-                                .emplace_or_replace(*displayId, displayToken, *displayId,
+                                .emplace_or_replace(*displayId, displayToken, *displayId, *port,
                                                     *kConnectionTypeOpt, makeModes(activeMode),
                                                     std::move(colorModes), std::nullopt)
                                 .first;
@@ -299,6 +301,13 @@ void SetupNewDisplayDeviceInternalTest::setupNewDisplayDeviceInternalTest() {
                   mFlinger.mutableDisplayModeController()
                           .getActiveMode(device->getPhysicalId())
                           .modePtr->getHwcId());
+
+        EXPECT_EQ(Case::Display::PORT::value,
+                  mFlinger.physicalDisplays()
+                          .get(device->getPhysicalId())
+                          .transform([](const display::PhysicalDisplay& display) {
+                              return display.snapshot().port();
+                          }));
     }
 }
 

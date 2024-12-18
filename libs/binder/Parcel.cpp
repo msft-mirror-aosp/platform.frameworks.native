@@ -156,7 +156,7 @@ enum {
 
 #ifdef BINDER_WITH_KERNEL_IPC
 static void acquire_object(const sp<ProcessState>& proc, const flat_binder_object& obj,
-                           const void* who) {
+                           const void* who, bool tagFds) {
     switch (obj.hdr.type) {
         case BINDER_TYPE_BINDER:
             if (obj.binder) {
@@ -173,14 +173,14 @@ static void acquire_object(const sp<ProcessState>& proc, const flat_binder_objec
             return;
         }
         case BINDER_TYPE_FD: {
-            if (obj.cookie != 0) { // owned
+            if (tagFds && obj.cookie != 0) { // owned
                 FdTag(obj.handle, nullptr, who);
             }
             return;
         }
     }
 
-    ALOGD("Invalid object type 0x%08x", obj.hdr.type);
+    ALOGE("Invalid object type 0x%08x to acquire", obj.hdr.type);
 }
 
 static void release_object(const sp<ProcessState>& proc, const flat_binder_object& obj,
@@ -210,7 +210,7 @@ static void release_object(const sp<ProcessState>& proc, const flat_binder_objec
         }
     }
 
-    ALOGE("Invalid object type 0x%08x", obj.hdr.type);
+    ALOGE("Invalid object type 0x%08x to release", obj.hdr.type);
 }
 #endif // BINDER_WITH_KERNEL_IPC
 
@@ -611,7 +611,7 @@ status_t Parcel::appendFrom(const Parcel* parcel, size_t offset, size_t len) {
                     }
                 }
 
-                acquire_object(proc, *flat, this);
+                acquire_object(proc, *flat, this, true /*tagFds*/);
             }
         }
 #else
@@ -668,7 +668,8 @@ status_t Parcel::appendFrom(const Parcel* parcel, size_t offset, size_t len) {
                 // FD was unowned in the source parcel.
                 int newFd = -1;
                 if (status_t status = binder::os::dupFileDescriptor(oldFd, &newFd); status != OK) {
-                    ALOGW("Failed to duplicate file descriptor %d: %s", oldFd, strerror(-status));
+                    ALOGW("Failed to duplicate file descriptor %d: %s", oldFd,
+                          statusToString(status).c_str());
                 }
                 rpcFields->mFds->emplace_back(unique_fd(newFd));
                 // Fixup the index in the data.
@@ -683,7 +684,7 @@ status_t Parcel::appendFrom(const Parcel* parcel, size_t offset, size_t len) {
     return err;
 }
 
-int Parcel::compareData(const Parcel& other) {
+int Parcel::compareData(const Parcel& other) const {
     size_t size = dataSize();
     if (size != other.dataSize()) {
         return size < other.dataSize() ? -1 : 1;
@@ -1150,31 +1151,6 @@ status_t Parcel::finishWrite(size_t len)
     return NO_ERROR;
 }
 
-status_t Parcel::writeUnpadded(const void* data, size_t len)
-{
-    if (len > INT32_MAX) {
-        // don't accept size_t values which may have come from an
-        // inadvertent conversion from a negative int.
-        return BAD_VALUE;
-    }
-
-    size_t end = mDataPos + len;
-    if (end < mDataPos) {
-        // integer overflow
-        return BAD_VALUE;
-    }
-
-    if (end <= mDataCapacity) {
-restart_write:
-        memcpy(mData+mDataPos, data, len);
-        return finishWrite(len);
-    }
-
-    status_t err = growData(len);
-    if (err == NO_ERROR) goto restart_write;
-    return err;
-}
-
 status_t Parcel::write(const void* data, size_t len)
 {
     if (len > INT32_MAX) {
@@ -1210,6 +1186,10 @@ void* Parcel::writeInplace(size_t len)
 restart_write:
         //printf("Writing %ld bytes, padded to %ld\n", len, padded);
         uint8_t* const data = mData+mDataPos;
+
+        if (status_t status = validateReadData(mDataPos + padded); status != OK) {
+            return nullptr; // drops status
+        }
 
         // Need to pad at end?
         if (padded != len) {
@@ -1799,6 +1779,10 @@ status_t Parcel::writeObject(const flat_binder_object& val, bool nullMetaData)
     const bool enoughObjects = kernelFields->mObjectsSize < kernelFields->mObjectsCapacity;
     if (enoughData && enoughObjects) {
 restart_write:
+        if (status_t status = validateReadData(mDataPos + sizeof(val)); status != OK) {
+            return status;
+        }
+
         *reinterpret_cast<flat_binder_object*>(mData+mDataPos) = val;
 
         // remember if it's a file descriptor
@@ -1813,11 +1797,20 @@ restart_write:
         // Need to write meta-data?
         if (nullMetaData || val.binder != 0) {
             kernelFields->mObjects[kernelFields->mObjectsSize] = mDataPos;
-            acquire_object(ProcessState::self(), val, this);
+            acquire_object(ProcessState::self(), val, this, true /*tagFds*/);
             kernelFields->mObjectsSize++;
         }
 
         return finishWrite(sizeof(flat_binder_object));
+    }
+
+    if (mOwner) {
+        // continueWrite does have the logic to convert this from an
+        // owned to an unowned Parcel. However, this is pretty inefficient,
+        // and it's really strange to need to do so, so prefer to avoid
+        // these paths than try to support them.
+        ALOGE("writing objects not supported on owned Parcels");
+        return PERMISSION_DENIED;
     }
 
     if (!enoughData) {
@@ -1874,7 +1867,10 @@ status_t Parcel::validateReadData(size_t upperBound) const
                 if (mDataPos < kernelFields->mObjects[nextObject] + sizeof(flat_binder_object)) {
                     // Requested info overlaps with an object
                     if (!mServiceFuzzing) {
-                        ALOGE("Attempt to read from protected data in Parcel %p", this);
+                        ALOGE("Attempt to read or write from protected data in Parcel %p. pos: "
+                              "%zu, nextObject: %zu, object offset: %llu, object size: %zu",
+                              this, mDataPos, nextObject, kernelFields->mObjects[nextObject],
+                              sizeof(flat_binder_object));
                     }
                     return PERMISSION_DENIED;
                 }
@@ -2042,6 +2038,10 @@ status_t Parcel::writeAligned(T val) {
 
     if ((mDataPos+sizeof(val)) <= mDataCapacity) {
 restart_write:
+        if (status_t status = validateReadData(mDataPos + sizeof(val)); status != OK) {
+            return status;
+        }
+
         memcpy(mData + mDataPos, &val, sizeof(val));
         return finishWrite(sizeof(val));
     }
@@ -2232,9 +2232,7 @@ const char* Parcel::readCString() const
         const char* eos = reinterpret_cast<const char*>(memchr(str, 0, avail));
         if (eos) {
             const size_t len = eos - str;
-            mDataPos += pad_size(len+1);
-            ALOGV("readCString Setting data pos of %p to %zu", this, mDataPos);
-            return str;
+            return static_cast<const char*>(readInplace(len + 1));
         }
     }
     return nullptr;
@@ -2678,14 +2676,14 @@ const flat_binder_object* Parcel::readObject(bool nullMetaData) const
 }
 #endif // BINDER_WITH_KERNEL_IPC
 
-void Parcel::closeFileDescriptors() {
+void Parcel::closeFileDescriptors(size_t newObjectsSize) {
     if (auto* kernelFields = maybeKernelFields()) {
 #ifdef BINDER_WITH_KERNEL_IPC
         size_t i = kernelFields->mObjectsSize;
         if (i > 0) {
             // ALOGI("Closing file descriptors for %zu objects...", i);
         }
-        while (i > 0) {
+        while (i > newObjectsSize) {
             i--;
             const flat_binder_object* flat =
                     reinterpret_cast<flat_binder_object*>(mData + kernelFields->mObjects[i]);
@@ -2696,6 +2694,7 @@ void Parcel::closeFileDescriptors() {
             }
         }
 #else  // BINDER_WITH_KERNEL_IPC
+        (void)newObjectsSize;
         LOG_ALWAYS_FATAL("Binder kernel driver disabled at build time");
 #endif // BINDER_WITH_KERNEL_IPC
     } else if (auto* rpcFields = maybeRpcFields()) {
@@ -2729,6 +2728,65 @@ size_t Parcel::ipcObjectsCount() const
     return 0;
 }
 
+static void do_nothing_release_func(const uint8_t* data, size_t dataSize,
+                                    const binder_size_t* objects, size_t objectsCount) {
+    (void)data;
+    (void)dataSize;
+    (void)objects;
+    (void)objectsCount;
+}
+static void delete_data_release_func(const uint8_t* data, size_t dataSize,
+                                     const binder_size_t* objects, size_t objectsCount) {
+    delete[] data;
+    (void)dataSize;
+    (void)objects;
+    (void)objectsCount;
+}
+
+void Parcel::makeDangerousViewOf(Parcel* p) {
+    if (p->isForRpc()) {
+        // warning: this must match the logic in rpcSetDataReference
+        auto* rf = p->maybeRpcFields();
+        LOG_ALWAYS_FATAL_IF(rf == nullptr);
+        std::vector<std::variant<binder::unique_fd, binder::borrowed_fd>> fds;
+        if (rf->mFds) {
+            fds.reserve(rf->mFds->size());
+            for (const auto& fd : *rf->mFds) {
+                fds.push_back(binder::borrowed_fd(toRawFd(fd)));
+            }
+        }
+        status_t result =
+                rpcSetDataReference(rf->mSession, p->mData, p->mDataSize,
+                                    rf->mObjectPositions.data(), rf->mObjectPositions.size(),
+                                    std::move(fds), do_nothing_release_func);
+        LOG_ALWAYS_FATAL_IF(result != OK, "Failed: %s", statusToString(result).c_str());
+    } else {
+#ifdef BINDER_WITH_KERNEL_IPC
+        // warning: this must match the logic in ipcSetDataReference
+        auto* kf = p->maybeKernelFields();
+        LOG_ALWAYS_FATAL_IF(kf == nullptr);
+
+        // Ownership of FDs is passed to the Parcel from kernel binder. This should be refactored
+        // to move this ownership out of Parcel and into release_func. However, today, Parcel
+        // always assums it can own and close FDs today. So, for purposes of testing consistency,
+        // , create new FDs it can own.
+
+        uint8_t* newData = new uint8_t[p->mDataSize]; // deleted by delete_data_release_func
+        memcpy(newData, p->mData, p->mDataSize);
+        for (size_t i = 0; i < kf->mObjectsSize; i++) {
+            flat_binder_object* flat =
+                    reinterpret_cast<flat_binder_object*>(newData + kf->mObjects[i]);
+            if (flat->hdr.type == BINDER_TYPE_FD) {
+                flat->handle = fcntl(flat->handle, F_DUPFD_CLOEXEC, 0);
+            }
+        }
+
+        ipcSetDataReference(newData, p->mDataSize, kf->mObjects, kf->mObjectsSize,
+                            delete_data_release_func);
+#endif // BINDER_WITH_KERNEL_IPC
+    }
+}
+
 void Parcel::ipcSetDataReference(const uint8_t* data, size_t dataSize, const binder_size_t* objects,
                                  size_t objectsCount, release_func relFunc) {
     // this code uses 'mOwner == nullptr' to understand whether it owns memory
@@ -2739,6 +2797,7 @@ void Parcel::ipcSetDataReference(const uint8_t* data, size_t dataSize, const bin
     auto* kernelFields = maybeKernelFields();
     LOG_ALWAYS_FATAL_IF(kernelFields == nullptr); // guaranteed by freeData.
 
+    // must match makeDangerousViewOf
     mData = const_cast<uint8_t*>(data);
     mDataSize = mDataCapacity = dataSize;
     kernelFields->mObjects = const_cast<binder_size_t*>(objects);
@@ -2817,6 +2876,7 @@ status_t Parcel::rpcSetDataReference(
     auto* rpcFields = maybeRpcFields();
     LOG_ALWAYS_FATAL_IF(rpcFields == nullptr); // guaranteed by markForRpc.
 
+    // must match makeDangerousViewOf
     mData = const_cast<uint8_t*>(data);
     mDataSize = mDataCapacity = dataSize;
     mOwner = relFunc;
@@ -2884,15 +2944,17 @@ void Parcel::releaseObjects()
 #endif // BINDER_WITH_KERNEL_IPC
 }
 
-void Parcel::acquireObjects()
-{
+void Parcel::reacquireObjects(size_t objectsSize) {
     auto* kernelFields = maybeKernelFields();
     if (kernelFields == nullptr) {
         return;
     }
 
 #ifdef BINDER_WITH_KERNEL_IPC
-    size_t i = kernelFields->mObjectsSize;
+    LOG_ALWAYS_FATAL_IF(objectsSize > kernelFields->mObjectsSize,
+                        "Object size %zu out of range of %zu", objectsSize,
+                        kernelFields->mObjectsSize);
+    size_t i = objectsSize;
     if (i == 0) {
         return;
     }
@@ -2902,8 +2964,10 @@ void Parcel::acquireObjects()
     while (i > 0) {
         i--;
         const flat_binder_object* flat = reinterpret_cast<flat_binder_object*>(data + objects[i]);
-        acquire_object(proc, *flat, this);
+        acquire_object(proc, *flat, this, false /*tagFds*/); // they are already tagged
     }
+#else
+    (void) objectsSize;
 #endif // BINDER_WITH_KERNEL_IPC
 }
 
@@ -2920,7 +2984,7 @@ void Parcel::freeDataNoInit()
         //ALOGI("Freeing data ref of %p (pid=%d)", this, getpid());
         auto* kernelFields = maybeKernelFields();
         // Close FDs before freeing, otherwise they will leak for kernel binder.
-        closeFileDescriptors();
+        closeFileDescriptors(/*newObjectsSize=*/0);
         mOwner(mData, mDataSize, kernelFields ? kernelFields->mObjects : nullptr,
                kernelFields ? kernelFields->mObjectsSize : 0);
     } else {
@@ -2945,6 +3009,14 @@ status_t Parcel::growData(size_t len)
     if (len > INT32_MAX) {
         // don't accept size_t values which may have come from an
         // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
+    if (mDataPos > mDataSize) {
+        // b/370831157 - this case used to abort. We also don't expect mDataPos < mDataSize, but
+        // this would only waste a bit of memory, so it's okay.
+        ALOGE("growData only expected at the end of a Parcel. pos: %zu, size: %zu, capacity: %zu",
+              mDataPos, len, mDataCapacity);
         return BAD_VALUE;
     }
 
@@ -3049,13 +3121,38 @@ status_t Parcel::continueWrite(size_t desired)
             objectsSize = 0;
         } else {
             if (kernelFields) {
+#ifdef BINDER_WITH_KERNEL_IPC
+                validateReadData(mDataSize); // hack to sort the objects
                 while (objectsSize > 0) {
-                    if (kernelFields->mObjects[objectsSize - 1] < desired) break;
+                    if (kernelFields->mObjects[objectsSize - 1] + sizeof(flat_binder_object) <=
+                        desired)
+                        break;
                     objectsSize--;
                 }
+#endif // BINDER_WITH_KERNEL_IPC
             } else {
                 while (objectsSize > 0) {
-                    if (rpcFields->mObjectPositions[objectsSize - 1] < desired) break;
+                    // Object size varies by type.
+                    uint32_t pos = rpcFields->mObjectPositions[objectsSize - 1];
+                    size_t size = sizeof(RpcFields::ObjectType);
+                    uint32_t minObjectEnd;
+                    if (__builtin_add_overflow(pos, sizeof(RpcFields::ObjectType), &minObjectEnd) ||
+                        minObjectEnd > mDataSize) {
+                        return BAD_VALUE;
+                    }
+                    const auto type = *reinterpret_cast<const RpcFields::ObjectType*>(mData + pos);
+                    switch (type) {
+                        case RpcFields::TYPE_BINDER_NULL:
+                            break;
+                        case RpcFields::TYPE_BINDER:
+                            size += sizeof(uint64_t); // address
+                            break;
+                        case RpcFields::TYPE_NATIVE_FILE_DESCRIPTOR:
+                            size += sizeof(int32_t); // fd index
+                            break;
+                    }
+
+                    if (pos + size <= desired) break;
                     objectsSize--;
                 }
             }
@@ -3087,12 +3184,8 @@ status_t Parcel::continueWrite(size_t desired)
                 return NO_MEMORY;
             }
 
-            // Little hack to only acquire references on objects
-            // we will be keeping.
-            size_t oldObjectsSize = kernelFields->mObjectsSize;
-            kernelFields->mObjectsSize = objectsSize;
-            acquireObjects();
-            kernelFields->mObjectsSize = oldObjectsSize;
+            // only acquire references on objects we are keeping
+            reacquireObjects(objectsSize);
         }
         if (rpcFields) {
             if (status_t status = truncateRpcObjects(objectsSize); status != OK) {
@@ -3104,15 +3197,24 @@ status_t Parcel::continueWrite(size_t desired)
         if (mData) {
             memcpy(data, mData, mDataSize < desired ? mDataSize : desired);
         }
+#ifdef BINDER_WITH_KERNEL_IPC
         if (objects && kernelFields && kernelFields->mObjects) {
             memcpy(objects, kernelFields->mObjects, objectsSize * sizeof(binder_size_t));
+            // All FDs are owned when `mOwner`, even when `cookie == 0`. When
+            // we switch to `!mOwner`, we need to explicitly mark the FDs as
+            // owned.
+            for (size_t i = 0; i < objectsSize; i++) {
+                flat_binder_object* flat = reinterpret_cast<flat_binder_object*>(data + objects[i]);
+                if (flat->hdr.type == BINDER_TYPE_FD) {
+                    flat->cookie = 1;
+                }
+            }
         }
         // ALOGI("Freeing data ref of %p (pid=%d)", this, getpid());
         if (kernelFields) {
-            // TODO(b/239222407): This seems wrong. We should only free FDs when
-            // they are in a truncated section of the parcel.
-            closeFileDescriptors();
+            closeFileDescriptors(objectsSize);
         }
+#endif // BINDER_WITH_KERNEL_IPC
         mOwner(mData, mDataSize, kernelFields ? kernelFields->mObjects : nullptr,
                kernelFields ? kernelFields->mObjectsSize : 0);
         mOwner = nullptr;
@@ -3239,11 +3341,19 @@ status_t Parcel::truncateRpcObjects(size_t newObjectsSize) {
     }
     while (rpcFields->mObjectPositions.size() > newObjectsSize) {
         uint32_t pos = rpcFields->mObjectPositions.back();
-        rpcFields->mObjectPositions.pop_back();
+        uint32_t minObjectEnd;
+        if (__builtin_add_overflow(pos, sizeof(RpcFields::ObjectType), &minObjectEnd) ||
+            minObjectEnd > mDataSize) {
+            return BAD_VALUE;
+        }
         const auto type = *reinterpret_cast<const RpcFields::ObjectType*>(mData + pos);
         if (type == RpcFields::TYPE_NATIVE_FILE_DESCRIPTOR) {
-            const auto fdIndex =
-                    *reinterpret_cast<const int32_t*>(mData + pos + sizeof(RpcFields::ObjectType));
+            uint32_t objectEnd;
+            if (__builtin_add_overflow(minObjectEnd, sizeof(int32_t), &objectEnd) ||
+                objectEnd > mDataSize) {
+                return BAD_VALUE;
+            }
+            const auto fdIndex = *reinterpret_cast<const int32_t*>(mData + minObjectEnd);
             if (rpcFields->mFds == nullptr || fdIndex < 0 ||
                 static_cast<size_t>(fdIndex) >= rpcFields->mFds->size()) {
                 ALOGE("RPC Parcel contains invalid file descriptor index. index=%d fd_count=%zu",
@@ -3253,6 +3363,7 @@ status_t Parcel::truncateRpcObjects(size_t newObjectsSize) {
             // In practice, this always removes the last element.
             rpcFields->mFds->erase(rpcFields->mFds->begin() + fdIndex);
         }
+        rpcFields->mObjectPositions.pop_back();
     }
     return OK;
 }

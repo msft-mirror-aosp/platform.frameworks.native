@@ -92,7 +92,7 @@ public:
 
     LIBBINDER_EXPORTED status_t appendFrom(const Parcel* parcel, size_t start, size_t len);
 
-    LIBBINDER_EXPORTED int compareData(const Parcel& other);
+    LIBBINDER_EXPORTED int compareData(const Parcel& other) const;
     LIBBINDER_EXPORTED status_t compareDataInRange(size_t thisOffset, const Parcel& other,
                                                    size_t otherOffset, size_t length,
                                                    int* result) const;
@@ -172,14 +172,14 @@ public:
 
     LIBBINDER_EXPORTED status_t write(const void* data, size_t len);
     LIBBINDER_EXPORTED void* writeInplace(size_t len);
-    LIBBINDER_EXPORTED status_t writeUnpadded(const void* data, size_t len);
     LIBBINDER_EXPORTED status_t writeInt32(int32_t val);
     LIBBINDER_EXPORTED status_t writeUint32(uint32_t val);
     LIBBINDER_EXPORTED status_t writeInt64(int64_t val);
     LIBBINDER_EXPORTED status_t writeUint64(uint64_t val);
     LIBBINDER_EXPORTED status_t writeFloat(float val);
     LIBBINDER_EXPORTED status_t writeDouble(double val);
-    LIBBINDER_EXPORTED status_t writeCString(const char* str);
+    LIBBINDER_EXPORTED status_t writeCString(const char* str)
+            __attribute__((deprecated("use AIDL, writeString* instead")));
     LIBBINDER_EXPORTED status_t writeString8(const String8& str);
     LIBBINDER_EXPORTED status_t writeString8(const char* str, size_t len);
     LIBBINDER_EXPORTED status_t writeString16(const String16& str);
@@ -435,7 +435,8 @@ public:
     LIBBINDER_EXPORTED status_t readUtf8FromUtf16(std::unique_ptr<std::string>* str) const
             __attribute__((deprecated("use std::optional version instead")));
 
-    LIBBINDER_EXPORTED const char* readCString() const;
+    LIBBINDER_EXPORTED const char* readCString() const
+            __attribute__((deprecated("use AIDL, use readString*")));
     LIBBINDER_EXPORTED String8 readString8() const;
     LIBBINDER_EXPORTED status_t readString8(String8* pArg) const;
     LIBBINDER_EXPORTED const char* readString8Inplace(size_t* outLen) const;
@@ -637,9 +638,6 @@ public:
 
     LIBBINDER_EXPORTED const flat_binder_object* readObject(bool nullMetaData) const;
 
-    // Explicitly close all file descriptors in the parcel.
-    LIBBINDER_EXPORTED void closeFileDescriptors();
-
     // Debugging: get metrics on current allocations.
     LIBBINDER_EXPORTED static size_t getGlobalAllocSize();
     LIBBINDER_EXPORTED static size_t getGlobalAllocCount();
@@ -651,7 +649,15 @@ public:
 
     LIBBINDER_EXPORTED void print(std::ostream& to, uint32_t flags = 0) const;
 
+    // This API is to quickly become a view of another Parcel, so that we can also
+    // test 'owner' paths quickly. It's extremely dangerous to use this API in
+    // practice, and you should never ever do it.
+    LIBBINDER_EXPORTED void makeDangerousViewOf(Parcel* p);
+
 private:
+    // Close all file descriptors in the parcel at object positions >= newObjectsSize.
+    void closeFileDescriptors(size_t newObjectsSize);
+
     // `objects` and `objectsSize` always 0 for RPC Parcels.
     typedef void (*release_func)(const uint8_t* data, size_t dataSize, const binder_size_t* objects,
                                  size_t objectsSize);
@@ -663,7 +669,7 @@ private:
     void ipcSetDataReference(const uint8_t* data, size_t dataSize, const binder_size_t* objects,
                              size_t objectsCount, release_func relFunc);
     // Takes ownership even when an error is returned.
-    status_t rpcSetDataReference(
+    [[nodiscard]] status_t rpcSetDataReference(
             const sp<RpcSession>& session, const uint8_t* data, size_t dataSize,
             const uint32_t* objectTable, size_t objectTableSize,
             std::vector<std::variant<binder::unique_fd, binder::borrowed_fd>>&& ancillaryFds,
@@ -671,7 +677,7 @@ private:
 
     status_t            finishWrite(size_t len);
     void                releaseObjects();
-    void                acquireObjects();
+    void reacquireObjects(size_t objectSize);
     status_t            growData(size_t len);
     // Clear the Parcel and set the capacity to `desired`.
     // Doesn't reset the RPC session association.
@@ -1240,7 +1246,7 @@ private:
             if (__builtin_mul_overflow(size, sizeof(T), &dataLen)) {
                 return -EOVERFLOW;
             }
-            auto data = reinterpret_cast<const T*>(readInplace(dataLen));
+            auto data = readInplace(dataLen);
             if (data == nullptr) return BAD_VALUE;
             // std::vector::insert and similar methods will require type-dependent
             // byte alignment when inserting from a const iterator such as `data`,

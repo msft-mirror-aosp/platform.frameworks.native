@@ -52,6 +52,7 @@ cc_library {
         "-Wall",
         "-Werror",
         "-Wextra",
+        "-Wthread-safety",
         "-fvisibility=hidden",
     ],
 
@@ -91,7 +92,7 @@ cc_library {
         "libaidlcommonsupport",
         "android.hardware.sensors@1.0-convert",
         "android.hardware.sensors-V1-convert",
-        "android.hardware.sensors-V2-ndk",
+        "android.hardware.sensors-V3-ndk",
         "sensorservice_flags_c_lib",
     ],
 

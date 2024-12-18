@@ -19,13 +19,17 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <numeric>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 
 #include <ftl/hash.h>
 #include <log/log.h>
 #include <ui/DisplayIdentification.h>
+#include <ui/Size.h>
 
 namespace android {
 namespace {
@@ -44,6 +48,10 @@ std::optional<uint8_t> getEdidDescriptorType(const byte_view& view) {
     }
 
     return view[3];
+}
+
+bool isDetailedTimingDescriptor(const byte_view& view) {
+    return view[0] != 0 && view[1] != 0;
 }
 
 std::string_view parseEdidText(const byte_view& view) {
@@ -189,6 +197,21 @@ std::optional<Edid> parseEdid(const DisplayIdentificationData& edid) {
     const uint16_t productId =
             static_cast<uint16_t>(edid[kProductIdOffset] | (edid[kProductIdOffset + 1] << 8));
 
+    //   Bytes 12-15: display serial number, in little-endian (LSB). This field is
+    //   optional and its absence is marked by having all bytes set to 0x00.
+    //   Values do not represent ASCII characters.
+    constexpr size_t kSerialNumberOffset = 12;
+    if (edid.size() < kSerialNumberOffset + sizeof(uint32_t)) {
+        ALOGE("Invalid EDID: block zero S/N is truncated.");
+        return {};
+    }
+    const uint32_t blockZeroSerialNumber = edid[kSerialNumberOffset] +
+            (edid[kSerialNumberOffset + 1] << 8) + (edid[kSerialNumberOffset + 2] << 16) +
+            (edid[kSerialNumberOffset + 3] << 24);
+    const auto hashedBlockZeroSNOpt = blockZeroSerialNumber == 0
+            ? std::nullopt
+            : ftl::stable_hash(std::string_view(std::to_string(blockZeroSerialNumber)));
+
     constexpr size_t kManufactureWeekOffset = 16;
     if (edid.size() < kManufactureWeekOffset + sizeof(uint8_t)) {
         ALOGE("Invalid EDID: manufacture week is truncated.");
@@ -207,6 +230,15 @@ std::optional<Edid> parseEdid(const DisplayIdentificationData& edid) {
     ALOGW_IF(manufactureOrModelYear <= 0xf,
              "Invalid EDID: model year or manufacture year cannot be in the range [0x0, 0xf].");
 
+    constexpr size_t kMaxHorizontalPhysicalSizeOffset = 21;
+    constexpr size_t kMaxVerticalPhysicalSizeOffset = 22;
+    if (edid.size() < kMaxVerticalPhysicalSizeOffset + sizeof(uint8_t)) {
+        ALOGE("Invalid EDID: display's physical size is truncated.");
+        return {};
+    }
+    ui::Size maxPhysicalSizeInCm(edid[kMaxHorizontalPhysicalSizeOffset],
+                                 edid[kMaxVerticalPhysicalSizeOffset]);
+
     constexpr size_t kDescriptorOffset = 54;
     if (edid.size() < kDescriptorOffset) {
         ALOGE("Invalid EDID: descriptors are missing.");
@@ -217,8 +249,11 @@ std::optional<Edid> parseEdid(const DisplayIdentificationData& edid) {
     view = view.subspan(kDescriptorOffset);
 
     std::string_view displayName;
-    std::string_view serialNumber;
+    std::string_view descriptorBlockSerialNumber;
+    std::optional<uint64_t> hashedDescriptorBlockSNOpt = std::nullopt;
     std::string_view asciiText;
+    ui::Size preferredDTDPixelSize;
+    ui::Size preferredDTDPhysicalSize;
 
     constexpr size_t kDescriptorCount = 4;
     constexpr size_t kDescriptorLength = 18;
@@ -240,9 +275,41 @@ std::optional<Edid> parseEdid(const DisplayIdentificationData& edid) {
                     asciiText = parseEdidText(descriptor);
                     break;
                 case 0xff:
-                    serialNumber = parseEdidText(descriptor);
+                    descriptorBlockSerialNumber = parseEdidText(descriptor);
+                    hashedDescriptorBlockSNOpt = descriptorBlockSerialNumber.empty()
+                            ? std::nullopt
+                            : ftl::stable_hash(descriptorBlockSerialNumber);
                     break;
             }
+        } else if (isDetailedTimingDescriptor(view)) {
+            static constexpr size_t kHorizontalPhysicalLsbOffset = 12;
+            static constexpr size_t kHorizontalPhysicalMsbOffset = 14;
+            static constexpr size_t kVerticalPhysicalLsbOffset = 13;
+            static constexpr size_t kVerticalPhysicalMsbOffset = 14;
+            const uint32_t hSize =
+                    static_cast<uint32_t>(view[kHorizontalPhysicalLsbOffset] |
+                                          ((view[kHorizontalPhysicalMsbOffset] >> 4) << 8));
+            const uint32_t vSize =
+                    static_cast<uint32_t>(view[kVerticalPhysicalLsbOffset] |
+                                          ((view[kVerticalPhysicalMsbOffset] & 0b1111) << 8));
+
+            static constexpr size_t kHorizontalPixelLsbOffset = 2;
+            static constexpr size_t kHorizontalPixelMsbOffset = 4;
+            static constexpr size_t kVerticalPixelLsbOffset = 5;
+            static constexpr size_t kVerticalPixelMsbOffset = 7;
+
+            const uint8_t hLsb = view[kHorizontalPixelLsbOffset];
+            const uint8_t hMsb = view[kHorizontalPixelMsbOffset];
+            const int32_t hPixel = hLsb + ((hMsb & 0xF0) << 4);
+
+            const uint8_t vLsb = view[kVerticalPixelLsbOffset];
+            const uint8_t vMsb = view[kVerticalPixelMsbOffset];
+            const int32_t vPixel = vLsb + ((vMsb & 0xF0) << 4);
+
+            preferredDTDPixelSize.setWidth(hPixel);
+            preferredDTDPixelSize.setHeight(vPixel);
+            preferredDTDPhysicalSize.setWidth(hSize);
+            preferredDTDPhysicalSize.setHeight(vSize);
         }
 
         view = view.subspan(kDescriptorLength);
@@ -252,7 +319,7 @@ std::optional<Edid> parseEdid(const DisplayIdentificationData& edid) {
 
     if (modelString.empty()) {
         ALOGW("Invalid EDID: falling back to serial number due to missing display name.");
-        modelString = serialNumber;
+        modelString = descriptorBlockSerialNumber;
     }
     if (modelString.empty()) {
         ALOGW("Invalid EDID: falling back to ASCII text due to missing serial number.");
@@ -297,14 +364,25 @@ std::optional<Edid> parseEdid(const DisplayIdentificationData& edid) {
         }
     }
 
-    return Edid{.manufacturerId = manufacturerId,
-                .productId = productId,
-                .pnpId = *pnpId,
-                .modelHash = modelHash,
-                .displayName = displayName,
-                .manufactureOrModelYear = manufactureOrModelYear,
-                .manufactureWeek = manufactureWeek,
-                .cea861Block = cea861Block};
+    DetailedTimingDescriptor preferredDetailedTimingDescriptor{
+            .pixelSizeCount = preferredDTDPixelSize,
+            .physicalSizeInMm = preferredDTDPhysicalSize,
+    };
+
+    return Edid{
+            .manufacturerId = manufacturerId,
+            .productId = productId,
+            .hashedBlockZeroSerialNumberOpt = hashedBlockZeroSNOpt,
+            .hashedDescriptorBlockSerialNumberOpt = hashedDescriptorBlockSNOpt,
+            .pnpId = *pnpId,
+            .modelHash = modelHash,
+            .displayName = displayName,
+            .manufactureOrModelYear = manufactureOrModelYear,
+            .manufactureWeek = manufactureWeek,
+            .physicalSizeInCm = maxPhysicalSizeInCm,
+            .cea861Block = cea861Block,
+            .preferredDetailedTimingDescriptor = preferredDetailedTimingDescriptor,
+    };
 }
 
 std::optional<PnpId> getPnpId(uint16_t manufacturerId) {
@@ -336,9 +414,13 @@ std::optional<DisplayIdentificationInfo> parseDisplayIdentificationData(
     }
 
     const auto displayId = PhysicalDisplayId::fromEdid(port, edid->manufacturerId, edid->modelHash);
-    return DisplayIdentificationInfo{.id = displayId,
-                                     .name = std::string(edid->displayName),
-                                     .deviceProductInfo = buildDeviceProductInfo(*edid)};
+    return DisplayIdentificationInfo{
+            .id = displayId,
+            .name = std::string(edid->displayName),
+            .port = port,
+            .deviceProductInfo = buildDeviceProductInfo(*edid),
+            .preferredDetailedTimingDescriptor = edid->preferredDetailedTimingDescriptor,
+    };
 }
 
 PhysicalDisplayId getVirtualDisplayId(uint32_t id) {

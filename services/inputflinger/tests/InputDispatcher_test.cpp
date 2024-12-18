@@ -1913,6 +1913,99 @@ TEST_F(InputDispatcherTest, HoverMoveAndScroll) {
     window->consumeMotionEvent(WithMotionAction(ACTION_SCROLL));
 }
 
+/**
+ * Two windows: a trusted overlay and a regular window underneath. Both windows are visible.
+ * Mouse is hovered, and the hover event should only go to the overlay.
+ * However, next, the touchable region of the trusted overlay shrinks. The mouse position hasn't
+ * changed, but the cursor would now end up hovering above the regular window underneatch.
+ * If the mouse is now clicked, this would generate an ACTION_DOWN event, which would go to the
+ * regular window. However, the trusted overlay is also watching for outside touch.
+ * The trusted overlay should get two events:
+ * 1) The ACTION_OUTSIDE event, since the click is now not inside its touchable region
+ * 2) The HOVER_EXIT event, since the mouse pointer is no longer hovering inside this window
+ *
+ * This test reproduces a crash where there is an overlap between dispatch modes for the trusted
+ * overlay touch target, since the event is causing both an ACTION_OUTSIDE, and as a HOVER_EXIT.
+ */
+TEST_F(InputDispatcherTest, MouseClickUnderShrinkingTrustedOverlay) {
+    std::shared_ptr<FakeApplicationHandle> app = std::make_shared<FakeApplicationHandle>();
+    sp<FakeWindowHandle> overlay = sp<FakeWindowHandle>::make(app, mDispatcher, "Trusted overlay",
+                                                              ui::LogicalDisplayId::DEFAULT);
+    overlay->setTrustedOverlay(true);
+    overlay->setWatchOutsideTouch(true);
+    overlay->setFrame(Rect(0, 0, 200, 200));
+
+    sp<FakeWindowHandle> window = sp<FakeWindowHandle>::make(app, mDispatcher, "Regular window",
+                                                             ui::LogicalDisplayId::DEFAULT);
+    window->setFrame(Rect(0, 0, 200, 200));
+
+    mDispatcher->onWindowInfosChanged({{*overlay->getInfo(), *window->getInfo()}, {}, 0, 0});
+    // Hover the mouse into the overlay
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                                      .pointer(PointerBuilder(0, ToolType::MOUSE).x(100).y(110))
+                                      .build());
+    overlay->consumeMotionEvent(WithMotionAction(ACTION_HOVER_ENTER));
+
+    // Now, shrink the touchable region of the overlay! This will cause the cursor to suddenly have
+    // the regular window as the touch target
+    overlay->setTouchableRegion(Region({0, 0, 0, 0}));
+    mDispatcher->onWindowInfosChanged({{*overlay->getInfo(), *window->getInfo()}, {}, 0, 0});
+
+    // Now we can click with the mouse. The click should go into the regular window
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_DOWN, AINPUT_SOURCE_MOUSE)
+                                      .pointer(PointerBuilder(0, ToolType::MOUSE).x(100).y(110))
+                                      .build());
+    overlay->consumeMotionEvent(WithMotionAction(ACTION_HOVER_EXIT));
+    overlay->consumeMotionEvent(WithMotionAction(ACTION_OUTSIDE));
+    window->consumeMotionEvent(WithMotionAction(ACTION_DOWN));
+}
+
+/**
+ * Similar to above, but also has a spy on top that also catches the HOVER
+ * events. Also, instead of ACTION_DOWN, we are continuing to send the hovering
+ * stream to ensure that the spy receives hover events correctly.
+ */
+TEST_F(InputDispatcherTest, MouseClickUnderShrinkingTrustedOverlayWithSpy) {
+    std::shared_ptr<FakeApplicationHandle> app = std::make_shared<FakeApplicationHandle>();
+    sp<FakeWindowHandle> spyWindow =
+            sp<FakeWindowHandle>::make(app, mDispatcher, "Spy", ui::LogicalDisplayId::DEFAULT);
+    spyWindow->setFrame(Rect(0, 0, 200, 200));
+    spyWindow->setTrustedOverlay(true);
+    spyWindow->setSpy(true);
+    sp<FakeWindowHandle> overlay = sp<FakeWindowHandle>::make(app, mDispatcher, "Trusted overlay",
+                                                              ui::LogicalDisplayId::DEFAULT);
+    overlay->setTrustedOverlay(true);
+    overlay->setWatchOutsideTouch(true);
+    overlay->setFrame(Rect(0, 0, 200, 200));
+
+    sp<FakeWindowHandle> window = sp<FakeWindowHandle>::make(app, mDispatcher, "Regular window",
+                                                             ui::LogicalDisplayId::DEFAULT);
+    window->setFrame(Rect(0, 0, 200, 200));
+
+    mDispatcher->onWindowInfosChanged(
+            {{*spyWindow->getInfo(), *overlay->getInfo(), *window->getInfo()}, {}, 0, 0});
+    // Hover the mouse into the overlay
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                                      .pointer(PointerBuilder(0, ToolType::MOUSE).x(100).y(110))
+                                      .build());
+    spyWindow->consumeMotionEvent(WithMotionAction(ACTION_HOVER_ENTER));
+    overlay->consumeMotionEvent(WithMotionAction(ACTION_HOVER_ENTER));
+
+    // Now, shrink the touchable region of the overlay! This will cause the cursor to suddenly have
+    // the regular window as the touch target
+    overlay->setTouchableRegion(Region({0, 0, 0, 0}));
+    mDispatcher->onWindowInfosChanged(
+            {{*spyWindow->getInfo(), *overlay->getInfo(), *window->getInfo()}, {}, 0, 0});
+
+    // Now we can click with the mouse. The click should go into the regular window
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                                      .pointer(PointerBuilder(0, ToolType::MOUSE).x(110).y(110))
+                                      .build());
+    spyWindow->consumeMotionEvent(WithMotionAction(ACTION_HOVER_MOVE));
+    overlay->consumeMotionEvent(WithMotionAction(ACTION_HOVER_EXIT));
+    window->consumeMotionEvent(WithMotionAction(ACTION_HOVER_ENTER));
+}
+
 using InputDispatcherMultiDeviceTest = InputDispatcherTest;
 
 /**
@@ -5012,9 +5105,7 @@ TEST_F(InputDispatcherTest, HoverExitIsSentToRemovedWindow) {
 /**
  * Test that invalid HOVER events sent by accessibility do not cause a fatal crash.
  */
-TEST_F_WITH_FLAGS(InputDispatcherTest, InvalidA11yHoverStreamDoesNotCrash,
-                  REQUIRES_FLAGS_DISABLED(ACONFIG_FLAG(com::android::input::flags,
-                                                       a11y_crash_on_inconsistent_event_stream))) {
+TEST_F(InputDispatcherTest, InvalidA11yHoverStreamDoesNotCrash) {
     std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
     sp<FakeWindowHandle> window = sp<FakeWindowHandle>::make(application, mDispatcher, "Window",
                                                              ui::LogicalDisplayId::DEFAULT);
@@ -5030,10 +5121,11 @@ TEST_F_WITH_FLAGS(InputDispatcherTest, InvalidA11yHoverStreamDoesNotCrash,
                     .addFlag(AMOTION_EVENT_FLAG_IS_ACCESSIBILITY_EVENT);
     ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
               injectMotionEvent(*mDispatcher, hoverEnterBuilder.build()));
-    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
+    window->consumeMotionEvent(WithMotionAction(AMOTION_EVENT_ACTION_HOVER_ENTER));
+    // Another HOVER_ENTER would be inconsistent, and should therefore fail to
+    // get injected.
+    ASSERT_EQ(InputEventInjectionResult::FAILED,
               injectMotionEvent(*mDispatcher, hoverEnterBuilder.build()));
-    window->consumeMotionEvent(WithMotionAction(AMOTION_EVENT_ACTION_HOVER_ENTER));
-    window->consumeMotionEvent(WithMotionAction(AMOTION_EVENT_ACTION_HOVER_ENTER));
 }
 
 /**
@@ -9091,6 +9183,7 @@ class InputDispatcherKeyRepeatTest : public InputDispatcherTest {
 protected:
     static constexpr std::chrono::nanoseconds KEY_REPEAT_TIMEOUT = 40ms;
     static constexpr std::chrono::nanoseconds KEY_REPEAT_DELAY = 40ms;
+    static constexpr bool KEY_REPEAT_ENABLED = true;
 
     std::shared_ptr<FakeApplicationHandle> mApp;
     sp<FakeWindowHandle> mWindow;
@@ -9098,7 +9191,8 @@ protected:
     virtual void SetUp() override {
         InputDispatcherTest::SetUp();
 
-        mDispatcher->setKeyRepeatConfiguration(KEY_REPEAT_TIMEOUT, KEY_REPEAT_DELAY);
+        mDispatcher->setKeyRepeatConfiguration(KEY_REPEAT_TIMEOUT, KEY_REPEAT_DELAY,
+                                               KEY_REPEAT_ENABLED);
         setUpWindow();
     }
 
@@ -9245,6 +9339,24 @@ TEST_F(InputDispatcherKeyRepeatTest, FocusedWindow_CorrectRepeatCountWhenInjectK
     injectKeyRepeat(1);
     // Expect repeatCount to be 3 instead of 1
     expectKeyRepeatOnce(3);
+}
+
+TEST_F(InputDispatcherKeyRepeatTest, FocusedWindow_NoRepeatWhenKeyRepeatDisabled) {
+    SCOPED_FLAG_OVERRIDE(keyboard_repeat_keys, true);
+    static constexpr std::chrono::milliseconds KEY_NO_REPEAT_ASSERTION_TIMEOUT = 100ms;
+
+    mDispatcher->setKeyRepeatConfiguration(KEY_REPEAT_TIMEOUT, KEY_REPEAT_DELAY,
+                                           /*repeatKeyEnabled=*/false);
+    sendAndConsumeKeyDown(/*deviceId=*/1);
+
+    ASSERT_GT(KEY_NO_REPEAT_ASSERTION_TIMEOUT, KEY_REPEAT_TIMEOUT)
+            << "Ensure the check for no key repeats extends beyond the repeat timeout duration.";
+    ASSERT_GT(KEY_NO_REPEAT_ASSERTION_TIMEOUT, KEY_REPEAT_DELAY)
+            << "Ensure the check for no key repeats extends beyond the repeat delay duration.";
+
+    // No events should be returned if key repeat is turned off.
+    // Wait for KEY_NO_REPEAT_ASSERTION_TIMEOUT to return no events to ensure key repeat disabled.
+    mWindow->assertNoEvents(KEY_NO_REPEAT_ASSERTION_TIMEOUT);
 }
 
 /* Test InputDispatcher for MultiDisplay */
@@ -12776,6 +12888,22 @@ TEST_F(InputDispatcherDragTests, DragAndDropFinishedWhenCancelCurrentTouch) {
     // Remove drag window
     mDispatcher->onWindowInfosChanged({{*mWindow->getInfo(), *mSecondWindow->getInfo()}, {}, 0, 0});
 
+    // Complete the first event stream, even though the injection will fail because there aren't any
+    // valid targets to dispatch this event to. This is still needed to make the input stream
+    // consistent
+    ASSERT_EQ(InputEventInjectionResult::FAILED,
+              injectMotionEvent(*mDispatcher,
+                                MotionEventBuilder(ACTION_CANCEL, AINPUT_SOURCE_TOUCHSCREEN)
+                                        .displayId(ui::LogicalDisplayId::DEFAULT)
+                                        .pointer(PointerBuilder(/*id=*/0, ToolType::FINGER)
+                                                         .x(150)
+                                                         .y(50))
+                                        .pointer(PointerBuilder(/*id=*/1, ToolType::FINGER)
+                                                         .x(50)
+                                                         .y(50))
+                                        .build(),
+                                INJECT_EVENT_TIMEOUT, InputEventInjectionSync::WAIT_FOR_RESULT));
+
     // Inject a simple gesture, ensure dispatcher not crashed
     ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
               injectMotionDown(*mDispatcher, AINPUT_SOURCE_TOUCHSCREEN,
@@ -12812,6 +12940,87 @@ TEST_F(InputDispatcherDragTests, NoDragAndDropWithHoveringPointer) {
 
     ASSERT_FALSE(startDrag(/*sendDown=*/false))
             << "Drag and drop should not work with a hovering pointer";
+}
+
+/**
+ * Two devices, we use the second pointer of Device A to start the drag, during the drag process, if
+ * we perform a click using Device B, the dispatcher should work well.
+ */
+TEST_F(InputDispatcherDragTests, DragAndDropWhenSplitTouchAndMultiDevice) {
+    const DeviceId deviceA = 1;
+    const DeviceId deviceB = 2;
+    // First down on second window with deviceA.
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_DOWN, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .deviceId(deviceA)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(150).y(50))
+                                      .build());
+    mSecondWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_DOWN), WithDeviceId(deviceA),
+                                            WithDisplayId(ui::LogicalDisplayId::DEFAULT)));
+
+    // Second down on first window with deviceA
+    mDispatcher->notifyMotion(MotionArgsBuilder(POINTER_1_DOWN, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .deviceId(deviceA)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(150).y(50))
+                                      .pointer(PointerBuilder(1, ToolType::FINGER).x(50).y(50))
+                                      .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_DOWN), WithDeviceId(deviceA),
+                                      WithDisplayId(ui::LogicalDisplayId::DEFAULT)));
+    mSecondWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_MOVE), WithDeviceId(deviceA),
+                                            WithDisplayId(ui::LogicalDisplayId::DEFAULT)));
+
+    // Perform drag and drop from first window.
+    ASSERT_TRUE(startDrag(/*sendDown=*/false));
+
+    // Click first window with device B, we should ensure dispatcher work well.
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_DOWN, AINPUT_SOURCE_MOUSE)
+                                      .deviceId(deviceB)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(50).y(50))
+                                      .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_DOWN), WithDeviceId(deviceB),
+                                      WithDisplayId(ui::LogicalDisplayId::DEFAULT)));
+
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_UP, AINPUT_SOURCE_MOUSE)
+                                      .deviceId(deviceB)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(50).y(50))
+                                      .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_UP), WithDeviceId(deviceB),
+                                      WithDisplayId(ui::LogicalDisplayId::DEFAULT)));
+
+    // Move with device A.
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_MOVE, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .deviceId(deviceA)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(151).y(51))
+                                      .pointer(PointerBuilder(1, ToolType::FINGER).x(51).y(51))
+                                      .build());
+
+    mDragWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_MOVE), WithDeviceId(deviceA),
+                                          WithDisplayId(ui::LogicalDisplayId::DEFAULT),
+                                          WithFlags(AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE)));
+    mWindow->consumeDragEvent(false, 51, 51);
+    mSecondWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_MOVE), WithDeviceId(deviceA),
+                                            WithDisplayId(ui::LogicalDisplayId::DEFAULT)));
+
+    // Releasing the drag pointer should cause drop.
+    mDispatcher->notifyMotion(MotionArgsBuilder(POINTER_1_UP, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .deviceId(deviceA)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(151).y(51))
+                                      .pointer(PointerBuilder(1, ToolType::FINGER).x(51).y(51))
+                                      .build());
+    mDragWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_UP), WithDeviceId(deviceA),
+                                          WithDisplayId(ui::LogicalDisplayId::DEFAULT),
+                                          WithFlags(AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE)));
+    mFakePolicy->assertDropTargetEquals(*mDispatcher, mWindow->getToken());
+    mSecondWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_MOVE), WithDeviceId(deviceA),
+                                            WithDisplayId(ui::LogicalDisplayId::DEFAULT)));
+
+    // Release all pointers.
+    mDispatcher->notifyMotion(MotionArgsBuilder(ACTION_UP, AINPUT_SOURCE_TOUCHSCREEN)
+                                      .deviceId(deviceA)
+                                      .pointer(PointerBuilder(0, ToolType::FINGER).x(151).y(51))
+                                      .build());
+    mSecondWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_UP), WithDeviceId(deviceA),
+                                            WithDisplayId(ui::LogicalDisplayId::DEFAULT)));
+    mWindow->assertNoEvents();
 }
 
 class InputDispatcherDropInputFeatureTest : public InputDispatcherTest {};

@@ -43,9 +43,11 @@
 #include <input/BlockingQueue.h>
 #include <processgroup/processgroup.h>
 #include <utils/Flattenable.h>
+#include <utils/SystemClock.h>
 
 #include <linux/sched.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -110,6 +112,8 @@ enum BinderLibTestTranscationCode {
     BINDER_LIB_TEST_LINK_DEATH_TRANSACTION,
     BINDER_LIB_TEST_WRITE_FILE_TRANSACTION,
     BINDER_LIB_TEST_WRITE_PARCEL_FILE_DESCRIPTOR_TRANSACTION,
+    BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_OWNED_TRANSACTION,
+    BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_UNOWNED_TRANSACTION,
     BINDER_LIB_TEST_EXIT_TRANSACTION,
     BINDER_LIB_TEST_DELAYED_EXIT_TRANSACTION,
     BINDER_LIB_TEST_GET_PTR_SIZE_TRANSACTION,
@@ -220,6 +224,8 @@ class BinderLibTestEnv : public ::testing::Environment {
             ASSERT_GT(m_serverpid, 0);
 
             sp<IServiceManager> sm = defaultServiceManager();
+            // disable caching during addService.
+            sm->enableAddServiceCache(false);
             //printf("%s: pid %d, get service\n", __func__, m_pid);
             LIBBINDER_IGNORE("-Wdeprecated-declarations")
             m_server = sm->getService(binderLibTestServiceName);
@@ -295,6 +301,9 @@ class BinderLibTest : public ::testing::Test {
         virtual void SetUp() {
             m_server = static_cast<BinderLibTestEnv *>(binder_env)->getServer();
             IPCThreadState::self()->restoreCallingWorkSource(0);
+            sp<IServiceManager> sm = defaultServiceManager();
+            // disable caching during addService.
+            sm->enableAddServiceCache(false);
         }
         virtual void TearDown() {
         }
@@ -335,7 +344,12 @@ class BinderLibTest : public ::testing::Test {
         }
 
         bool checkFreezeSupport() {
-            std::ifstream freezer_file("/sys/fs/cgroup/uid_0/cgroup.freeze");
+            std::string path;
+            if (!CgroupGetAttributePathForTask("FreezerState", getpid(), &path)) {
+                return false;
+            }
+
+            std::ifstream freezer_file(path);
             // Pass test on devices where the cgroup v2 freezer is not supported
             if (freezer_file.fail()) {
                 return false;
@@ -534,6 +548,30 @@ class TestDeathRecipient : public IBinder::DeathRecipient, public BinderLibTestE
             (void)who;
             triggerEvent();
         };
+};
+
+ssize_t countFds() {
+    return std::distance(std::filesystem::directory_iterator("/proc/self/fd"),
+                         std::filesystem::directory_iterator{});
+}
+
+struct FdLeakDetector {
+    int startCount;
+
+    FdLeakDetector() {
+        // This log statement is load bearing. We have to log something before
+        // counting FDs to make sure the logging system is initialized, otherwise
+        // the sockets it opens will look like a leak.
+        ALOGW("FdLeakDetector counting FDs.");
+        startCount = countFds();
+    }
+    ~FdLeakDetector() {
+        int endCount = countFds();
+        if (startCount != endCount) {
+            ADD_FAILURE() << "fd count changed (" << startCount << " -> " << endCount
+                          << ") fd leak?";
+        }
+    }
 };
 
 TEST_F(BinderLibTest, CannotUseBinderAfterFork) {
@@ -1175,6 +1213,100 @@ TEST_F(BinderLibTest, PassParcelFileDescriptor) {
     EXPECT_EQ(0, read(read_end.get(), readbuf.data(), datasize));
 }
 
+TEST_F(BinderLibTest, RecvOwnedFileDescriptors) {
+    FdLeakDetector fd_leak_detector;
+
+    Parcel data;
+    Parcel reply;
+    EXPECT_EQ(NO_ERROR,
+              m_server->transact(BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_OWNED_TRANSACTION, data,
+                                 &reply));
+    unique_fd a, b;
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&a));
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&b));
+}
+
+// Used to trigger fdsan error (b/239222407).
+TEST_F(BinderLibTest, RecvOwnedFileDescriptorsAndWriteInt) {
+    GTEST_SKIP() << "triggers fdsan false positive: b/370824489";
+
+    FdLeakDetector fd_leak_detector;
+
+    Parcel data;
+    Parcel reply;
+    EXPECT_EQ(NO_ERROR,
+              m_server->transact(BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_OWNED_TRANSACTION, data,
+                                 &reply));
+    reply.setDataPosition(reply.dataSize());
+    reply.writeInt32(0);
+    reply.setDataPosition(0);
+    unique_fd a, b;
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&a));
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&b));
+}
+
+// Used to trigger fdsan error (b/239222407).
+TEST_F(BinderLibTest, RecvOwnedFileDescriptorsAndTruncate) {
+    GTEST_SKIP() << "triggers fdsan false positive: b/370824489";
+
+    FdLeakDetector fd_leak_detector;
+
+    Parcel data;
+    Parcel reply;
+    EXPECT_EQ(NO_ERROR,
+              m_server->transact(BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_OWNED_TRANSACTION, data,
+                                 &reply));
+    reply.setDataSize(reply.dataSize() - sizeof(flat_binder_object));
+    unique_fd a, b;
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&a));
+    EXPECT_EQ(BAD_TYPE, reply.readUniqueFileDescriptor(&b));
+}
+
+TEST_F(BinderLibTest, RecvUnownedFileDescriptors) {
+    FdLeakDetector fd_leak_detector;
+
+    Parcel data;
+    Parcel reply;
+    EXPECT_EQ(NO_ERROR,
+              m_server->transact(BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_UNOWNED_TRANSACTION, data,
+                                 &reply));
+    unique_fd a, b;
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&a));
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&b));
+}
+
+// Used to trigger fdsan error (b/239222407).
+TEST_F(BinderLibTest, RecvUnownedFileDescriptorsAndWriteInt) {
+    FdLeakDetector fd_leak_detector;
+
+    Parcel data;
+    Parcel reply;
+    EXPECT_EQ(NO_ERROR,
+              m_server->transact(BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_UNOWNED_TRANSACTION, data,
+                                 &reply));
+    reply.setDataPosition(reply.dataSize());
+    reply.writeInt32(0);
+    reply.setDataPosition(0);
+    unique_fd a, b;
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&a));
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&b));
+}
+
+// Used to trigger fdsan error (b/239222407).
+TEST_F(BinderLibTest, RecvUnownedFileDescriptorsAndTruncate) {
+    FdLeakDetector fd_leak_detector;
+
+    Parcel data;
+    Parcel reply;
+    EXPECT_EQ(NO_ERROR,
+              m_server->transact(BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_UNOWNED_TRANSACTION, data,
+                                 &reply));
+    reply.setDataSize(reply.dataSize() - sizeof(flat_binder_object));
+    unique_fd a, b;
+    EXPECT_EQ(OK, reply.readUniqueFileDescriptor(&a));
+    EXPECT_EQ(BAD_TYPE, reply.readUniqueFileDescriptor(&b));
+}
+
 TEST_F(BinderLibTest, PromoteLocal) {
     sp<IBinder> strong = new BBinder();
     wp<IBinder> weak = strong;
@@ -1644,6 +1776,7 @@ TEST_F(BinderLibTest, TooManyFdsFlattenable) {
 
 TEST(ServiceNotifications, Unregister) {
     auto sm = defaultServiceManager();
+    sm->enableAddServiceCache(false);
     using LocalRegistrationCallback = IServiceManager::LocalRegistrationCallback;
     class LocalRegistrationCallbackImpl : public virtual LocalRegistrationCallback {
         void onServiceRegistration(const String16 &, const sp<IBinder> &) override {}
@@ -1710,14 +1843,6 @@ TEST_F(BinderLibTest, ThreadPoolStarted) {
     EXPECT_TRUE(reply.readBool());
 }
 
-size_t epochMillis() {
-    using std::chrono::duration_cast;
-    using std::chrono::milliseconds;
-    using std::chrono::seconds;
-    using std::chrono::system_clock;
-    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-}
-
 TEST_F(BinderLibTest, HangingServices) {
     Parcel data, reply;
     sp<IBinder> server = addServer();
@@ -1726,7 +1851,7 @@ TEST_F(BinderLibTest, HangingServices) {
     data.writeInt32(delay);
     // b/266537959 - must take before taking lock, since countdown is started in the remote
     // process there.
-    size_t epochMsBefore = epochMillis();
+    int64_t timeBefore = uptimeMillis();
     EXPECT_THAT(server->transact(BINDER_LIB_TEST_PROCESS_TEMPORARY_LOCK, data, &reply), NO_ERROR);
     std::vector<std::thread> ts;
     for (size_t i = 0; i < kKernelThreads + 1; i++) {
@@ -1740,10 +1865,10 @@ TEST_F(BinderLibTest, HangingServices) {
     for (auto &t : ts) {
         t.join();
     }
-    size_t epochMsAfter = epochMillis();
+    int64_t timeAfter = uptimeMillis();
 
     // deadlock occurred and threads only finished after 1s passed.
-    EXPECT_GE(epochMsAfter, epochMsBefore + delay);
+    EXPECT_GE(timeAfter, timeBefore + delay);
 }
 
 TEST_F(BinderLibTest, BinderProxyCount) {
@@ -2224,6 +2349,40 @@ public:
                 if (ret != size) return UNKNOWN_ERROR;
                 return NO_ERROR;
             }
+            case BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_OWNED_TRANSACTION: {
+                unique_fd fd1(memfd_create("memfd1", MFD_CLOEXEC));
+                if (!fd1.ok()) {
+                    PLOGE("memfd_create failed");
+                    return UNKNOWN_ERROR;
+                }
+                unique_fd fd2(memfd_create("memfd2", MFD_CLOEXEC));
+                if (!fd2.ok()) {
+                    PLOGE("memfd_create failed");
+                    return UNKNOWN_ERROR;
+                }
+                status_t ret;
+                ret = reply->writeFileDescriptor(fd1.release(), true);
+                if (ret != NO_ERROR) {
+                    return ret;
+                }
+                ret = reply->writeFileDescriptor(fd2.release(), true);
+                if (ret != NO_ERROR) {
+                    return ret;
+                }
+                return NO_ERROR;
+            }
+            case BINDER_LIB_TEST_GET_FILE_DESCRIPTORS_UNOWNED_TRANSACTION: {
+                status_t ret;
+                ret = reply->writeFileDescriptor(STDOUT_FILENO, false);
+                if (ret != NO_ERROR) {
+                    return ret;
+                }
+                ret = reply->writeFileDescriptor(STDERR_FILENO, false);
+                if (ret != NO_ERROR) {
+                    return ret;
+                }
+                return NO_ERROR;
+            }
             case BINDER_LIB_TEST_DELAYED_EXIT_TRANSACTION:
                 alarm(10);
                 return NO_ERROR;
@@ -2261,7 +2420,7 @@ public:
                 if (ret != NO_ERROR) {
                     return ret;
                 }
-                auto event = frozenStateChangeCallback->events.popWithTimeout(10ms);
+                auto event = frozenStateChangeCallback->events.popWithTimeout(1000ms);
                 if (!event.has_value()) {
                     return NOT_ENOUGH_DATA;
                 }
@@ -2374,6 +2533,8 @@ int run_server(int index, int readypipefd, bool usePoll)
 
     status_t ret;
     sp<IServiceManager> sm = defaultServiceManager();
+    sm->enableAddServiceCache(false);
+
     BinderLibTestService* testServicePtr;
     {
         sp<BinderLibTestService> testService = new BinderLibTestService(index);
