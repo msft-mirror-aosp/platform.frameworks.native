@@ -31,14 +31,19 @@ use crate::bounce_keys_filter::BounceKeysFilter;
 use crate::input_filter_thread::InputFilterThread;
 use crate::slow_keys_filter::SlowKeysFilter;
 use crate::sticky_keys_filter::StickyKeysFilter;
+use input::ModifierState;
 use log::{error, info};
 use std::sync::{Arc, Mutex, RwLock};
+
+/// Virtual keyboard device ID
+pub const VIRTUAL_KEYBOARD_DEVICE_ID: i32 = -1;
 
 /// Interface for all the sub input filters
 pub trait Filter {
     fn notify_key(&mut self, event: &KeyEvent);
     fn notify_devices_changed(&mut self, device_infos: &[DeviceInfo]);
     fn destroy(&mut self);
+    fn dump(&mut self, dump_str: String) -> String;
 }
 
 struct InputFilterState {
@@ -118,17 +123,29 @@ impl IInputFilter for InputFilter {
                     self.input_filter_thread.clone(),
                 ));
                 state.enabled = true;
-                info!("Slow keys filter is installed");
+                info!(
+                    "Slow keys filter is installed, threshold = {:?}ns",
+                    config.slowKeysThresholdNs
+                );
             }
             if config.bounceKeysThresholdNs > 0 {
                 first_filter =
                     Box::new(BounceKeysFilter::new(first_filter, config.bounceKeysThresholdNs));
                 state.enabled = true;
-                info!("Bounce keys filter is installed");
+                info!(
+                    "Bounce keys filter is installed, threshold = {:?}ns",
+                    config.bounceKeysThresholdNs
+                );
             }
             state.first_filter = first_filter;
         }
         Result::Ok(())
+    }
+
+    fn dumpFilter(&self) -> binder::Result<String> {
+        let first_filter = &mut self.state.lock().unwrap().first_filter;
+        let dump_str = first_filter.dump(String::new());
+        Result::Ok(dump_str)
     }
 }
 
@@ -157,6 +174,11 @@ impl Filter for BaseFilter {
     fn destroy(&mut self) {
         // do nothing
     }
+
+    fn dump(&mut self, dump_str: String) -> String {
+        // do nothing
+        dump_str
+    }
 }
 
 /// This struct wraps around IInputFilterCallbacks restricting access to only
@@ -169,12 +191,15 @@ impl ModifierStateListener {
         Self(callbacks)
     }
 
-    pub fn modifier_state_changed(&self, modifier_state: u32, locked_modifier_state: u32) {
-        let _ = self
-            .0
-            .read()
-            .unwrap()
-            .onModifierStateChanged(modifier_state as i32, locked_modifier_state as i32);
+    pub fn modifier_state_changed(
+        &self,
+        modifier_state: ModifierState,
+        locked_modifier_state: ModifierState,
+    ) {
+        let _ = self.0.read().unwrap().onModifierStateChanged(
+            modifier_state.bits() as i32,
+            locked_modifier_state.bits() as i32,
+        );
     }
 }
 
@@ -210,6 +235,7 @@ mod tests {
         InputFilterConfiguration::InputFilterConfiguration, KeyEvent::KeyEvent,
         KeyEventAction::KeyEventAction,
     };
+    use input::KeyboardType;
     use std::sync::{Arc, RwLock};
 
     #[test]
@@ -252,7 +278,11 @@ mod tests {
             Arc::new(RwLock::new(Strong::new(Box::new(test_callbacks)))),
         );
         assert!(input_filter
-            .notifyInputDevicesChanged(&[DeviceInfo { deviceId: 0, external: true }])
+            .notifyInputDevicesChanged(&[DeviceInfo {
+                deviceId: 0,
+                external: true,
+                keyboardType: KeyboardType::None as i32
+            }])
             .is_ok());
         assert!(test_filter.is_device_changed_called());
     }
@@ -385,6 +415,10 @@ pub mod test_filter {
         fn destroy(&mut self) {
             self.inner().is_destroy_called = true;
         }
+        fn dump(&mut self, dump_str: String) -> String {
+            // do nothing
+            dump_str
+        }
     }
 }
 
@@ -396,14 +430,17 @@ pub mod test_callbacks {
         IInputThread::{BnInputThread, IInputThread, IInputThreadCallback::IInputThreadCallback},
         KeyEvent::KeyEvent,
     };
-    use std::sync::{Arc, RwLock, RwLockWriteGuard};
+    use input::ModifierState;
+    use nix::{sys::time::TimeValLike, time::clock_gettime, time::ClockId};
+    use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, RwLock, RwLockWriteGuard};
+    use std::time::Duration;
 
     #[derive(Default)]
     struct TestCallbacksInner {
-        last_modifier_state: u32,
-        last_locked_modifier_state: u32,
+        last_modifier_state: ModifierState,
+        last_locked_modifier_state: ModifierState,
         last_event: Option<KeyEvent>,
-        test_thread: Option<TestThread>,
+        test_thread: Option<FakeCppThread>,
     }
 
     #[derive(Default, Clone)]
@@ -426,25 +463,21 @@ pub mod test_callbacks {
 
         pub fn clear(&mut self) {
             self.inner().last_event = None;
-            self.inner().last_modifier_state = 0;
-            self.inner().last_locked_modifier_state = 0;
+            self.inner().last_modifier_state = ModifierState::None;
+            self.inner().last_locked_modifier_state = ModifierState::None;
         }
 
-        pub fn get_last_modifier_state(&self) -> u32 {
+        pub fn get_last_modifier_state(&self) -> ModifierState {
             self.0.read().unwrap().last_modifier_state
         }
 
-        pub fn get_last_locked_modifier_state(&self) -> u32 {
+        pub fn get_last_locked_modifier_state(&self) -> ModifierState {
             self.0.read().unwrap().last_locked_modifier_state
         }
 
-        pub fn is_thread_created(&self) -> bool {
-            self.0.read().unwrap().test_thread.is_some()
-        }
-
-        pub fn is_thread_finished(&self) -> bool {
+        pub fn is_thread_running(&self) -> bool {
             if let Some(test_thread) = &self.0.read().unwrap().test_thread {
-                return test_thread.is_finish_called();
+                return test_thread.is_running();
             }
             false
         }
@@ -461,48 +494,110 @@ pub mod test_callbacks {
             modifier_state: i32,
             locked_modifier_state: i32,
         ) -> std::result::Result<(), binder::Status> {
-            self.inner().last_modifier_state = modifier_state as u32;
-            self.inner().last_locked_modifier_state = locked_modifier_state as u32;
+            self.inner().last_modifier_state =
+                ModifierState::from_bits(modifier_state as u32).unwrap();
+            self.inner().last_locked_modifier_state =
+                ModifierState::from_bits(locked_modifier_state as u32).unwrap();
             Result::Ok(())
         }
 
         fn createInputFilterThread(
             &self,
-            _callback: &Strong<dyn IInputThreadCallback>,
+            callback: &Strong<dyn IInputThreadCallback>,
         ) -> std::result::Result<Strong<dyn IInputThread>, binder::Status> {
-            let test_thread = TestThread::new();
+            let test_thread = FakeCppThread::new(callback.clone());
+            test_thread.start_looper();
             self.inner().test_thread = Some(test_thread.clone());
             Result::Ok(BnInputThread::new_binder(test_thread, BinderFeatures::default()))
         }
     }
 
     #[derive(Default)]
-    struct TestThreadInner {
-        is_finish_called: bool,
+    struct FakeCppThreadInner {
+        join_handle: Option<std::thread::JoinHandle<()>>,
     }
 
-    #[derive(Default, Clone)]
-    struct TestThread(Arc<RwLock<TestThreadInner>>);
+    #[derive(Clone)]
+    struct FakeCppThread {
+        callback: Arc<RwLock<Strong<dyn IInputThreadCallback>>>,
+        inner: Arc<RwLock<FakeCppThreadInner>>,
+        exit_flag: Arc<AtomicBool>,
+    }
 
-    impl Interface for TestThread {}
+    impl Interface for FakeCppThread {}
 
-    impl TestThread {
-        pub fn new() -> Self {
-            Default::default()
+    impl FakeCppThread {
+        pub fn new(callback: Strong<dyn IInputThreadCallback>) -> Self {
+            let thread = Self {
+                callback: Arc::new(RwLock::new(callback)),
+                inner: Arc::new(RwLock::new(FakeCppThreadInner { join_handle: None })),
+                exit_flag: Arc::new(AtomicBool::new(true)),
+            };
+            thread.create_looper();
+            thread
         }
 
-        fn inner(&self) -> RwLockWriteGuard<'_, TestThreadInner> {
-            self.0.write().unwrap()
+        fn inner(&self) -> RwLockWriteGuard<'_, FakeCppThreadInner> {
+            self.inner.write().unwrap()
         }
 
-        pub fn is_finish_called(&self) -> bool {
-            self.0.read().unwrap().is_finish_called
+        fn create_looper(&self) {
+            let clone = self.clone();
+            let join_handle = std::thread::Builder::new()
+                .name("fake_cpp_thread".to_string())
+                .spawn(move || loop {
+                    if !clone.exit_flag.load(Ordering::Relaxed) {
+                        clone.loop_once();
+                    }
+                })
+                .unwrap();
+            self.inner().join_handle = Some(join_handle);
+            // Sleep until the looper thread starts
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        pub fn start_looper(&self) {
+            self.exit_flag.store(false, Ordering::Relaxed);
+        }
+
+        pub fn stop_looper(&self) {
+            self.exit_flag.store(true, Ordering::Relaxed);
+            if let Some(join_handle) = &self.inner.read().unwrap().join_handle {
+                join_handle.thread().unpark();
+            }
+        }
+
+        pub fn is_running(&self) -> bool {
+            !self.exit_flag.load(Ordering::Relaxed)
+        }
+
+        fn loop_once(&self) {
+            let _ = self.callback.read().unwrap().loopOnce();
         }
     }
 
-    impl IInputThread for TestThread {
+    impl IInputThread for FakeCppThread {
         fn finish(&self) -> binder::Result<()> {
-            self.inner().is_finish_called = true;
+            self.stop_looper();
+            Result::Ok(())
+        }
+
+        fn wake(&self) -> binder::Result<()> {
+            if let Some(join_handle) = &self.inner.read().unwrap().join_handle {
+                join_handle.thread().unpark();
+            }
+            Result::Ok(())
+        }
+
+        fn sleepUntil(&self, wake_up_time: i64) -> binder::Result<()> {
+            let now = clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap().num_nanoseconds();
+            if wake_up_time == i64::MAX {
+                std::thread::park();
+            } else {
+                let duration_now = Duration::from_nanos(now as u64);
+                let duration_wake_up = Duration::from_nanos(wake_up_time as u64);
+                std::thread::park_timeout(duration_wake_up - duration_now);
+            }
             Result::Ok(())
         }
     }

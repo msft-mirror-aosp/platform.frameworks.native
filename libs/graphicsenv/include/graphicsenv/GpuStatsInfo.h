@@ -60,6 +60,10 @@ class GpuStatsAppInfo : public Parcelable {
 public:
     // This limits the worst case number of extensions to be tracked.
     static const uint32_t MAX_NUM_EXTENSIONS = 100;
+    // Max number of vulkan engine names for a single GpuStatsAppInfo
+    static const uint32_t MAX_VULKAN_ENGINE_NAMES = 16;
+    // Max length of a vulkan engine name string
+    static const size_t MAX_VULKAN_ENGINE_NAME_LENGTH = 50;
 
     GpuStatsAppInfo() = default;
     GpuStatsAppInfo(const GpuStatsAppInfo&) = default;
@@ -84,6 +88,7 @@ public:
     uint64_t vulkanDeviceFeaturesEnabled = 0;
     std::vector<int32_t> vulkanInstanceExtensions = {};
     std::vector<int32_t> vulkanDeviceExtensions = {};
+    std::vector<std::string> vulkanEngineNames = {};
 
     std::chrono::time_point<std::chrono::system_clock> lastAccessTime;
 };
@@ -120,6 +125,11 @@ public:
         VULKAN_DEVICE_EXTENSION = 9,
     };
 
+    enum GLTelemetryHints {
+        NO_HINT = 0,
+        SKIP_TELEMETRY = 1,
+    };
+
     GpuStatsInfo() = default;
     GpuStatsInfo(const GpuStatsInfo&) = default;
     virtual ~GpuStatsInfo() = default;
@@ -131,7 +141,6 @@ public:
     std::string appPackageName = "";
     int32_t vulkanVersion = 0;
     Driver glDriverToLoad = Driver::NONE;
-    Driver glDriverFallback = Driver::NONE;
     Driver vkDriverToLoad = Driver::NONE;
     Driver vkDriverFallback = Driver::NONE;
     bool glDriverToSend = false;

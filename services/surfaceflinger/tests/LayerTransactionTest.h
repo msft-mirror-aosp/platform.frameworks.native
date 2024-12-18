@@ -23,7 +23,7 @@
 
 #include <cutils/properties.h>
 #include <gtest/gtest.h>
-#include <gui/AidlStatusUtil.h>
+#include <gui/AidlUtil.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/SurfaceComposerClient.h>
 #include <private/gui/ComposerService.h>
@@ -104,6 +104,10 @@ protected:
             t.setAlpha(colorLayer, color.a / 255.0f);
         });
         return colorLayer;
+    }
+
+    sp<SurfaceControl> mirrorSurface(SurfaceControl* mirrorFromSurface) {
+        return mClient->mirrorSurface(mirrorFromSurface);
     }
 
     ANativeWindow_Buffer getBufferQueueLayerBuffer(const sp<SurfaceControl>& layer) {

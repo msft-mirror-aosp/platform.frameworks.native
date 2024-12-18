@@ -18,20 +18,28 @@
 
 #include <input/MotionPredictor.h>
 
+#include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <android-base/logging.h>
 #include <android-base/strings.h>
 #include <android/input.h>
+#include <com_android_input_flags.h>
 
 #include <attestation/HmacKeyManager.h>
 #include <ftl/enum.h>
 #include <input/TfLiteMotionPredictor.h>
+
+namespace input_flags = com::android::input::flags;
 
 namespace android {
 namespace {
@@ -55,7 +63,86 @@ TfLiteMotionPredictorSample::Point convertPrediction(
     return {.x = axisTo.x + x_delta, .y = axisTo.y + y_delta};
 }
 
+float normalizeRange(float x, float min, float max) {
+    const float normalized = (x - min) / (max - min);
+    return std::min(1.0f, std::max(0.0f, normalized));
+}
+
 } // namespace
+
+// --- JerkTracker ---
+
+JerkTracker::JerkTracker(bool normalizedDt, float alpha)
+      : mNormalizedDt(normalizedDt), mAlpha(alpha) {}
+
+void JerkTracker::pushSample(int64_t timestamp, float xPos, float yPos) {
+    // If we previously had full samples, we have a previous jerk calculation
+    // to do weighted smoothing.
+    const bool applySmoothing = mTimestamps.size() == mTimestamps.capacity();
+    mTimestamps.pushBack(timestamp);
+    const int numSamples = mTimestamps.size();
+
+    std::array<float, 4> newXDerivatives;
+    std::array<float, 4> newYDerivatives;
+
+    /**
+     * Diagram showing the calculation of higher order derivatives of sample x3
+     * collected at time=t3.
+     * Terms in parentheses are not stored (and not needed for calculations)
+     *  t0 ----- t1  ----- t2 ----- t3
+     * (x0)-----(x1) ----- x2 ----- x3
+     * (x'0) --- x'1 ---  x'2
+     *  x''0  -  x''1
+     *  x'''0
+     *
+     * In this example:
+     * x'2 = (x3 - x2) / (t3 - t2)
+     * x''1 = (x'2 - x'1) / (t2 - t1)
+     * x'''0 = (x''1 - x''0) / (t1 - t0)
+     * Therefore, timestamp history is needed to calculate higher order derivatives,
+     * compared to just the last calculated derivative sample.
+     *
+     * If mNormalizedDt = true, then dt = 1 and the division is moot.
+     */
+    for (int i = 0; i < numSamples; ++i) {
+        if (i == 0) {
+            newXDerivatives[i] = xPos;
+            newYDerivatives[i] = yPos;
+        } else {
+            newXDerivatives[i] = newXDerivatives[i - 1] - mXDerivatives[i - 1];
+            newYDerivatives[i] = newYDerivatives[i - 1] - mYDerivatives[i - 1];
+            if (!mNormalizedDt) {
+                const float dt = mTimestamps[numSamples - i] - mTimestamps[numSamples - i - 1];
+                newXDerivatives[i] = newXDerivatives[i] / dt;
+                newYDerivatives[i] = newYDerivatives[i] / dt;
+            }
+        }
+    }
+
+    if (numSamples == static_cast<int>(mTimestamps.capacity())) {
+        float newJerkMagnitude = std::hypot(newXDerivatives[3], newYDerivatives[3]);
+        ALOGD_IF(isDebug(), "raw jerk: %f", newJerkMagnitude);
+        if (applySmoothing) {
+            mJerkMagnitude = mJerkMagnitude + (mAlpha * (newJerkMagnitude - mJerkMagnitude));
+        } else {
+            mJerkMagnitude = newJerkMagnitude;
+        }
+    }
+
+    std::swap(newXDerivatives, mXDerivatives);
+    std::swap(newYDerivatives, mYDerivatives);
+}
+
+void JerkTracker::reset() {
+    mTimestamps.clear();
+}
+
+std::optional<float> JerkTracker::jerkMagnitude() const {
+    if (mTimestamps.size() == mTimestamps.capacity()) {
+        return mJerkMagnitude;
+    }
+    return std::nullopt;
+}
 
 // --- MotionPredictor ---
 
@@ -65,6 +152,24 @@ MotionPredictor::MotionPredictor(nsecs_t predictionTimestampOffsetNanos,
       : mPredictionTimestampOffsetNanos(predictionTimestampOffsetNanos),
         mCheckMotionPredictionEnabled(std::move(checkMotionPredictionEnabled)),
         mReportAtomFunction(reportAtomFunction) {}
+
+void MotionPredictor::initializeObjects() {
+    mModel = TfLiteMotionPredictorModel::create();
+    LOG_ALWAYS_FATAL_IF(!mModel);
+
+    // mJerkTracker assumes normalized dt = 1 between recorded samples because
+    // the underlying mModel input also assumes fixed-interval samples.
+    // Normalized dt as 1 is also used to correspond with the similar Jank
+    // implementation from the JetPack MotionPredictor implementation.
+    mJerkTracker = std::make_unique<JerkTracker>(/*normalizedDt=*/true, mModel->config().jerkAlpha);
+
+    mBuffers = std::make_unique<TfLiteMotionPredictorBuffers>(mModel->inputLength());
+
+    mMetricsManager =
+            std::make_unique<MotionPredictorMetricsManager>(mModel->config().predictionInterval,
+                                                            mModel->outputLength(),
+                                                            mReportAtomFunction);
+}
 
 android::base::Result<void> MotionPredictor::record(const MotionEvent& event) {
     if (mLastEvent && mLastEvent->getDeviceId() != event.getDeviceId()) {
@@ -82,27 +187,18 @@ android::base::Result<void> MotionPredictor::record(const MotionEvent& event) {
         return {};
     }
 
-    // Initialise the model now that it's likely to be used.
     if (!mModel) {
-        mModel = TfLiteMotionPredictorModel::create();
-        LOG_ALWAYS_FATAL_IF(!mModel);
-    }
-
-    if (!mBuffers) {
-        mBuffers = std::make_unique<TfLiteMotionPredictorBuffers>(mModel->inputLength());
+        initializeObjects();
     }
 
     // Pass input event to the MetricsManager.
-    if (!mMetricsManager) {
-        mMetricsManager.emplace(mModel->config().predictionInterval, mModel->outputLength(),
-                                mReportAtomFunction);
-    }
     mMetricsManager->onRecord(event);
 
     const int32_t action = event.getActionMasked();
     if (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_CANCEL) {
         ALOGD_IF(isDebug(), "End of event stream");
         mBuffers->reset();
+        mJerkTracker->reset();
         mLastEvent.reset();
         return {};
     } else if (action != AMOTION_EVENT_ACTION_DOWN && action != AMOTION_EVENT_ACTION_MOVE) {
@@ -137,6 +233,9 @@ android::base::Result<void> MotionPredictor::record(const MotionEvent& event) {
                                                                           0, i),
                                      .orientation = event.getHistoricalOrientation(0, i),
                              });
+        mJerkTracker->pushSample(event.getHistoricalEventTime(i),
+                                 coords->getAxisValue(AMOTION_EVENT_AXIS_X),
+                                 coords->getAxisValue(AMOTION_EVENT_AXIS_Y));
     }
 
     if (!mLastEvent) {
@@ -184,6 +283,17 @@ std::unique_ptr<MotionEvent> MotionPredictor::predict(nsecs_t timestamp) {
     int64_t predictionTime = mBuffers->lastTimestamp();
     const int64_t futureTime = timestamp + mPredictionTimestampOffsetNanos;
 
+    const float jerkMagnitude = mJerkTracker->jerkMagnitude().value_or(0);
+    const float fractionKept =
+            1 - normalizeRange(jerkMagnitude, mModel->config().lowJerk, mModel->config().highJerk);
+    // float to ensure proper division below.
+    const float predictionTimeWindow = futureTime - predictionTime;
+    const int maxNumPredictions = static_cast<int>(
+            std::ceil(predictionTimeWindow / mModel->config().predictionInterval * fractionKept));
+    ALOGD_IF(isDebug(),
+             "jerk (d^3p/normalizedDt^3): %f, fraction of prediction window pruned: %f, max number "
+             "of predictions: %d",
+             jerkMagnitude, 1 - fractionKept, maxNumPredictions);
     for (size_t i = 0; i < static_cast<size_t>(predictedR.size()) && predictionTime <= futureTime;
          ++i) {
         if (predictedR[i] < mModel->config().distanceNoiseFloor) {
@@ -197,7 +307,13 @@ std::unique_ptr<MotionEvent> MotionPredictor::predict(nsecs_t timestamp) {
             // device starts to speed up, but avoids producing noisy predictions as it slows down.
             break;
         }
-        // TODO(b/266747654): Stop predictions if confidence is < some threshold.
+        if (input_flags::enable_prediction_pruning_via_jerk_thresholding()) {
+            if (i >= static_cast<size_t>(maxNumPredictions)) {
+                break;
+            }
+        }
+        // TODO(b/266747654): Stop predictions if confidence is < some
+        // threshold. Currently predictions are pruned via jerk thresholding.
 
         const TfLiteMotionPredictorSample::Point predictedPoint =
                 convertPrediction(axisFrom, axisTo, predictedR[i], predictedPhi[i]);
@@ -229,7 +345,7 @@ std::unique_ptr<MotionEvent> MotionPredictor::predict(nsecs_t timestamp) {
                                    event.getRawTransform(), event.getDownTime(), predictionTime,
                                    event.getPointerCount(), event.getPointerProperties(), &coords);
         } else {
-            prediction->addSample(predictionTime, &coords);
+            prediction->addSample(predictionTime, &coords, prediction->getId());
         }
 
         axisFrom = axisTo;

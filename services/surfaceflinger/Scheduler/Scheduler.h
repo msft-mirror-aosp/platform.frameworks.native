@@ -92,8 +92,8 @@ public:
 
     void startTimers();
 
-    // TODO(b/241285191): Remove this API by promoting pacesetter in onScreen{Acquired,Released}.
-    void setPacesetterDisplay(std::optional<PhysicalDisplayId>) REQUIRES(kMainThreadContext)
+    // TODO: b/241285191 - Remove this API by promoting pacesetter in onScreen{Acquired,Released}.
+    void setPacesetterDisplay(PhysicalDisplayId) REQUIRES(kMainThreadContext)
             EXCLUDES(mDisplayLock);
 
     using RefreshRateSelectorPtr = std::shared_ptr<RefreshRateSelector>;
@@ -101,9 +101,16 @@ public:
     using ConstVsyncSchedulePtr = std::shared_ptr<const VsyncSchedule>;
     using VsyncSchedulePtr = std::shared_ptr<VsyncSchedule>;
 
-    void registerDisplay(PhysicalDisplayId, RefreshRateSelectorPtr) REQUIRES(kMainThreadContext)
+    // After registration/unregistration, `activeDisplayId` is promoted to pacesetter. Note that the
+    // active display is never unregistered, since hotplug disconnect never happens for activatable
+    // displays, i.e. a foldable's internal displays or otherwise the (internal or external) primary
+    // display.
+    // TODO: b/255635821 - Remove active display parameters.
+    void registerDisplay(PhysicalDisplayId, RefreshRateSelectorPtr,
+                         PhysicalDisplayId activeDisplayId) REQUIRES(kMainThreadContext)
             EXCLUDES(mDisplayLock);
-    void unregisterDisplay(PhysicalDisplayId) REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock);
+    void unregisterDisplay(PhysicalDisplayId, PhysicalDisplayId activeDisplayId)
+            REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock);
 
     void run();
 
@@ -138,21 +145,15 @@ public:
             Cycle, EventRegistrationFlags eventRegistration = {},
             const sp<IBinder>& layerHandle = nullptr) EXCLUDES(mChoreographerLock);
 
-    const sp<EventThreadConnection>& getEventConnection(Cycle cycle) const {
-        return cycle == Cycle::Render ? mRenderEventConnection : mLastCompositeEventConnection;
-    }
-
     enum class Hotplug { Connected, Disconnected };
     void dispatchHotplug(PhysicalDisplayId, Hotplug);
 
     void dispatchHotplugError(int32_t errorCode);
 
-    void onPrimaryDisplayModeChanged(Cycle, const FrameRateMode&) EXCLUDES(mPolicyLock);
-    void onNonPrimaryDisplayModeChanged(Cycle, const FrameRateMode&);
+    // Returns true if the PhysicalDisplayId is the pacesetter.
+    bool onDisplayModeChanged(PhysicalDisplayId, const FrameRateMode&) EXCLUDES(mPolicyLock);
 
     void enableSyntheticVsync(bool = true) REQUIRES(kMainThreadContext);
-
-    void onFrameRateOverridesChanged(Cycle, PhysicalDisplayId);
 
     void onHdcpLevelsChanged(Cycle, PhysicalDisplayId, int32_t, int32_t);
 
@@ -182,13 +183,12 @@ public:
         }
     }
 
-    void updatePhaseConfiguration(Fps);
-    void resetPhaseConfiguration(Fps) REQUIRES(kMainThreadContext);
+    void updatePhaseConfiguration(PhysicalDisplayId, Fps);
 
     const VsyncConfiguration& getVsyncConfiguration() const { return *mVsyncConfiguration; }
 
     // Sets the render rate for the scheduler to run at.
-    void setRenderRate(PhysicalDisplayId, Fps);
+    void setRenderRate(PhysicalDisplayId, Fps, bool applyImmediately);
 
     void enableHardwareVsync(PhysicalDisplayId) REQUIRES(kMainThreadContext);
     void disableHardwareVsync(PhysicalDisplayId, bool disallow) REQUIRES(kMainThreadContext);
@@ -215,7 +215,7 @@ public:
             REQUIRES(kMainThreadContext);
 
     // Layers are registered on creation, and unregistered when the weak reference expires.
-    void registerLayer(Layer*);
+    void registerLayer(Layer*, FrameRateCompatibility);
     void recordLayerHistory(int32_t id, const LayerProps& layerProps, nsecs_t presentTime,
                             nsecs_t now, LayerHistory::LayerUpdateType) EXCLUDES(mDisplayLock);
     void setModeChangePending(bool pending);
@@ -319,7 +319,7 @@ public:
         return mLayerHistory.getLayerFramerate(now, id);
     }
 
-    bool updateFrameRateOverrides(GlobalSignals, Fps displayRefreshRate) EXCLUDES(mPolicyLock);
+    void updateFrameRateOverrides(GlobalSignals, Fps displayRefreshRate) EXCLUDES(mPolicyLock);
 
     // Returns true if the small dirty detection is enabled for the appId.
     bool supportSmallDirtyDetection(int32_t appId) {
@@ -346,7 +346,9 @@ private:
     // Used to skip event dispatch before EventThread creation during boot.
     // TODO: b/241285191 - Reorder Scheduler initialization to avoid this.
     bool hasEventThreads() const {
-        return CC_LIKELY(mRenderEventThread && mLastCompositeEventThread);
+        return CC_LIKELY(
+                mRenderEventThread &&
+                (FlagManager::getInstance().deprecate_vsync_sf() || mLastCompositeEventThread));
     }
 
     EventThread& eventThreadFor(Cycle cycle) const {
@@ -368,9 +370,16 @@ private:
     void resyncAllToHardwareVsync(bool allowToEnable) EXCLUDES(mDisplayLock);
     void setVsyncConfig(const VsyncConfig&, Period vsyncPeriod);
 
-    // Chooses a pacesetter among the registered displays, unless `pacesetterIdOpt` is specified.
-    // The new `mPacesetterDisplayId` is never `std::nullopt`.
-    void promotePacesetterDisplay(std::optional<PhysicalDisplayId> pacesetterIdOpt = std::nullopt)
+    // TODO: b/241286431 - Remove this option, which assumes that the pacesetter does not change
+    // when a (secondary) display is registered or unregistered. In the short term, this avoids
+    // a deadlock where the main thread joins with the timer thread as the timer thread waits to
+    // lock a mutex held by the main thread.
+    struct PromotionParams {
+        // Whether to stop and start the idle timer. Ignored unless connected_display flag is set.
+        bool toggleIdleTimer;
+    };
+
+    void promotePacesetterDisplay(PhysicalDisplayId pacesetterId, PromotionParams)
             REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock);
 
     // Changes to the displays (e.g. registering and unregistering) must be made
@@ -379,17 +388,20 @@ private:
     // MessageQueue and EventThread need to use the new pacesetter's
     // VsyncSchedule, and this must happen while mDisplayLock is *not* locked,
     // or else we may deadlock with EventThread.
-    std::shared_ptr<VsyncSchedule> promotePacesetterDisplayLocked(
-            std::optional<PhysicalDisplayId> pacesetterIdOpt = std::nullopt)
+    std::shared_ptr<VsyncSchedule> promotePacesetterDisplayLocked(PhysicalDisplayId pacesetterId,
+                                                                  PromotionParams)
             REQUIRES(kMainThreadContext, mDisplayLock);
     void applyNewVsyncSchedule(std::shared_ptr<VsyncSchedule>) EXCLUDES(mDisplayLock);
 
-    // Blocks until the pacesetter's idle timer thread exits. `mDisplayLock` must not be locked by
-    // the caller on the main thread to avoid deadlock, since the timer thread locks it before exit.
-    void demotePacesetterDisplay() REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock, mPolicyLock);
+    // If toggleIdleTimer is true, the calling thread blocks until the pacesetter's idle timer
+    // thread exits, in which case mDisplayLock must not be locked by the caller to avoid deadlock,
+    // since the timer thread locks it before exit.
+    void demotePacesetterDisplay(PromotionParams) REQUIRES(kMainThreadContext)
+            EXCLUDES(mDisplayLock, mPolicyLock);
 
-    void registerDisplayInternal(PhysicalDisplayId, RefreshRateSelectorPtr, VsyncSchedulePtr)
-            REQUIRES(kMainThreadContext) EXCLUDES(mDisplayLock);
+    void registerDisplayInternal(PhysicalDisplayId, RefreshRateSelectorPtr, VsyncSchedulePtr,
+                                 PhysicalDisplayId activeDisplayId) REQUIRES(kMainThreadContext)
+            EXCLUDES(mDisplayLock);
 
     struct Policy;
 
@@ -401,6 +413,11 @@ private:
     struct DisplayModeChoice {
         DisplayModeChoice(FrameRateMode mode, GlobalSignals consideredSignals)
               : mode(std::move(mode)), consideredSignals(consideredSignals) {}
+
+        static DisplayModeChoice from(RefreshRateSelector::RankedFrameRates rankedFrameRates) {
+            return {rankedFrameRates.ranking.front().frameRateMode,
+                    rankedFrameRates.consideredSignals};
+        }
 
         FrameRateMode mode;
         GlobalSignals consideredSignals;
@@ -426,6 +443,9 @@ private:
 
     bool updateFrameRateOverridesLocked(GlobalSignals, Fps displayRefreshRate)
             REQUIRES(mPolicyLock);
+
+    void onFrameRateOverridesChanged();
+
     void updateAttachedChoreographers(const surfaceflinger::frontend::LayerHierarchy&,
                                       Fps displayRefreshRate);
     int updateAttachedChoreographersInternal(const surfaceflinger::frontend::LayerHierarchy&,
@@ -433,19 +453,17 @@ private:
     void updateAttachedChoreographersFrameRate(const surfaceflinger::frontend::RequestedLayerState&,
                                                Fps fps) EXCLUDES(mChoreographerLock);
 
-    void dispatchCachedReportedMode() REQUIRES(mPolicyLock) EXCLUDES(mDisplayLock);
+    void emitModeChangeIfNeeded() REQUIRES(mPolicyLock) EXCLUDES(mDisplayLock);
 
     // IEventThreadCallback overrides
     bool throttleVsync(TimePoint, uid_t) override;
+    // Get frame interval
     Period getVsyncPeriod(uid_t) override EXCLUDES(mDisplayLock);
     void resync() override EXCLUDES(mDisplayLock);
     void onExpectedPresentTimePosted(TimePoint expectedPresentTime) override EXCLUDES(mDisplayLock);
 
     std::unique_ptr<EventThread> mRenderEventThread;
-    sp<EventThreadConnection> mRenderEventConnection;
-
     std::unique_ptr<EventThread> mLastCompositeEventThread;
-    sp<EventThreadConnection> mLastCompositeEventConnection;
 
     std::atomic<nsecs_t> mLastResyncTime = 0;
 
@@ -558,13 +576,8 @@ private:
         // Chosen display mode.
         ftl::Optional<FrameRateMode> modeOpt;
 
-        struct ModeChangedParams {
-            Cycle cycle;
-            FrameRateMode mode;
-        };
-
-        // Parameters for latest dispatch of mode change event.
-        std::optional<ModeChangedParams> cachedModeChangedParams;
+        // Display mode of latest emitted event.
+        std::optional<FrameRateMode> emittedModeOpt;
     } mPolicy GUARDED_BY(mPolicyLock);
 
     std::mutex mChoreographerLock;

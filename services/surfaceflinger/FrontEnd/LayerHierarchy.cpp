@@ -18,6 +18,8 @@
 #undef LOG_TAG
 #define LOG_TAG "SurfaceFlinger"
 
+#include <android-base/logging.h>
+
 #include "LayerHierarchy.h"
 #include "LayerLog.h"
 #include "SwapErase.h"
@@ -52,8 +54,12 @@ LayerHierarchy::LayerHierarchy(const LayerHierarchy& hierarchy, bool childrenOnl
     mChildren = hierarchy.mChildren;
 }
 
-void LayerHierarchy::traverse(const Visitor& visitor,
-                              LayerHierarchy::TraversalPath& traversalPath) const {
+void LayerHierarchy::traverse(const Visitor& visitor, LayerHierarchy::TraversalPath& traversalPath,
+                              uint32_t depth) const {
+    LLOG_ALWAYS_FATAL_WITH_TRACE_IF(depth > 50,
+                                    "Cycle detected in LayerHierarchy::traverse. See "
+                                    "traverse_stack_overflow_transactions.winscope");
+
     if (mLayer) {
         bool breakTraversal = !visitor(*this, traversalPath);
         if (breakTraversal) {
@@ -66,7 +72,7 @@ void LayerHierarchy::traverse(const Visitor& visitor,
     for (auto& [child, childVariant] : mChildren) {
         ScopedAddToTraversalPath addChildToTraversalPath(traversalPath, child->mLayer->id,
                                                          childVariant);
-        child->traverse(visitor, traversalPath);
+        child->traverse(visitor, traversalPath, depth + 1);
     }
 }
 
@@ -153,7 +159,7 @@ void LayerHierarchy::dump(std::ostream& out, const std::string& prefix,
         out << prefix + (isLastChild ? "└─ " : "├─ ");
         if (variant == LayerHierarchy::Variant::Relative) {
             out << "(Relative) ";
-        } else if (variant == LayerHierarchy::Variant::Mirror) {
+        } else if (LayerHierarchy::isMirror(variant)) {
             if (!includeMirroredHierarchy) {
                 out << "(Mirroring) " << *mLayer << "\n" + prefix + "   └─ ...";
                 return;
@@ -256,27 +262,36 @@ void LayerHierarchyBuilder::detachFromRelativeParent(LayerHierarchy* hierarchy) 
     hierarchy->mParent->updateChild(hierarchy, LayerHierarchy::Variant::Attached);
 }
 
-void LayerHierarchyBuilder::attachHierarchyToRelativeParent(LayerHierarchy* root) {
-    if (root->mLayer) {
-        attachToRelativeParent(root);
-    }
-    for (auto& [child, childVariant] : root->mChildren) {
-        if (childVariant == LayerHierarchy::Variant::Detached ||
-            childVariant == LayerHierarchy::Variant::Attached) {
-            attachHierarchyToRelativeParent(child);
+std::vector<LayerHierarchy*> LayerHierarchyBuilder::getDescendants(LayerHierarchy* root) {
+    std::vector<LayerHierarchy*> hierarchies;
+    hierarchies.push_back(root);
+    std::vector<LayerHierarchy*> descendants;
+    for (size_t i = 0; i < hierarchies.size(); i++) {
+        LayerHierarchy* hierarchy = hierarchies[i];
+        if (hierarchy->mLayer) {
+            descendants.push_back(hierarchy);
         }
+        for (auto& [child, childVariant] : hierarchy->mChildren) {
+            if (childVariant == LayerHierarchy::Variant::Detached ||
+                childVariant == LayerHierarchy::Variant::Attached) {
+                hierarchies.push_back(child);
+            }
+        }
+    }
+    return descendants;
+}
+
+void LayerHierarchyBuilder::attachHierarchyToRelativeParent(LayerHierarchy* root) {
+    std::vector<LayerHierarchy*> hierarchiesToAttach = getDescendants(root);
+    for (LayerHierarchy* hierarchy : hierarchiesToAttach) {
+        attachToRelativeParent(hierarchy);
     }
 }
 
 void LayerHierarchyBuilder::detachHierarchyFromRelativeParent(LayerHierarchy* root) {
-    if (root->mLayer) {
-        detachFromRelativeParent(root);
-    }
-    for (auto& [child, childVariant] : root->mChildren) {
-        if (childVariant == LayerHierarchy::Variant::Detached ||
-            childVariant == LayerHierarchy::Variant::Attached) {
-            detachHierarchyFromRelativeParent(child);
-        }
+    std::vector<LayerHierarchy*> hierarchiesToDetach = getDescendants(root);
+    for (LayerHierarchy* hierarchy : hierarchiesToDetach) {
+        detachFromRelativeParent(hierarchy);
     }
 }
 
@@ -288,6 +303,12 @@ void LayerHierarchyBuilder::onLayerAdded(RequestedLayerState* layer) {
     for (uint32_t mirrorId : layer->mirrorIds) {
         LayerHierarchy* mirror = getHierarchyFromId(mirrorId);
         hierarchy->addChild(mirror, LayerHierarchy::Variant::Mirror);
+    }
+    if (FlagManager::getInstance().detached_mirror()) {
+        if (layer->layerIdToMirror != UNASSIGNED_LAYER_ID) {
+            LayerHierarchy* mirror = getHierarchyFromId(layer->layerIdToMirror);
+            hierarchy->addChild(mirror, LayerHierarchy::Variant::Detached_Mirror);
+        }
     }
 }
 
@@ -325,7 +346,7 @@ void LayerHierarchyBuilder::updateMirrorLayer(RequestedLayerState* layer) {
     LayerHierarchy* hierarchy = getHierarchyFromId(layer->id);
     auto it = hierarchy->mChildren.begin();
     while (it != hierarchy->mChildren.end()) {
-        if (it->second == LayerHierarchy::Variant::Mirror) {
+        if (LayerHierarchy::isMirror(it->second)) {
             it = hierarchy->mChildren.erase(it);
         } else {
             it++;
@@ -334,6 +355,12 @@ void LayerHierarchyBuilder::updateMirrorLayer(RequestedLayerState* layer) {
 
     for (uint32_t mirrorId : layer->mirrorIds) {
         hierarchy->addChild(getHierarchyFromId(mirrorId), LayerHierarchy::Variant::Mirror);
+    }
+    if (FlagManager::getInstance().detached_mirror()) {
+        if (layer->layerIdToMirror != UNASSIGNED_LAYER_ID) {
+            hierarchy->addChild(getHierarchyFromId(layer->layerIdToMirror),
+                                LayerHierarchy::Variant::Detached_Mirror);
+        }
     }
 }
 
@@ -388,11 +415,11 @@ void LayerHierarchyBuilder::doUpdate(
 
 void LayerHierarchyBuilder::update(LayerLifecycleManager& layerLifecycleManager) {
     if (!mInitialized) {
-        ATRACE_NAME("LayerHierarchyBuilder:init");
+        SFTRACE_NAME("LayerHierarchyBuilder:init");
         init(layerLifecycleManager.getLayers());
     } else if (layerLifecycleManager.getGlobalChanges().test(
                        RequestedLayerState::Changes::Hierarchy)) {
-        ATRACE_NAME("LayerHierarchyBuilder:update");
+        SFTRACE_NAME("LayerHierarchyBuilder:update");
         doUpdate(layerLifecycleManager.getLayers(), layerLifecycleManager.getDestroyedLayers());
     } else {
         return; // nothing to do
@@ -401,7 +428,7 @@ void LayerHierarchyBuilder::update(LayerLifecycleManager& layerLifecycleManager)
     uint32_t invalidRelativeRoot;
     bool hasRelZLoop = mRoot.hasRelZLoop(invalidRelativeRoot);
     while (hasRelZLoop) {
-        ATRACE_NAME("FixRelZLoop");
+        SFTRACE_NAME("FixRelZLoop");
         TransactionTraceWriter::getInstance().invoke("relz_loop_detected",
                                                      /*overwrite=*/false);
         layerLifecycleManager.fixRelativeZLoop(invalidRelativeRoot);
@@ -460,6 +487,55 @@ LayerHierarchy* LayerHierarchyBuilder::getHierarchyFromId(uint32_t layerId, bool
     return it->second;
 }
 
+void LayerHierarchyBuilder::logSampledChildren(const LayerHierarchy& hierarchy) const {
+    LOG(ERROR) << "Dumping random sampling of child layers.";
+    int sampleSize = static_cast<int>(hierarchy.mChildren.size() / 100 + 1);
+    for (const auto& [child, variant] : hierarchy.mChildren) {
+        if (rand() % sampleSize == 0) {
+            LOG(ERROR) << "Child Layer: " << *(child->mLayer);
+        }
+    }
+}
+
+void LayerHierarchyBuilder::dumpLayerSample(const LayerHierarchy& root) const {
+    LOG(ERROR) << "Dumping layer keeping > 20 children alive:";
+    // If mLayer is nullptr, it will be skipped while traversing.
+    if (!root.mLayer && root.mChildren.size() > 20) {
+        LOG(ERROR) << "ROOT has " << root.mChildren.size() << " children";
+        logSampledChildren(root);
+    }
+    root.traverse([&](const LayerHierarchy& hierarchy, const auto&) -> bool {
+        if (hierarchy.mChildren.size() <= 20) {
+            return true;
+        }
+        // mLayer is ensured to be non-null. See LayerHierarchy::traverse.
+        const auto* layer = hierarchy.mLayer;
+        const auto childrenCount = hierarchy.mChildren.size();
+        LOG(ERROR) << "Layer " << *layer << " has " << childrenCount << " children";
+
+        const auto* parent = hierarchy.mParent;
+        while (parent != nullptr) {
+            if (!parent->mLayer) break;
+            LOG(ERROR) << "Parent Layer: " << *(parent->mLayer);
+            parent = parent->mParent;
+        }
+
+        logSampledChildren(hierarchy);
+        // Stop traversing.
+        return false;
+    });
+    LOG(ERROR) << "Dumping random sampled layers.";
+    size_t numLayers = 0;
+    root.traverse([&](const LayerHierarchy& hierarchy, const auto&) -> bool {
+        if (hierarchy.mLayer) numLayers++;
+        if ((rand() % 20 == 13) && hierarchy.mLayer) {
+            LOG(ERROR) << "Layer: " << *(hierarchy.mLayer);
+        }
+        return true;
+    });
+    LOG(ERROR) << "Total layer count: " << numLayers;
+}
+
 const LayerHierarchy::TraversalPath LayerHierarchy::TraversalPath::ROOT =
         {.id = UNASSIGNED_LAYER_ID, .variant = LayerHierarchy::Attached};
 
@@ -501,7 +577,7 @@ LayerHierarchy::ScopedAddToTraversalPath::ScopedAddToTraversalPath(TraversalPath
     // stored to reset the id upon destruction.
     traversalPath.id = layerId;
     traversalPath.variant = variant;
-    if (variant == LayerHierarchy::Variant::Mirror) {
+    if (LayerHierarchy::isMirror(variant)) {
         traversalPath.mirrorRootIds.emplace_back(mParentPath.id);
     } else if (variant == LayerHierarchy::Variant::Relative) {
         if (std::find(traversalPath.relativeRootIds.begin(), traversalPath.relativeRootIds.end(),
@@ -516,7 +592,7 @@ LayerHierarchy::ScopedAddToTraversalPath::ScopedAddToTraversalPath(TraversalPath
 LayerHierarchy::ScopedAddToTraversalPath::~ScopedAddToTraversalPath() {
     // Reset the traversal id to its original parent state using the state that was saved in
     // the constructor.
-    if (mTraversalPath.variant == LayerHierarchy::Variant::Mirror) {
+    if (LayerHierarchy::isMirror(mTraversalPath.variant)) {
         mTraversalPath.mirrorRootIds.pop_back();
     } else if (mTraversalPath.variant == LayerHierarchy::Variant::Relative) {
         mTraversalPath.relativeRootIds.pop_back();

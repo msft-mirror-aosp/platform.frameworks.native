@@ -281,6 +281,9 @@ std::unique_ptr<TfLiteMotionPredictorModel> TfLiteMotionPredictorModel::create()
     Config config{
             .predictionInterval = parseXMLInt64(*configRoot, "prediction-interval"),
             .distanceNoiseFloor = parseXMLFloat(*configRoot, "distance-noise-floor"),
+            .lowJerk = parseXMLFloat(*configRoot, "low-jerk"),
+            .highJerk = parseXMLFloat(*configRoot, "high-jerk"),
+            .jerkAlpha = parseXMLFloat(*configRoot, "jerk-alpha"),
     };
 
     return std::unique_ptr<TfLiteMotionPredictorModel>(

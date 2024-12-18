@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "EventHub.h"
 #include "InputDevice.h"
 #include "InputListener.h"
@@ -78,7 +80,7 @@ public:
                                                             const InputReaderConfiguration& config,
                                                             ConfigurationChanges changes);
     [[nodiscard]] virtual std::list<NotifyArgs> reset(nsecs_t when);
-    [[nodiscard]] virtual std::list<NotifyArgs> process(const RawEvent* rawEvent) = 0;
+    [[nodiscard]] virtual std::list<NotifyArgs> process(const RawEvent& rawEvent) = 0;
     [[nodiscard]] virtual std::list<NotifyArgs> timeoutExpired(nsecs_t when);
 
     virtual int32_t getKeyCodeState(uint32_t sourceMask, int32_t keyCode);
@@ -117,8 +119,10 @@ public:
 
     [[nodiscard]] virtual std::list<NotifyArgs> updateExternalStylusState(const StylusState& state);
 
-    virtual std::optional<int32_t> getAssociatedDisplayId() { return std::nullopt; }
+    virtual std::optional<ui::LogicalDisplayId> getAssociatedDisplayId() { return std::nullopt; }
     virtual void updateLedState(bool reset) {}
+
+    virtual std::optional<HardwareProperties> getTouchpadHardwareProperties();
 
 protected:
     InputDeviceContext& mDeviceContext;
@@ -126,10 +130,11 @@ protected:
     explicit InputMapper(InputDeviceContext& deviceContext,
                          const InputReaderConfiguration& readerConfig);
 
-    status_t getAbsoluteAxisInfo(int32_t axis, RawAbsoluteAxisInfo* axisInfo);
+    std::optional<RawAbsoluteAxisInfo> getAbsoluteAxisInfo(int32_t axis);
     void bumpGeneration();
 
-    static void dumpRawAbsoluteAxisInfo(std::string& dump, const RawAbsoluteAxisInfo& axis,
+    static void dumpRawAbsoluteAxisInfo(std::string& dump,
+                                        const std::optional<RawAbsoluteAxisInfo>& axis,
                                         const char* name);
     static void dumpStylusState(std::string& dump, const StylusState& state);
 };

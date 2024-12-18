@@ -668,7 +668,8 @@ status_t Parcel::appendFrom(const Parcel* parcel, size_t offset, size_t len) {
                 // FD was unowned in the source parcel.
                 int newFd = -1;
                 if (status_t status = binder::os::dupFileDescriptor(oldFd, &newFd); status != OK) {
-                    ALOGW("Failed to duplicate file descriptor %d: %s", oldFd, strerror(-status));
+                    ALOGW("Failed to duplicate file descriptor %d: %s", oldFd,
+                          statusToString(status).c_str());
                 }
                 rpcFields->mFds->emplace_back(unique_fd(newFd));
                 // Fixup the index in the data.
@@ -683,7 +684,7 @@ status_t Parcel::appendFrom(const Parcel* parcel, size_t offset, size_t len) {
     return err;
 }
 
-int Parcel::compareData(const Parcel& other) {
+int Parcel::compareData(const Parcel& other) const {
     size_t size = dataSize();
     if (size != other.dataSize()) {
         return size < other.dataSize() ? -1 : 1;
@@ -1725,7 +1726,9 @@ status_t Parcel::writeBlob(size_t len, bool mutableCopy, WritableBlob* outBlob)
                 }
             }
         }
-        ::munmap(ptr, len);
+        if (::munmap(ptr, len) == -1) {
+            ALOGW("munmap() failed: %s", strerror(errno));
+        }
     }
     ::close(fd);
     return status;
@@ -2982,13 +2985,14 @@ status_t Parcel::restartWrite(size_t desired)
         return continueWrite(desired);
     }
 
+    releaseObjects();
+
     uint8_t* data = reallocZeroFree(mData, mDataCapacity, desired, mDeallocZero);
     if (!data && desired > mDataCapacity) {
+        LOG_ALWAYS_FATAL("out of memory");
         mError = NO_MEMORY;
         return NO_MEMORY;
     }
-
-    releaseObjects();
 
     if (data || desired == 0) {
         LOG_ALLOC("Parcel %p: restart from %zu to %zu capacity", this, mDataCapacity, desired);
@@ -3331,7 +3335,9 @@ Parcel::Blob::~Blob() {
 
 void Parcel::Blob::release() {
     if (mFd != -1 && mData) {
-        ::munmap(mData, mSize);
+        if (::munmap(mData, mSize) == -1) {
+            ALOGW("munmap() failed: %s", strerror(errno));
+        }
     }
     clear();
 }

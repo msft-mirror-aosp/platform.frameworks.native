@@ -15,7 +15,6 @@
  */
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
-#include "renderengine/ExternalTexture.h"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
 #pragma clang diagnostic ignored "-Wextra"
@@ -31,6 +30,7 @@
 #include <gui/IProducerListener.h>
 #include <gui/LayerMetadata.h>
 #include <log/log.h>
+#include <renderengine/ExternalTexture.h>
 #include <renderengine/mock/FakeExternalTexture.h>
 #include <renderengine/mock/RenderEngine.h>
 #include <system/window.h>
@@ -70,6 +70,7 @@ using testing::SetArgPointee;
 
 using FakeHwcDisplayInjector = TestableSurfaceFlinger::FakeHwcDisplayInjector;
 using FakeDisplayDeviceInjector = TestableSurfaceFlinger::FakeDisplayDeviceInjector;
+using namespace ftl::flag_operators;
 
 constexpr hal::HWDisplayId HWC_DISPLAY = FakeHwcDisplayInjector::DEFAULT_HWC_DISPLAY_ID;
 constexpr hal::HWLayerId HWC_LAYER = 5000;
@@ -148,7 +149,6 @@ public:
     sp<compositionengine::mock::DisplaySurface> mDisplaySurface =
             sp<compositionengine::mock::DisplaySurface>::make();
     sp<mock::NativeWindow> mNativeWindow = sp<mock::NativeWindow>::make();
-    std::vector<sp<Layer>> mAuxiliaryLayers;
 
     sp<GraphicBuffer> mBuffer =
             sp<GraphicBuffer>::make(1u, 1u, PIXEL_FORMAT_RGBA_8888,
@@ -193,19 +193,19 @@ void CompositionTest::displayRefreshCompositionDirtyFrame() {
 template <typename LayerCase>
 void CompositionTest::captureScreenComposition() {
     LayerCase::setupForScreenCapture(this);
+    mFlinger.commit();
 
     const Rect sourceCrop(0, 0, DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT);
     constexpr bool regionSampling = false;
 
-    auto renderArea = DisplayRenderArea::create(mDisplay, sourceCrop, sourceCrop.getSize(),
-                                                ui::Dataspace::V0_SRGB, true, true);
+    auto renderArea =
+            DisplayRenderArea::create(mDisplay, sourceCrop, sourceCrop.getSize(),
+                                      ui::Dataspace::V0_SRGB,
+                                      RenderArea::Options::CAPTURE_SECURE_LAYERS |
+                                              RenderArea::Options::HINT_FOR_SEAMLESS_TRANSITION);
 
-    auto traverseLayers = [this](const LayerVector::Visitor& visitor) {
-        return mFlinger.traverseLayersInLayerStack(mDisplay->getLayerStack(),
-                                                   CaptureArgs::UNSET_UID, {}, visitor);
-    };
-
-    auto getLayerSnapshots = RenderArea::fromTraverseLayersLambda(traverseLayers);
+    auto getLayerSnapshotsFn = mFlinger.getLayerSnapshotsForScreenshotsFn(mDisplay->getLayerStack(),
+                                                                          CaptureArgs::UNSET_UID);
 
     const uint32_t usage = GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN |
             GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
@@ -215,7 +215,7 @@ void CompositionTest::captureScreenComposition() {
                                                                       HAL_PIXEL_FORMAT_RGBA_8888, 1,
                                                                       usage);
 
-    auto future = mFlinger.renderScreenImpl(std::move(renderArea), getLayerSnapshots,
+    auto future = mFlinger.renderScreenImpl(mDisplay, std::move(renderArea), getLayerSnapshotsFn,
                                             mCaptureScreenBuffer, regionSampling);
     ASSERT_TRUE(future.valid());
     const auto fenceResult = future.get();
@@ -282,7 +282,7 @@ struct BaseDisplayVariant {
                         .setSecure(Derived::IS_SECURE)
                         .setPowerMode(Derived::INIT_POWER_MODE)
                         .setRefreshRateSelector(test->mFlinger.scheduler()->refreshRateSelector())
-                        .skipRegisterDisplay()
+                        .skipSchedulerRegistration()
                         .inject();
         Mock::VerifyAndClear(test->mNativeWindow.get());
 
@@ -457,7 +457,7 @@ struct BaseLayerProperties {
     static constexpr IComposerClient::BlendMode BLENDMODE =
             IComposerClient::BlendMode::PREMULTIPLIED;
 
-    static void setupLatchedBuffer(CompositionTest* test, sp<Layer> layer) {
+    static void setupLatchedBuffer(CompositionTest* test, frontend::RequestedLayerState& layer) {
         Mock::VerifyAndClear(test->mRenderEngine);
 
         const auto buffer = std::make_shared<
@@ -467,21 +467,15 @@ struct BaseLayerProperties {
                                                          LayerProperties::FORMAT,
                                                          LayerProperties::USAGE |
                                                                  GraphicBuffer::USAGE_HW_TEXTURE);
-
-        auto& layerDrawingState = test->mFlinger.mutableLayerDrawingState(layer);
-        layerDrawingState.crop = Rect(0, 0, LayerProperties::HEIGHT, LayerProperties::WIDTH);
-        layerDrawingState.buffer = buffer;
-        layerDrawingState.acquireFence = Fence::NO_FENCE;
-        layerDrawingState.dataspace = ui::Dataspace::UNKNOWN;
-        layer->setSurfaceDamageRegion(
-                Region(Rect(LayerProperties::HEIGHT, LayerProperties::WIDTH)));
-
-        bool ignoredRecomputeVisibleRegions;
-        layer->latchBuffer(ignoredRecomputeVisibleRegions, 0);
+        layer.crop = Rect(0, 0, LayerProperties::HEIGHT, LayerProperties::WIDTH);
+        layer.externalTexture = buffer;
+        layer.bufferData->acquireFence = Fence::NO_FENCE;
+        layer.dataspace = ui::Dataspace::UNKNOWN;
+        layer.surfaceDamageRegion = Region(Rect(LayerProperties::HEIGHT, LayerProperties::WIDTH));
         Mock::VerifyAndClear(test->mRenderEngine);
     }
 
-    static void setupLayerState(CompositionTest* test, sp<Layer> layer) {
+    static void setupLayerState(CompositionTest* test, frontend::RequestedLayerState& layer) {
         setupLatchedBuffer(test, layer);
     }
 
@@ -665,14 +659,12 @@ struct SidebandLayerProperties : public BaseLayerProperties<SidebandLayerPropert
     using Base = BaseLayerProperties<SidebandLayerProperties>;
     static constexpr IComposerClient::BlendMode BLENDMODE = IComposerClient::BlendMode::NONE;
 
-    static void setupLayerState(CompositionTest* test, sp<Layer> layer) {
+    static void setupLayerState(CompositionTest* test, frontend::RequestedLayerState& layer) {
         sp<NativeHandle> stream =
                 NativeHandle::create(reinterpret_cast<native_handle_t*>(DEFAULT_SIDEBAND_STREAM),
                                      false);
-        test->mFlinger.setLayerSidebandStream(layer, stream);
-        auto& layerDrawingState = test->mFlinger.mutableLayerDrawingState(layer);
-        layerDrawingState.crop =
-                Rect(0, 0, SidebandLayerProperties::HEIGHT, SidebandLayerProperties::WIDTH);
+        layer.sidebandStream = stream;
+        layer.crop = Rect(0, 0, SidebandLayerProperties::HEIGHT, SidebandLayerProperties::WIDTH);
     }
 
     static void setupHwcSetSourceCropBufferCallExpectations(CompositionTest* test) {
@@ -750,17 +742,17 @@ struct SecureLayerProperties : public CommonSecureLayerProperties<SecureLayerPro
 struct CursorLayerProperties : public BaseLayerProperties<CursorLayerProperties> {
     using Base = BaseLayerProperties<CursorLayerProperties>;
 
-    static void setupLayerState(CompositionTest* test, sp<Layer> layer) {
+    static void setupLayerState(CompositionTest* test, frontend::RequestedLayerState& layer) {
         Base::setupLayerState(test, layer);
-        test->mFlinger.setLayerPotentialCursor(layer, true);
+        layer.potentialCursor = true;
     }
 };
 
 struct NoLayerVariant {
-    using FlingerLayerType = sp<Layer>;
-
-    static FlingerLayerType createLayer(CompositionTest*) { return FlingerLayerType(); }
-    static void injectLayer(CompositionTest*, FlingerLayerType) {}
+    static frontend::RequestedLayerState createLayer(CompositionTest*) {
+        return {LayerCreationArgs()};
+    }
+    static void injectLayer(CompositionTest*, frontend::RequestedLayerState&) {}
     static void cleanupInjectedLayers(CompositionTest*) {}
 
     static void setupCallExpectationsForDirtyGeometry(CompositionTest*) {}
@@ -770,10 +762,10 @@ struct NoLayerVariant {
 template <typename LayerProperties>
 struct BaseLayerVariant {
     template <typename L, typename F>
-    static sp<L> createLayerWithFactory(CompositionTest* test, F factory) {
+    static frontend::RequestedLayerState createLayerWithFactory(CompositionTest* test, F factory) {
         EXPECT_CALL(*test->mFlinger.scheduler(), postMessage(_)).Times(0);
 
-        sp<L> layer = factory();
+        auto layer = factory();
 
         // Layer should be registered with scheduler.
         EXPECT_EQ(1u, test->mFlinger.scheduler()->layerHistorySize());
@@ -787,27 +779,26 @@ struct BaseLayerVariant {
         return layer;
     }
 
-    template <typename L>
-    static void initLayerDrawingStateAndComputeBounds(CompositionTest* test, sp<L> layer) {
-        auto& layerDrawingState = test->mFlinger.mutableLayerDrawingState(layer);
-        layerDrawingState.layerStack = LAYER_STACK;
-        layerDrawingState.color = half4(LayerProperties::COLOR[0], LayerProperties::COLOR[1],
-                                        LayerProperties::COLOR[2], LayerProperties::COLOR[3]);
-        layer->computeBounds(FloatRect(0, 0, 100, 100), ui::Transform(), 0.f /* shadowRadius */);
+    static void initLayerDrawingStateAndComputeBounds(CompositionTest* test,
+                                                      frontend::RequestedLayerState& layer) {
+        layer.layerStack = LAYER_STACK;
+        layer.color = half4(LayerProperties::COLOR[0], LayerProperties::COLOR[1],
+                            LayerProperties::COLOR[2], LayerProperties::COLOR[3]);
     }
 
-    static void injectLayer(CompositionTest* test, sp<Layer> layer) {
+    static void injectLayer(CompositionTest* test, frontend::RequestedLayerState& layer) {
         EXPECT_CALL(*test->mComposer, createLayer(HWC_DISPLAY, _))
                 .WillOnce(DoAll(SetArgPointee<1>(HWC_LAYER), Return(Error::NONE)));
-
+        auto legacyLayer = test->mFlinger.getLegacyLayer(layer.id);
         auto outputLayer = test->mDisplay->getCompositionDisplay()->injectOutputLayerForTest(
-                layer->getCompositionEngineLayerFE());
+                legacyLayer->getCompositionEngineLayerFE({.id = layer.id}));
         outputLayer->editState().visibleRegion = Region(Rect(0, 0, 100, 100));
         outputLayer->editState().outputSpaceVisibleRegion = Region(Rect(0, 0, 100, 100));
 
         Mock::VerifyAndClear(test->mComposer);
 
-        test->mFlinger.mutableDrawingState().layersSortedByZ.add(layer);
+        auto layerCopy = std::make_unique<frontend::RequestedLayerState>(layer);
+        test->mFlinger.addLayer(layerCopy);
         test->mFlinger.mutableVisibleRegionsDirty() = true;
     }
 
@@ -815,10 +806,9 @@ struct BaseLayerVariant {
         EXPECT_CALL(*test->mComposer, destroyLayer(HWC_DISPLAY, HWC_LAYER))
                 .WillOnce(Return(Error::NONE));
 
+        test->mFlinger.destroyAllLayerHandles();
         test->mDisplay->getCompositionDisplay()->clearOutputLayers();
-        test->mFlinger.mutableDrawingState().layersSortedByZ.clear();
         test->mFlinger.mutablePreviouslyComposedLayers().clear();
-
         // Layer should be unregistered with scheduler.
         test->mFlinger.commit();
         EXPECT_EQ(0u, test->mFlinger.scheduler()->layerHistorySize());
@@ -828,17 +818,17 @@ struct BaseLayerVariant {
 template <typename LayerProperties>
 struct EffectLayerVariant : public BaseLayerVariant<LayerProperties> {
     using Base = BaseLayerVariant<LayerProperties>;
-    using FlingerLayerType = sp<Layer>;
-
-    static FlingerLayerType createLayer(CompositionTest* test) {
-        FlingerLayerType layer = Base::template createLayerWithFactory<Layer>(test, [test]() {
-            return sp<Layer>::make(LayerCreationArgs(test->mFlinger.flinger(), sp<Client>(),
-                                                     "test-layer", LayerProperties::LAYER_FLAGS,
-                                                     LayerMetadata()));
+    static frontend::RequestedLayerState createLayer(CompositionTest* test) {
+        frontend::RequestedLayerState layer = Base::template createLayerWithFactory<
+                frontend::RequestedLayerState>(test, [test]() {
+            auto args = LayerCreationArgs(test->mFlinger.flinger(), sp<Client>(), "test-layer",
+                                          LayerProperties::LAYER_FLAGS, LayerMetadata());
+            auto legacyLayer = sp<Layer>::make(args);
+            test->mFlinger.injectLegacyLayer(legacyLayer);
+            return frontend::RequestedLayerState(args);
         });
 
-        auto& layerDrawingState = test->mFlinger.mutableLayerDrawingState(layer);
-        layerDrawingState.crop = Rect(0, 0, LayerProperties::HEIGHT, LayerProperties::WIDTH);
+        layer.crop = Rect(0, 0, LayerProperties::HEIGHT, LayerProperties::WIDTH);
         return layer;
     }
 
@@ -864,13 +854,15 @@ struct EffectLayerVariant : public BaseLayerVariant<LayerProperties> {
 template <typename LayerProperties>
 struct BufferLayerVariant : public BaseLayerVariant<LayerProperties> {
     using Base = BaseLayerVariant<LayerProperties>;
-    using FlingerLayerType = sp<Layer>;
 
-    static FlingerLayerType createLayer(CompositionTest* test) {
-        FlingerLayerType layer = Base::template createLayerWithFactory<Layer>(test, [test]() {
+    static frontend::RequestedLayerState createLayer(CompositionTest* test) {
+        frontend::RequestedLayerState layer = Base::template createLayerWithFactory<
+                frontend::RequestedLayerState>(test, [test]() {
             LayerCreationArgs args(test->mFlinger.flinger(), sp<Client>(), "test-layer",
                                    LayerProperties::LAYER_FLAGS, LayerMetadata());
-            return sp<Layer>::make(args);
+            auto legacyLayer = sp<Layer>::make(args);
+            test->mFlinger.injectLegacyLayer(legacyLayer);
+            return frontend::RequestedLayerState(args);
         });
 
         LayerProperties::setupLayerState(test, layer);
@@ -912,13 +904,14 @@ struct BufferLayerVariant : public BaseLayerVariant<LayerProperties> {
 template <typename LayerProperties>
 struct ContainerLayerVariant : public BaseLayerVariant<LayerProperties> {
     using Base = BaseLayerVariant<LayerProperties>;
-    using FlingerLayerType = sp<Layer>;
 
-    static FlingerLayerType createLayer(CompositionTest* test) {
+    static frontend::RequestedLayerState createLayer(CompositionTest* test) {
         LayerCreationArgs args(test->mFlinger.flinger(), sp<Client>(), "test-container-layer",
                                LayerProperties::LAYER_FLAGS, LayerMetadata());
-        FlingerLayerType layer = sp<Layer>::make(args);
-        Base::template initLayerDrawingStateAndComputeBounds(test, layer);
+        sp<Layer> legacyLayer = sp<Layer>::make(args);
+        test->mFlinger.injectLegacyLayer(legacyLayer);
+        frontend::RequestedLayerState layer(args);
+        Base::initLayerDrawingStateAndComputeBounds(test, layer);
         return layer;
     }
 };
@@ -926,29 +919,19 @@ struct ContainerLayerVariant : public BaseLayerVariant<LayerProperties> {
 template <typename LayerVariant, typename ParentLayerVariant>
 struct ChildLayerVariant : public LayerVariant {
     using Base = LayerVariant;
-    using FlingerLayerType = typename LayerVariant::FlingerLayerType;
     using ParentBase = ParentLayerVariant;
 
-    static FlingerLayerType createLayer(CompositionTest* test) {
+    static frontend::RequestedLayerState createLayer(CompositionTest* test) {
         // Need to create child layer first. Otherwise layer history size will be 2.
-        FlingerLayerType layer = Base::createLayer(test);
-
-        typename ParentBase::FlingerLayerType parentLayer = ParentBase::createLayer(test);
-        parentLayer->addChild(layer);
-        test->mFlinger.setLayerDrawingParent(layer, parentLayer);
-
-        test->mAuxiliaryLayers.push_back(parentLayer);
-
+        frontend::RequestedLayerState layer = Base::createLayer(test);
+        frontend::RequestedLayerState parentLayer = ParentBase::createLayer(test);
+        layer.parentId = parentLayer.id;
+        auto layerCopy = std::make_unique<frontend::RequestedLayerState>(parentLayer);
+        test->mFlinger.addLayer(layerCopy);
         return layer;
     }
 
-    static void cleanupInjectedLayers(CompositionTest* test) {
-        // Clear auxiliary layers first so that child layer can be successfully destroyed in the
-        // following call.
-        test->mAuxiliaryLayers.clear();
-
-        Base::cleanupInjectedLayers(test);
-    }
+    static void cleanupInjectedLayers(CompositionTest* test) { Base::cleanupInjectedLayers(test); }
 };
 
 /* ------------------------------------------------------------------------
@@ -1011,7 +994,7 @@ struct ChangeCompositionTypeVariant {
  */
 
 struct CompositionResultBaseVariant {
-    static void setupLayerState(CompositionTest*, sp<Layer>) {}
+    static void setupLayerState(CompositionTest*, frontend::RequestedLayerState&) {}
 
     template <typename Case>
     static void setupCallExpectationsForDirtyGeometry(CompositionTest* test) {
@@ -1051,9 +1034,8 @@ struct RECompositionResultVariant : public CompositionResultBaseVariant {
 };
 
 struct ForcedClientCompositionResultVariant : public CompositionResultBaseVariant {
-    static void setupLayerState(CompositionTest* test, sp<Layer> layer) {
-        const auto outputLayer =
-                TestableSurfaceFlinger::findOutputLayerForDisplay(layer, test->mDisplay);
+    static void setupLayerState(CompositionTest* test, frontend::RequestedLayerState& layer) {
+        const auto outputLayer = test->mFlinger.findOutputLayerForDisplay(layer.id, test->mDisplay);
         LOG_FATAL_IF(!outputLayer);
         outputLayer->editState().forceClientComposition = true;
     }
@@ -1074,7 +1056,7 @@ struct ForcedClientCompositionResultVariant : public CompositionResultBaseVarian
 };
 
 struct ForcedClientCompositionViaDebugOptionResultVariant : public CompositionResultBaseVariant {
-    static void setupLayerState(CompositionTest* test, sp<Layer>) {
+    static void setupLayerState(CompositionTest* test, frontend::RequestedLayerState&) {
         test->mFlinger.mutableDebugDisableHWC() = true;
     }
 
@@ -1094,7 +1076,7 @@ struct ForcedClientCompositionViaDebugOptionResultVariant : public CompositionRe
 };
 
 struct EmptyScreenshotResultVariant {
-    static void setupLayerState(CompositionTest*, sp<Layer>) {}
+    static void setupLayerState(CompositionTest*, frontend::RequestedLayerState&) {}
 
     template <typename Case>
     static void setupCallExpectations(CompositionTest*) {}
@@ -1359,28 +1341,6 @@ TEST_F(CompositionTest, captureScreenSecureBufferLayerOnInsecureDisplay) {
 /* ------------------------------------------------------------------------
  *  Layers with a parent layer with ISurfaceComposerClient::eSecure, on a non-secure display
  */
-
-TEST_F(CompositionTest,
-       HWCComposedBufferLayerWithSecureParentLayerOnInsecureDisplayWithDirtyGeometry) {
-    displayRefreshCompositionDirtyGeometry<CompositionCase<
-            InsecureDisplaySetupVariant,
-            ChildLayerVariant<BufferLayerVariant<ParentSecureLayerProperties>,
-                              ContainerLayerVariant<SecureLayerProperties>>,
-            KeepCompositionTypeVariant<
-                    aidl::android::hardware::graphics::composer3::Composition::CLIENT>,
-            ForcedClientCompositionResultVariant>>();
-}
-
-TEST_F(CompositionTest,
-       HWCComposedBufferLayerWithSecureParentLayerOnInsecureDisplayWithDirtyFrame) {
-    displayRefreshCompositionDirtyFrame<CompositionCase<
-            InsecureDisplaySetupVariant,
-            ChildLayerVariant<BufferLayerVariant<ParentSecureLayerProperties>,
-                              ContainerLayerVariant<SecureLayerProperties>>,
-            KeepCompositionTypeVariant<
-                    aidl::android::hardware::graphics::composer3::Composition::CLIENT>,
-            ForcedClientCompositionResultVariant>>();
-}
 
 TEST_F(CompositionTest, captureScreenBufferLayerWithSecureParentLayerOnInsecureDisplay) {
     captureScreenComposition<

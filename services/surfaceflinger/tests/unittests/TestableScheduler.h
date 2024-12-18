@@ -53,7 +53,7 @@ public:
                       factory, selectorPtr->getActiveMode().fps, timeStats) {
         const auto displayId = selectorPtr->getActiveMode().modePtr->getPhysicalDisplayId();
         registerDisplay(displayId, std::move(selectorPtr), std::move(controller),
-                        std::move(tracker));
+                        std::move(tracker), displayId);
 
         ON_CALL(*this, postMessage).WillByDefault([](sp<MessageHandler>&& handler) {
             // Execute task to prevent broken promise exception on destruction.
@@ -62,7 +62,7 @@ public:
     }
 
     MOCK_METHOD(void, scheduleConfigure, (), (override));
-    MOCK_METHOD(void, scheduleFrame, (), (override));
+    MOCK_METHOD(void, scheduleFrame, (Duration), (override));
     MOCK_METHOD(void, postMessage, (sp<MessageHandler>&&), (override));
 
     void doFrameSignal(ICompositor& compositor, VsyncId vsyncId) {
@@ -74,10 +74,8 @@ public:
     void setEventThread(Cycle cycle, std::unique_ptr<EventThread> eventThreadPtr) {
         if (cycle == Cycle::Render) {
             mRenderEventThread = std::move(eventThreadPtr);
-            mRenderEventConnection = mRenderEventThread->createEventConnection();
         } else {
             mLastCompositeEventThread = std::move(eventThreadPtr);
-            mLastCompositeEventConnection = mLastCompositeEventThread->createEventConnection();
         }
     }
 
@@ -85,14 +83,16 @@ public:
 
     void registerDisplay(
             PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr,
+            std::optional<PhysicalDisplayId> activeDisplayIdOpt = {},
             std::shared_ptr<VSyncTracker> vsyncTracker = std::make_shared<mock::VSyncTracker>()) {
         registerDisplay(displayId, std::move(selectorPtr),
-                        std::make_unique<mock::VsyncController>(), vsyncTracker);
+                        std::make_unique<mock::VsyncController>(), vsyncTracker,
+                        activeDisplayIdOpt.value_or(displayId));
     }
 
     void registerDisplay(PhysicalDisplayId displayId, RefreshRateSelectorPtr selectorPtr,
                          std::unique_ptr<VsyncController> controller,
-                         std::shared_ptr<VSyncTracker> tracker) {
+                         std::shared_ptr<VSyncTracker> tracker, PhysicalDisplayId activeDisplayId) {
         ftl::FakeGuard guard(kMainThreadContext);
         Scheduler::registerDisplayInternal(displayId, std::move(selectorPtr),
                                            std::shared_ptr<VsyncSchedule>(
@@ -101,14 +101,15 @@ public:
                                                                              mock::VSyncDispatch>(),
                                                                      std::move(controller),
                                                                      mockRequestHardwareVsync
-                                                                             .AsStdFunction())));
+                                                                             .AsStdFunction())),
+                                           activeDisplayId);
     }
 
     testing::MockFunction<void(PhysicalDisplayId, bool)> mockRequestHardwareVsync;
 
-    void unregisterDisplay(PhysicalDisplayId displayId) {
+    void setDisplayPowerMode(PhysicalDisplayId displayId, hal::PowerMode powerMode) {
         ftl::FakeGuard guard(kMainThreadContext);
-        Scheduler::unregisterDisplay(displayId);
+        Scheduler::setDisplayPowerMode(displayId, powerMode);
     }
 
     std::optional<PhysicalDisplayId> pacesetterDisplayId() const NO_THREAD_SAFETY_ANALYSIS {
@@ -130,7 +131,9 @@ public:
     using Scheduler::resyncAllToHardwareVsync;
 
     auto& mutableLayerHistory() { return mLayerHistory; }
-    auto& mutableAttachedChoreographers() { return mAttachedChoreographers; }
+    auto& mutableAttachedChoreographers() NO_THREAD_SAFETY_ANALYSIS {
+        return mAttachedChoreographers;
+    }
 
     size_t layerHistorySize() NO_THREAD_SAFETY_ANALYSIS {
         return mLayerHistory.mActiveLayerInfos.size() + mLayerHistory.mInactiveLayerInfos.size();
@@ -173,6 +176,11 @@ public:
         mPolicy.idleTimer = globalSignals.idle ? TimerState::Expired : TimerState::Reset;
     }
 
+    using Scheduler::TimerState;
+
+    using Scheduler::idleTimerCallback;
+    using Scheduler::touchTimerCallback;
+
     void setContentRequirements(std::vector<RefreshRateSelector::LayerRequirement> layers) {
         std::lock_guard<std::mutex> lock(mPolicyLock);
         mPolicy.contentRequirements = std::move(layers);
@@ -185,15 +193,7 @@ public:
         return Scheduler::chooseDisplayModes();
     }
 
-    void dispatchCachedReportedMode() {
-        std::lock_guard<std::mutex> lock(mPolicyLock);
-        Scheduler::dispatchCachedReportedMode();
-    }
-
-    void clearCachedReportedMode() {
-        std::lock_guard<std::mutex> lock(mPolicyLock);
-        mPolicy.cachedModeChangedParams.reset();
-    }
+    using Scheduler::onDisplayModeChanged;
 
     void setInitialHwVsyncEnabled(PhysicalDisplayId id, bool enabled) {
         auto schedule = getVsyncSchedule(id);

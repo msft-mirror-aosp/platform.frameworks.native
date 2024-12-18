@@ -31,6 +31,7 @@
 #include <ui/Rect.h>
 #include <ui/Region.h>
 
+#include <gui/AdditionalOptions.h>
 #include <gui/FrameTimestamps.h>
 #include <gui/HdrMetadata.h>
 
@@ -402,7 +403,7 @@ public:
         uint64_t nextFrameNumber{0};
         FrameEventHistoryDelta frameTimestamps;
         bool bufferReplaced{false};
-        int maxBufferCount{0};
+        int maxBufferCount{BufferQueueDefs::NUM_BUFFER_SLOTS};
         status_t result{NO_ERROR};
     };
 
@@ -684,6 +685,10 @@ public:
                                   int8_t changeFrameRateStrategy);
 #endif
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_EXTENDEDALLOCATE)
+    virtual status_t setAdditionalOptions(const std::vector<gui::AdditionalOptions>& options);
+#endif
+
     struct RequestBufferOutput : public Flattenable<RequestBufferOutput> {
         RequestBufferOutput() = default;
 
@@ -862,6 +867,6 @@ class BnGraphicBufferProducer : public IGraphicBufferProducer {
 #endif
 
 // ----------------------------------------------------------------------------
-}; // namespace android
+} // namespace android
 
 #endif // ANDROID_GUI_IGRAPHICBUFFERPRODUCER_H

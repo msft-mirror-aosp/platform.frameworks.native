@@ -38,7 +38,7 @@ struct TouchedWindow {
     bool hasHoveringPointers() const;
     bool hasHoveringPointers(DeviceId deviceId) const;
     bool hasHoveringPointer(DeviceId deviceId, int32_t pointerId) const;
-    void addHoveringPointer(DeviceId deviceId, const PointerProperties& pointer);
+    void addHoveringPointer(DeviceId deviceId, const PointerProperties& pointer, float x, float y);
     void removeHoveringPointer(DeviceId deviceId, int32_t pointerId);
 
     // Touching
@@ -46,7 +46,8 @@ struct TouchedWindow {
     bool hasTouchingPointers() const;
     bool hasTouchingPointers(DeviceId deviceId) const;
     std::vector<PointerProperties> getTouchingPointers(DeviceId deviceId) const;
-    void addTouchingPointers(DeviceId deviceId, const std::vector<PointerProperties>& pointers);
+    android::base::Result<void> addTouchingPointers(DeviceId deviceId,
+                                                    const std::vector<PointerProperties>& pointers);
     void removeTouchingPointer(DeviceId deviceId, int32_t pointerId);
     void removeTouchingPointers(DeviceId deviceId, std::bitset<MAX_POINTER_ID + 1> pointers);
     bool hasActiveStylus() const;
@@ -68,6 +69,15 @@ struct TouchedWindow {
     void clearHoveringPointers(DeviceId deviceId);
     std::string dump() const;
 
+    struct HoveringPointer {
+        PointerProperties properties;
+        float x;
+        float y;
+    };
+
+    std::vector<DeviceId> eraseHoveringPointersIf(
+            std::function<bool(const PointerProperties&, float /*x*/, float /*y*/)> condition);
+
 private:
     struct DeviceState {
         std::vector<PointerProperties> touchingPointers;
@@ -77,7 +87,7 @@ private:
         // NOTE: This is not initialized in case of HOVER entry/exit and DISPATCH_AS_OUTSIDE
         // scenario.
         std::optional<nsecs_t> downTimeInTarget;
-        std::vector<PointerProperties> hoveringPointers;
+        std::vector<HoveringPointer> hoveringPointers;
 
         bool hasPointers() const { return !touchingPointers.empty() || !hoveringPointers.empty(); };
     };

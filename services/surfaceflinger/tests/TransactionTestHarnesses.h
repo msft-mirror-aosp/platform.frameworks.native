@@ -16,9 +16,12 @@
 #ifndef ANDROID_TRANSACTION_TEST_HARNESSES
 #define ANDROID_TRANSACTION_TEST_HARNESSES
 
+#include <com_android_graphics_libgui_flags.h>
+#include <common/FlagManager.h>
 #include <ui/DisplayState.h>
 
 #include "LayerTransactionTest.h"
+#include "ui/LayerStack.h"
 
 namespace android {
 
@@ -36,9 +39,10 @@ public:
             case RenderPath::VIRTUAL_DISPLAY:
 
                 const auto ids = SurfaceComposerClient::getPhysicalDisplayIds();
+                const PhysicalDisplayId displayId = ids.front();
                 const auto displayToken = ids.empty()
                         ? nullptr
-                        : SurfaceComposerClient::getPhysicalDisplayToken(ids.front());
+                        : SurfaceComposerClient::getPhysicalDisplayToken(displayId);
 
                 ui::DisplayState displayState;
                 SurfaceComposerClient::getDisplayState(displayToken, &displayState);
@@ -48,6 +52,16 @@ public:
                 const ui::Size& resolution = displayMode.resolution;
 
                 sp<IBinder> vDisplay;
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
+                sp<BufferItemConsumer> itemConsumer = sp<BufferItemConsumer>::make(
+                        // Sample usage bits from screenrecord
+                        GRALLOC_USAGE_HW_VIDEO_ENCODER | GRALLOC_USAGE_SW_READ_OFTEN);
+                sp<BufferListener> listener = sp<BufferListener>::make(this);
+                itemConsumer->setFrameAvailableListener(listener);
+                itemConsumer->setName(String8("Virtual disp consumer"));
+                itemConsumer->setDefaultBufferSize(resolution.getWidth(), resolution.getHeight());
+#else
                 sp<IGraphicBufferProducer> producer;
                 sp<IGraphicBufferConsumer> consumer;
                 sp<BufferItemConsumer> itemConsumer;
@@ -62,15 +76,32 @@ public:
                                                                     GRALLOC_USAGE_SW_READ_OFTEN);
                 sp<BufferListener> listener = sp<BufferListener>::make(this);
                 itemConsumer->setFrameAvailableListener(listener);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
 
-                vDisplay = SurfaceComposerClient::createDisplay(String8("VirtualDisplay"),
-                                                                false /*secure*/);
+                static const std::string kDisplayName("VirtualDisplay");
+                vDisplay = SurfaceComposerClient::createVirtualDisplay(kDisplayName,
+                                                                       false /*isSecure*/);
+
+                constexpr ui::LayerStack layerStack{
+                        848472}; // ASCII for TTH (TransactionTestHarnesses)
+                sp<SurfaceControl> mirrorSc =
+                        SurfaceComposerClient::getDefault()->mirrorDisplay(displayId);
 
                 SurfaceComposerClient::Transaction t;
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
+                t.setDisplaySurface(vDisplay,
+                                    itemConsumer->getSurface()->getIGraphicBufferProducer());
+#else
                 t.setDisplaySurface(vDisplay, producer);
-                t.setDisplayLayerStack(vDisplay, ui::DEFAULT_LAYER_STACK);
+#endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
                 t.setDisplayProjection(vDisplay, displayState.orientation,
                                        Rect(displayState.layerStackSpaceRect), Rect(resolution));
+                if (FlagManager::getInstance().ce_fence_promise()) {
+                    t.setDisplayLayerStack(vDisplay, layerStack);
+                    t.setLayerStack(mirrorSc, layerStack);
+                } else {
+                    t.setDisplayLayerStack(vDisplay, ui::DEFAULT_LAYER_STACK);
+                }
                 t.apply();
                 SurfaceComposerClient::Transaction().apply(true);
 
@@ -85,7 +116,16 @@ public:
                 constexpr bool kContainsHdr = false;
                 auto sc = std::make_unique<ScreenCapture>(item.mGraphicBuffer, kContainsHdr);
                 itemConsumer->releaseBuffer(item);
-                SurfaceComposerClient::destroyDisplay(vDisplay);
+
+                // Possible race condition with destroying virtual displays, in which
+                // CompositionEngine::present may attempt to be called on the same
+                // display multiple times. The layerStack is set to invalid here so
+                // that the display is ignored if that scenario occurs.
+                if (FlagManager::getInstance().ce_fence_promise()) {
+                    t.setLayerStack(mirrorSc, ui::INVALID_LAYER_STACK);
+                    t.apply(true);
+                }
+                SurfaceComposerClient::destroyVirtualDisplay(vDisplay);
                 return sc;
         }
     }

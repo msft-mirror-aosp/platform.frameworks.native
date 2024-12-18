@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include "trace/EventTrackerInterface.h"
+
 #include <input/Input.h>
 #include <bitset>
 #include <optional>
@@ -30,7 +32,8 @@ struct CancelationOptions {
         CANCEL_POINTER_EVENTS = 1,
         CANCEL_NON_POINTER_EVENTS = 2,
         CANCEL_FALLBACK_EVENTS = 3,
-        ftl_last = CANCEL_FALLBACK_EVENTS,
+        CANCEL_HOVER_EVENTS = 4,
+        ftl_last = CANCEL_HOVER_EVENTS
     };
 
     // The criterion to use to determine which events should be canceled.
@@ -46,12 +49,18 @@ struct CancelationOptions {
     std::optional<int32_t> deviceId = std::nullopt;
 
     // The specific display id of events to cancel, or nullopt to cancel events on any display.
-    std::optional<int32_t> displayId = std::nullopt;
+    std::optional<ui::LogicalDisplayId> displayId = std::nullopt;
 
     // The specific pointers to cancel, or nullopt to cancel all pointer events
     std::optional<std::bitset<MAX_POINTER_ID + 1>> pointerIds = std::nullopt;
 
-    CancelationOptions(Mode mode, const char* reason) : mode(mode), reason(reason) {}
+    const std::unique_ptr<trace::EventTrackerInterface>& traceTracker;
+
+    explicit CancelationOptions(Mode mode, const char* reason,
+                                const std::unique_ptr<trace::EventTrackerInterface>& traceTracker)
+          : mode(mode), reason(reason), traceTracker(traceTracker) {}
+    CancelationOptions(const CancelationOptions&) = delete;
+    CancelationOptions operator=(const CancelationOptions&) = delete;
 };
 
 } // namespace inputdispatcher

@@ -56,6 +56,16 @@ cc_defaults {
         host: {
             sanitize: {
                 address: true,
+                diag: {
+                    cfi: true,
+                    integer_overflow: true,
+                    memtag_heap: true,
+                    undefined: true,
+                    misc_undefined: [
+                        "bounds",
+                        "all",
+                    ],
+                },
             },
             include_dirs: [
                 "bionic/libc/kernel/android/uapi/",
@@ -107,6 +117,7 @@ cc_defaults {
         "libutils",
         "libstatspull",
         "libstatssocket",
+        "packagemanager_aidl-cpp",
         "server_configurable_flags",
     ],
     static_libs: [
@@ -161,9 +172,8 @@ cc_library_shared {
     export_static_lib_headers: [
         "libinputdispatcher",
     ],
-    export_include_dirs: [
-        ".",
-        "include",
+    export_shared_lib_headers: [
+        "libinputflinger_base",
     ],
 }
 
@@ -174,7 +184,16 @@ cc_library_shared {
 cc_library_headers {
     name: "libinputflinger_headers",
     host_supported: true,
-    export_include_dirs: ["include"],
+    export_include_dirs: [
+        "include",
+        ".",
+    ],
+    header_libs: [
+        "libchrome-gestures_headers",
+    ],
+    export_header_lib_headers: [
+        "libchrome-gestures_headers",
+    ],
 }
 
 filegroup {
@@ -198,6 +217,7 @@ cc_defaults {
         "libcutils",
         "libinput",
         "liblog",
+        "libprocessgroup",
         "libstatslog",
         "libutils",
     ],
@@ -270,5 +290,6 @@ phony {
         "FrameworksServicesTests",
         "CtsSecurityTestCases",
         "CtsSecurityBulletinHostTestCases",
+        "monkey_test",
     ],
 }
