@@ -5218,8 +5218,7 @@ sp<WindowInfoHandle> InputDispatcher::getWindowHandleLocked(
     return nullptr;
 }
 
-sp<WindowInfoHandle> InputDispatcher::getWindowHandleLocked(
-        const sp<WindowInfoHandle>& windowHandle) const {
+bool InputDispatcher::isWindowPresentLocked(const sp<WindowInfoHandle>& windowHandle) const {
     for (const auto& [displayId, windowHandles] : mWindowHandlesByDisplay) {
         for (const sp<WindowInfoHandle>& handle : windowHandles) {
             if (handle->getId() == windowHandle->getId() &&
@@ -5230,11 +5229,11 @@ sp<WindowInfoHandle> InputDispatcher::getWindowHandleLocked(
                           windowHandle->getName().c_str(), displayId.toString().c_str(),
                           windowHandle->getInfo()->displayId.toString().c_str());
                 }
-                return handle;
+                return true;
             }
         }
     }
-    return nullptr;
+    return false;
 }
 
 sp<WindowInfoHandle> InputDispatcher::getFocusedWindowHandleLocked(
@@ -5429,7 +5428,7 @@ void InputDispatcher::setInputWindowsLocked(
         TouchState& state = it->second;
         for (size_t i = 0; i < state.windows.size();) {
             TouchedWindow& touchedWindow = state.windows[i];
-            if (getWindowHandleLocked(touchedWindow.windowHandle) != nullptr) {
+            if (isWindowPresentLocked(touchedWindow.windowHandle)) {
                 i++;
                 continue;
             }
@@ -5495,7 +5494,7 @@ void InputDispatcher::setInputWindowsLocked(
     // Otherwise, they might stick around until the window handle is destroyed
     // which might not happen until the next GC.
     for (const sp<WindowInfoHandle>& oldWindowHandle : oldWindowHandles) {
-        if (getWindowHandleLocked(oldWindowHandle) == nullptr) {
+        if (!isWindowPresentLocked(oldWindowHandle)) {
             if (DEBUG_FOCUS) {
                 ALOGD("Window went away: %s", oldWindowHandle->getName().c_str());
             }

@@ -384,8 +384,8 @@ private:
     sp<android::gui::WindowInfoHandle> getWindowHandleLocked(
             const sp<IBinder>& windowHandleToken,
             std::optional<ui::LogicalDisplayId> displayId = {}) const REQUIRES(mLock);
-    sp<android::gui::WindowInfoHandle> getWindowHandleLocked(
-            const sp<android::gui::WindowInfoHandle>& windowHandle) const REQUIRES(mLock);
+    bool isWindowPresentLocked(const sp<android::gui::WindowInfoHandle>& windowHandle) const
+            REQUIRES(mLock);
     sp<android::gui::WindowInfoHandle> getFocusedWindowHandleLocked(
             ui::LogicalDisplayId displayId) const REQUIRES(mLock);
     bool canWindowReceiveMotionLocked(const sp<android::gui::WindowInfoHandle>& window,
