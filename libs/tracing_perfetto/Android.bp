@@ -37,11 +37,16 @@ cc_library_shared {
     srcs: [
         "tracing_perfetto.cpp",
         "tracing_perfetto_internal.cpp",
+        "tracing_sdk.cpp",
     ],
 
     shared_libs: [
         "libbase",
         "libcutils",
+        "libperfetto_c",
+    ],
+
+    export_shared_lib_headers: [
         "libperfetto_c",
     ],
 
