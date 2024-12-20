@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <PowerAdvisor/Workload.h>
 #include <compositionengine/LayerFECompositionState.h>
 #include <renderengine/LayerSettings.h>
 #include "DisplayHardware/ComposerHal.h"
@@ -159,6 +160,10 @@ struct LayerSnapshot : public compositionengine::LayerFECompositionState {
     friend std::ostream& operator<<(std::ostream& os, const LayerSnapshot& obj);
     void merge(const RequestedLayerState& requested, bool forceUpdate, bool displayChanges,
                bool forceFullDamage, uint32_t displayRotationFlags);
+    // Returns a char summarizing the composition request
+    // This function tries to maintain parity with planner::Plan chars.
+    char classifyCompositionForDebug(
+            aidl::android::hardware::graphics::composer3::Composition compositionType) const;
 };
 
 } // namespace android::surfaceflinger::frontend

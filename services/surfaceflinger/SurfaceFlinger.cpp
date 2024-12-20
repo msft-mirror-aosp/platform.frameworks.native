@@ -44,6 +44,7 @@
 #include <com_android_graphics_libgui_flags.h>
 #include <com_android_graphics_surfaceflinger_flags.h>
 #include <common/FlagManager.h>
+#include <common/WorkloadTracer.h>
 #include <common/trace.h>
 #include <compositionengine/CompositionEngine.h>
 #include <compositionengine/CompositionRefreshArgs.h>
@@ -156,6 +157,7 @@
 #include "MutexUtils.h"
 #include "NativeWindowSurface.h"
 #include "PowerAdvisor/PowerAdvisor.h"
+#include "PowerAdvisor/Workload.h"
 #include "RegionSamplingThread.h"
 #include "RenderAreaBuilder.h"
 #include "Scheduler/EventThread.h"
@@ -2458,6 +2460,7 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
                                           bool flushTransactions, bool& outTransactionsAreEmpty) {
     using Changes = frontend::RequestedLayerState::Changes;
     SFTRACE_CALL();
+    SFTRACE_NAME_FOR_TRACK(WorkloadTracer::TRACK_NAME, "Transaction Handling");
     frontend::Update update;
     if (flushTransactions) {
         SFTRACE_NAME("TransactionHandler:flushTransactions");
@@ -2484,8 +2487,20 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
             mDestroyedHandles.clear();
         }
 
+        size_t addedLayers = update.newLayers.size();
         mLayerLifecycleManager.addLayers(std::move(update.newLayers));
         update.transactions = mTransactionHandler.flushTransactions();
+        ftl::Flags<adpf::Workload> committedWorkload;
+        for (auto& transaction : update.transactions) {
+            committedWorkload |= transaction.workloadHint;
+        }
+        SFTRACE_INSTANT_FOR_TRACK(WorkloadTracer::TRACK_NAME,
+                                  ftl::Concat("Layers: +", addedLayers, " -",
+                                              update.destroyedHandles.size(),
+                                              " txns:", update.transactions.size())
+                                          .c_str());
+
+        mPowerAdvisor->setCommittedWorkload(committedWorkload);
         if (mTransactionTracing) {
             mTransactionTracing->addCommittedTransactions(ftl::to_underlying(vsyncId), frameTimeNs,
                                                           update, mFrontEndDisplayInfos,
@@ -2686,7 +2701,7 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
             return false;
         }
     }
-
+    SFTRACE_NAME_FOR_TRACK(WorkloadTracer::TRACK_NAME, "Commit");
     const Period vsyncPeriod = mScheduler->getVsyncSchedule()->period();
 
     // Save this once per commit + composite to ensure consistency
@@ -2760,6 +2775,7 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
     // Hold mStateLock as chooseRefreshRateForContent promotes wp<Layer> to sp<Layer>
     // and may eventually call to ~Layer() if it holds the last reference
     {
+        SFTRACE_NAME_FOR_TRACK(WorkloadTracer::TRACK_NAME, "Refresh Rate Selection");
         bool updateAttachedChoreographer = mUpdateAttachedChoreographer;
         mUpdateAttachedChoreographer = false;
 
@@ -2786,6 +2802,8 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
 
 CompositeResultsPerDisplay SurfaceFlinger::composite(
         PhysicalDisplayId pacesetterId, const scheduler::FrameTargeters& frameTargeters) {
+    SFTRACE_ASYNC_FOR_TRACK_BEGIN(WorkloadTracer::TRACK_NAME, "Composition",
+                                  WorkloadTracer::COMPOSITION_TRACE_COOKIE);
     const scheduler::FrameTarget& pacesetterTarget =
             frameTargeters.get(pacesetterId)->get()->target();
 
@@ -2948,10 +2966,34 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     }
 
     mCompositionEngine->present(refreshArgs);
-    moveSnapshotsFromCompositionArgs(refreshArgs, layers);
+    ftl::Flags<adpf::Workload> compositedWorkload;
+    if (refreshArgs.updatingGeometryThisFrame || refreshArgs.updatingOutputGeometryThisFrame) {
+        compositedWorkload |= adpf::Workload::VISIBLE_REGION;
+    }
+    if (mFrontEndDisplayInfosChanged) {
+        compositedWorkload |= adpf::Workload::DISPLAY_CHANGES;
+        SFTRACE_INSTANT_FOR_TRACK(WorkloadTracer::TRACK_NAME, "Display Changes");
+    }
 
+    int index = 0;
+    std::array<char, WorkloadTracer::COMPOSITION_SUMMARY_SIZE> compositionSummary = {0};
+    auto lastLayerStack = ui::INVALID_LAYER_STACK;
     for (auto& [layer, layerFE] : layers) {
         CompositionResult compositionResult{layerFE->stealCompositionResult()};
+        if (index < compositionSummary.size()) {
+            if (lastLayerStack != ui::INVALID_LAYER_STACK &&
+                lastLayerStack != layerFE->mSnapshot->outputFilter.layerStack) {
+                // add a space to separate displays
+                compositionSummary[index++] = ' ';
+            }
+            lastLayerStack = layerFE->mSnapshot->outputFilter.layerStack;
+            compositionSummary[index++] = layerFE->mSnapshot->classifyCompositionForDebug(
+                    layerFE->getHwcCompositionType());
+            if (layerFE->mSnapshot->hasEffect()) {
+                compositedWorkload |= adpf::Workload::EFFECTS;
+            }
+        }
+
         if (compositionResult.lastClientCompositionFence) {
             layer->setWasClientComposed(compositionResult.lastClientCompositionFence);
         }
@@ -2960,6 +3002,20 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         }
     }
 
+    // Concisely describe the layers composited this frame using single chars. GPU composited layers
+    // are uppercase, DPU composited are lowercase. Special chars denote effects (blur, shadow,
+    // etc.). This provides a snapshot of the compositing workload.
+    SFTRACE_INSTANT_FOR_TRACK(WorkloadTracer::TRACK_NAME,
+                              ftl::Concat("Layers: ", layers.size(), " ",
+                                          ftl::truncated<WorkloadTracer::COMPOSITION_SUMMARY_SIZE>(
+                                                  compositionSummary.data()))
+                                      .c_str());
+
+    mPowerAdvisor->setCompositedWorkload(compositedWorkload);
+    moveSnapshotsFromCompositionArgs(refreshArgs, layers);
+    SFTRACE_ASYNC_FOR_TRACK_END(WorkloadTracer::TRACK_NAME,
+                                WorkloadTracer::COMPOSITION_TRACE_COOKIE);
+    SFTRACE_NAME_FOR_TRACK(WorkloadTracer::TRACK_NAME, "Post Composition");
     SFTRACE_NAME("postComposition");
     mTimeStats->recordFrameDuration(pacesetterTarget.frameBeginTime().ns(), systemTime());
 
@@ -4874,8 +4930,15 @@ status_t SurfaceFlinger::setTransactionState(
     const int originPid = ipc->getCallingPid();
     const int originUid = ipc->getCallingUid();
     uint32_t permissions = LayerStatePermissions::getTransactionPermissions(originPid, originUid);
+    ftl::Flags<adpf::Workload> queuedWorkload;
     for (auto& composerState : states) {
         composerState.state.sanitize(permissions);
+        if (composerState.state.what & layer_state_t::COMPOSITION_EFFECTS) {
+            queuedWorkload |= adpf::Workload::EFFECTS;
+        }
+        if (composerState.state.what & layer_state_t::VISIBLE_REGION_CHANGES) {
+            queuedWorkload |= adpf::Workload::VISIBLE_REGION;
+        }
     }
 
     for (DisplayState& display : displays) {
@@ -4898,6 +4961,10 @@ status_t SurfaceFlinger::setTransactionState(
             flags &= ~(eEarlyWakeupStart | eEarlyWakeupEnd);
         }
     }
+    if (flags & eEarlyWakeupStart) {
+        queuedWorkload |= adpf::Workload::WAKEUP;
+    }
+    mPowerAdvisor->setQueuedWorkload(queuedWorkload);
 
     const int64_t postTime = systemTime();
 
@@ -4961,6 +5028,7 @@ status_t SurfaceFlinger::setTransactionState(
                                  originUid,
                                  transactionId,
                                  mergedTransactionIds};
+    state.workloadHint = queuedWorkload;
 
     if (mTransactionTracing) {
         mTransactionTracing->addQueuedTransaction(state);
@@ -7394,6 +7462,8 @@ std::optional<SurfaceFlinger::OutputCompositionState> SurfaceFlinger::getSnapsho
         std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) {
     return mScheduler
             ->schedule([=, this, &renderAreaBuilder, &layers]() REQUIRES(kMainThreadContext) {
+                SFTRACE_NAME_FOR_TRACK(WorkloadTracer::TRACK_NAME, "Screenshot");
+                mPowerAdvisor->setScreenshotWorkload();
                 SFTRACE_NAME("getSnapshotsFromMainThread");
                 layers = getLayerSnapshotsFn();
                 // Non-threaded RenderEngine eventually returns to the main thread a 2nd time

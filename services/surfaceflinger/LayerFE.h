@@ -59,6 +59,9 @@ public:
     void setReleaseFence(const FenceResult& releaseFence) override;
     LayerFE::ReleaseFencePromiseStatus getReleaseFencePromiseStatus() override;
     void onPictureProfileCommitted() override;
+    void setHwcCompositionType(aidl::android::hardware::graphics::composer3::Composition) override;
+    aidl::android::hardware::graphics::composer3::Composition getHwcCompositionType()
+            const override;
 
     std::unique_ptr<surfaceflinger::frontend::LayerSnapshot> mSnapshot;
 
@@ -90,6 +93,8 @@ private:
     std::string mName;
     std::promise<FenceResult> mReleaseFence;
     ReleaseFencePromiseStatus mReleaseFencePromiseStatus = ReleaseFencePromiseStatus::UNINITIALIZED;
+    aidl::android::hardware::graphics::composer3::Composition mLastHwcCompositionType =
+            aidl::android::hardware::graphics::composer3::Composition::INVALID;
 };
 
 } // namespace android
