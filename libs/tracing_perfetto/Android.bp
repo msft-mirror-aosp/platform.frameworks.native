@@ -21,7 +21,7 @@ package {
     default_applicable_licenses: ["frameworks_native_license"],
 }
 
-cc_library_shared {
+cc_library {
     name: "libtracing_perfetto",
     export_include_dirs: [
         "include",
