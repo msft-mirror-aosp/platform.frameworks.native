@@ -384,6 +384,9 @@ private:
         // Get the transform for display, returns Identity-transform if display is missing.
         ui::Transform getDisplayTransform(ui::LogicalDisplayId displayId) const;
 
+        // Get the raw transform to use for motion events going to the given window.
+        ui::Transform getRawTransform(const android::gui::WindowInfo&) const;
+
         // Lookup for WindowInfoHandle from token and optionally a display-id. In cases where
         // display-id is not provided lookup is done for all displays.
         sp<android::gui::WindowInfoHandle> findWindowHandle(

@@ -3013,11 +3013,10 @@ void InputDispatcher::addWindowTargetLocked(const sp<WindowInfoHandle>& windowHa
                   windowHandle->getName().c_str());
             return;
         }
-        inputTargets.push_back(createInputTarget(connection, windowHandle, dispatchMode,
-                                                 targetFlags,
-                                                 mWindowInfos.getDisplayTransform(
-                                                         windowHandle->getInfo()->displayId),
-                                                 firstDownTimeInTarget));
+        inputTargets.push_back(
+                createInputTarget(connection, windowHandle, dispatchMode, targetFlags,
+                                  mWindowInfos.getRawTransform(*windowHandle->getInfo()),
+                                  firstDownTimeInTarget));
         it = inputTargets.end() - 1;
     }
 
@@ -3068,11 +3067,10 @@ void InputDispatcher::addPointerWindowTargetLocked(
                   windowHandle->getName().c_str());
             return;
         }
-        inputTargets.push_back(createInputTarget(connection, windowHandle, dispatchMode,
-                                                 targetFlags,
-                                                 mWindowInfos.getDisplayTransform(
-                                                         windowHandle->getInfo()->displayId),
-                                                 firstDownTimeInTarget));
+        inputTargets.push_back(
+                createInputTarget(connection, windowHandle, dispatchMode, targetFlags,
+                                  mWindowInfos.getRawTransform(*windowHandle->getInfo()),
+                                  firstDownTimeInTarget));
         it = inputTargets.end() - 1;
     }
 
@@ -3104,7 +3102,8 @@ void InputDispatcher::addGlobalMonitoringTargetsLocked(std::vector<InputTarget>&
     for (const Monitor& monitor : selectResponsiveMonitorsLocked(monitorsIt->second)) {
         InputTarget target{monitor.connection};
         // target.firstDownTimeInTarget is not set for global monitors. It is only required in split
-        // touch and global monitoring works as intended even without setting firstDownTimeInTarget
+        // touch and global monitoring works as intended even without setting firstDownTimeInTarget.
+        // Since global monitors don't have windows, use the display transform as the raw transform.
         target.rawTransform = mWindowInfos.getDisplayTransform(displayId);
         target.setDefaultPointerTransform(target.rawTransform);
         inputTargets.push_back(target);
@@ -4291,6 +4290,7 @@ void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
                                                  motionEntry.downTime, targets);
                 } else {
                     targets.emplace_back(fallbackTarget);
+                    // Since we don't have a window, use the display transform as the raw transform.
                     const ui::Transform displayTransform =
                             mWindowInfos.getDisplayTransform(motionEntry.displayId);
                     targets.back().rawTransform = displayTransform;
@@ -4376,6 +4376,7 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
                                                  targets);
                 } else {
                     targets.emplace_back(connection, targetFlags);
+                    // Since we don't have a window, use the display transform as the raw transform.
                     const ui::Transform displayTransform =
                             mWindowInfos.getDisplayTransform(motionEntry.displayId);
                     targets.back().rawTransform = displayTransform;
@@ -5287,6 +5288,16 @@ ui::Transform InputDispatcher::DispatcherWindowInfo::getDisplayTransform(
     auto displayInfoIt = mDisplayInfos.find(displayId);
     return displayInfoIt != mDisplayInfos.end() ? displayInfoIt->second.transform
                                                 : kIdentityTransform;
+}
+
+ui::Transform InputDispatcher::DispatcherWindowInfo::getRawTransform(
+        const android::gui::WindowInfo& windowInfo) const {
+    // If the window has a cloneLayerStackTransform, always use it as the transform for the "getRaw"
+    // APIs. If not, fall back to using the DisplayInfo transform of the window's display.
+    return (input_flags::use_cloned_screen_coordinates_as_raw() &&
+            windowInfo.cloneLayerStackTransform)
+            ? *windowInfo.cloneLayerStackTransform
+            : getDisplayTransform(windowInfo.displayId);
 }
 
 std::string InputDispatcher::DispatcherWindowInfo::dumpDisplayAndWindowInfo() const {
@@ -6567,9 +6578,8 @@ void InputDispatcher::doDispatchCycleFinishedCommand(nsecs_t finishTime,
                                            createInputTarget(connection, windowHandle,
                                                              InputTarget::DispatchMode::AS_IS,
                                                              dispatchEntry->targetFlags,
-                                                             mWindowInfos.getDisplayTransform(
-                                                                     windowHandle->getInfo()
-                                                                             ->displayId),
+                                                             mWindowInfos.getRawTransform(
+                                                                     *windowHandle->getInfo()),
                                                              downTime));
             }
         }

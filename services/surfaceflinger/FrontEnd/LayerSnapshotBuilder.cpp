@@ -16,6 +16,8 @@
 
 // #define LOG_NDEBUG 0
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
+#include "FrontEnd/LayerSnapshot.h"
+#include "ui/Transform.h"
 #undef LOG_TAG
 #define LOG_TAG "SurfaceFlinger"
 
@@ -1205,13 +1207,27 @@ void LayerSnapshotBuilder::updateInput(LayerSnapshot& snapshot,
     snapshot.inputInfo.contentSize = {snapshot.croppedBufferSize.getHeight(),
                                       snapshot.croppedBufferSize.getWidth()};
 
-    // If the layer is a clone, we need to crop the input region to cloned root to prevent
-    // touches from going outside the cloned area.
+    snapshot.inputInfo.cloneLayerStackTransform.reset();
+
     if (path.isClone()) {
         snapshot.inputInfo.inputConfig |= InputConfig::CLONE;
         // Cloned layers shouldn't handle watch outside since their z order is not determined by
         // WM or the client.
         snapshot.inputInfo.inputConfig.clear(InputConfig::WATCH_OUTSIDE_TOUCH);
+
+        // Compute the transform that maps the clone's display to the layer stack space of the
+        // cloned window.
+        const LayerSnapshot* clonedSnapshot = getSnapshot(path.getClonedFrom());
+        if (clonedSnapshot != nullptr) {
+            const auto& [clonedInputBounds, s] =
+                    getInputBounds(*clonedSnapshot, /*fillParentBounds=*/false);
+            ui::Transform inputToLayer;
+            inputToLayer.set(clonedInputBounds.left, clonedInputBounds.top);
+            const ui::Transform& layerToLayerStack = getInputTransform(*clonedSnapshot);
+            const auto& displayToInput = snapshot.inputInfo.transform;
+            snapshot.inputInfo.cloneLayerStackTransform =
+                    layerToLayerStack * inputToLayer * displayToInput;
+        }
     }
 }
 
