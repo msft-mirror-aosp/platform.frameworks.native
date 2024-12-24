@@ -256,10 +256,6 @@ private:
             ui::LogicalDisplayId displayId, const sp<android::gui::WindowInfoHandle>& touchedWindow,
             int32_t pointerId) const REQUIRES(mLock);
 
-    std::vector<sp<android::gui::WindowInfoHandle>> findTouchedSpyWindowsAtLocked(
-            ui::LogicalDisplayId displayId, float x, float y, bool isStylus,
-            DeviceId deviceId) const REQUIRES(mLock);
-
     static sp<android::gui::WindowInfoHandle> findTouchedForegroundWindow(
             const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay,
             ui::LogicalDisplayId displayId);
@@ -400,6 +396,11 @@ private:
         sp<android::gui::WindowInfoHandle> findTouchedWindowAt(
                 ui::LogicalDisplayId displayId, float x, float y, bool isStylus = false,
                 const sp<android::gui::WindowInfoHandle> ignoreWindow = nullptr) const;
+
+        std::vector<sp<android::gui::WindowInfoHandle>> findTouchedSpyWindowsAt(
+                ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId,
+                const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay)
+                const;
 
         std::string dumpDisplayAndWindowInfo() const;
 
@@ -727,13 +728,19 @@ private:
             bool handled) REQUIRES(mLock);
 
     // Find touched state and touched window by token.
-    std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
-    findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) REQUIRES(mLock);
+    static std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
+    findTouchStateWindowAndDisplay(
+            const sp<IBinder>& token,
+            std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
 
-    std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
-    findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) const REQUIRES(mLock);
-    bool windowHasTouchingPointersLocked(const sp<android::gui::WindowInfoHandle>& windowHandle,
-                                         DeviceId deviceId) const REQUIRES(mLock);
+    static std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
+    findTouchStateWindowAndDisplay(
+            const sp<IBinder>& token,
+            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
+
+    static bool windowHasTouchingPointers(
+            const sp<android::gui::WindowInfoHandle>& windowHandle, DeviceId deviceId,
+            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
 
     // Statistics gathering.
     nsecs_t mLastStatisticPushTime = 0;

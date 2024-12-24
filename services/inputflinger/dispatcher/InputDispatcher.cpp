@@ -1346,7 +1346,8 @@ bool InputDispatcher::shouldPruneInboundQueueLocked(const MotionEntry& motionEnt
 
         // Alternatively, maybe there's a spy window that could handle this event.
         const std::vector<sp<WindowInfoHandle>> touchedSpies =
-                findTouchedSpyWindowsAtLocked(displayId, x, y, isStylus, motionEntry.deviceId);
+                mWindowInfos.findTouchedSpyWindowsAt(displayId, x, y, isStylus,
+                                                     motionEntry.deviceId, mTouchStatesByDisplay);
         for (const auto& windowHandle : touchedSpies) {
             const std::shared_ptr<Connection> connection =
                     getConnectionLocked(windowHandle->getToken());
@@ -1499,15 +1500,16 @@ std::vector<InputTarget> InputDispatcher::findOutsideTargetsLocked(
     return outsideTargets;
 }
 
-std::vector<sp<WindowInfoHandle>> InputDispatcher::findTouchedSpyWindowsAtLocked(
-        ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId) const {
+std::vector<sp<WindowInfoHandle>> InputDispatcher::DispatcherWindowInfo::findTouchedSpyWindowsAt(
+        ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId,
+        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) const {
     // Traverse windows from front to back and gather the touched spy windows.
     std::vector<sp<WindowInfoHandle>> spyWindows;
-    const auto& windowHandles = mWindowInfos.getWindowHandlesForDisplay(displayId);
+    const auto& windowHandles = getWindowHandlesForDisplay(displayId);
     for (const sp<WindowInfoHandle>& windowHandle : windowHandles) {
         const WindowInfo& info = *windowHandle->getInfo();
         if (!windowAcceptsTouchAt(info, displayId, x, y, isStylus,
-                                  mWindowInfos.getDisplayTransform(displayId))) {
+                                  getDisplayTransform(displayId))) {
             // Generally, we would skip any pointer that's outside of the window. However, if the
             // spy prevents splitting, and already has some of the pointers from this device, then
             // it should get more pointers from the same device, even if they are outside of that
@@ -1518,7 +1520,7 @@ std::vector<sp<WindowInfoHandle>> InputDispatcher::findTouchedSpyWindowsAtLocked
 
             // We know that split touch is not supported. Skip this window only if it doesn't have
             // any touching pointers for this device already.
-            if (!windowHasTouchingPointersLocked(windowHandle, deviceId)) {
+            if (!windowHasTouchingPointers(windowHandle, deviceId, touchStatesByDisplay)) {
                 continue;
             }
             // If it already has pointers down for this device, then give it this pointer, too.
@@ -2519,7 +2521,8 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
         }
 
         std::vector<sp<WindowInfoHandle>> newTouchedWindows =
-                findTouchedSpyWindowsAtLocked(displayId, x, y, isStylus, entry.deviceId);
+                mWindowInfos.findTouchedSpyWindowsAt(displayId, x, y, isStylus, entry.deviceId,
+                                                     mTouchStatesByDisplay);
         if (newTouchedWindowHandle != nullptr) {
             // Process the foreground window first so that it is the first to receive the event.
             newTouchedWindows.insert(newTouchedWindows.begin(), newTouchedWindowHandle);
@@ -4340,7 +4343,7 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
     }
 
     const auto [_, touchedWindowState, displayId] =
-            findTouchStateWindowAndDisplayLocked(connection->getToken());
+            findTouchStateWindowAndDisplay(connection->getToken(), mTouchStatesByDisplay);
     if (touchedWindowState == nullptr) {
         LOG(FATAL) << __func__ << ": Touch state is out of sync: No touched window for token";
     }
@@ -5798,10 +5801,12 @@ void InputDispatcher::setMaximumObscuringOpacityForTouch(float opacity) {
     mMaximumObscuringOpacityForTouch = opacity;
 }
 
-std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
-InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) {
-    for (auto& [displayId, state] : mTouchStatesByDisplay) {
-        for (TouchedWindow& w : state.windows) {
+std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
+InputDispatcher::findTouchStateWindowAndDisplay(
+        const sp<IBinder>& token,
+        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
+    for (auto& [displayId, state] : touchStatesByDisplay) {
+        for (const TouchedWindow& w : state.windows) {
             if (w.windowHandle->getToken() == token) {
                 return std::make_tuple(&state, &w, displayId);
             }
@@ -5810,15 +5815,25 @@ InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) 
     return std::make_tuple(nullptr, nullptr, ui::LogicalDisplayId::DEFAULT);
 }
 
-std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
-InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) const {
-    return const_cast<InputDispatcher*>(this)->findTouchStateWindowAndDisplayLocked(token);
+std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
+InputDispatcher::findTouchStateWindowAndDisplay(
+        const sp<IBinder>& token,
+        std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
+    auto [constTouchState, constTouchedWindow, displayId] = InputDispatcher::
+            findTouchStateWindowAndDisplay(token,
+                                           const_cast<const std::unordered_map<ui::LogicalDisplayId,
+                                                                               TouchState>&>(
+                                                   touchStatesByDisplay));
+
+    return std::make_tuple(const_cast<TouchState*>(constTouchState),
+                           const_cast<TouchedWindow*>(constTouchedWindow), displayId);
 }
 
-bool InputDispatcher::windowHasTouchingPointersLocked(const sp<WindowInfoHandle>& windowHandle,
-                                                      DeviceId deviceId) const {
+bool InputDispatcher::windowHasTouchingPointers(
+        const sp<WindowInfoHandle>& windowHandle, DeviceId deviceId,
+        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
     const auto& [touchState, touchedWindow, _] =
-            findTouchStateWindowAndDisplayLocked(windowHandle->getToken());
+            findTouchStateWindowAndDisplay(windowHandle->getToken(), touchStatesByDisplay);
     if (touchState == nullptr) {
         // No touching pointers at all
         return false;
@@ -5839,7 +5854,8 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
         std::scoped_lock _l(mLock);
 
         // Find the target touch state and touched window by fromToken.
-        auto [state, touchedWindow, displayId] = findTouchStateWindowAndDisplayLocked(fromToken);
+        auto [state, touchedWindow, displayId] =
+                findTouchStateWindowAndDisplay(fromToken, mTouchStatesByDisplay);
 
         if (state == nullptr || touchedWindow == nullptr) {
             ALOGD("Touch transfer failed because from window is not being touched.");
@@ -6344,7 +6360,8 @@ status_t InputDispatcher::pilferPointersLocked(const sp<IBinder>& token) {
         return BAD_VALUE;
     }
 
-    auto [statePtr, windowPtr, displayId] = findTouchStateWindowAndDisplayLocked(token);
+    auto [statePtr, windowPtr, displayId] =
+            findTouchStateWindowAndDisplay(token, mTouchStatesByDisplay);
     if (statePtr == nullptr || windowPtr == nullptr) {
         LOG(WARNING)
                 << "Attempted to pilfer points from a channel without any on-going pointer streams."
