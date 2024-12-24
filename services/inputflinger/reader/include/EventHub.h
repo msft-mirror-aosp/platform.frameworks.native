@@ -88,6 +88,7 @@ std::ostream& operator<<(std::ostream& out, const std::optional<RawAbsoluteAxisI
  * If any new classes are added, we need to add them in rust input side too.
  */
 enum class InputDeviceClass : uint32_t {
+    // LINT.IfChange
     /* The input device is a keyboard or has buttons. */
     KEYBOARD = android::os::IInputConstants::DEVICE_CLASS_KEYBOARD,
 
@@ -144,6 +145,7 @@ enum class InputDeviceClass : uint32_t {
 
     /* The input device is external (not built-in). */
     EXTERNAL = android::os::IInputConstants::DEVICE_CLASS_EXTERNAL,
+    // LINT.ThenChange(frameworks/native/services/inputflinger/tests/fuzzers/MapperHelpers.h)
 };
 
 enum class SysfsClass : uint32_t {
