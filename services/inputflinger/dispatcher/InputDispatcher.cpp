@@ -924,6 +924,23 @@ Error<EnumErrorWrapper<InputEventInjectionResult>> injectionError(InputEventInje
             std::forward<InputEventInjectionResult>(e));
 }
 
+InputTarget createInputTarget(const std::shared_ptr<Connection>& connection,
+                              const sp<android::gui::WindowInfoHandle>& windowHandle,
+                              InputTarget::DispatchMode dispatchMode,
+                              ftl::Flags<InputTarget::Flags> targetFlags,
+                              const ui::Transform& displayTransform,
+                              std::optional<nsecs_t> firstDownTimeInTarget) {
+    LOG_ALWAYS_FATAL_IF(connection == nullptr);
+    InputTarget inputTarget{connection};
+    inputTarget.windowHandle = windowHandle;
+    inputTarget.dispatchMode = dispatchMode;
+    inputTarget.flags = targetFlags;
+    inputTarget.globalScaleFactor = windowHandle->getInfo()->globalScaleFactor;
+    inputTarget.displayTransform = displayTransform;
+    inputTarget.firstDownTimeInTarget = firstDownTimeInTarget;
+    return inputTarget;
+}
+
 } // namespace
 
 // --- InputDispatcher ---
@@ -2975,26 +2992,6 @@ void InputDispatcher::addDragEventLocked(const MotionEntry& entry) {
     }
 }
 
-std::optional<InputTarget> InputDispatcher::createInputTargetLocked(
-        const sp<android::gui::WindowInfoHandle>& windowHandle,
-        InputTarget::DispatchMode dispatchMode, ftl::Flags<InputTarget::Flags> targetFlags,
-        std::optional<nsecs_t> firstDownTimeInTarget) const {
-    std::shared_ptr<Connection> connection = getConnectionLocked(windowHandle->getToken());
-    if (connection == nullptr) {
-        ALOGW("Not creating InputTarget for %s, no input channel", windowHandle->getName().c_str());
-        return {};
-    }
-    InputTarget inputTarget{connection};
-    inputTarget.windowHandle = windowHandle;
-    inputTarget.dispatchMode = dispatchMode;
-    inputTarget.flags = targetFlags;
-    inputTarget.globalScaleFactor = windowHandle->getInfo()->globalScaleFactor;
-    inputTarget.firstDownTimeInTarget = firstDownTimeInTarget;
-    inputTarget.displayTransform =
-            mWindowInfos.getDisplayTransform(windowHandle->getInfo()->displayId);
-    return inputTarget;
-}
-
 void InputDispatcher::addWindowTargetLocked(const sp<WindowInfoHandle>& windowHandle,
                                             InputTarget::DispatchMode dispatchMode,
                                             ftl::Flags<InputTarget::Flags> targetFlags,
@@ -3009,13 +3006,17 @@ void InputDispatcher::addWindowTargetLocked(const sp<WindowInfoHandle>& windowHa
     const WindowInfo* windowInfo = windowHandle->getInfo();
 
     if (it == inputTargets.end()) {
-        std::optional<InputTarget> target =
-                createInputTargetLocked(windowHandle, dispatchMode, targetFlags,
-                                        firstDownTimeInTarget);
-        if (!target) {
+        std::shared_ptr<Connection> connection = getConnectionLocked(windowHandle->getToken());
+        if (connection == nullptr) {
+            ALOGW("Not creating InputTarget for %s, no input channel",
+                  windowHandle->getName().c_str());
             return;
         }
-        inputTargets.push_back(*target);
+        inputTargets.push_back(createInputTarget(connection, windowHandle, dispatchMode,
+                                                 targetFlags,
+                                                 mWindowInfos.getDisplayTransform(
+                                                         windowHandle->getInfo()->displayId),
+                                                 firstDownTimeInTarget));
         it = inputTargets.end() - 1;
     }
 
@@ -3060,13 +3061,17 @@ void InputDispatcher::addPointerWindowTargetLocked(
     const WindowInfo* windowInfo = windowHandle->getInfo();
 
     if (it == inputTargets.end()) {
-        std::optional<InputTarget> target =
-                createInputTargetLocked(windowHandle, dispatchMode, targetFlags,
-                                        firstDownTimeInTarget);
-        if (!target) {
+        std::shared_ptr<Connection> connection = getConnectionLocked(windowHandle->getToken());
+        if (connection == nullptr) {
+            ALOGW("Not creating InputTarget for %s, no input channel",
+                  windowHandle->getName().c_str());
             return;
         }
-        inputTargets.push_back(*target);
+        inputTargets.push_back(createInputTarget(connection, windowHandle, dispatchMode,
+                                                 targetFlags,
+                                                 mWindowInfos.getDisplayTransform(
+                                                         windowHandle->getInfo()->displayId),
+                                                 firstDownTimeInTarget));
         it = inputTargets.end() - 1;
     }
 
@@ -6556,14 +6561,15 @@ void InputDispatcher::doDispatchCycleFinishedCommand(nsecs_t finishTime,
             const auto windowHandle = mWindowInfos.findWindowHandle(connection->getToken());
             // Only dispatch fallbacks if there is a window for the connection.
             if (windowHandle != nullptr) {
-                const auto inputTarget =
-                        createInputTargetLocked(windowHandle, InputTarget::DispatchMode::AS_IS,
-                                                dispatchEntry->targetFlags,
-                                                fallbackKeyEntry->downTime);
-                if (inputTarget.has_value()) {
-                    enqueueDispatchEntryLocked(connection, std::move(fallbackKeyEntry),
-                                               *inputTarget);
-                }
+                nsecs_t downTime = fallbackKeyEntry->downTime;
+                enqueueDispatchEntryLocked(connection, std::move(fallbackKeyEntry),
+                                           createInputTarget(connection, windowHandle,
+                                                             InputTarget::DispatchMode::AS_IS,
+                                                             dispatchEntry->targetFlags,
+                                                             mWindowInfos.getDisplayTransform(
+                                                                     windowHandle->getInfo()
+                                                                             ->displayId),
+                                                             downTime));
             }
         }
         releaseDispatchEntry(std::move(dispatchEntry));

@@ -582,10 +582,6 @@ private:
     std::vector<Monitor> selectResponsiveMonitorsLocked(
             const std::vector<Monitor>& gestureMonitors) const REQUIRES(mLock);
 
-    std::optional<InputTarget> createInputTargetLocked(
-            const sp<android::gui::WindowInfoHandle>& windowHandle,
-            InputTarget::DispatchMode dispatchMode, ftl::Flags<InputTarget::Flags> targetFlags,
-            std::optional<nsecs_t> firstDownTimeInTarget) const REQUIRES(mLock);
     void addWindowTargetLocked(const sp<android::gui::WindowInfoHandle>& windowHandle,
                                InputTarget::DispatchMode dispatchMode,
                                ftl::Flags<InputTarget::Flags> targetFlags,
