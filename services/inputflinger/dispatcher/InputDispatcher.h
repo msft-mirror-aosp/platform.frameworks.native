@@ -260,8 +260,9 @@ private:
             ui::LogicalDisplayId displayId, float x, float y, bool isStylus,
             DeviceId deviceId) const REQUIRES(mLock);
 
-    sp<android::gui::WindowInfoHandle> findTouchedForegroundWindowLocked(
-            ui::LogicalDisplayId displayId) const REQUIRES(mLock);
+    static sp<android::gui::WindowInfoHandle> findTouchedForegroundWindow(
+            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay,
+            ui::LogicalDisplayId displayId);
 
     std::shared_ptr<Connection> getConnectionLocked(const sp<IBinder>& inputConnectionToken) const
             REQUIRES(mLock);

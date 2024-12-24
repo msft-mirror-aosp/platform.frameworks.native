@@ -5931,10 +5931,11 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
  * Return null if there are no windows touched on that display, or if more than one foreground
  * window is being touched.
  */
-sp<WindowInfoHandle> InputDispatcher::findTouchedForegroundWindowLocked(
-        ui::LogicalDisplayId displayId) const {
-    auto stateIt = mTouchStatesByDisplay.find(displayId);
-    if (stateIt == mTouchStatesByDisplay.end()) {
+sp<WindowInfoHandle> InputDispatcher::findTouchedForegroundWindow(
+        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay,
+        ui::LogicalDisplayId displayId) {
+    const auto stateIt = touchStatesByDisplay.find(displayId);
+    if (stateIt == touchStatesByDisplay.end()) {
         ALOGI("No touch state on display %s", displayId.toString().c_str());
         return nullptr;
     }
@@ -5970,7 +5971,7 @@ bool InputDispatcher::transferTouchOnDisplay(const sp<IBinder>& destChannelToken
             return false;
         }
 
-        sp<WindowInfoHandle> from = findTouchedForegroundWindowLocked(displayId);
+        sp<WindowInfoHandle> from = findTouchedForegroundWindow(mTouchStatesByDisplay, displayId);
         if (from == nullptr) {
             ALOGE("Could not find a source window in %s for %p", __func__, destChannelToken.get());
             return false;
