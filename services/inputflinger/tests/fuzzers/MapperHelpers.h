@@ -367,8 +367,8 @@ private:
 template <class Fdp>
 InputDevice getFuzzedInputDevice(Fdp& fdp, FuzzInputReaderContext* context) {
     InputDeviceIdentifier identifier;
-    identifier.name = fdp.ConsumeRandomLengthString(16);
-    identifier.location = fdp.ConsumeRandomLengthString(12);
+    identifier.name = fdp.ConsumeRandomLengthUtf8String(16);
+    identifier.location = fdp.ConsumeRandomLengthUtf8String(12);
     int32_t deviceID = fdp.ConsumeIntegralInRange(0, 5);
     int32_t deviceGeneration = fdp.ConsumeIntegralInRange(0, 5);
     return InputDevice(context, deviceID, deviceGeneration, identifier);
