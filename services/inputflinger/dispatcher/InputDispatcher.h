@@ -734,10 +734,6 @@ private:
             const sp<IBinder>& token,
             const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
 
-    static bool windowHasTouchingPointers(
-            const sp<android::gui::WindowInfoHandle>& windowHandle, DeviceId deviceId,
-            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
-
     // Statistics gathering.
     nsecs_t mLastStatisticPushTime = 0;
     std::unique_ptr<InputEventTimelineProcessor> mInputEventTimelineProcessor GUARDED_BY(mLock);

@@ -150,8 +150,6 @@ struct WindowInfo : public Parcelable {
                 static_cast<uint32_t>(os::InputConfig::NOT_FOCUSABLE),
         NOT_TOUCHABLE =
                 static_cast<uint32_t>(os::InputConfig::NOT_TOUCHABLE),
-        PREVENT_SPLITTING =
-                static_cast<uint32_t>(os::InputConfig::PREVENT_SPLITTING),
         DUPLICATE_TOUCH_TO_WALLPAPER =
                 static_cast<uint32_t>(os::InputConfig::DUPLICATE_TOUCH_TO_WALLPAPER),
         IS_WALLPAPER =

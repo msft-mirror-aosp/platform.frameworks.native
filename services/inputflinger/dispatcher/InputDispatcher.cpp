@@ -788,38 +788,14 @@ void filterUntrustedTargets(TouchState& touchState, std::vector<InputTarget>& ta
     });
 }
 
-/**
- * In general, touch should be always split between windows. Some exceptions:
- * 1. Don't split touch if all of the below is true:
- *     (a) we have an active pointer down *and*
- *     (b) a new pointer is going down that's from the same device *and*
- *     (c) the window that's receiving the current pointer does not support split touch.
- * 2. Don't split mouse events
- */
-bool shouldSplitTouch(const TouchState& touchState, const MotionEntry& entry) {
-    if (isFromSource(entry.source, AINPUT_SOURCE_MOUSE)) {
-        // We should never split mouse events
-        return false;
-    }
-    for (const TouchedWindow& touchedWindow : touchState.windows) {
-        if (touchedWindow.windowHandle->getInfo()->isSpy()) {
-            // Spy windows should not affect whether or not touch is split.
-            continue;
-        }
-        if (touchedWindow.windowHandle->getInfo()->supportsSplitTouch()) {
-            continue;
-        }
-        if (touchedWindow.windowHandle->getInfo()->inputConfig.test(
-                    gui::WindowInfo::InputConfig::IS_WALLPAPER)) {
-            // Wallpaper window should not affect whether or not touch is split
-            continue;
-        }
-
-        if (touchedWindow.hasTouchingPointers(entry.deviceId)) {
-            return false;
-        }
-    }
-    return true;
+bool shouldSplitTouch(int32_t source) {
+    // We should never split mouse events. This is because the events that are produced by touchpad
+    // are sent to InputDispatcher as two fingers (for example, pinch zoom), but they need to be
+    // dispatched to the same window. In those cases, the behaviour is also slightly different from
+    // default because the events should be sent to the cursor position rather than the x,y values
+    // of each of the fingers.
+    // The "normal" (uncaptured) events produced by touchpad and by mouse have SOURCE_MOUSE.
+    return !isFromSource(source, AINPUT_SOURCE_MOUSE);
 }
 
 /**
@@ -1528,20 +1504,8 @@ std::vector<sp<WindowInfoHandle>> InputDispatcher::DispatcherWindowInfo::findTou
         const WindowInfo& info = *windowHandle->getInfo();
         if (!windowAcceptsTouchAt(info, displayId, x, y, isStylus,
                                   getDisplayTransform(displayId))) {
-            // Generally, we would skip any pointer that's outside of the window. However, if the
-            // spy prevents splitting, and already has some of the pointers from this device, then
-            // it should get more pointers from the same device, even if they are outside of that
-            // window
-            if (info.supportsSplitTouch()) {
-                continue;
-            }
-
-            // We know that split touch is not supported. Skip this window only if it doesn't have
-            // any touching pointers for this device already.
-            if (!windowHasTouchingPointers(windowHandle, deviceId, touchStatesByDisplay)) {
-                continue;
-            }
-            // If it already has pointers down for this device, then give it this pointer, too.
+            // Skip if the pointer is outside of the window.
+            continue;
         }
         if (!info.isSpy()) {
             // The first touched non-spy window was found, so return the spy windows touched so far.
@@ -2448,7 +2412,7 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
         tempTouchState = *oldState;
     }
 
-    bool isSplit = shouldSplitTouch(tempTouchState, entry);
+    bool isSplit = shouldSplitTouch(entry.source);
 
     const bool isHoverAction = (maskedAction == AMOTION_EVENT_ACTION_HOVER_MOVE ||
                                 maskedAction == AMOTION_EVENT_ACTION_HOVER_ENTER ||
@@ -2501,17 +2465,6 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
         LOG_IF(INFO, newTouchedWindowHandle == nullptr)
                 << "No new touched window at (" << std::format("{:.1f}, {:.1f}", x, y)
                 << ") in display " << displayId;
-        // Handle the case where we did not find a window.
-        if (!input_flags::split_all_touches()) {
-            // If we are force splitting all touches, then touches outside of the window should
-            // be dropped, even if this device already has pointers down in another window.
-            if (newTouchedWindowHandle == nullptr) {
-                // Try to assign the pointer to the first foreground window we find, if there is
-                // one.
-                newTouchedWindowHandle =
-                        tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
-            }
-        }
 
         // Verify targeted injection.
         if (const auto err = verifyTargetedInjection(newTouchedWindowHandle, entry); err) {
@@ -2519,24 +2472,7 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
             return injectionError(InputEventInjectionResult::TARGET_MISMATCH);
         }
 
-        // Figure out whether splitting will be allowed for this window.
-        if (newTouchedWindowHandle != nullptr) {
-            if (newTouchedWindowHandle->getInfo()->supportsSplitTouch()) {
-                // New window supports splitting, but we should never split mouse events.
-                isSplit = !isFromMouse;
-            } else if (isSplit) {
-                // New window does not support splitting but we have already split events.
-                // Ignore the new window.
-                LOG(INFO) << "Skipping " << newTouchedWindowHandle->getName()
-                          << " because it doesn't support split touch";
-                newTouchedWindowHandle = nullptr;
-            }
-        } else {
-            // No window is touched, so set split to true. This will allow the next pointer down to
-            // be delivered to a new window which supports split touch. Pointers from a mouse device
-            // should never be split.
-            isSplit = !isFromMouse;
-        }
+        isSplit = !isFromMouse;
 
         std::vector<sp<WindowInfoHandle>> newTouchedWindows =
                 mWindowInfos.findTouchedSpyWindowsAt(displayId, x, y, isStylus, entry.deviceId,
@@ -2711,9 +2647,7 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
                                              targets);
 
                 // Make a slippery entrance into the new window.
-                if (newTouchedWindowHandle->getInfo()->supportsSplitTouch()) {
-                    isSplit = !isFromMouse;
-                }
+                isSplit = !isFromMouse;
 
                 ftl::Flags<InputTarget::Flags> targetFlags;
                 if (canReceiveForegroundTouches(*newTouchedWindowHandle->getInfo())) {
@@ -5835,18 +5769,6 @@ InputDispatcher::findTouchStateWindowAndDisplay(
                            const_cast<TouchedWindow*>(constTouchedWindow), displayId);
 }
 
-bool InputDispatcher::windowHasTouchingPointers(
-        const sp<WindowInfoHandle>& windowHandle, DeviceId deviceId,
-        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
-    const auto& [touchState, touchedWindow, _] =
-            findTouchStateWindowAndDisplay(windowHandle->getToken(), touchStatesByDisplay);
-    if (touchState == nullptr) {
-        // No touching pointers at all
-        return false;
-    }
-    return touchState->hasTouchingPointers(deviceId);
-}
-
 bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
                                            bool isDragDrop) {
     if (fromToken == toToken) {
@@ -7168,13 +7090,6 @@ void InputDispatcher::onWindowInfosChanged(const gui::WindowInfosUpdate& update)
     for (const auto& info : update.windowInfos) {
         handlesPerDisplay.emplace(info.displayId, std::vector<sp<WindowInfoHandle>>());
         handlesPerDisplay[info.displayId].push_back(sp<WindowInfoHandle>::make(info));
-        if (input_flags::split_all_touches()) {
-            handlesPerDisplay[info.displayId]
-                    .back()
-                    ->editInfo()
-                    ->setInputConfig(android::gui::WindowInfo::InputConfig::PREVENT_SPLITTING,
-                                     false);
-        }
     }
 
     { // acquire lock

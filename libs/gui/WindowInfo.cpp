@@ -73,10 +73,6 @@ void WindowInfo::addTouchableRegion(const Rect& region) {
     touchableRegion.orSelf(region);
 }
 
-bool WindowInfo::supportsSplitTouch() const {
-    return !inputConfig.test(InputConfig::PREVENT_SPLITTING);
-}
-
 bool WindowInfo::isSpy() const {
     return inputConfig.test(InputConfig::SPY);
 }
