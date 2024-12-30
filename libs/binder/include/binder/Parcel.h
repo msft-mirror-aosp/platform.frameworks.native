@@ -383,9 +383,6 @@ public:
     LIBBINDER_EXPORTED status_t
     writeUniqueFileDescriptorVector(const std::optional<std::vector<binder::unique_fd>>& val);
     LIBBINDER_EXPORTED status_t
-    writeUniqueFileDescriptorVector(const std::unique_ptr<std::vector<binder::unique_fd>>& val)
-            __attribute__((deprecated("use std::optional version instead")));
-    LIBBINDER_EXPORTED status_t
     writeUniqueFileDescriptorVector(const std::vector<binder::unique_fd>& val);
 
     // Writes a blob to the parcel.
@@ -625,9 +622,6 @@ public:
     // Retrieve a vector of smart file descriptors from the parcel.
     LIBBINDER_EXPORTED status_t
     readUniqueFileDescriptorVector(std::optional<std::vector<binder::unique_fd>>* val) const;
-    LIBBINDER_EXPORTED status_t
-    readUniqueFileDescriptorVector(std::unique_ptr<std::vector<binder::unique_fd>>* val) const
-            __attribute__((deprecated("use std::optional version instead")));
     LIBBINDER_EXPORTED status_t
     readUniqueFileDescriptorVector(std::vector<binder::unique_fd>* val) const;
 

@@ -1314,10 +1314,6 @@ status_t Parcel::writeUniqueFileDescriptorVector(const std::vector<unique_fd>& v
 status_t Parcel::writeUniqueFileDescriptorVector(const std::optional<std::vector<unique_fd>>& val) {
     return writeData(val);
 }
-status_t Parcel::writeUniqueFileDescriptorVector(
-        const std::unique_ptr<std::vector<unique_fd>>& val) {
-    return writeData(val);
-}
 
 status_t Parcel::writeStrongBinderVector(const std::vector<sp<IBinder>>& val) { return writeData(val); }
 status_t Parcel::writeStrongBinderVector(const std::optional<std::vector<sp<IBinder>>>& val) { return writeData(val); }
@@ -1371,10 +1367,6 @@ status_t Parcel::readUtf8VectorFromUtf16Vector(
 status_t Parcel::readUtf8VectorFromUtf16Vector(std::vector<std::string>* val) const { return readData(val); }
 
 status_t Parcel::readUniqueFileDescriptorVector(std::optional<std::vector<unique_fd>>* val) const {
-    return readData(val);
-}
-status_t Parcel::readUniqueFileDescriptorVector(
-        std::unique_ptr<std::vector<unique_fd>>* val) const {
     return readData(val);
 }
 status_t Parcel::readUniqueFileDescriptorVector(std::vector<unique_fd>* val) const {
