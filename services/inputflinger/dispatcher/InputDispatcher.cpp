@@ -46,6 +46,7 @@
 #include <ctime>
 #include <queue>
 #include <sstream>
+#include <variant>
 
 #include "../InputDeviceMetricsSource.h"
 
@@ -6651,24 +6652,27 @@ void InputDispatcher::updateLastAnrStateLocked(const std::string& windowLabel,
 void InputDispatcher::doInterceptKeyBeforeDispatchingCommand(const sp<IBinder>& focusedWindowToken,
                                                              const KeyEntry& entry) {
     const KeyEvent event = createKeyEvent(entry);
+    std::variant<nsecs_t, KeyEntry::InterceptKeyResult> interceptResult;
     nsecs_t delay = 0;
     { // release lock
         scoped_unlock unlock(mLock);
         android::base::Timer t;
-        delay = mPolicy.interceptKeyBeforeDispatching(focusedWindowToken, event, entry.policyFlags);
+        interceptResult =
+                mPolicy.interceptKeyBeforeDispatching(focusedWindowToken, event, entry.policyFlags);
         if (t.duration() > SLOW_INTERCEPTION_THRESHOLD) {
             ALOGW("Excessive delay in interceptKeyBeforeDispatching; took %s ms",
                   std::to_string(t.duration().count()).c_str());
         }
     } // acquire lock
 
-    if (delay < 0) {
-        entry.interceptKeyResult = KeyEntry::InterceptKeyResult::SKIP;
-    } else if (delay == 0) {
-        entry.interceptKeyResult = KeyEntry::InterceptKeyResult::CONTINUE;
-    } else {
+    if (std::holds_alternative<KeyEntry::InterceptKeyResult>(interceptResult)) {
+        entry.interceptKeyResult = std::get<KeyEntry::InterceptKeyResult>(interceptResult);
+        return;
+    }
+
+    if (std::holds_alternative<nsecs_t>(interceptResult)) {
         entry.interceptKeyResult = KeyEntry::InterceptKeyResult::TRY_AGAIN_LATER;
-        entry.interceptKeyWakeupTime = now() + delay;
+        entry.interceptKeyWakeupTime = now() + std::get<nsecs_t>(interceptResult);
     }
 }
 
