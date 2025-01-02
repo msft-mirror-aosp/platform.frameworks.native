@@ -325,6 +325,14 @@ private:
         TouchOcclusionInfo computeTouchOcclusionInfo(
                 const sp<android::gui::WindowInfoHandle>& windowHandle, float x, float y) const;
 
+        bool isWindowObscured(const sp<android::gui::WindowInfoHandle>& windowHandle) const;
+
+        bool isWindowObscuredAtPoint(const sp<android::gui::WindowInfoHandle>& windowHandle,
+                                     float x, float y) const;
+
+        sp<android::gui::WindowInfoHandle> findWallpaperWindowBelow(
+                const sp<android::gui::WindowInfoHandle>& windowHandle) const;
+
         std::string dumpDisplayAndWindowInfo() const;
 
     private:
@@ -639,10 +647,6 @@ private:
 
     bool isTouchTrustedLocked(const DispatcherWindowInfo::TouchOcclusionInfo& occlusionInfo) const
             REQUIRES(mLock);
-    bool isWindowObscuredAtPointLocked(const sp<android::gui::WindowInfoHandle>& windowHandle,
-                                       float x, float y) const REQUIRES(mLock);
-    bool isWindowObscuredLocked(const sp<android::gui::WindowInfoHandle>& windowHandle) const
-            REQUIRES(mLock);
     std::string getApplicationWindowLabel(const InputApplicationHandle* applicationHandle,
                                           const sp<android::gui::WindowInfoHandle>& windowHandle);
 
@@ -794,9 +798,6 @@ private:
                                 const std::vector<PointerProperties>& pointers,
                                 const std::unique_ptr<trace::EventTrackerInterface>& traceTracker)
             REQUIRES(mLock);
-
-    sp<android::gui::WindowInfoHandle> findWallpaperWindowBelow(
-            const sp<android::gui::WindowInfoHandle>& windowHandle) const REQUIRES(mLock);
 
     /** Stores the value of the input flag for per device input latency metrics. */
     const bool mPerDeviceInputLatencyMetricsFlag =
