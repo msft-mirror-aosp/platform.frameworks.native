@@ -2506,9 +2506,9 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
             if (isSplit) {
                 targetFlags |= InputTarget::Flags::SPLIT;
             }
-            if (isWindowObscuredAtPointLocked(windowHandle, x, y)) {
+            if (mWindowInfos.isWindowObscuredAtPoint(windowHandle, x, y)) {
                 targetFlags |= InputTarget::Flags::WINDOW_IS_OBSCURED;
-            } else if (isWindowObscuredLocked(windowHandle)) {
+            } else if (mWindowInfos.isWindowObscured(windowHandle)) {
                 targetFlags |= InputTarget::Flags::WINDOW_IS_PARTIALLY_OBSCURED;
             }
 
@@ -2539,7 +2539,8 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
                 if (isDownOrPointerDown && targetFlags.test(InputTarget::Flags::FOREGROUND) &&
                     windowHandle->getInfo()->inputConfig.test(
                             gui::WindowInfo::InputConfig::DUPLICATE_TOUCH_TO_WALLPAPER)) {
-                    sp<WindowInfoHandle> wallpaper = findWallpaperWindowBelow(windowHandle);
+                    sp<WindowInfoHandle> wallpaper =
+                            mWindowInfos.findWallpaperWindowBelow(windowHandle);
                     if (wallpaper != nullptr) {
                         ftl::Flags<InputTarget::Flags> wallpaperFlags =
                                 InputTarget::Flags::WINDOW_IS_OBSCURED |
@@ -2652,9 +2653,9 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
                 if (isSplit) {
                     targetFlags |= InputTarget::Flags::SPLIT;
                 }
-                if (isWindowObscuredAtPointLocked(newTouchedWindowHandle, x, y)) {
+                if (mWindowInfos.isWindowObscuredAtPoint(newTouchedWindowHandle, x, y)) {
                     targetFlags |= InputTarget::Flags::WINDOW_IS_OBSCURED;
-                } else if (isWindowObscuredLocked(newTouchedWindowHandle)) {
+                } else if (mWindowInfos.isWindowObscured(newTouchedWindowHandle)) {
                     targetFlags |= InputTarget::Flags::WINDOW_IS_PARTIALLY_OBSCURED;
                 }
 
@@ -3180,29 +3181,27 @@ bool InputDispatcher::isTouchTrustedLocked(
     return true;
 }
 
-bool InputDispatcher::isWindowObscuredAtPointLocked(const sp<WindowInfoHandle>& windowHandle,
-                                                    float x, float y) const {
+bool InputDispatcher::DispatcherWindowInfo::isWindowObscuredAtPoint(
+        const sp<WindowInfoHandle>& windowHandle, float x, float y) const {
     ui::LogicalDisplayId displayId = windowHandle->getInfo()->displayId;
-    const std::vector<sp<WindowInfoHandle>>& windowHandles =
-            mWindowInfos.getWindowHandlesForDisplay(displayId);
+    const std::vector<sp<WindowInfoHandle>>& windowHandles = getWindowHandlesForDisplay(displayId);
     for (const sp<WindowInfoHandle>& otherHandle : windowHandles) {
         if (windowHandle == otherHandle) {
             break; // All future windows are below us. Exit early.
         }
         const WindowInfo* otherInfo = otherHandle->getInfo();
         if (canBeObscuredBy(windowHandle, otherHandle) &&
-            windowOccludesTouchAt(*otherInfo, displayId, x, y,
-                                  mWindowInfos.getDisplayTransform(displayId))) {
+            windowOccludesTouchAt(*otherInfo, displayId, x, y, getDisplayTransform(displayId))) {
             return true;
         }
     }
     return false;
 }
 
-bool InputDispatcher::isWindowObscuredLocked(const sp<WindowInfoHandle>& windowHandle) const {
+bool InputDispatcher::DispatcherWindowInfo::isWindowObscured(
+        const sp<WindowInfoHandle>& windowHandle) const {
     ui::LogicalDisplayId displayId = windowHandle->getInfo()->displayId;
-    const std::vector<sp<WindowInfoHandle>>& windowHandles =
-            mWindowInfos.getWindowHandlesForDisplay(displayId);
+    const std::vector<sp<WindowInfoHandle>>& windowHandles = getWindowHandlesForDisplay(displayId);
     const WindowInfo* windowInfo = windowHandle->getInfo();
     for (const sp<WindowInfoHandle>& otherHandle : windowHandles) {
         if (windowHandle == otherHandle) {
@@ -7066,7 +7065,7 @@ bool InputDispatcher::shouldDropInput(
     if (windowHandle->getInfo()->inputConfig.test(WindowInfo::InputConfig::DROP_INPUT) ||
         (windowHandle->getInfo()->inputConfig.test(
                  WindowInfo::InputConfig::DROP_INPUT_IF_OBSCURED) &&
-         isWindowObscuredLocked(windowHandle))) {
+         mWindowInfos.isWindowObscured(windowHandle))) {
         ALOGW("Dropping %s event targeting %s as requested by the input configuration {%s} on "
               "display %s.",
               ftl::enum_string(entry.type).c_str(), windowHandle->getName().c_str(),
@@ -7119,7 +7118,7 @@ void InputDispatcher::slipWallpaperTouch(ftl::Flags<InputTarget::Flags> targetFl
     const sp<WindowInfoHandle> oldWallpaper =
             oldHasWallpaper ? state.getWallpaperWindow(deviceId) : nullptr;
     const sp<WindowInfoHandle> newWallpaper =
-            newHasWallpaper ? findWallpaperWindowBelow(newWindowHandle) : nullptr;
+            newHasWallpaper ? mWindowInfos.findWallpaperWindowBelow(newWindowHandle) : nullptr;
     if (oldWallpaper == newWallpaper) {
         return;
     }
@@ -7156,7 +7155,7 @@ void InputDispatcher::transferWallpaperTouch(
     const sp<WindowInfoHandle> oldWallpaper =
             oldHasWallpaper ? state.getWallpaperWindow(deviceId) : nullptr;
     const sp<WindowInfoHandle> newWallpaper =
-            newHasWallpaper ? findWallpaperWindowBelow(toWindowHandle) : nullptr;
+            newHasWallpaper ? mWindowInfos.findWallpaperWindowBelow(toWindowHandle) : nullptr;
     if (oldWallpaper == newWallpaper) {
         return;
     }
@@ -7188,10 +7187,10 @@ void InputDispatcher::transferWallpaperTouch(
     }
 }
 
-sp<WindowInfoHandle> InputDispatcher::findWallpaperWindowBelow(
+sp<WindowInfoHandle> InputDispatcher::DispatcherWindowInfo::findWallpaperWindowBelow(
         const sp<WindowInfoHandle>& windowHandle) const {
     const std::vector<sp<WindowInfoHandle>>& windowHandles =
-            mWindowInfos.getWindowHandlesForDisplay(windowHandle->getInfo()->displayId);
+            getWindowHandlesForDisplay(windowHandle->getInfo()->displayId);
     bool foundWindow = false;
     for (const sp<WindowInfoHandle>& otherHandle : windowHandles) {
         if (!foundWindow && otherHandle != windowHandle) {
