@@ -954,7 +954,6 @@ InputDispatcher::InputDispatcher(InputDispatcherPolicyInterface& policy,
         mDispatchEnabled(false),
         mDispatchFrozen(false),
         mInputFilterEnabled(false),
-        mMaximumObscuringOpacityForTouch(1.0f),
         mFocusedDisplayId(ui::LogicalDisplayId::DEFAULT),
         mWindowTokenWithPointerCapture(nullptr),
         mAwaitedApplicationDisplayId(ui::LogicalDisplayId::INVALID),
@@ -3161,8 +3160,8 @@ InputDispatcher::DispatcherWindowInfo::computeTouchOcclusionInfo(
     return info;
 }
 
-bool InputDispatcher::isTouchTrustedLocked(
-        const DispatcherWindowInfo::TouchOcclusionInfo& occlusionInfo) const {
+bool InputDispatcher::DispatcherWindowInfo::isTouchTrusted(
+        const TouchOcclusionInfo& occlusionInfo) const {
     if (occlusionInfo.hasBlockingOcclusion) {
         ALOGW("Untrusted touch due to occlusion by %s/%s", occlusionInfo.obscuringPackage.c_str(),
               occlusionInfo.obscuringUid.toString().c_str());
@@ -5268,8 +5267,9 @@ std::string InputDispatcher::DispatcherWindowInfo::dumpDisplayAndWindowInfo() co
     return dump;
 }
 
-bool InputDispatcher::canWindowReceiveMotionLocked(const sp<WindowInfoHandle>& window,
-                                                   const MotionEntry& motionEntry) const {
+bool InputDispatcher::canWindowReceiveMotionLocked(
+        const sp<android::gui::WindowInfoHandle>& window,
+        const android::inputdispatcher::MotionEntry& motionEntry) const {
     const WindowInfo& info = *window->getInfo();
 
     // Skip spy window targets that are not valid for targeted injection.
@@ -5304,7 +5304,7 @@ bool InputDispatcher::canWindowReceiveMotionLocked(const sp<WindowInfoHandle>& w
     const auto [x, y] = resolveTouchedPosition(motionEntry);
     DispatcherWindowInfo::TouchOcclusionInfo occlusionInfo =
             mWindowInfos.computeTouchOcclusionInfo(window, x, y);
-    if (!isTouchTrustedLocked(occlusionInfo)) {
+    if (!mWindowInfos.isTouchTrusted(occlusionInfo)) {
         if (DEBUG_TOUCH_OCCLUSION) {
             ALOGD("Stack of obscuring windows during untrusted touch (%.1f, %.1f):", x, y);
             for (const auto& log : occlusionInfo.debugInfo) {
@@ -5748,13 +5748,8 @@ bool InputDispatcher::recentWindowsAreOwnedByLocked(gui::Pid pid, gui::Uid uid) 
 }
 
 void InputDispatcher::setMaximumObscuringOpacityForTouch(float opacity) {
-    if (opacity < 0 || opacity > 1) {
-        LOG_ALWAYS_FATAL("Maximum obscuring opacity for touch should be >= 0 and <= 1");
-        return;
-    }
-
     std::scoped_lock lock(mLock);
-    mMaximumObscuringOpacityForTouch = opacity;
+    mWindowInfos.setMaximumObscuringOpacityForTouch(opacity);
 }
 
 std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
@@ -7352,6 +7347,13 @@ std::string InputDispatcher::ConnectionManager::dump(nsecs_t currentTime) const 
         dump += "Connections: <none>\n";
     }
     return dump;
+}
+
+void InputDispatcher::DispatcherWindowInfo::setMaximumObscuringOpacityForTouch(float opacity) {
+    if (opacity < 0 || opacity > 1) {
+        LOG_ALWAYS_FATAL("Maximum obscuring opacity for touch should be >= 0 and <= 1");
+    }
+    mMaximumObscuringOpacityForTouch = opacity;
 }
 
 } // namespace android::inputdispatcher
