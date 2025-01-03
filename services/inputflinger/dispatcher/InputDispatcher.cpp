@@ -1333,7 +1333,7 @@ bool InputDispatcher::shouldPruneInboundQueueLocked(const MotionEntry& motionEnt
         const bool isStylus = isPointerFromStylus(motionEntry, /*pointerIndex=*/0);
 
         sp<WindowInfoHandle> touchedWindowHandle =
-                findTouchedWindowAtLocked(displayId, x, y, isStylus);
+                mWindowInfos.findTouchedWindowAt(displayId, x, y, isStylus);
         if (touchedWindowHandle != nullptr &&
             touchedWindowHandle->getApplicationToken() !=
                     mAwaitedFocusedApplication->getApplicationToken()) {
@@ -1452,20 +1452,19 @@ void InputDispatcher::addRecentEventLocked(std::shared_ptr<const EventEntry> ent
     }
 }
 
-sp<WindowInfoHandle> InputDispatcher::findTouchedWindowAtLocked(ui::LogicalDisplayId displayId,
-                                                                float x, float y, bool isStylus,
-                                                                bool ignoreDragWindow) const {
+sp<WindowInfoHandle> InputDispatcher::DispatcherWindowInfo::findTouchedWindowAt(
+        ui::LogicalDisplayId displayId, float x, float y, bool isStylus,
+        const sp<android::gui::WindowInfoHandle> ignoreWindow) const {
     // Traverse windows from front to back to find touched window.
-    const auto& windowHandles = mWindowInfos.getWindowHandlesForDisplay(displayId);
+    const auto& windowHandles = getWindowHandlesForDisplay(displayId);
     for (const sp<WindowInfoHandle>& windowHandle : windowHandles) {
-        if (ignoreDragWindow && haveSameToken(windowHandle, mDragState->dragWindow)) {
+        if (ignoreWindow && haveSameToken(windowHandle, ignoreWindow)) {
             continue;
         }
 
         const WindowInfo& info = *windowHandle->getInfo();
         if (!info.isSpy() &&
-            windowAcceptsTouchAt(info, displayId, x, y, isStylus,
-                                 mWindowInfos.getDisplayTransform(displayId))) {
+            windowAcceptsTouchAt(info, displayId, x, y, isStylus, getDisplayTransform(displayId))) {
             return windowHandle;
         }
     }
@@ -2474,7 +2473,7 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
         // be a pointer that would generate ACTION_DOWN, *and* touch should not already be down.
         const bool isStylus = isPointerFromStylus(entry, pointerIndex);
         sp<WindowInfoHandle> newTouchedWindowHandle =
-                findTouchedWindowAtLocked(displayId, x, y, isStylus);
+                mWindowInfos.findTouchedWindowAt(displayId, x, y, isStylus);
 
         if (isDown) {
             targets += findOutsideTargetsLocked(displayId, newTouchedWindowHandle, pointer.id);
@@ -2657,7 +2656,7 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
                     tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
             LOG_ALWAYS_FATAL_IF(oldTouchedWindowHandle == nullptr);
             sp<WindowInfoHandle> newTouchedWindowHandle =
-                    findTouchedWindowAtLocked(displayId, x, y, isStylus);
+                    mWindowInfos.findTouchedWindowAt(displayId, x, y, isStylus);
 
             // Verify targeted injection.
             if (const auto err = verifyTargetedInjection(newTouchedWindowHandle, entry); err) {
@@ -2881,7 +2880,8 @@ void InputDispatcher::finishDragAndDrop(ui::LogicalDisplayId displayId, float x,
     constexpr bool isStylus = false;
 
     sp<WindowInfoHandle> dropWindow =
-            findTouchedWindowAtLocked(displayId, x, y, isStylus, /*ignoreDragWindow=*/true);
+            mWindowInfos.findTouchedWindowAt(displayId, x, y, isStylus, /*ignoreWindow=*/
+                                             mDragState->dragWindow);
     if (dropWindow) {
         vec2 local = dropWindow->getInfo()->transform.transform(x, y);
         sendDropWindowCommandLocked(dropWindow->getToken(), local.x, local.y);
@@ -2936,8 +2936,8 @@ void InputDispatcher::addDragEventLocked(const MotionEntry& entry) {
             constexpr bool isStylus = false;
 
             sp<WindowInfoHandle> hoverWindowHandle =
-                    findTouchedWindowAtLocked(entry.displayId, x, y, isStylus,
-                                              /*ignoreDragWindow=*/true);
+                    mWindowInfos.findTouchedWindowAt(entry.displayId, x, y, isStylus,
+                                                     /*ignoreWindow=*/mDragState->dragWindow);
             // enqueue drag exit if needed.
             if (hoverWindowHandle != mDragState->dragHoverWindowHandle &&
                 !haveSameToken(hoverWindowHandle, mDragState->dragHoverWindowHandle)) {
@@ -5931,10 +5931,11 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
  * Return null if there are no windows touched on that display, or if more than one foreground
  * window is being touched.
  */
-sp<WindowInfoHandle> InputDispatcher::findTouchedForegroundWindowLocked(
-        ui::LogicalDisplayId displayId) const {
-    auto stateIt = mTouchStatesByDisplay.find(displayId);
-    if (stateIt == mTouchStatesByDisplay.end()) {
+sp<WindowInfoHandle> InputDispatcher::findTouchedForegroundWindow(
+        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay,
+        ui::LogicalDisplayId displayId) {
+    const auto stateIt = touchStatesByDisplay.find(displayId);
+    if (stateIt == touchStatesByDisplay.end()) {
         ALOGI("No touch state on display %s", displayId.toString().c_str());
         return nullptr;
     }
@@ -5970,7 +5971,7 @@ bool InputDispatcher::transferTouchOnDisplay(const sp<IBinder>& destChannelToken
             return false;
         }
 
-        sp<WindowInfoHandle> from = findTouchedForegroundWindowLocked(displayId);
+        sp<WindowInfoHandle> from = findTouchedForegroundWindow(mTouchStatesByDisplay, displayId);
         if (from == nullptr) {
             ALOGE("Could not find a source window in %s for %p", __func__, destChannelToken.get());
             return false;

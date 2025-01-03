@@ -252,9 +252,6 @@ private:
     // to transfer focus to a new application.
     std::shared_ptr<const EventEntry> mNextUnblockedEvent GUARDED_BY(mLock);
 
-    sp<android::gui::WindowInfoHandle> findTouchedWindowAtLocked(
-            ui::LogicalDisplayId displayId, float x, float y, bool isStylus = false,
-            bool ignoreDragWindow = false) const REQUIRES(mLock);
     std::vector<InputTarget> findOutsideTargetsLocked(
             ui::LogicalDisplayId displayId, const sp<android::gui::WindowInfoHandle>& touchedWindow,
             int32_t pointerId) const REQUIRES(mLock);
@@ -263,8 +260,9 @@ private:
             ui::LogicalDisplayId displayId, float x, float y, bool isStylus,
             DeviceId deviceId) const REQUIRES(mLock);
 
-    sp<android::gui::WindowInfoHandle> findTouchedForegroundWindowLocked(
-            ui::LogicalDisplayId displayId) const REQUIRES(mLock);
+    static sp<android::gui::WindowInfoHandle> findTouchedForegroundWindow(
+            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay,
+            ui::LogicalDisplayId displayId);
 
     std::shared_ptr<Connection> getConnectionLocked(const sp<IBinder>& inputConnectionToken) const
             REQUIRES(mLock);
@@ -397,6 +395,11 @@ private:
                 std::optional<ui::LogicalDisplayId> displayId = {}) const;
 
         bool isWindowPresent(const sp<android::gui::WindowInfoHandle>& windowHandle) const;
+
+        // Returns the touched window at the given location, excluding the ignoreWindow if provided.
+        sp<android::gui::WindowInfoHandle> findTouchedWindowAt(
+                ui::LogicalDisplayId displayId, float x, float y, bool isStylus = false,
+                const sp<android::gui::WindowInfoHandle> ignoreWindow = nullptr) const;
 
         std::string dumpDisplayAndWindowInfo() const;
 
