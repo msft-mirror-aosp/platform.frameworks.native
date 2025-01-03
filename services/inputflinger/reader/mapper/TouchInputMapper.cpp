@@ -3476,7 +3476,7 @@ std::list<NotifyArgs> TouchInputMapper::dispatchPointerMouse(nsecs_t when, nsecs
     }
 
     return dispatchPointerSimple(when, readTime, policyFlags, down, hovering,
-                                 ui::LogicalDisplayId::INVALID);
+                                 getAssociatedDisplayId().value_or(ui::LogicalDisplayId::INVALID));
 }
 
 std::list<NotifyArgs> TouchInputMapper::abortPointerMouse(nsecs_t when, nsecs_t readTime,
@@ -3967,14 +3967,8 @@ bool TouchInputMapper::markSupportedKeyCodes(uint32_t sourceMask,
 }
 
 std::optional<ui::LogicalDisplayId> TouchInputMapper::getAssociatedDisplayId() {
-    if (mParameters.hasAssociatedDisplay) {
-        if (mDeviceMode == DeviceMode::POINTER) {
-            return ui::LogicalDisplayId::INVALID;
-        } else {
-            return std::make_optional(mViewport.displayId);
-        }
-    }
-    return std::nullopt;
+    return mParameters.hasAssociatedDisplay ? std::make_optional(mViewport.displayId)
+                                            : std::nullopt;
 }
 
 } // namespace android
