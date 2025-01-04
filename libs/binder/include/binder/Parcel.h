@@ -388,6 +388,11 @@ public:
     LIBBINDER_EXPORTED status_t
     writeUniqueFileDescriptorVector(const std::vector<binder::unique_fd>& val);
 
+    // WARNING: deprecated and incompatible with AIDL. You should use Parcelable
+    // definitions outside of Parcel to represent shared memory, such as
+    // IMemory or with ParcelFileDescriptor. We should remove this, or move it to be
+    // external to Parcel, it's not a very encapsulated API.
+    //
     // Writes a blob to the parcel.
     // If the blob is small, then it is stored in-place, otherwise it is
     // transferred by way of an anonymous shared memory region.  Prefer sending
@@ -630,6 +635,11 @@ public:
     LIBBINDER_EXPORTED status_t
     readUniqueFileDescriptorVector(std::vector<binder::unique_fd>* val) const;
 
+    // WARNING: deprecated and incompatible with AIDL. You should use Parcelable
+    // definitions outside of Parcel to represent shared memory, such as
+    // IMemory or with ParcelFileDescriptor. We should remove this, or move it to be
+    // external to Parcel, it's not a very encapsulated API.
+    //
     // Reads a blob from the parcel.
     // The caller should call release() on the blob after reading its contents.
     LIBBINDER_EXPORTED status_t readBlob(size_t len, ReadableBlob* outBlob) const;
