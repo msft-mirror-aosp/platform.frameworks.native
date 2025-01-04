@@ -46,6 +46,7 @@
 #include <ctime>
 #include <queue>
 #include <sstream>
+#include <variant>
 
 #include "../InputDeviceMetricsSource.h"
 
@@ -924,6 +925,23 @@ Error<EnumErrorWrapper<InputEventInjectionResult>> injectionError(InputEventInje
             std::forward<InputEventInjectionResult>(e));
 }
 
+InputTarget createInputTarget(const std::shared_ptr<Connection>& connection,
+                              const sp<android::gui::WindowInfoHandle>& windowHandle,
+                              InputTarget::DispatchMode dispatchMode,
+                              ftl::Flags<InputTarget::Flags> targetFlags,
+                              const ui::Transform& displayTransform,
+                              std::optional<nsecs_t> firstDownTimeInTarget) {
+    LOG_ALWAYS_FATAL_IF(connection == nullptr);
+    InputTarget inputTarget{connection};
+    inputTarget.windowHandle = windowHandle;
+    inputTarget.dispatchMode = dispatchMode;
+    inputTarget.flags = targetFlags;
+    inputTarget.globalScaleFactor = windowHandle->getInfo()->globalScaleFactor;
+    inputTarget.displayTransform = displayTransform;
+    inputTarget.firstDownTimeInTarget = firstDownTimeInTarget;
+    return inputTarget;
+}
+
 } // namespace
 
 // --- InputDispatcher ---
@@ -1346,7 +1364,8 @@ bool InputDispatcher::shouldPruneInboundQueueLocked(const MotionEntry& motionEnt
 
         // Alternatively, maybe there's a spy window that could handle this event.
         const std::vector<sp<WindowInfoHandle>> touchedSpies =
-                findTouchedSpyWindowsAtLocked(displayId, x, y, isStylus, motionEntry.deviceId);
+                mWindowInfos.findTouchedSpyWindowsAt(displayId, x, y, isStylus,
+                                                     motionEntry.deviceId, mTouchStatesByDisplay);
         for (const auto& windowHandle : touchedSpies) {
             const std::shared_ptr<Connection> connection =
                     getConnectionLocked(windowHandle->getToken());
@@ -1499,15 +1518,16 @@ std::vector<InputTarget> InputDispatcher::findOutsideTargetsLocked(
     return outsideTargets;
 }
 
-std::vector<sp<WindowInfoHandle>> InputDispatcher::findTouchedSpyWindowsAtLocked(
-        ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId) const {
+std::vector<sp<WindowInfoHandle>> InputDispatcher::DispatcherWindowInfo::findTouchedSpyWindowsAt(
+        ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId,
+        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) const {
     // Traverse windows from front to back and gather the touched spy windows.
     std::vector<sp<WindowInfoHandle>> spyWindows;
-    const auto& windowHandles = mWindowInfos.getWindowHandlesForDisplay(displayId);
+    const auto& windowHandles = getWindowHandlesForDisplay(displayId);
     for (const sp<WindowInfoHandle>& windowHandle : windowHandles) {
         const WindowInfo& info = *windowHandle->getInfo();
         if (!windowAcceptsTouchAt(info, displayId, x, y, isStylus,
-                                  mWindowInfos.getDisplayTransform(displayId))) {
+                                  getDisplayTransform(displayId))) {
             // Generally, we would skip any pointer that's outside of the window. However, if the
             // spy prevents splitting, and already has some of the pointers from this device, then
             // it should get more pointers from the same device, even if they are outside of that
@@ -1518,7 +1538,7 @@ std::vector<sp<WindowInfoHandle>> InputDispatcher::findTouchedSpyWindowsAtLocked
 
             // We know that split touch is not supported. Skip this window only if it doesn't have
             // any touching pointers for this device already.
-            if (!windowHasTouchingPointersLocked(windowHandle, deviceId)) {
+            if (!windowHasTouchingPointers(windowHandle, deviceId, touchStatesByDisplay)) {
                 continue;
             }
             // If it already has pointers down for this device, then give it this pointer, too.
@@ -2519,7 +2539,8 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
         }
 
         std::vector<sp<WindowInfoHandle>> newTouchedWindows =
-                findTouchedSpyWindowsAtLocked(displayId, x, y, isStylus, entry.deviceId);
+                mWindowInfos.findTouchedSpyWindowsAt(displayId, x, y, isStylus, entry.deviceId,
+                                                     mTouchStatesByDisplay);
         if (newTouchedWindowHandle != nullptr) {
             // Process the foreground window first so that it is the first to receive the event.
             newTouchedWindows.insert(newTouchedWindows.begin(), newTouchedWindowHandle);
@@ -2972,26 +2993,6 @@ void InputDispatcher::addDragEventLocked(const MotionEntry& entry) {
     }
 }
 
-std::optional<InputTarget> InputDispatcher::createInputTargetLocked(
-        const sp<android::gui::WindowInfoHandle>& windowHandle,
-        InputTarget::DispatchMode dispatchMode, ftl::Flags<InputTarget::Flags> targetFlags,
-        std::optional<nsecs_t> firstDownTimeInTarget) const {
-    std::shared_ptr<Connection> connection = getConnectionLocked(windowHandle->getToken());
-    if (connection == nullptr) {
-        ALOGW("Not creating InputTarget for %s, no input channel", windowHandle->getName().c_str());
-        return {};
-    }
-    InputTarget inputTarget{connection};
-    inputTarget.windowHandle = windowHandle;
-    inputTarget.dispatchMode = dispatchMode;
-    inputTarget.flags = targetFlags;
-    inputTarget.globalScaleFactor = windowHandle->getInfo()->globalScaleFactor;
-    inputTarget.firstDownTimeInTarget = firstDownTimeInTarget;
-    inputTarget.displayTransform =
-            mWindowInfos.getDisplayTransform(windowHandle->getInfo()->displayId);
-    return inputTarget;
-}
-
 void InputDispatcher::addWindowTargetLocked(const sp<WindowInfoHandle>& windowHandle,
                                             InputTarget::DispatchMode dispatchMode,
                                             ftl::Flags<InputTarget::Flags> targetFlags,
@@ -3006,13 +3007,17 @@ void InputDispatcher::addWindowTargetLocked(const sp<WindowInfoHandle>& windowHa
     const WindowInfo* windowInfo = windowHandle->getInfo();
 
     if (it == inputTargets.end()) {
-        std::optional<InputTarget> target =
-                createInputTargetLocked(windowHandle, dispatchMode, targetFlags,
-                                        firstDownTimeInTarget);
-        if (!target) {
+        std::shared_ptr<Connection> connection = getConnectionLocked(windowHandle->getToken());
+        if (connection == nullptr) {
+            ALOGW("Not creating InputTarget for %s, no input channel",
+                  windowHandle->getName().c_str());
             return;
         }
-        inputTargets.push_back(*target);
+        inputTargets.push_back(createInputTarget(connection, windowHandle, dispatchMode,
+                                                 targetFlags,
+                                                 mWindowInfos.getDisplayTransform(
+                                                         windowHandle->getInfo()->displayId),
+                                                 firstDownTimeInTarget));
         it = inputTargets.end() - 1;
     }
 
@@ -3057,13 +3062,17 @@ void InputDispatcher::addPointerWindowTargetLocked(
     const WindowInfo* windowInfo = windowHandle->getInfo();
 
     if (it == inputTargets.end()) {
-        std::optional<InputTarget> target =
-                createInputTargetLocked(windowHandle, dispatchMode, targetFlags,
-                                        firstDownTimeInTarget);
-        if (!target) {
+        std::shared_ptr<Connection> connection = getConnectionLocked(windowHandle->getToken());
+        if (connection == nullptr) {
+            ALOGW("Not creating InputTarget for %s, no input channel",
+                  windowHandle->getName().c_str());
             return;
         }
-        inputTargets.push_back(*target);
+        inputTargets.push_back(createInputTarget(connection, windowHandle, dispatchMode,
+                                                 targetFlags,
+                                                 mWindowInfos.getDisplayTransform(
+                                                         windowHandle->getInfo()->displayId),
+                                                 firstDownTimeInTarget));
         it = inputTargets.end() - 1;
     }
 
@@ -4340,7 +4349,7 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
     }
 
     const auto [_, touchedWindowState, displayId] =
-            findTouchStateWindowAndDisplayLocked(connection->getToken());
+            findTouchStateWindowAndDisplay(connection->getToken(), mTouchStatesByDisplay);
     if (touchedWindowState == nullptr) {
         LOG(FATAL) << __func__ << ": Touch state is out of sync: No touched window for token";
     }
@@ -5798,10 +5807,12 @@ void InputDispatcher::setMaximumObscuringOpacityForTouch(float opacity) {
     mMaximumObscuringOpacityForTouch = opacity;
 }
 
-std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
-InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) {
-    for (auto& [displayId, state] : mTouchStatesByDisplay) {
-        for (TouchedWindow& w : state.windows) {
+std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
+InputDispatcher::findTouchStateWindowAndDisplay(
+        const sp<IBinder>& token,
+        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
+    for (auto& [displayId, state] : touchStatesByDisplay) {
+        for (const TouchedWindow& w : state.windows) {
             if (w.windowHandle->getToken() == token) {
                 return std::make_tuple(&state, &w, displayId);
             }
@@ -5810,15 +5821,25 @@ InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) 
     return std::make_tuple(nullptr, nullptr, ui::LogicalDisplayId::DEFAULT);
 }
 
-std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
-InputDispatcher::findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) const {
-    return const_cast<InputDispatcher*>(this)->findTouchStateWindowAndDisplayLocked(token);
+std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
+InputDispatcher::findTouchStateWindowAndDisplay(
+        const sp<IBinder>& token,
+        std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
+    auto [constTouchState, constTouchedWindow, displayId] = InputDispatcher::
+            findTouchStateWindowAndDisplay(token,
+                                           const_cast<const std::unordered_map<ui::LogicalDisplayId,
+                                                                               TouchState>&>(
+                                                   touchStatesByDisplay));
+
+    return std::make_tuple(const_cast<TouchState*>(constTouchState),
+                           const_cast<TouchedWindow*>(constTouchedWindow), displayId);
 }
 
-bool InputDispatcher::windowHasTouchingPointersLocked(const sp<WindowInfoHandle>& windowHandle,
-                                                      DeviceId deviceId) const {
+bool InputDispatcher::windowHasTouchingPointers(
+        const sp<WindowInfoHandle>& windowHandle, DeviceId deviceId,
+        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
     const auto& [touchState, touchedWindow, _] =
-            findTouchStateWindowAndDisplayLocked(windowHandle->getToken());
+            findTouchStateWindowAndDisplay(windowHandle->getToken(), touchStatesByDisplay);
     if (touchState == nullptr) {
         // No touching pointers at all
         return false;
@@ -5839,7 +5860,8 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
         std::scoped_lock _l(mLock);
 
         // Find the target touch state and touched window by fromToken.
-        auto [state, touchedWindow, displayId] = findTouchStateWindowAndDisplayLocked(fromToken);
+        auto [state, touchedWindow, displayId] =
+                findTouchStateWindowAndDisplay(fromToken, mTouchStatesByDisplay);
 
         if (state == nullptr || touchedWindow == nullptr) {
             ALOGD("Touch transfer failed because from window is not being touched.");
@@ -6344,7 +6366,8 @@ status_t InputDispatcher::pilferPointersLocked(const sp<IBinder>& token) {
         return BAD_VALUE;
     }
 
-    auto [statePtr, windowPtr, displayId] = findTouchStateWindowAndDisplayLocked(token);
+    auto [statePtr, windowPtr, displayId] =
+            findTouchStateWindowAndDisplay(token, mTouchStatesByDisplay);
     if (statePtr == nullptr || windowPtr == nullptr) {
         LOG(WARNING)
                 << "Attempted to pilfer points from a channel without any on-going pointer streams."
@@ -6539,14 +6562,15 @@ void InputDispatcher::doDispatchCycleFinishedCommand(nsecs_t finishTime,
             const auto windowHandle = mWindowInfos.findWindowHandle(connection->getToken());
             // Only dispatch fallbacks if there is a window for the connection.
             if (windowHandle != nullptr) {
-                const auto inputTarget =
-                        createInputTargetLocked(windowHandle, InputTarget::DispatchMode::AS_IS,
-                                                dispatchEntry->targetFlags,
-                                                fallbackKeyEntry->downTime);
-                if (inputTarget.has_value()) {
-                    enqueueDispatchEntryLocked(connection, std::move(fallbackKeyEntry),
-                                               *inputTarget);
-                }
+                nsecs_t downTime = fallbackKeyEntry->downTime;
+                enqueueDispatchEntryLocked(connection, std::move(fallbackKeyEntry),
+                                           createInputTarget(connection, windowHandle,
+                                                             InputTarget::DispatchMode::AS_IS,
+                                                             dispatchEntry->targetFlags,
+                                                             mWindowInfos.getDisplayTransform(
+                                                                     windowHandle->getInfo()
+                                                                             ->displayId),
+                                                             downTime));
             }
         }
         releaseDispatchEntry(std::move(dispatchEntry));
@@ -6651,24 +6675,27 @@ void InputDispatcher::updateLastAnrStateLocked(const std::string& windowLabel,
 void InputDispatcher::doInterceptKeyBeforeDispatchingCommand(const sp<IBinder>& focusedWindowToken,
                                                              const KeyEntry& entry) {
     const KeyEvent event = createKeyEvent(entry);
+    std::variant<nsecs_t, KeyEntry::InterceptKeyResult> interceptResult;
     nsecs_t delay = 0;
     { // release lock
         scoped_unlock unlock(mLock);
         android::base::Timer t;
-        delay = mPolicy.interceptKeyBeforeDispatching(focusedWindowToken, event, entry.policyFlags);
+        interceptResult =
+                mPolicy.interceptKeyBeforeDispatching(focusedWindowToken, event, entry.policyFlags);
         if (t.duration() > SLOW_INTERCEPTION_THRESHOLD) {
             ALOGW("Excessive delay in interceptKeyBeforeDispatching; took %s ms",
                   std::to_string(t.duration().count()).c_str());
         }
     } // acquire lock
 
-    if (delay < 0) {
-        entry.interceptKeyResult = KeyEntry::InterceptKeyResult::SKIP;
-    } else if (delay == 0) {
-        entry.interceptKeyResult = KeyEntry::InterceptKeyResult::CONTINUE;
-    } else {
+    if (std::holds_alternative<KeyEntry::InterceptKeyResult>(interceptResult)) {
+        entry.interceptKeyResult = std::get<KeyEntry::InterceptKeyResult>(interceptResult);
+        return;
+    }
+
+    if (std::holds_alternative<nsecs_t>(interceptResult)) {
         entry.interceptKeyResult = KeyEntry::InterceptKeyResult::TRY_AGAIN_LATER;
-        entry.interceptKeyWakeupTime = now() + delay;
+        entry.interceptKeyWakeupTime = now() + std::get<nsecs_t>(interceptResult);
     }
 }
 

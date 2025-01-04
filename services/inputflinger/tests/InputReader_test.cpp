@@ -2474,10 +2474,10 @@ TEST_F(ExternalStylusIntegrationTest, FusedExternalStylusPressureNotReported) {
     const auto syncTime = std::chrono::system_clock::now();
     // After 72 ms, the event *will* be generated. If we wait the full 72 ms to check that NO event
     // is generated in that period, there will be a race condition between the event being generated
-    // and the test's wait timeout expiring. Thus, we wait for a shorter duration in the test, which
-    // will reduce the liklihood of the race condition occurring.
-    const auto waitUntilTimeForNoEvent =
-            syncTime + std::chrono::milliseconds(ns2ms(EXTERNAL_STYLUS_DATA_TIMEOUT / 2));
+    // and the test's wait timeout expiring. Thus, we wait for a shorter duration in the test to
+    // ensure the event is not immediately generated, which should reduce the liklihood of the race
+    // condition occurring.
+    const auto waitUntilTimeForNoEvent = syncTime + std::chrono::milliseconds(1);
     mDevice->sendSync();
     ASSERT_NO_FATAL_FAILURE(mTestListener->assertNotifyMotionWasNotCalled(waitUntilTimeForNoEvent));
 

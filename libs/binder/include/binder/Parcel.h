@@ -401,8 +401,6 @@ public:
     // as long as it keeps a dup of the blob file descriptor handy for later.
     LIBBINDER_EXPORTED status_t writeDupImmutableBlobFileDescriptor(int fd);
 
-    LIBBINDER_EXPORTED status_t writeObject(const flat_binder_object& val, bool nullMetaData);
-
     // Like Parcel.java's writeNoException().  Just writes a zero int32.
     // Currently the native implementation doesn't do any of the StrictMode
     // stack gathering and serialization that the Java implementation does.
@@ -685,6 +683,7 @@ private:
     // Set the capacity to `desired`, truncating the Parcel if necessary.
     status_t            continueWrite(size_t desired);
     status_t truncateRpcObjects(size_t newObjectsSize);
+    status_t writeObject(const flat_binder_object& val, bool nullMetaData);
     status_t            writePointer(uintptr_t val);
     status_t            readPointer(uintptr_t *pArg) const;
     uintptr_t           readPointer() const;

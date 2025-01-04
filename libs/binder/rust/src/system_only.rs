@@ -24,19 +24,14 @@ use std::os::raw::c_char;
 
 use libc::{sockaddr, sockaddr_un, sockaddr_vm, socklen_t};
 use std::sync::Arc;
-use std::{fmt, mem, ptr};
+use std::{mem, ptr};
 
 /// Rust wrapper around ABinderRpc_Accessor objects for RPC binder service management.
 ///
 /// Dropping the `Accessor` will drop the underlying object and the binder it owns.
+#[derive(Debug)]
 pub struct Accessor {
     accessor: *mut sys::ABinderRpc_Accessor,
-}
-
-impl fmt::Debug for Accessor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ABinderRpc_Accessor({:p})", self.accessor)
-    }
 }
 
 /// Socket connection info required for libbinder to connect to a service.
