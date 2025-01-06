@@ -920,7 +920,8 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
 
     mCompositionEngine->setTimeStats(mTimeStats);
 
-    mCompositionEngine->setHwComposer(getFactory().createHWComposer(mHwcServiceName));
+    mHWComposer = getFactory().createHWComposer(mHwcServiceName);
+    mCompositionEngine->setHwComposer(mHWComposer.get());
     auto& composer = mCompositionEngine->getHwComposer();
     composer.setCallback(*this);
     mDisplayModeController.setHwComposer(&composer);
@@ -7697,6 +7698,7 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
         std::unique_ptr<compositionengine::CompositionEngine> compositionEngine =
                 mFactory.createCompositionEngine();
         compositionEngine->setRenderEngine(mRenderEngine.get());
+        compositionEngine->setHwComposer(mHWComposer.get());
 
         std::vector<sp<compositionengine::LayerFE>> layerFEs;
         layerFEs.reserve(layers.size());
