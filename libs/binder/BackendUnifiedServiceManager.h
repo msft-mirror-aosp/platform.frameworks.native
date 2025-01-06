@@ -167,5 +167,9 @@ private:
 sp<BackendUnifiedServiceManager> getBackendUnifiedServiceManager();
 
 android::binder::Status getInjectedAccessor(const std::string& name, android::os::Service* service);
+void appendInjectedAccessorServices(std::vector<std::string>* list);
+// Do not call any other service manager APIs that might take the accessor
+// mutex because this will be holding it!
+void forEachInjectedAccessorService(const std::function<void(const std::string&)>& f);
 
 } // namespace android
