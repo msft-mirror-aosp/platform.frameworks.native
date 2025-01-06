@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <DisplayHardware/Hal.h>
 #include <android-base/stringprintf.h>
 #include <compositionengine/DisplayColorProfile.h>
@@ -22,11 +23,13 @@
 #include <compositionengine/impl/OutputCompositionState.h>
 #include <compositionengine/impl/OutputLayer.h>
 #include <compositionengine/impl/OutputLayerCompositionState.h>
-#include <cstdint>
-#include "system/graphics-base-v1.0.h"
-#include "ui/FloatRect.h"
-
+#include <ui/FloatRect.h>
 #include <ui/HdrRenderTypeUtils.h>
+#include <cstdint>
+#include <limits>
+#include "system/graphics-base-v1.0.h"
+
+#include <com_android_graphics_libgui_flags.h>
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push
@@ -286,8 +289,13 @@ uint32_t OutputLayer::calculateOutputRelativeBufferTransform(
 }
 
 void OutputLayer::updateLuts(
-        std::shared_ptr<gui::DisplayLuts> layerFEStateLut,
+        const LayerFECompositionState& layerFEState,
         const std::optional<std::vector<std::optional<LutProperties>>>& properties) {
+    auto& luts = layerFEState.luts;
+    if (!luts) {
+        return;
+    }
+
     auto& state = editState();
 
     if (!properties) {
@@ -303,7 +311,7 @@ void OutputLayer::updateLuts(
         }
     }
 
-    for (const auto& inputLut : layerFEStateLut->lutProperties) {
+    for (const auto& inputLut : luts->lutProperties) {
         bool foundInHwcLuts = false;
         for (const auto& hwcLut : hwcLutProperties) {
             if (static_cast<int32_t>(hwcLut.dimension) ==
@@ -316,7 +324,7 @@ void OutputLayer::updateLuts(
                 break;
             }
         }
-        // if any lut properties of layerFEStateLut can not be found in hwcLutProperties,
+        // if any lut properties of luts can not be found in hwcLutProperties,
         // GPU composition instead
         if (!foundInHwcLuts) {
             state.forceClientComposition = true;
@@ -391,11 +399,22 @@ void OutputLayer::updateCompositionState(
     // For hdr content, treat the white point as the display brightness - HDR content should not be
     // boosted or dimmed.
     // If the layer explicitly requests to disable dimming, then don't dim either.
-    if (hdrRenderType == HdrRenderType::GENERIC_HDR ||
-        getOutput().getState().displayBrightnessNits == getOutput().getState().sdrWhitePointNits ||
-        getOutput().getState().displayBrightnessNits == 0.f || !layerFEState->dimmingEnabled) {
+    if (getOutput().getState().displayBrightnessNits == getOutput().getState().sdrWhitePointNits ||
+        getOutput().getState().displayBrightnessNits <= 0.f || !layerFEState->dimmingEnabled) {
         state.dimmingRatio = 1.f;
         state.whitePointNits = getOutput().getState().displayBrightnessNits;
+    } else if (hdrRenderType == HdrRenderType::GENERIC_HDR) {
+        float deviceHeadroom = getOutput().getState().displayBrightnessNits /
+                getOutput().getState().sdrWhitePointNits;
+        float idealizedMaxHeadroom = deviceHeadroom;
+
+        if (FlagManager::getInstance().begone_bright_hlg()) {
+            idealizedMaxHeadroom =
+                    std::min(idealizedMaxHeadroom, getIdealizedMaxHeadroom(state.dataspace));
+        }
+
+        state.dimmingRatio = std::min(idealizedMaxHeadroom / deviceHeadroom, 1.0f);
+        state.whitePointNits = getOutput().getState().displayBrightnessNits * state.dimmingRatio;
     } else {
         float layerBrightnessNits = getOutput().getState().sdrWhitePointNits;
         // RANGE_EXTENDED can "self-promote" to HDR, but is still rendered for a particular
@@ -409,10 +428,7 @@ void OutputLayer::updateCompositionState(
         state.whitePointNits = layerBrightnessNits;
     }
 
-    const auto& layerFEStateLut = layerFEState->luts;
-    if (layerFEStateLut) {
-        updateLuts(layerFEStateLut, properties);
-    }
+    updateLuts(*layerFEState, properties);
 
     // These are evaluated every frame as they can potentially change at any
     // time.
@@ -422,8 +438,19 @@ void OutputLayer::updateCompositionState(
     }
 }
 
+void OutputLayer::commitPictureProfileToCompositionState() {
+    if (!com_android_graphics_libgui_flags_apply_picture_profiles()) {
+        return;
+    }
+    const auto* layerState = getLayerFE().getCompositionState();
+    if (layerState) {
+        editState().pictureProfileHandle = layerState->pictureProfileHandle;
+    }
+}
+
 void OutputLayer::writeStateToHWC(bool includeGeometry, bool skipLayer, uint32_t z,
-                                  bool zIsOverridden, bool isPeekingThrough) {
+                                  bool zIsOverridden, bool isPeekingThrough,
+                                  bool hasLutsProperties) {
     const auto& state = getState();
     // Skip doing this if there is no HWC interface
     if (!state.hwc) {
@@ -465,8 +492,9 @@ void OutputLayer::writeStateToHWC(bool includeGeometry, bool skipLayer, uint32_t
 
     writeCompositionTypeToHWC(hwcLayer.get(), requestedCompositionType, isPeekingThrough,
                               skipLayer);
-
-    writeLutToHWC(hwcLayer.get(), *outputIndependentState);
+    if (hasLutsProperties) {
+        writeLutToHWC(hwcLayer.get(), *outputIndependentState);
+    }
 
     if (requestedCompositionType == Composition::SOLID_COLOR) {
         writeSolidColorStateToHWC(hwcLayer.get(), *outputIndependentState);
@@ -563,28 +591,29 @@ void OutputLayer::writeOutputIndependentGeometryStateToHWC(
 
 void OutputLayer::writeLutToHWC(HWC2::Layer* hwcLayer,
                                 const LayerFECompositionState& outputIndependentState) {
-    if (!outputIndependentState.luts) {
-        return;
-    }
-    auto& lutFileDescriptor = outputIndependentState.luts->getLutFileDescriptor();
-    auto lutOffsets = outputIndependentState.luts->offsets;
-    auto& lutProperties = outputIndependentState.luts->lutProperties;
-
-    std::vector<LutProperties> aidlProperties;
-    aidlProperties.reserve(lutProperties.size());
-    for (size_t i = 0; i < lutOffsets.size(); i++) {
-        LutProperties properties;
-        properties.dimension = static_cast<LutProperties::Dimension>(lutProperties[i].dimension);
-        properties.size = lutProperties[i].size;
-        properties.samplingKeys = {
-                static_cast<LutProperties::SamplingKey>(lutProperties[i].samplingKey)};
-        aidlProperties.emplace_back(properties);
-    }
-
     Luts luts;
-    luts.pfd = ndk::ScopedFileDescriptor(dup(lutFileDescriptor.get()));
-    luts.offsets = lutOffsets;
-    luts.lutProperties = std::move(aidlProperties);
+    // if outputIndependentState.luts is nullptr, it means we want to clear the LUTs
+    // and we pass an empty Luts object to the HWC.
+    if (outputIndependentState.luts) {
+        auto& lutFileDescriptor = outputIndependentState.luts->getLutFileDescriptor();
+        auto lutOffsets = outputIndependentState.luts->offsets;
+        auto& lutProperties = outputIndependentState.luts->lutProperties;
+
+        std::vector<LutProperties> aidlProperties;
+        aidlProperties.reserve(lutProperties.size());
+        for (size_t i = 0; i < lutOffsets.size(); i++) {
+            aidlProperties.emplace_back(
+                    LutProperties{.dimension = static_cast<LutProperties::Dimension>(
+                                          lutProperties[i].dimension),
+                                  .size = lutProperties[i].size,
+                                  .samplingKeys = {static_cast<LutProperties::SamplingKey>(
+                                          lutProperties[i].samplingKey)}});
+        }
+
+        luts.pfd = ndk::ScopedFileDescriptor(dup(lutFileDescriptor.get()));
+        luts.offsets = lutOffsets;
+        luts.lutProperties = std::move(aidlProperties);
+    }
 
     switch (auto error = hwcLayer->setLuts(luts)) {
         case hal::Error::NONE:
@@ -642,6 +671,21 @@ void OutputLayer::writeOutputDependentPerFrameStateToHWC(HWC2::Layer* hwcLayer) 
     if (auto error = hwcLayer->setBrightness(dimmingRatio); error != hal::Error::NONE) {
         ALOGE("[%s] Failed to set brightness %f: %s (%d)", getLayerFE().getDebugName(),
               dimmingRatio, to_string(error).c_str(), static_cast<int32_t>(error));
+    }
+
+    if (com_android_graphics_libgui_flags_apply_picture_profiles() &&
+        outputDependentState.pictureProfileHandle) {
+        if (auto error =
+                    hwcLayer->setPictureProfileHandle(outputDependentState.pictureProfileHandle);
+            error != hal::Error::NONE) {
+            ALOGE("[%s] Failed to set picture profile handle: %s (%d)", getLayerFE().getDebugName(),
+                  toString(outputDependentState.pictureProfileHandle).c_str(),
+                  static_cast<int32_t>(error));
+        }
+        // Reset the picture profile state, as it needs to be re-committed on each present cycle
+        // when Output decides that the limited picture-processing hardware should be used by this
+        // layer.
+        editState().pictureProfileHandle = PictureProfileHandle::NONE;
     }
 }
 
@@ -748,6 +792,16 @@ void OutputLayer::uncacheBuffers(const std::vector<uint64_t>& bufferIdsToUncache
     }
 }
 
+int64_t OutputLayer::getPictureProfilePriority() const {
+    const auto* layerState = getLayerFE().getCompositionState();
+    return layerState ? layerState->pictureProfilePriority : 0;
+}
+
+const PictureProfileHandle& OutputLayer::getPictureProfileHandle() const {
+    const auto* layerState = getLayerFE().getCompositionState();
+    return layerState ? layerState->pictureProfileHandle : PictureProfileHandle::NONE;
+}
+
 void OutputLayer::writeBufferStateToHWC(HWC2::Layer* hwcLayer,
                                         const LayerFECompositionState& outputIndependentState,
                                         bool skipLayer) {
@@ -830,14 +884,14 @@ void OutputLayer::writeCursorPositionToHWC() const {
         return;
     }
 
-    const auto* layerFEState = getLayerFE().getCompositionState();
-    if (!layerFEState) {
+    const auto* layerState = getLayerFE().getCompositionState();
+    if (!layerState) {
         return;
     }
 
     const auto& outputState = getOutput().getState();
 
-    Rect frame = layerFEState->cursorFrame;
+    Rect frame = layerState->cursorFrame;
     frame.intersect(outputState.layerStackSpace.getContent(), &frame);
     Rect position = outputState.transform.transform(frame);
 

@@ -16,6 +16,7 @@
 
 #include <gui/IGraphicBufferConsumer.h>
 
+#include <com_android_graphics_libgui_flags.h>
 #include <gui/BufferItem.h>
 #include <gui/IConsumerListener.h>
 
@@ -24,8 +25,10 @@
 #include <ui/Fence.h>
 #include <ui/GraphicBuffer.h>
 
+#include <utils/Errors.h>
 #include <utils/NativeHandle.h>
 #include <utils/String8.h>
+#include <cstdint>
 
 namespace android {
 
@@ -52,7 +55,9 @@ enum class Tag : uint32_t {
     GET_OCCUPANCY_HISTORY,
     DISCARD_FREE_BUFFERS,
     DUMP_STATE,
-    LAST = DUMP_STATE,
+    ALLOW_UNLIMITED_SLOTS,
+    GET_RELEASED_BUFFERS_EXTENDED,
+    LAST = GET_RELEASED_BUFFERS_EXTENDED,
 };
 
 } // Anonymous namespace
@@ -84,7 +89,8 @@ public:
                            EGLDisplay display __attribute__((unused)),
                            EGLSyncKHR fence __attribute__((unused)),
                            const sp<Fence>& releaseFence) override {
-        return callRemote<ReleaseBuffer>(Tag::RELEASE_BUFFER, buf, frameNumber, releaseFence);
+        using Signature = status_t (IGraphicBufferConsumer::*)(int, uint64_t, const sp<Fence>&);
+        return callRemote<Signature>(Tag::RELEASE_BUFFER, buf, frameNumber, releaseFence);
     }
 
     status_t consumerConnect(const sp<IConsumerListener>& consumer, bool controlledByApp) override {
@@ -102,10 +108,24 @@ public:
         return callRemote<Signature>(Tag::GET_RELEASED_BUFFERS, slotMask);
     }
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+    status_t getReleasedBuffersExtended(std::vector<bool>* slotMask) override {
+        using Signature = decltype(&IGraphicBufferConsumer::getReleasedBuffersExtended);
+        return callRemote<Signature>(Tag::GET_RELEASED_BUFFERS_EXTENDED, slotMask);
+    }
+#endif
+
     status_t setDefaultBufferSize(uint32_t width, uint32_t height) override {
         using Signature = decltype(&IGraphicBufferConsumer::setDefaultBufferSize);
         return callRemote<Signature>(Tag::SET_DEFAULT_BUFFER_SIZE, width, height);
     }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+    status_t allowUnlimitedSlots(bool allowUnlimitedSlots) override {
+        using Signature = decltype(&IGraphicBufferConsumer::allowUnlimitedSlots);
+        return callRemote<Signature>(Tag::ALLOW_UNLIMITED_SLOTS, allowUnlimitedSlots);
+    }
+#endif
 
     status_t setMaxBufferCount(int bufferCount) override {
         using Signature = decltype(&IGraphicBufferConsumer::setMaxBufferCount);
@@ -188,8 +208,10 @@ status_t BnGraphicBufferConsumer::onTransact(uint32_t code, const Parcel& data, 
             return callLocal(data, reply, &IGraphicBufferConsumer::detachBuffer);
         case Tag::ATTACH_BUFFER:
             return callLocal(data, reply, &IGraphicBufferConsumer::attachBuffer);
-        case Tag::RELEASE_BUFFER:
-            return callLocal(data, reply, &IGraphicBufferConsumer::releaseHelper);
+        case Tag::RELEASE_BUFFER: {
+            using Signature = status_t (IGraphicBufferConsumer::*)(int, uint64_t, const sp<Fence>&);
+            return callLocal<Signature>(data, reply, &IGraphicBufferConsumer::releaseBuffer);
+        }
         case Tag::CONSUMER_CONNECT:
             return callLocal(data, reply, &IGraphicBufferConsumer::consumerConnect);
         case Tag::CONSUMER_DISCONNECT:
@@ -223,6 +245,20 @@ status_t BnGraphicBufferConsumer::onTransact(uint32_t code, const Parcel& data, 
         case Tag::DUMP_STATE: {
             using Signature = status_t (IGraphicBufferConsumer::*)(const String8&, String8*) const;
             return callLocal<Signature>(data, reply, &IGraphicBufferConsumer::dumpState);
+        }
+        case Tag::GET_RELEASED_BUFFERS_EXTENDED: {
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+            return callLocal(data, reply, &IGraphicBufferConsumer::getReleasedBuffersExtended);
+#else
+            return INVALID_OPERATION;
+#endif
+        }
+        case Tag::ALLOW_UNLIMITED_SLOTS: {
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+            return callLocal(data, reply, &IGraphicBufferConsumer::allowUnlimitedSlots);
+#else
+            return INVALID_OPERATION;
+#endif
         }
     }
 }

@@ -286,18 +286,23 @@ void BLASTBufferQueue::update(const sp<SurfaceControl>& surface, uint32_t width,
     if (surfaceControlChanged && mSurfaceControl != nullptr) {
         BQA_LOGD("Updating SurfaceControl without recreating BBQ");
     }
-    bool applyTransaction = false;
 
     // Always update the native object even though they might have the same layer handle, so we can
     // get the updated transform hint from WM.
     mSurfaceControl = surface;
     SurfaceComposerClient::Transaction t;
+    bool applyTransaction = false;
     if (surfaceControlChanged) {
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
         updateBufferReleaseProducer();
 #endif
         t.setFlags(mSurfaceControl, layer_state_t::eEnableBackpressure,
                    layer_state_t::eEnableBackpressure);
+        // Migrate the picture profile handle to the new surface control.
+        if (com_android_graphics_libgui_flags_apply_picture_profiles() &&
+            mPictureProfileHandle.has_value()) {
+            t.setPictureProfileHandle(mSurfaceControl, *mPictureProfileHandle);
+        }
         applyTransaction = true;
     }
     mTransformHint = mSurfaceControl->getTransformHint();
@@ -679,6 +684,17 @@ status_t BLASTBufferQueue::acquireNextBufferLocked(
     if (!bufferItem.mIsAutoTimestamp) {
         t->setDesiredPresentTime(bufferItem.mTimestamp);
     }
+    if (com_android_graphics_libgui_flags_apply_picture_profiles() &&
+        bufferItem.mPictureProfileHandle.has_value()) {
+        t->setPictureProfileHandle(mSurfaceControl, *bufferItem.mPictureProfileHandle);
+        // The current picture profile must be maintained in case the BBQ gets its
+        // SurfaceControl switched out.
+        mPictureProfileHandle = bufferItem.mPictureProfileHandle;
+        // Clear out the picture profile if the requestor has asked for it to be cleared
+        if (mPictureProfileHandle == PictureProfileHandle::NONE) {
+            mPictureProfileHandle = std::nullopt;
+        }
+    }
 
     // Drop stale frame timeline infos
     while (!mPendingFrameTimelines.empty() &&
@@ -1016,7 +1032,7 @@ void BLASTBufferQueue::mergeWithNextTransaction(SurfaceComposerClient::Transacti
     std::lock_guard _lock{mMutex};
     if (mLastAcquiredFrameNumber >= frameNumber) {
         // Apply the transaction since we have already acquired the desired frame.
-        t->apply();
+        t->setApplyToken(mApplyToken).apply();
     } else {
         mPendingTransactions.emplace_back(frameNumber, *t);
         // Clear the transaction so it can't be applied elsewhere.
@@ -1216,6 +1232,11 @@ public:
             return OK;
         }
 
+        // Provide a callback for Choreographer to start buffer stuffing recovery when blocked
+        // on buffer release.
+        std::function<void()> callbackCopy = bbq->getWaitForBufferReleaseCallback();
+        if (callbackCopy) callbackCopy();
+
         // BufferQueue has already checked if we have a free buffer. If there's an unread interrupt,
         // we want to ignore it. This must be done before unlocking the BufferQueue lock to ensure
         // we don't miss an interrupt.
@@ -1326,6 +1347,16 @@ void BLASTBufferQueue::setTransactionHangCallback(
 void BLASTBufferQueue::setApplyToken(sp<IBinder> applyToken) {
     std::lock_guard _lock{mMutex};
     mApplyToken = std::move(applyToken);
+}
+
+void BLASTBufferQueue::setWaitForBufferReleaseCallback(std::function<void()> callback) {
+    std::lock_guard _lock{mWaitForBufferReleaseMutex};
+    mWaitForBufferReleaseCallback = std::move(callback);
+}
+
+std::function<void()> BLASTBufferQueue::getWaitForBufferReleaseCallback() const {
+    std::lock_guard _lock{mWaitForBufferReleaseMutex};
+    return mWaitForBufferReleaseCallback;
 }
 
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)

@@ -15,6 +15,7 @@
  */
 
 #include <android-base/stringprintf.h>
+#include <com_android_graphics_libgui_flags.h>
 #include <com_android_graphics_surfaceflinger_flags.h>
 #include <compositionengine/LayerFECompositionState.h>
 #include <compositionengine/impl/Output.h>
@@ -37,11 +38,14 @@
 #include <cstdint>
 #include <variant>
 
+#include <com_android_graphics_surfaceflinger_flags.h>
+
 #include <common/FlagManager.h>
 #include <common/test/FlagUtils.h>
 #include "CallOrderStateMachineHelper.h"
 #include "RegionMatcher.h"
 #include "mock/DisplayHardware/MockHWC2.h"
+#include "mock/DisplayHardware/MockHWComposer.h"
 
 namespace android::compositionengine {
 namespace {
@@ -142,6 +146,24 @@ struct OutputTest : public testing::Test {
     public:
         using impl::Output::injectOutputLayerForTest;
         virtual void injectOutputLayerForTest(std::unique_ptr<compositionengine::OutputLayer>) = 0;
+
+        virtual ftl::Optional<DisplayId> getDisplayId() const override { return mId; }
+
+        virtual bool hasPictureProcessing() const override { return mHasPictureProcessing; }
+        virtual int32_t getMaxLayerPictureProfiles() const override {
+            return mMaxLayerPictureProfiles;
+        }
+
+        void setDisplayIdForTest(DisplayId value) { mId = value; }
+
+        void setHasPictureProcessingForTest(bool value) { mHasPictureProcessing = value; }
+
+        void setMaxLayerPictureProfilesForTest(int32_t value) { mMaxLayerPictureProfiles = value; }
+
+    private:
+        ftl::Optional<DisplayId> mId;
+        bool mHasPictureProcessing;
+        int32_t mMaxLayerPictureProfiles;
     };
 
     static std::shared_ptr<Output> createOutput(
@@ -157,6 +179,7 @@ struct OutputTest : public testing::Test {
         mOutput->editState().displaySpace.setBounds(
                 ui::Size(kDefaultDisplaySize.getWidth(), kDefaultDisplaySize.getHeight()));
         EXPECT_CALL(mCompositionEngine, getRenderEngine()).WillRepeatedly(ReturnRef(mRenderEngine));
+        EXPECT_CALL(mCompositionEngine, getHwComposer()).WillRepeatedly(ReturnRef(mHwComposer));
     }
 
     void injectOutputLayer(InjectedLayer& layer) {
@@ -169,6 +192,7 @@ struct OutputTest : public testing::Test {
 
     static const Rect kDefaultDisplaySize;
 
+    StrictMock<::android::mock::HWComposer> mHwComposer;
     StrictMock<mock::CompositionEngine> mCompositionEngine;
     StrictMock<renderengine::mock::RenderEngine> mRenderEngine;
     mock::DisplayColorProfile* mDisplayColorProfile = new StrictMock<mock::DisplayColorProfile>();
@@ -789,19 +813,22 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, updatesLayerContentForAllLayers
                 updateCompositionState(false, false, ui::Transform::ROT_180, _));
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer1.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer,
                 updateCompositionState(false, false, ui::Transform::ROT_180, _));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer2.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer,
                 updateCompositionState(false, false, ui::Transform::ROT_180, _));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer3.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
 
     injectOutputLayer(layer1);
@@ -828,17 +855,20 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, updatesLayerGeometryAndContentF
     EXPECT_CALL(*layer1.outputLayer, updateCompositionState(true, false, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer1.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(true, false, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer2.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(true, false, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer3.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
 
     injectOutputLayer(layer1);
@@ -864,17 +894,20 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, forcesClientCompositionForAllLa
     EXPECT_CALL(*layer1.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer1.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer2.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer3.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
 
     injectOutputLayer(layer1);
@@ -908,7 +941,8 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, peekThroughLayerChangesOrder) {
     uint32_t z = 0;
     EXPECT_CALL(*layer0.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer0.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
 
     // After calling planComposition (which clears overrideInfo), this test sets
@@ -918,15 +952,17 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, peekThroughLayerChangesOrder) {
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
                                 /*zIsOverridden*/ true, /*isPeekingThrough*/
-                                true));
+                                true, /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer3.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ true, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ true, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer1.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ true, /*skipLayer*/ true, z++,
-                                /*zIsOverridden*/ true, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ true, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer2.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
 
     injectOutputLayer(layer0);
@@ -4938,12 +4974,14 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, noBackgroundBlurWhenOpaque) {
     EXPECT_CALL(*layer1.outputLayer, updateCompositionState(false, false, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer1.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(false, false, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer2.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
 
     layer2.layerFEState.backgroundBlurRadius = 10;
@@ -4972,17 +5010,20 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, handlesBackgroundBlurRequests) 
     EXPECT_CALL(*layer1.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer1.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer2.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(false, false, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer3.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
 
     layer2.layerFEState.backgroundBlurRadius = 10;
@@ -5012,17 +5053,20 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, handlesBlurRegionRequests) {
     EXPECT_CALL(*layer1.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer1.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer1.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer2.outputLayer, updateCompositionState(false, true, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer2.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer2.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
     EXPECT_CALL(*layer3.outputLayer, updateCompositionState(false, false, ui::Transform::ROT_0, _));
     EXPECT_CALL(*layer3.outputLayer,
                 writeStateToHWC(/*includeGeometry*/ false, /*skipLayer*/ false, z++,
-                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false));
+                                /*zIsOverridden*/ false, /*isPeekingThrough*/ false,
+                                /*hasLutsProperties*/ false));
     EXPECT_CALL(*layer3.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
 
     BlurRegion region;
@@ -5035,6 +5079,133 @@ TEST_F(OutputUpdateAndWriteCompositionStateTest, handlesBlurRegionRequests) {
 
     mOutput->editState().isEnabled = true;
 
+    CompositionRefreshArgs args;
+    args.updatingGeometryThisFrame = false;
+    args.devOptForceClientComposition = false;
+    mOutput->updateCompositionState(args);
+    mOutput->planComposition();
+    mOutput->writeCompositionState(args);
+}
+
+TEST_F(OutputUpdateAndWriteCompositionStateTest, assignsDisplayProfileBasedOnLayerPriority) {
+    if (!com_android_graphics_libgui_flags_apply_picture_profiles()) {
+        GTEST_SKIP() << "Feature flag disabled, skipping";
+    }
+
+    mOutput->setDisplayIdForTest(PhysicalDisplayId::fromPort(1));
+    // Has only one display-global picture processing pipeline
+    mOutput->setHasPictureProcessingForTest(true);
+    mOutput->setMaxLayerPictureProfilesForTest(0);
+
+    InjectedLayer layer1;
+    injectOutputLayer(layer1);
+    PictureProfileHandle profileForLayer1(1);
+    EXPECT_CALL(*layer1.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(1));
+    EXPECT_CALL(*layer1.outputLayer, getPictureProfileHandle())
+            .WillRepeatedly(ReturnRef(profileForLayer1));
+
+    InjectedLayer layer2;
+    injectOutputLayer(layer2);
+    PictureProfileHandle profileForLayer2(2);
+    EXPECT_CALL(*layer2.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(3));
+    EXPECT_CALL(*layer2.outputLayer, getPictureProfileHandle())
+            .WillRepeatedly(ReturnRef(profileForLayer2));
+
+    InjectedLayer layer3;
+    injectOutputLayer(layer3);
+    PictureProfileHandle profileForLayer3(3);
+    EXPECT_CALL(*layer3.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(2));
+    EXPECT_CALL(*layer3.outputLayer, getPictureProfileHandle())
+            .WillRepeatedly(ReturnRef(profileForLayer3));
+
+    // Because StrictMock
+    EXPECT_CALL(*layer1.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
+    EXPECT_CALL(*layer1.outputLayer, updateCompositionState(_, _, _, _));
+    EXPECT_CALL(*layer1.outputLayer, writeStateToHWC(_, _, _, _, _, _));
+    EXPECT_CALL(*layer2.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
+    EXPECT_CALL(*layer2.outputLayer, updateCompositionState(_, _, _, _));
+    EXPECT_CALL(*layer2.outputLayer, writeStateToHWC(_, _, _, _, _, _));
+    EXPECT_CALL(*layer3.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
+    EXPECT_CALL(*layer3.outputLayer, updateCompositionState(_, _, _, _));
+    EXPECT_CALL(*layer3.outputLayer, writeStateToHWC(_, _, _, _, _, _));
+
+    // No layer picture profiles should be committed
+    EXPECT_CALL(*layer1.outputLayer, commitPictureProfileToCompositionState).Times(0);
+    EXPECT_CALL(*layer2.outputLayer, commitPictureProfileToCompositionState).Times(0);
+    EXPECT_CALL(*layer3.outputLayer, commitPictureProfileToCompositionState).Times(0);
+
+    // Sets display picture profile to the highest priority layer's profile
+    EXPECT_CALL(mHwComposer, setDisplayPictureProfileHandle(_, Eq(profileForLayer2)));
+
+    // Marks only the highest priority layer as committed
+    EXPECT_CALL(*layer1.layerFE, onPictureProfileCommitted).Times(0);
+    EXPECT_CALL(*layer2.layerFE, onPictureProfileCommitted);
+    EXPECT_CALL(*layer3.layerFE, onPictureProfileCommitted).Times(0);
+
+    mOutput->editState().isEnabled = true;
+    CompositionRefreshArgs args;
+    args.updatingGeometryThisFrame = false;
+    args.devOptForceClientComposition = false;
+    mOutput->updateCompositionState(args);
+    mOutput->planComposition();
+    mOutput->writeCompositionState(args);
+}
+
+TEST_F(OutputUpdateAndWriteCompositionStateTest, assignsLayerProfileBasedOnLayerPriority) {
+    if (!com_android_graphics_libgui_flags_apply_picture_profiles()) {
+        GTEST_SKIP() << "Feature flag disabled, skipping";
+    }
+    mOutput->setDisplayIdForTest(PhysicalDisplayId::fromPort(1));
+    // Has 2 layer-specific picture processing pipelines
+    mOutput->setHasPictureProcessingForTest(true);
+    mOutput->setMaxLayerPictureProfilesForTest(2);
+
+    InjectedLayer layer1;
+    injectOutputLayer(layer1);
+    PictureProfileHandle profileForLayer1(1);
+    EXPECT_CALL(*layer1.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(1));
+    EXPECT_CALL(*layer1.outputLayer, getPictureProfileHandle())
+            .WillRepeatedly(ReturnRef(profileForLayer1));
+
+    InjectedLayer layer2;
+    injectOutputLayer(layer2);
+    PictureProfileHandle profileForLayer2(2);
+    EXPECT_CALL(*layer2.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(3));
+    EXPECT_CALL(*layer2.outputLayer, getPictureProfileHandle())
+            .WillRepeatedly(ReturnRef(profileForLayer2));
+
+    InjectedLayer layer3;
+    injectOutputLayer(layer3);
+    PictureProfileHandle profileForLayer3(3);
+    EXPECT_CALL(*layer3.outputLayer, getPictureProfilePriority()).WillRepeatedly(Return(2));
+    EXPECT_CALL(*layer3.outputLayer, getPictureProfileHandle())
+            .WillRepeatedly(ReturnRef(profileForLayer3));
+
+    // Because StrictMock
+    EXPECT_CALL(*layer1.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
+    EXPECT_CALL(*layer1.outputLayer, updateCompositionState(_, _, _, _));
+    EXPECT_CALL(*layer1.outputLayer, writeStateToHWC(_, _, _, _, _, _));
+    EXPECT_CALL(*layer2.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
+    EXPECT_CALL(*layer2.outputLayer, updateCompositionState(_, _, _, _));
+    EXPECT_CALL(*layer2.outputLayer, writeStateToHWC(_, _, _, _, _, _));
+    EXPECT_CALL(*layer3.outputLayer, requiresClientComposition()).WillRepeatedly(Return(false));
+    EXPECT_CALL(*layer3.outputLayer, updateCompositionState(_, _, _, _));
+    EXPECT_CALL(*layer3.outputLayer, writeStateToHWC(_, _, _, _, _, _));
+
+    // The two highest priority layers should have their picture profiles committed
+    EXPECT_CALL(*layer1.outputLayer, commitPictureProfileToCompositionState).Times(0);
+    EXPECT_CALL(*layer2.outputLayer, commitPictureProfileToCompositionState);
+    EXPECT_CALL(*layer3.outputLayer, commitPictureProfileToCompositionState);
+
+    // Marks only the highest priority layers as committed
+    EXPECT_CALL(*layer1.layerFE, onPictureProfileCommitted).Times(0);
+    EXPECT_CALL(*layer2.layerFE, onPictureProfileCommitted);
+    EXPECT_CALL(*layer3.layerFE, onPictureProfileCommitted);
+
+    // No display picture profile is sent
+    EXPECT_CALL(mHwComposer, setDisplayPictureProfileHandle).Times(0);
+
+    mOutput->editState().isEnabled = true;
     CompositionRefreshArgs args;
     args.updatingGeometryThisFrame = false;
     args.devOptForceClientComposition = false;

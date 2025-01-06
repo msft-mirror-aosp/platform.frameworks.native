@@ -252,19 +252,13 @@ private:
     // to transfer focus to a new application.
     std::shared_ptr<const EventEntry> mNextUnblockedEvent GUARDED_BY(mLock);
 
-    sp<android::gui::WindowInfoHandle> findTouchedWindowAtLocked(
-            ui::LogicalDisplayId displayId, float x, float y, bool isStylus = false,
-            bool ignoreDragWindow = false) const REQUIRES(mLock);
     std::vector<InputTarget> findOutsideTargetsLocked(
             ui::LogicalDisplayId displayId, const sp<android::gui::WindowInfoHandle>& touchedWindow,
             int32_t pointerId) const REQUIRES(mLock);
 
-    std::vector<sp<android::gui::WindowInfoHandle>> findTouchedSpyWindowsAtLocked(
-            ui::LogicalDisplayId displayId, float x, float y, bool isStylus,
-            DeviceId deviceId) const REQUIRES(mLock);
-
-    sp<android::gui::WindowInfoHandle> findTouchedForegroundWindowLocked(
-            ui::LogicalDisplayId displayId) const REQUIRES(mLock);
+    static sp<android::gui::WindowInfoHandle> findTouchedForegroundWindow(
+            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay,
+            ui::LogicalDisplayId displayId);
 
     std::shared_ptr<Connection> getConnectionLocked(const sp<IBinder>& inputConnectionToken) const
             REQUIRES(mLock);
@@ -368,24 +362,62 @@ private:
     };
     sp<gui::WindowInfosListener> mWindowInfoListener;
 
-    std::unordered_map<ui::LogicalDisplayId /*displayId*/,
-                       std::vector<sp<android::gui::WindowInfoHandle>>>
-            mWindowHandlesByDisplay GUARDED_BY(mLock);
-    std::unordered_map<ui::LogicalDisplayId /*displayId*/, android::gui::DisplayInfo> mDisplayInfos
-            GUARDED_BY(mLock);
+    class DispatcherWindowInfo {
+    public:
+        void setWindowHandlesForDisplay(
+                ui::LogicalDisplayId displayId,
+                std::vector<sp<android::gui::WindowInfoHandle>>&& windowHandles);
+
+        void setDisplayInfos(const std::vector<android::gui::DisplayInfo>& displayInfos);
+
+        void removeDisplay(ui::LogicalDisplayId displayId);
+
+        // Get a reference to window handles by display, return an empty vector if not found.
+        const std::vector<sp<android::gui::WindowInfoHandle>>& getWindowHandlesForDisplay(
+                ui::LogicalDisplayId displayId) const;
+
+        void forEachWindowHandle(
+                std::function<void(const sp<android::gui::WindowInfoHandle>&)> f) const;
+
+        void forEachDisplayId(std::function<void(ui::LogicalDisplayId)> f) const;
+
+        // Get the transform for display, returns Identity-transform if display is missing.
+        ui::Transform getDisplayTransform(ui::LogicalDisplayId displayId) const;
+
+        // Lookup for WindowInfoHandle from token and optionally a display-id. In cases where
+        // display-id is not provided lookup is done for all displays.
+        sp<android::gui::WindowInfoHandle> findWindowHandle(
+                const sp<IBinder>& windowHandleToken,
+                std::optional<ui::LogicalDisplayId> displayId = {}) const;
+
+        bool isWindowPresent(const sp<android::gui::WindowInfoHandle>& windowHandle) const;
+
+        // Returns the touched window at the given location, excluding the ignoreWindow if provided.
+        sp<android::gui::WindowInfoHandle> findTouchedWindowAt(
+                ui::LogicalDisplayId displayId, float x, float y, bool isStylus = false,
+                const sp<android::gui::WindowInfoHandle> ignoreWindow = nullptr) const;
+
+        std::vector<sp<android::gui::WindowInfoHandle>> findTouchedSpyWindowsAt(
+                ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId,
+                const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay)
+                const;
+
+        std::string dumpDisplayAndWindowInfo() const;
+
+    private:
+        std::unordered_map<ui::LogicalDisplayId /*displayId*/,
+                           std::vector<sp<android::gui::WindowInfoHandle>>>
+                mWindowHandlesByDisplay;
+        std::unordered_map<ui::LogicalDisplayId /*displayId*/, android::gui::DisplayInfo>
+                mDisplayInfos;
+    };
+
+    DispatcherWindowInfo mWindowInfos GUARDED_BY(mLock);
+
     void setInputWindowsLocked(
             const std::vector<sp<android::gui::WindowInfoHandle>>& inputWindowHandles,
             ui::LogicalDisplayId displayId) REQUIRES(mLock);
-    // Get a reference to window handles by display, return an empty vector if not found.
-    const std::vector<sp<android::gui::WindowInfoHandle>>& getWindowHandlesLocked(
-            ui::LogicalDisplayId displayId) const REQUIRES(mLock);
-    ui::Transform getTransformLocked(ui::LogicalDisplayId displayId) const REQUIRES(mLock);
 
-    sp<android::gui::WindowInfoHandle> getWindowHandleLocked(
-            const sp<IBinder>& windowHandleToken,
-            std::optional<ui::LogicalDisplayId> displayId = {}) const REQUIRES(mLock);
-    sp<android::gui::WindowInfoHandle> getWindowHandleLocked(
-            const sp<android::gui::WindowInfoHandle>& windowHandle) const REQUIRES(mLock);
     sp<android::gui::WindowInfoHandle> getFocusedWindowHandleLocked(
             ui::LogicalDisplayId displayId) const REQUIRES(mLock);
     bool canWindowReceiveMotionLocked(const sp<android::gui::WindowInfoHandle>& window,
@@ -550,10 +582,6 @@ private:
     std::vector<Monitor> selectResponsiveMonitorsLocked(
             const std::vector<Monitor>& gestureMonitors) const REQUIRES(mLock);
 
-    std::optional<InputTarget> createInputTargetLocked(
-            const sp<android::gui::WindowInfoHandle>& windowHandle,
-            InputTarget::DispatchMode dispatchMode, ftl::Flags<InputTarget::Flags> targetFlags,
-            std::optional<nsecs_t> firstDownTimeInTarget) const REQUIRES(mLock);
     void addWindowTargetLocked(const sp<android::gui::WindowInfoHandle>& windowHandle,
                                InputTarget::DispatchMode dispatchMode,
                                ftl::Flags<InputTarget::Flags> targetFlags,
@@ -696,13 +724,19 @@ private:
             bool handled) REQUIRES(mLock);
 
     // Find touched state and touched window by token.
-    std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
-    findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) REQUIRES(mLock);
+    static std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
+    findTouchStateWindowAndDisplay(
+            const sp<IBinder>& token,
+            std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
 
-    std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
-    findTouchStateWindowAndDisplayLocked(const sp<IBinder>& token) const REQUIRES(mLock);
-    bool windowHasTouchingPointersLocked(const sp<android::gui::WindowInfoHandle>& windowHandle,
-                                         DeviceId deviceId) const REQUIRES(mLock);
+    static std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
+    findTouchStateWindowAndDisplay(
+            const sp<IBinder>& token,
+            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
+
+    static bool windowHasTouchingPointers(
+            const sp<android::gui::WindowInfoHandle>& windowHandle, DeviceId deviceId,
+            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
 
     // Statistics gathering.
     nsecs_t mLastStatisticPushTime = 0;

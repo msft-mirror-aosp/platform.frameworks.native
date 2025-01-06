@@ -40,6 +40,7 @@
 #include <gui/TraceUtils.h>
 #include <private/gui/BufferQueueThreadState.h>
 
+#include <utils/Errors.h>
 #include <utils/Log.h>
 #include <utils/Trace.h>
 
@@ -108,9 +109,9 @@ status_t BufferQueueProducer::requestBuffer(int slot, sp<GraphicBuffer>* buf) {
         return NO_INIT;
     }
 
-    if (slot < 0 || slot >= BufferQueueDefs::NUM_BUFFER_SLOTS) {
-        BQ_LOGE("requestBuffer: slot index %d out of range [0, %d)",
-                slot, BufferQueueDefs::NUM_BUFFER_SLOTS);
+    int maxSlot = mCore->getTotalSlotCountLocked();
+    if (slot < 0 || slot >= maxSlot) {
+        BQ_LOGE("requestBuffer: slot index %d out of range [0, %d)", slot, maxSlot);
         return BAD_VALUE;
     } else if (!mSlots[slot].mBufferState.isDequeued()) {
         BQ_LOGE("requestBuffer: slot %d is not owned by the producer "
@@ -122,6 +123,49 @@ status_t BufferQueueProducer::requestBuffer(int slot, sp<GraphicBuffer>* buf) {
     *buf = mSlots[slot].mGraphicBuffer;
     return NO_ERROR;
 }
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+status_t BufferQueueProducer::extendSlotCount(int size) {
+    ATRACE_CALL();
+
+    sp<IConsumerListener> listener;
+    {
+        std::lock_guard<std::mutex> lock(mCore->mMutex);
+        BQ_LOGV("extendSlotCount: size %d", size);
+
+        if (mCore->mIsAbandoned) {
+            BQ_LOGE("extendSlotCount: BufferQueue has been abandoned");
+            return NO_INIT;
+        }
+
+        if (!mCore->mAllowExtendedSlotCount) {
+            BQ_LOGE("extendSlotCount: Consumer did not allow unlimited slots");
+            return INVALID_OPERATION;
+        }
+
+        int maxBeforeExtension = mCore->mMaxBufferCount;
+
+        if (size == maxBeforeExtension) {
+            return NO_ERROR;
+        }
+
+        if (size < maxBeforeExtension) {
+            return BAD_VALUE;
+        }
+
+        if (status_t ret = mCore->extendSlotCountLocked(size); ret != OK) {
+            return ret;
+        }
+        listener = mCore->mConsumerListener;
+    }
+
+    if (listener) {
+        listener->onSlotCountChanged(size);
+    }
+
+    return NO_ERROR;
+}
+#endif
 
 status_t BufferQueueProducer::setMaxDequeuedBufferCount(
         int maxDequeuedBuffers) {
@@ -170,9 +214,10 @@ status_t BufferQueueProducer::setMaxDequeuedBufferCount(int maxDequeuedBuffers,
         int bufferCount = mCore->getMinUndequeuedBufferCountLocked();
         bufferCount += maxDequeuedBuffers;
 
-        if (bufferCount > BufferQueueDefs::NUM_BUFFER_SLOTS) {
+        if (bufferCount > mCore->getTotalSlotCountLocked()) {
             BQ_LOGE("setMaxDequeuedBufferCount: bufferCount %d too large "
-                    "(max %d)", bufferCount, BufferQueueDefs::NUM_BUFFER_SLOTS);
+                    "(max %d)",
+                    bufferCount, mCore->getTotalSlotCountLocked());
             return BAD_VALUE;
         }
 
@@ -451,8 +496,10 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
     }
 
     status_t returnFlags = NO_ERROR;
+#if !COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_GL_FENCE_CLEANUP)
     EGLDisplay eglDisplay = EGL_NO_DISPLAY;
     EGLSyncKHR eglFence = EGL_NO_SYNC_KHR;
+#endif
     bool attachedByConsumer = false;
 
     sp<IConsumerListener> listener;
@@ -569,8 +616,10 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
             mSlots[found].mAcquireCalled = false;
             mSlots[found].mGraphicBuffer = nullptr;
             mSlots[found].mRequestBufferCalled = false;
+#if !COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_GL_FENCE_CLEANUP)
             mSlots[found].mEglDisplay = EGL_NO_DISPLAY;
             mSlots[found].mEglFence = EGL_NO_SYNC_KHR;
+#endif
             mSlots[found].mFence = Fence::NO_FENCE;
             mCore->mBufferAge = 0;
             mCore->mIsAllocating = true;
@@ -595,14 +644,18 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
                     found, buffer->width, buffer->height, buffer->format);
         }
 
+#if !COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_GL_FENCE_CLEANUP)
         eglDisplay = mSlots[found].mEglDisplay;
         eglFence = mSlots[found].mEglFence;
+#endif
         // Don't return a fence in shared buffer mode, except for the first
         // frame.
         *outFence = (mCore->mSharedBufferMode &&
                 mCore->mSharedBufferSlot == found) ?
                 Fence::NO_FENCE : mSlots[found].mFence;
+#if !COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_GL_FENCE_CLEANUP)
         mSlots[found].mEglFence = EGL_NO_SYNC_KHR;
+#endif
         mSlots[found].mFence = Fence::NO_FENCE;
 
         // If shared buffer mode has just been enabled, cache the slot of the
@@ -691,6 +744,7 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
         returnFlags |= BUFFER_NEEDS_REALLOCATION;
     }
 
+#if !COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_GL_FENCE_CLEANUP)
     if (eglFence != EGL_NO_SYNC_KHR) {
         EGLint result = eglClientWaitSyncKHR(eglDisplay, eglFence, 0,
                 1000000000);
@@ -705,6 +759,7 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
         }
         eglDestroySyncKHR(eglDisplay, eglFence);
     }
+#endif
 
     BQ_LOGV("dequeueBuffer: returning slot=%d/%" PRIu64 " buf=%p flags=%#x",
             *outSlot,
@@ -746,9 +801,9 @@ status_t BufferQueueProducer::detachBuffer(int slot) {
             return BAD_VALUE;
         }
 
-        if (slot < 0 || slot >= BufferQueueDefs::NUM_BUFFER_SLOTS) {
-            BQ_LOGE("detachBuffer: slot index %d out of range [0, %d)",
-                    slot, BufferQueueDefs::NUM_BUFFER_SLOTS);
+        const int totalSlotCount = mCore->getTotalSlotCountLocked();
+        if (slot < 0 || slot >= totalSlotCount) {
+            BQ_LOGE("detachBuffer: slot index %d out of range [0, %d)", slot, totalSlotCount);
             return BAD_VALUE;
         } else if (!mSlots[slot].mBufferState.isDequeued()) {
             // TODO(http://b/140581935): This message is BQ_LOGW because it
@@ -908,7 +963,9 @@ status_t BufferQueueProducer::attachBuffer(int* outSlot,
 
     mSlots[*outSlot].mGraphicBuffer = buffer;
     mSlots[*outSlot].mBufferState.attachProducer();
+#if !COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_GL_FENCE_CLEANUP)
     mSlots[*outSlot].mEglFence = EGL_NO_SYNC_KHR;
+#endif
     mSlots[*outSlot].mFence = Fence::NO_FENCE;
     mSlots[*outSlot].mRequestBufferCalled = true;
     mSlots[*outSlot].mAcquireCalled = false;
@@ -938,6 +995,8 @@ status_t BufferQueueProducer::queueBuffer(int slot,
             &getFrameTimestamps);
     const Region& surfaceDamage = input.getSurfaceDamage();
     const HdrMetadata& hdrMetadata = input.getHdrMetadata();
+    const std::optional<PictureProfileHandle>& pictureProfileHandle =
+            input.getPictureProfileHandle();
 
     if (acquireFence == nullptr) {
         BQ_LOGE("queueBuffer: fence is NULL");
@@ -979,9 +1038,9 @@ status_t BufferQueueProducer::queueBuffer(int slot,
             return NO_INIT;
         }
 
-        if (slot < 0 || slot >= BufferQueueDefs::NUM_BUFFER_SLOTS) {
-            BQ_LOGE("queueBuffer: slot index %d out of range [0, %d)",
-                    slot, BufferQueueDefs::NUM_BUFFER_SLOTS);
+        const int totalSlotCount = mCore->getTotalSlotCountLocked();
+        if (slot < 0 || slot >= totalSlotCount) {
+            BQ_LOGE("queueBuffer: slot index %d out of range [0, %d)", slot, totalSlotCount);
             return BAD_VALUE;
         } else if (!mSlots[slot].mBufferState.isDequeued()) {
             BQ_LOGE("queueBuffer: slot %d is not owned by the producer "
@@ -1044,6 +1103,7 @@ status_t BufferQueueProducer::queueBuffer(int slot,
         item.mIsAutoTimestamp = isAutoTimestamp;
         item.mDataSpace = dataSpace;
         item.mHdrMetadata = hdrMetadata;
+        item.mPictureProfileHandle = pictureProfileHandle;
         item.mFrameNumber = currentFrameNumber;
         item.mSlot = slot;
         item.mFence = acquireFence;
@@ -1224,9 +1284,9 @@ status_t BufferQueueProducer::cancelBuffer(int slot, const sp<Fence>& fence) {
             return BAD_VALUE;
         }
 
-        if (slot < 0 || slot >= BufferQueueDefs::NUM_BUFFER_SLOTS) {
-            BQ_LOGE("cancelBuffer: slot index %d out of range [0, %d)", slot,
-                    BufferQueueDefs::NUM_BUFFER_SLOTS);
+        const int totalSlotCount = mCore->getTotalSlotCountLocked();
+        if (slot < 0 || slot >= totalSlotCount) {
+            BQ_LOGE("cancelBuffer: slot index %d out of range [0, %d)", slot, totalSlotCount);
             return BAD_VALUE;
         } else if (!mSlots[slot].mBufferState.isDequeued()) {
             BQ_LOGE("cancelBuffer: slot %d is not owned by the producer "
@@ -1394,6 +1454,9 @@ status_t BufferQueueProducer::connect(const sp<IProducerListener>& listener,
             output->nextFrameNumber = mCore->mFrameCounter + 1;
             output->bufferReplaced = false;
             output->maxBufferCount = mCore->mMaxBufferCount;
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+            output->isSlotExpansionAllowed = mCore->mAllowExtendedSlotCount;
+#endif
 
             if (listener != nullptr) {
                 // Set up a death notification so that we can disconnect

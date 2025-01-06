@@ -17,7 +17,9 @@
 #ifndef ANDROID_GUI_BLAST_BUFFER_QUEUE_H
 #define ANDROID_GUI_BLAST_BUFFER_QUEUE_H
 
-#include <com_android_graphics_libgui_flags.h>
+#include <optional>
+#include <queue>
+
 #include <gui/BufferItem.h>
 #include <gui/BufferItemConsumer.h>
 #include <gui/IGraphicBufferConsumer.h>
@@ -29,7 +31,6 @@
 #include <utils/RefBase.h>
 
 #include <system/window.h>
-#include <queue>
 
 #include <com_android_graphics_libgui_flags.h>
 
@@ -143,6 +144,12 @@ public:
      */
     void setTransactionHangCallback(std::function<void(const std::string&)> callback);
     void setApplyToken(sp<IBinder>);
+
+    void setWaitForBufferReleaseCallback(std::function<void()> callback)
+            EXCLUDES(mWaitForBufferReleaseMutex);
+    std::function<void()> getWaitForBufferReleaseCallback() const
+            EXCLUDES(mWaitForBufferReleaseMutex);
+
     virtual ~BLASTBufferQueue();
 
     void onFirstRef() override;
@@ -185,6 +192,7 @@ private:
     sp<SurfaceControl> mSurfaceControl GUARDED_BY(mMutex);
 
     mutable std::mutex mMutex;
+    mutable std::mutex mWaitForBufferReleaseMutex;
     std::condition_variable mCallbackCV;
 
     // BufferQueue internally allows 1 more than
@@ -221,6 +229,10 @@ private:
     ui::Size mSize GUARDED_BY(mMutex);
     ui::Size mRequestedSize GUARDED_BY(mMutex);
     int32_t mFormat GUARDED_BY(mMutex);
+
+    // Keep a copy of the current picture profile handle, so it can be moved to a new
+    // SurfaceControl when BBQ migrates via ::update.
+    std::optional<PictureProfileHandle> mPictureProfileHandle;
 
     struct BufferInfo {
         bool hasBuffer = false;
@@ -319,6 +331,7 @@ private:
 
     std::unordered_set<uint64_t> mSyncedFrameNumbers GUARDED_BY(mMutex);
 
+    std::function<void()> mWaitForBufferReleaseCallback GUARDED_BY(mWaitForBufferReleaseMutex);
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BUFFER_RELEASE_CHANNEL)
     // BufferReleaseChannel is used to communicate buffer releases from SurfaceFlinger to the
     // client.

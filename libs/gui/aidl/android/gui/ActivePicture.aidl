@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 The Android Open Source Project
+ * Copyright 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-// TODO(b/349936395): set to true for Trusty
-#define API_LEVEL_AT_LEAST(sdk_api_level, vendor_api_level) (false)
+package android.gui;
+
+/**
+ * Visible content that is using picture processing.
+ * @hide
+ */
+parcelable ActivePicture {
+    /** The layer ID that is using picture processing. */
+    int layerId;
+
+    /** UID that owns layer using picture processing. */
+    int ownerUid;
+
+    /** ID of the picture profile that was used to configure the picture processing. */
+    long pictureProfileId;
+}

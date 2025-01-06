@@ -20,6 +20,8 @@
 #include "Constants.h"
 #include "MockConsumer.h"
 
+#include <EGL/egl.h>
+
 #include <gui/BufferItem.h>
 #include <gui/BufferItemConsumer.h>
 #include <gui/BufferQueue.h>
@@ -27,6 +29,7 @@
 #include <gui/Surface.h>
 
 #include <ui/GraphicBuffer.h>
+#include <ui/PictureProfileHandle.h>
 
 #include <android-base/properties.h>
 
@@ -43,7 +46,9 @@
 #include <gtest/gtest.h>
 
 #include <future>
+#include <optional>
 #include <thread>
+#include <unordered_map>
 
 #include <com_android_graphics_libgui_flags.h>
 
@@ -424,8 +429,7 @@ TEST_F(BufferQueueTest, DetachAndReattachOnConsumerSide) {
     ASSERT_EQ(BAD_VALUE, mConsumer->attachBuffer(&newSlot, nullptr));
     ASSERT_EQ(OK, mConsumer->attachBuffer(&newSlot, item.mGraphicBuffer));
 
-    ASSERT_EQ(OK, mConsumer->releaseBuffer(newSlot, 0, EGL_NO_DISPLAY,
-            EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+    ASSERT_EQ(OK, mConsumer->releaseBuffer(newSlot, 0, Fence::NO_FENCE));
 
     ASSERT_EQ(IGraphicBufferProducer::BUFFER_NEEDS_REALLOCATION,
               mProducer->dequeueBuffer(&slot, &fence, 0, 0, 0, GRALLOC_USAGE_SW_WRITE_OFTEN,
@@ -608,8 +612,7 @@ TEST_F(BufferQueueTest, TestSharedBufferModeWithoutAutoRefresh) {
     ASSERT_EQ(true, item.mQueuedBuffer);
     ASSERT_EQ(false, item.mAutoRefresh);
 
-    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-            EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
 
     // attempt to acquire a second time should return no buffer available
     ASSERT_EQ(IGraphicBufferConsumer::NO_BUFFER_AVAILABLE,
@@ -652,8 +655,7 @@ TEST_F(BufferQueueTest, TestSharedBufferModeWithAutoRefresh) {
         ASSERT_EQ(i == 0, item.mQueuedBuffer);
         ASSERT_EQ(true, item.mAutoRefresh);
 
-        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-                EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
     }
 
     // Repeatedly queue and dequeue a buffer from the producer side, it should
@@ -683,8 +685,7 @@ TEST_F(BufferQueueTest, TestSharedBufferModeWithAutoRefresh) {
         ASSERT_EQ(i == 0, item.mQueuedBuffer);
         ASSERT_EQ(true, item.mAutoRefresh);
 
-        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-                EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
     }
 }
 
@@ -734,8 +735,7 @@ TEST_F(BufferQueueTest, TestSharedBufferModeUsingAlreadyDequeuedBuffer) {
     ASSERT_EQ(true, item.mQueuedBuffer);
     ASSERT_EQ(false, item.mAutoRefresh);
 
-    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-            EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
 
     // attempt to acquire a second time should return no buffer available
     ASSERT_EQ(IGraphicBufferConsumer::NO_BUFFER_AVAILABLE,
@@ -873,8 +873,7 @@ TEST_F(BufferQueueTest, CanRetrieveLastQueuedBuffer) {
     for (size_t i = 0; i < 2; ++i) {
         BufferItem item;
         ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
-        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-                    EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
     }
 
     // Make sure we got the second buffer back
@@ -928,8 +927,7 @@ TEST_F(BufferQueueTest, TestOccupancyHistory) {
                                            nullptr, nullptr));
         ASSERT_EQ(OK, mProducer->queueBuffer(slot, input, &output));
         ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
-        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-                EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
         std::this_thread::sleep_for(16ms);
     }
 
@@ -945,8 +943,7 @@ TEST_F(BufferQueueTest, TestOccupancyHistory) {
                                            nullptr, nullptr));
         ASSERT_EQ(OK, mProducer->queueBuffer(slot, input, &output));
         ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
-        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-                EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
         std::this_thread::sleep_for(16ms);
     }
     ASSERT_EQ(OK,
@@ -958,12 +955,10 @@ TEST_F(BufferQueueTest, TestOccupancyHistory) {
                                        nullptr));
     ASSERT_EQ(OK, mProducer->queueBuffer(slot, input, &output));
     ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
-    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-            EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
     std::this_thread::sleep_for(16ms);
     ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
-    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-            EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
 
     // Sleep between segments
     std::this_thread::sleep_for(500ms);
@@ -980,13 +975,11 @@ TEST_F(BufferQueueTest, TestOccupancyHistory) {
                                            nullptr, nullptr));
         ASSERT_EQ(OK, mProducer->queueBuffer(slot, input, &output));
         ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
-        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-                    EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+        ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
         std::this_thread::sleep_for(16ms);
     }
     ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
-    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-            EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
 
     // Now we read the segments
     std::vector<OccupancyTracker::Segment> history;
@@ -1107,8 +1100,7 @@ TEST_F(BufferQueueTest, TestDiscardFreeBuffers) {
 
     // Acquire and free 1 buffer
     ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
-    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-                    EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
     int releasedSlot = item.mSlot;
 
     // Acquire 1 buffer, leaving 1 filled buffer in queue
@@ -1375,8 +1367,7 @@ TEST_F(BufferQueueTest, TestStaleBufferHandleSentAfterDisconnect) {
     ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
     ASSERT_EQ(slot, item.mSlot);
     ASSERT_NE(nullptr, item.mGraphicBuffer.get());
-    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-            EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
 
     // Dequeue and queue the buffer again
     ASSERT_EQ(OK,
@@ -1389,8 +1380,7 @@ TEST_F(BufferQueueTest, TestStaleBufferHandleSentAfterDisconnect) {
     ASSERT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
     ASSERT_EQ(slot, item.mSlot);
     ASSERT_EQ(nullptr, item.mGraphicBuffer.get());
-    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber,
-            EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, Fence::NO_FENCE));
+    ASSERT_EQ(OK, mConsumer->releaseBuffer(item.mSlot, item.mFrameNumber, Fence::NO_FENCE));
 
     // Dequeue and queue the buffer again
     ASSERT_EQ(OK,
@@ -1569,4 +1559,278 @@ TEST_F(BufferQueueTest, TestAdditionalOptions) {
     EXPECT_EQ(ADATASPACE_UNKNOWN, dataSpace);
 }
 
+TEST_F(BufferQueueTest, PassesThroughPictureProfileHandle) {
+    createBufferQueue();
+    sp<MockConsumer> mc(new MockConsumer);
+    mConsumer->consumerConnect(mc, false);
+
+    IGraphicBufferProducer::QueueBufferOutput qbo;
+    mProducer->connect(new StubProducerListener, NATIVE_WINDOW_API_CPU, false, &qbo);
+    mProducer->setMaxDequeuedBufferCount(2);
+    mConsumer->setMaxAcquiredBufferCount(2);
+
+    // First try to pass a valid picture profile handle
+    {
+        int slot;
+        sp<Fence> fence;
+        sp<GraphicBuffer> buf;
+        IGraphicBufferProducer::QueueBufferInput qbi(0, false, HAL_DATASPACE_UNKNOWN,
+                                                     Rect(0, 0, 1, 1),
+                                                     NATIVE_WINDOW_SCALING_MODE_FREEZE, 0,
+                                                     Fence::NO_FENCE);
+        qbi.setPictureProfileHandle(PictureProfileHandle(1));
+
+        EXPECT_EQ(IGraphicBufferProducer::BUFFER_NEEDS_REALLOCATION,
+                  mProducer->dequeueBuffer(&slot, &fence, 1, 1, 0, GRALLOC_USAGE_SW_READ_OFTEN,
+                                           nullptr, nullptr));
+        EXPECT_EQ(OK, mProducer->requestBuffer(slot, &buf));
+        EXPECT_EQ(OK, mProducer->queueBuffer(slot, qbi, &qbo));
+
+        BufferItem item;
+        EXPECT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
+
+        ASSERT_TRUE(item.mPictureProfileHandle.has_value());
+        ASSERT_EQ(item.mPictureProfileHandle, PictureProfileHandle(1));
+    }
+
+    // Then validate that the picture profile handle isn't sticky and is reset for the next buffer
+    {
+        int slot;
+        sp<Fence> fence;
+        sp<GraphicBuffer> buf;
+        IGraphicBufferProducer::QueueBufferInput qbi(0, false, HAL_DATASPACE_UNKNOWN,
+                                                     Rect(0, 0, 1, 1),
+                                                     NATIVE_WINDOW_SCALING_MODE_FREEZE, 0,
+                                                     Fence::NO_FENCE);
+
+        EXPECT_EQ(IGraphicBufferProducer::BUFFER_NEEDS_REALLOCATION,
+                  mProducer->dequeueBuffer(&slot, &fence, 1, 1, 0, GRALLOC_USAGE_SW_READ_OFTEN,
+                                           nullptr, nullptr));
+        EXPECT_EQ(OK, mProducer->requestBuffer(slot, &buf));
+        EXPECT_EQ(OK, mProducer->queueBuffer(slot, qbi, &qbo));
+
+        BufferItem item;
+        EXPECT_EQ(OK, mConsumer->acquireBuffer(&item, 0));
+
+        ASSERT_FALSE(item.mPictureProfileHandle.has_value());
+    }
+}
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+struct MockUnlimitedSlotConsumer : public MockConsumer {
+    virtual void onSlotCountChanged(int size) override { mSize = size; }
+
+    std::optional<int> mSize;
+};
+
+TEST_F(BufferQueueTest, UnlimitedSlots_FailsWhenNotAllowed) {
+    createBufferQueue();
+
+    sp<MockUnlimitedSlotConsumer> mc = sp<MockUnlimitedSlotConsumer>::make();
+    EXPECT_EQ(OK, mConsumer->consumerConnect(mc, false));
+
+    EXPECT_EQ(INVALID_OPERATION, mProducer->extendSlotCount(64));
+    EXPECT_EQ(INVALID_OPERATION, mProducer->extendSlotCount(32));
+    EXPECT_EQ(INVALID_OPERATION, mProducer->extendSlotCount(128));
+
+    EXPECT_EQ(std::nullopt, mc->mSize);
+}
+
+TEST_F(BufferQueueTest, UnlimitedSlots_OnlyAllowedForExtensions) {
+    createBufferQueue();
+
+    sp<MockUnlimitedSlotConsumer> consumerListener = sp<MockUnlimitedSlotConsumer>::make();
+    EXPECT_EQ(OK, mConsumer->consumerConnect(consumerListener, false));
+    EXPECT_EQ(OK, mConsumer->allowUnlimitedSlots(true));
+
+    EXPECT_EQ(BAD_VALUE, mProducer->extendSlotCount(32));
+    EXPECT_EQ(OK, mProducer->extendSlotCount(64));
+    EXPECT_EQ(OK, mProducer->extendSlotCount(128));
+    EXPECT_EQ(128, *consumerListener->mSize);
+
+    EXPECT_EQ(OK, mProducer->extendSlotCount(128));
+    EXPECT_EQ(BAD_VALUE, mProducer->extendSlotCount(127));
+}
+
+class BufferQueueUnlimitedTest : public BufferQueueTest {
+protected:
+    static constexpr auto kMaxBufferCount = 128;
+    static constexpr auto kAcquirableBufferCount = 2;
+    static constexpr auto kDequeableBufferCount = kMaxBufferCount - kAcquirableBufferCount;
+
+    virtual void SetUp() override {
+        BufferQueueTest::SetUp();
+
+        createBufferQueue();
+        setUpConsumer();
+        setUpProducer();
+    }
+
+    void setUpConsumer() {
+        EXPECT_EQ(OK, mConsumer->consumerConnect(mConsumerListener, false));
+
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+        EXPECT_EQ(OK, mConsumer->allowUnlimitedSlots(true));
+#endif
+        EXPECT_EQ(OK, mConsumer->setConsumerUsageBits(GraphicBuffer::USAGE_SW_READ_OFTEN));
+        EXPECT_EQ(OK, mConsumer->setDefaultBufferSize(10, 10));
+        EXPECT_EQ(OK, mConsumer->setDefaultBufferFormat(PIXEL_FORMAT_RGBA_8888));
+        EXPECT_EQ(OK, mConsumer->setMaxAcquiredBufferCount(kAcquirableBufferCount));
+    }
+
+    void setUpProducer() {
+        EXPECT_EQ(OK, mProducer->extendSlotCount(kMaxBufferCount));
+
+        IGraphicBufferProducer::QueueBufferOutput output;
+        EXPECT_EQ(OK,
+                  mProducer->connect(mProducerListener, NATIVE_WINDOW_API_CPU,
+                                     /*producerControlledByApp*/ true, &output));
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+        ASSERT_TRUE(output.isSlotExpansionAllowed);
+#endif
+        ASSERT_EQ(OK, mProducer->setMaxDequeuedBufferCount(kDequeableBufferCount));
+        ASSERT_EQ(OK, mProducer->allowAllocation(true));
+    }
+
+    std::unordered_map<int, sp<Fence>> dequeueAll() {
+        std::unordered_map<int, sp<Fence>> slotsToFences;
+
+        for (int i = 0; i < kDequeableBufferCount; ++i) {
+            int slot;
+            sp<Fence> fence;
+            sp<GraphicBuffer> buffer;
+
+            status_t ret =
+                    mProducer->dequeueBuffer(&slot, &fence, /*w*/ 0, /*h*/ 0, /*format*/ 0,
+                                             /*uint64_t*/ 0,
+                                             /*outBufferAge*/ nullptr, /*outTimestamps*/ nullptr);
+            if (ret & IGraphicBufferProducer::BUFFER_NEEDS_REALLOCATION) {
+                EXPECT_EQ(OK, mProducer->requestBuffer(slot, &buffer))
+                        << "Unable to request buffer for slot " << slot;
+            }
+            EXPECT_FALSE(slotsToFences.contains(slot));
+            slotsToFences.emplace(slot, fence);
+        }
+        EXPECT_EQ(kDequeableBufferCount, (int)slotsToFences.size());
+        return slotsToFences;
+    }
+
+    sp<MockUnlimitedSlotConsumer> mConsumerListener = sp<MockUnlimitedSlotConsumer>::make();
+    sp<StubProducerListener> mProducerListener = sp<StubProducerListener>::make();
+};
+
+TEST_F(BufferQueueUnlimitedTest, ExpandOverridesConsumerMaxBuffers) {
+    createBufferQueue();
+    setUpConsumer();
+    EXPECT_EQ(OK, mConsumer->setMaxBufferCount(10));
+
+    setUpProducer();
+
+    EXPECT_EQ(kDequeableBufferCount, (int)dequeueAll().size());
+}
+
+TEST_F(BufferQueueUnlimitedTest, CanDetachAll) {
+    auto slotsToFences = dequeueAll();
+    for (auto& [slot, fence] : slotsToFences) {
+        EXPECT_EQ(OK, mProducer->detachBuffer(slot));
+    }
+}
+
+TEST_F(BufferQueueUnlimitedTest, CanCancelAll) {
+    auto slotsToFences = dequeueAll();
+    for (auto& [slot, fence] : slotsToFences) {
+        EXPECT_EQ(OK, mProducer->cancelBuffer(slot, fence));
+    }
+}
+
+TEST_F(BufferQueueUnlimitedTest, CanAcquireAndReleaseAll) {
+    auto slotsToFences = dequeueAll();
+    for (auto& [slot, fence] : slotsToFences) {
+        IGraphicBufferProducer::QueueBufferInput input;
+        input.fence = fence;
+
+        IGraphicBufferProducer::QueueBufferOutput output;
+        EXPECT_EQ(OK, mProducer->queueBuffer(slot, input, &output));
+
+        BufferItem buffer;
+        EXPECT_EQ(OK, mConsumer->acquireBuffer(&buffer, 0));
+        EXPECT_EQ(OK,
+                  mConsumer->releaseBuffer(buffer.mSlot, buffer.mFrameNumber, EGL_NO_DISPLAY,
+                                           EGL_NO_SYNC, buffer.mFence));
+    }
+}
+
+TEST_F(BufferQueueUnlimitedTest, CanAcquireAndDetachAll) {
+    auto slotsToFences = dequeueAll();
+    for (auto& [slot, fence] : slotsToFences) {
+        IGraphicBufferProducer::QueueBufferInput input;
+        input.fence = fence;
+
+        IGraphicBufferProducer::QueueBufferOutput output;
+        EXPECT_EQ(OK, mProducer->queueBuffer(slot, input, &output));
+
+        BufferItem buffer;
+        EXPECT_EQ(OK, mConsumer->acquireBuffer(&buffer, 0));
+        EXPECT_EQ(OK, mConsumer->detachBuffer(buffer.mSlot));
+    }
+}
+
+TEST_F(BufferQueueUnlimitedTest, GetReleasedBuffersExtended) {
+    // First, acquire and release all the buffers so the consumer "knows" about
+    // them
+    auto slotsToFences = dequeueAll();
+
+    std::vector<bool> releasedSlots;
+    EXPECT_EQ(OK, mConsumer->getReleasedBuffersExtended(&releasedSlots));
+    for (auto& [slot, _] : slotsToFences) {
+        EXPECT_TRUE(releasedSlots[slot])
+                << "Slots that haven't been acquired will show up as released.";
+    }
+    for (auto& [slot, fence] : slotsToFences) {
+        IGraphicBufferProducer::QueueBufferInput input;
+        input.fence = fence;
+
+        IGraphicBufferProducer::QueueBufferOutput output;
+        EXPECT_EQ(OK, mProducer->queueBuffer(slot, input, &output));
+
+        BufferItem buffer;
+        EXPECT_EQ(OK, mConsumer->acquireBuffer(&buffer, 0));
+        EXPECT_EQ(OK,
+                  mConsumer->releaseBuffer(buffer.mSlot, buffer.mFrameNumber, EGL_NO_DISPLAY,
+                                           EGL_NO_SYNC_KHR, buffer.mFence));
+    }
+
+    EXPECT_EQ(OK, mConsumer->getReleasedBuffersExtended(&releasedSlots));
+    for (auto& [slot, _] : slotsToFences) {
+        EXPECT_FALSE(releasedSlots[slot])
+                << "Slots that have been acquired will show up as not released.";
+    }
+
+    // Then, alternatively cancel and detach (release) buffers. Only detached
+    // buffers should be returned by getReleasedBuffersExtended
+    slotsToFences = dequeueAll();
+    std::set<int> cancelledSlots;
+    std::set<int> detachedSlots;
+    bool cancel;
+    for (auto& [slot, fence] : slotsToFences) {
+        if (cancel) {
+            EXPECT_EQ(OK, mProducer->cancelBuffer(slot, fence));
+            cancelledSlots.insert(slot);
+        } else {
+            EXPECT_EQ(OK, mProducer->detachBuffer(slot));
+            detachedSlots.insert(slot);
+        }
+        cancel = !cancel;
+    }
+
+    EXPECT_EQ(OK, mConsumer->getReleasedBuffersExtended(&releasedSlots));
+    for (int slot : detachedSlots) {
+        EXPECT_TRUE(releasedSlots[slot]) << "Slots that are detached are released.";
+    }
+    for (int slot : cancelledSlots) {
+        EXPECT_FALSE(releasedSlots[slot])
+                << "Slots that are still held in the queue are not released.";
+    }
+}
+#endif //  COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
 } // namespace android

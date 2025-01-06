@@ -1264,6 +1264,15 @@ static void DumpIpAddrAndRules() {
     RunCommand("IP RULES v6", {"ip", "-6", "rule", "show"});
 }
 
+static void DumpKernelMemoryAllocations() {
+    if (!access("/proc/allocinfo", F_OK)) {
+        // Print the top 100 biggest memory allocations of at least one byte.
+        // The output is sorted by size, descending.
+        RunCommand("KERNEL MEMORY ALLOCATIONS",
+                   {"alloctop", "--once", "--sort", "s", "--min", "1", "--lines", "100"});
+    }
+}
+
 static Dumpstate::RunStatus RunDumpsysTextByPriority(const std::string& title, int priority,
                                                      std::chrono::milliseconds timeout,
                                                      std::chrono::milliseconds service_timeout) {
@@ -1772,6 +1781,8 @@ Dumpstate::RunStatus Dumpstate::dumpstate() {
     RunDumpsys("EBPF MAP STATS", {"connectivity", "trafficcontroller"});
 
     DoKmsg();
+
+    DumpKernelMemoryAllocations();
 
     DumpShutdownCheckpoints();
 
@@ -4656,7 +4667,7 @@ void Dumpstate::UpdateProgress(int32_t delta_sec) {
 void Dumpstate::TakeScreenshot(const std::string& path) {
     const std::string& real_path = path.empty() ? screenshot_path_ : path;
     int status =
-        RunCommand("", {"/system/bin/screencap", "-p", real_path},
+        RunCommand("", {"screencap", "-p", real_path},
                    CommandOptions::WithTimeout(10).Always().DropRoot().RedirectStderr().Build());
     if (status == 0) {
         MYLOGD("Screenshot saved on %s\n", real_path.c_str());

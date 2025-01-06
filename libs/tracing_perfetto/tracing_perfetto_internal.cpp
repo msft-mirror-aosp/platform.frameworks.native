@@ -47,7 +47,6 @@
 #include <atomic>
 #include <mutex>
 
-#include <android_os.h>
 #include <android-base/properties.h>
 #include <cutils/trace.h>
 #include <inttypes.h>
@@ -228,14 +227,11 @@ struct PerfettoTeCategory* toPerfettoCategory(uint64_t category) {
 }
 
 void registerWithPerfetto(bool test) {
-  if (!android::os::perfetto_sdk_tracing()) {
-    return;
-  }
-
   static std::once_flag registration;
   std::call_once(registration, [test]() {
     struct PerfettoProducerInitArgs args = PERFETTO_PRODUCER_INIT_ARGS_INIT();
     args.backends = test ? PERFETTO_BACKEND_IN_PROCESS : PERFETTO_BACKEND_SYSTEM;
+    args.shmem_size_hint_kb = 1024;
     PerfettoProducerInit(args);
     PerfettoTeInit();
     PERFETTO_TE_REGISTER_CATEGORIES(FRAMEWORK_CATEGORIES);

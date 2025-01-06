@@ -31,6 +31,9 @@
 #include <ui/Fence.h>
 #include <ui/FloatRect.h>
 #include <ui/GraphicBuffer.h>
+#include <ui/PictureProfileHandle.h>
+
+#include "DisplayHardware/Hal.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -53,6 +56,7 @@ using android::FloatRect;
 using android::GraphicBuffer;
 using android::HdrCapabilities;
 using android::HdrMetadata;
+using android::PictureProfileHandle;
 using android::Rect;
 using android::Region;
 using android::sp;
@@ -625,7 +629,7 @@ Error Display::getRequestedLuts(LayerLuts* outLuts,
         auto layer = getLayerById(layerIds[i]);
         if (layer) {
             auto& layerLut = tmpLuts[i];
-            if (layerLut.luts.pfd.get() > 0 && layerLut.luts.offsets.has_value()) {
+            if (layerLut.luts.pfd.get() >= 0 && layerLut.luts.offsets.has_value()) {
                 const auto& offsets = layerLut.luts.offsets.value();
                 std::vector<std::pair<int32_t, LutProperties>> lutOffsetsAndProperties;
                 lutOffsetsAndProperties.reserve(offsets.size());
@@ -652,6 +656,22 @@ Error Display::getDisplayDecorationSupport(
 
 Error Display::setIdleTimerEnabled(std::chrono::milliseconds timeout) {
     const auto error = mComposer.setIdleTimerEnabled(mId, timeout);
+    return static_cast<Error>(error);
+}
+
+Error Display::getMaxLayerPictureProfiles(int32_t* outMaxProfiles) {
+    const auto error = mComposer.getMaxLayerPictureProfiles(mId, outMaxProfiles);
+    return static_cast<Error>(error);
+}
+
+Error Display::setPictureProfileHandle(const PictureProfileHandle& handle) {
+    const auto error = mComposer.setDisplayPictureProfileId(mId, handle.getId());
+    return static_cast<Error>(error);
+}
+
+Error Display::getLuts(const std::vector<sp<GraphicBuffer>>& buffers,
+                       std::vector<aidl::android::hardware::graphics::composer3::Luts>* outLuts) {
+    const auto error = mComposer.getLuts(mId, buffers, outLuts);
     return static_cast<Error>(error);
 }
 
@@ -1083,6 +1103,15 @@ Error Layer::setLuts(aidl::android::hardware::graphics::composer3::Luts& luts) {
         return Error::BAD_DISPLAY;
     }
     const auto intError = mComposer.setLayerLuts(mDisplay->getId(), mId, luts);
+    return static_cast<Error>(intError);
+}
+
+Error Layer::setPictureProfileHandle(const PictureProfileHandle& handle) {
+    if (CC_UNLIKELY(!mDisplay)) {
+        return Error::BAD_DISPLAY;
+    }
+    const auto intError =
+            mComposer.setLayerPictureProfileId(mDisplay->getId(), mId, handle.getId());
     return static_cast<Error>(intError);
 }
 

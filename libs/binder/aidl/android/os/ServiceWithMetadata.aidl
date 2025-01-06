@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 The Android Open Source Project
+ * Copyright (C) 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +14,19 @@
  * limitations under the License.
  */
 
-#include "mock/DisplayHardware/MockPowerHintSessionWrapper.h"
+package android.os;
 
-namespace android::Hwc2::mock {
-
-// Explicit default instantiation is recommended.
-MockPowerHintSessionWrapper::MockPowerHintSessionWrapper()
-      : power::PowerHintSessionWrapper(nullptr) {}
-
-} // namespace android::Hwc2::mock
+/**
+ * Service binder with metadata.
+ * @hide
+ */
+parcelable ServiceWithMetadata {
+    /**
+     * IBinder to service
+     */
+    @nullable IBinder service;
+    /**
+     * boolean if the IBinder can be cached by client.
+     */
+    boolean isLazyService;
+}

@@ -17,6 +17,7 @@ cc_test {
         "IdGenerator_test.cpp",
         "InputChannel_test.cpp",
         "InputConsumer_test.cpp",
+        "InputConsumerFilteredResampling_test.cpp",
         "InputConsumerResampling_test.cpp",
         "InputDevice_test.cpp",
         "InputEvent_test.cpp",
@@ -25,6 +26,7 @@ cc_test {
         "InputVerifier_test.cpp",
         "MotionPredictor_test.cpp",
         "MotionPredictorMetricsManager_test.cpp",
+        "OneEuroFilter_test.cpp",
         "Resampler_test.cpp",
         "RingBuffer_test.cpp",
         "TestInputChannel.cpp",
@@ -56,14 +58,23 @@ cc_test {
         "-Wno-unused-parameter",
     ],
     sanitize: {
+        address: true,
         hwaddress: true,
         undefined: true,
         all_undefined: true,
         diag: {
+            cfi: true,
+            integer_overflow: true,
+            memtag_heap: true,
             undefined: true,
+            misc_undefined: [
+                "bounds",
+                "all",
+            ],
         },
     },
     shared_libs: [
+        "libaconfig_storage_read_api_cc",
         "libbase",
         "libbinder",
         "libcutils",
@@ -88,11 +99,6 @@ cc_test {
                 "libstatslog_libinput",
                 "libstatssocket_lazy",
             ],
-        },
-        host: {
-            sanitize: {
-                address: true,
-            },
         },
     },
     native_coverage: false,

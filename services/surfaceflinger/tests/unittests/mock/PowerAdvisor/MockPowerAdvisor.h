@@ -18,11 +18,11 @@
 
 #include <gmock/gmock.h>
 
-#include "DisplayHardware/PowerAdvisor.h"
+#include "PowerAdvisor/PowerAdvisor.h"
 
-namespace android::Hwc2::mock {
+namespace android::adpf::mock {
 
-class PowerAdvisor : public android::Hwc2::PowerAdvisor {
+class PowerAdvisor : public android::adpf::PowerAdvisor {
 public:
     PowerAdvisor();
     ~PowerAdvisor() override;
@@ -63,6 +63,8 @@ public:
     MOCK_METHOD(void, setCompositeEnd, (TimePoint compositeEndTime), (override));
     MOCK_METHOD(void, setDisplays, (std::vector<DisplayId> & displayIds), (override));
     MOCK_METHOD(void, setTotalFrameTargetWorkDuration, (Duration targetDuration), (override));
+    MOCK_METHOD(std::shared_ptr<SessionManager>, getSessionManager, (), (override));
+    MOCK_METHOD(sp<IBinder>, getOrCreateSessionManagerForBinder, (uid_t uid), (override));
 };
 
-} // namespace android::Hwc2::mock
+} // namespace android::adpf::mock

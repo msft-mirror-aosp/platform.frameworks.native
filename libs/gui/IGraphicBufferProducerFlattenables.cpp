@@ -20,21 +20,19 @@
 namespace android {
 
 constexpr size_t IGraphicBufferProducer::QueueBufferInput::minFlattenedSize() {
-    return sizeof(timestamp) +
-            sizeof(isAutoTimestamp) +
-            sizeof(dataSpace) +
-            sizeof(crop) +
-            sizeof(scalingMode) +
-            sizeof(transform) +
-            sizeof(stickyTransform) +
-            sizeof(getFrameTimestamps) +
-            sizeof(slot);
+    return sizeof(timestamp) + sizeof(isAutoTimestamp) + sizeof(dataSpace) + sizeof(crop) +
+            sizeof(scalingMode) + sizeof(transform) + sizeof(stickyTransform) +
+            sizeof(getFrameTimestamps) + sizeof(slot) +
+#if COM_ANDROID_GRAPHICS_LIBUI_FLAGS_APPLY_PICTURE_PROFILES
+            sizeof(decltype(pictureProfileHandle.has_value())) +
+            sizeof(decltype(pictureProfileHandle.getId()));
+#else
+            0;
+#endif // COM_ANDROID_GRAPHICS_LIBUI_FLAGS_APPLY_PICTURE_PROFILES
 }
 
 size_t IGraphicBufferProducer::QueueBufferInput::getFlattenedSize() const {
-    return minFlattenedSize() +
-            fence->getFlattenedSize() +
-            surfaceDamage.getFlattenedSize() +
+    return minFlattenedSize() + fence->getFlattenedSize() + surfaceDamage.getFlattenedSize() +
             hdrMetadata.getFlattenedSize();
 }
 
@@ -57,6 +55,12 @@ status_t IGraphicBufferProducer::QueueBufferInput::flatten(
     FlattenableUtils::write(buffer, size, transform);
     FlattenableUtils::write(buffer, size, stickyTransform);
     FlattenableUtils::write(buffer, size, getFrameTimestamps);
+#if COM_ANDROID_GRAPHICS_LIBUI_FLAGS_APPLY_PICTURE_PROFILES
+    FlattenableUtils::write(buffer, size, pictureProfileHandle.has_value());
+    FlattenableUtils::write(buffer, size,
+                            pictureProfileHandle.has_value() ? pictureProfileHandle->getId()
+                                                             : PictureProfileHandle::NONE.getId());
+#endif // COM_ANDROID_GRAPHICS_LIBUI_FLAGS_APPLY_PICTURE_PROFILES
 
     status_t result = fence->flatten(buffer, size, fds, count);
     if (result != NO_ERROR) {
@@ -91,6 +95,15 @@ status_t IGraphicBufferProducer::QueueBufferInput::unflatten(
     FlattenableUtils::read(buffer, size, transform);
     FlattenableUtils::read(buffer, size, stickyTransform);
     FlattenableUtils::read(buffer, size, getFrameTimestamps);
+#if COM_ANDROID_GRAPHICS_LIBUI_FLAGS_APPLY_PICTURE_PROFILES
+    bool hasPictureProfileHandle;
+    FlattenableUtils::read(buffer, size, hasPictureProfileHandle);
+    PictureProfileId pictureProfileId;
+    FlattenableUtils::read(buffer, size, pictureProfileId);
+    pictureProfileHandle = hasPictureProfileHandle
+            ? std::optional(PictureProfileHandle(pictureProfileId))
+            : std::nullopt;
+#endif // COM_ANDROID_GRAPHICS_LIBUI_FLAGS_APPLY_PICTURE_PROFILES
 
     fence = new Fence();
     status_t result = fence->unflatten(buffer, size, fds, count);
@@ -115,7 +128,7 @@ status_t IGraphicBufferProducer::QueueBufferInput::unflatten(
 constexpr size_t IGraphicBufferProducer::QueueBufferOutput::minFlattenedSize() {
     return sizeof(width) + sizeof(height) + sizeof(transformHint) + sizeof(numPendingBuffers) +
             sizeof(nextFrameNumber) + sizeof(bufferReplaced) + sizeof(maxBufferCount) +
-            sizeof(result);
+            sizeof(result) + sizeof(isSlotExpansionAllowed);
 }
 size_t IGraphicBufferProducer::QueueBufferOutput::getFlattenedSize() const {
     return minFlattenedSize() + frameTimestamps.getFlattenedSize();
@@ -139,6 +152,7 @@ status_t IGraphicBufferProducer::QueueBufferOutput::flatten(
     FlattenableUtils::write(buffer, size, nextFrameNumber);
     FlattenableUtils::write(buffer, size, bufferReplaced);
     FlattenableUtils::write(buffer, size, maxBufferCount);
+    FlattenableUtils::write(buffer, size, isSlotExpansionAllowed);
 
     status_t result = frameTimestamps.flatten(buffer, size, fds, count);
     if (result != NO_ERROR) {
@@ -162,6 +176,7 @@ status_t IGraphicBufferProducer::QueueBufferOutput::unflatten(
     FlattenableUtils::read(buffer, size, nextFrameNumber);
     FlattenableUtils::read(buffer, size, bufferReplaced);
     FlattenableUtils::read(buffer, size, maxBufferCount);
+    FlattenableUtils::read(buffer, size, isSlotExpansionAllowed);
 
     status_t result = frameTimestamps.unflatten(buffer, size, fds, count);
     if (result != NO_ERROR) {

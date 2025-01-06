@@ -13,11 +13,11 @@ cc_defaults {
     defaults: [
         "aconfig_lib_cc_static_link.defaults",
         "android.hardware.graphics.composer3-ndk_shared",
-        "android.hardware.power-ndk_shared",
         "librenderengine_deps",
         "libtimestats_deps",
         "surfaceflinger_defaults",
         "libsurfaceflinger_proto_deps",
+        "poweradvisor_deps",
     ],
     cflags: [
         "-DLOG_TAG=\"CompositionEngine\"",
@@ -42,6 +42,7 @@ cc_defaults {
         "libutils",
     ],
     static_libs: [
+        "libguiflags",
         "libmath",
         "librenderengine",
         "libtimestats",
@@ -49,9 +50,7 @@ cc_defaults {
         "libaidlcommonsupport",
         "libprocessgroup",
         "libprocessgroup_util",
-        "libcgrouprc",
         "libjsoncpp",
-        "libcgrouprc_format",
     ],
     header_libs: [
         "android.hardware.graphics.composer@2.1-command-buffer",

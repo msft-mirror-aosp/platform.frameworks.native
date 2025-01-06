@@ -327,8 +327,8 @@ std::unique_ptr<InputChannel> InputChannel::create(const std::string& name,
                                                    android::base::unique_fd fd, sp<IBinder> token) {
     const int result = fcntl(fd, F_SETFL, O_NONBLOCK);
     if (result != 0) {
-        LOG_ALWAYS_FATAL("channel '%s' ~ Could not make socket non-blocking: %s", name.c_str(),
-                         strerror(errno));
+        LOG_ALWAYS_FATAL("channel '%s' ~ Could not make socket (%d) non-blocking: %s", name.c_str(),
+                         fd.get(), strerror(errno));
         return nullptr;
     }
     // using 'new' to access a non-public constructor
@@ -583,15 +583,6 @@ status_t InputPublisher::publishMotionEvent(
                    StringPrintf("publishMotionEvent(inputChannel=%s, action=%s)",
                                 mChannel->getName().c_str(),
                                 MotionEvent::actionToString(action).c_str()));
-    if (verifyEvents()) {
-        Result<void> result =
-                mInputVerifier.processMovement(deviceId, source, action, pointerCount,
-                                               pointerProperties, pointerCoords, flags);
-        if (!result.ok()) {
-            LOG(ERROR) << "Bad stream: " << result.error();
-            return BAD_VALUE;
-        }
-    }
     if (debugTransportPublisher()) {
         std::string transformString;
         transform.dump(transformString, "transform", "        ");
@@ -657,8 +648,18 @@ status_t InputPublisher::publishMotionEvent(
         msg.body.motion.pointers[i].properties = pointerProperties[i];
         msg.body.motion.pointers[i].coords = pointerCoords[i];
     }
+    const status_t status = mChannel->sendMessage(&msg);
 
-    return mChannel->sendMessage(&msg);
+    if (status == OK && verifyEvents()) {
+        Result<void> result =
+                mInputVerifier.processMovement(deviceId, source, action, pointerCount,
+                                               pointerProperties, pointerCoords, flags);
+        if (!result.ok()) {
+            LOG(ERROR) << "Bad stream: " << result.error();
+            return BAD_VALUE;
+        }
+    }
+    return status;
 }
 
 status_t InputPublisher::publishFocusEvent(uint32_t seq, int32_t eventId, bool hasFocus) {

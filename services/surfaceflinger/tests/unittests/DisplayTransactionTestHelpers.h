@@ -47,10 +47,10 @@
 #include "TestableSurfaceFlinger.h"
 #include "mock/DisplayHardware/MockComposer.h"
 #include "mock/DisplayHardware/MockDisplayMode.h"
-#include "mock/DisplayHardware/MockPowerAdvisor.h"
 #include "mock/MockEventThread.h"
 #include "mock/MockNativeWindowSurface.h"
 #include "mock/MockVsyncController.h"
+#include "mock/PowerAdvisor/MockPowerAdvisor.h"
 #include "mock/system/window/MockNativeWindow.h"
 
 namespace android {
@@ -118,7 +118,7 @@ public:
     sp<GraphicBuffer> mBuffer =
             sp<GraphicBuffer>::make(1u, 1u, PIXEL_FORMAT_RGBA_8888,
                                     GRALLOC_USAGE_SW_WRITE_OFTEN | GRALLOC_USAGE_SW_READ_OFTEN);
-    Hwc2::mock::PowerAdvisor mPowerAdvisor;
+    adpf::mock::PowerAdvisor mPowerAdvisor;
 
     FakeDisplayInjector mFakeDisplayInjector{mFlinger, mPowerAdvisor, mNativeWindow};
 
@@ -231,6 +231,16 @@ struct HwcDisplayIdGetter<PhysicalDisplayIdType<PhysicalDisplay>> {
     static constexpr std::optional<HWDisplayId> value = PhysicalDisplay::HWC_DISPLAY_ID;
 };
 
+template <typename>
+struct PortGetter {
+    static constexpr std::optional<uint8_t> value;
+};
+
+template <typename PhysicalDisplay>
+struct PortGetter<PhysicalDisplayIdType<PhysicalDisplay>> {
+    static constexpr std::optional<uint8_t> value = PhysicalDisplay::PORT;
+};
+
 // DisplayIdType can be:
 //     1) PhysicalDisplayIdType<...> for generated ID of physical display backed by HWC.
 //     2) HalVirtualDisplayIdType<...> for hard-coded ID of virtual display backed by HWC.
@@ -241,6 +251,7 @@ struct DisplayVariant {
     using DISPLAY_ID = DisplayIdGetter<DisplayIdType>;
     using CONNECTION_TYPE = DisplayConnectionTypeGetter<DisplayIdType>;
     using HWC_DISPLAY_ID_OPT = HwcDisplayIdGetter<DisplayIdType>;
+    using PORT = PortGetter<DisplayIdType>;
 
     static constexpr int WIDTH = width;
     static constexpr int HEIGHT = height;
@@ -277,6 +288,7 @@ struct DisplayVariant {
                 TestableSurfaceFlinger::FakeDisplayDeviceInjector(test->mFlinger,
                                                                   compositionDisplay,
                                                                   CONNECTION_TYPE::value,
+                                                                  PORT::value,
                                                                   HWC_DISPLAY_ID_OPT::value,
                                                                   static_cast<bool>(PRIMARY));
 
@@ -558,6 +570,10 @@ using OuterDisplayNonSecureVariant =
                                                 /*hasIdentificationData=*/true, kNonSecure>,
                                1080, 2092>;
 
+using ExternalDisplayWithIdentificationVariant =
+        PhysicalDisplayVariant<SecondaryDisplay<ui::DisplayConnectionType::External,
+                                                /*hasIdentificationData=*/true, kNonSecure>,
+                               1920, 1280>;
 using ExternalDisplayVariant =
         PhysicalDisplayVariant<SecondaryDisplay<ui::DisplayConnectionType::External,
                                                 /*hasIdentificationData=*/false, kSecure>,

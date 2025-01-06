@@ -139,8 +139,16 @@ struct InputReaderConfiguration {
     // The mouse pointer speed, as a number from -7 (slowest) to 7 (fastest).
     int32_t mousePointerSpeed;
 
-    // Displays on which an acceleration curve shouldn't be applied for pointer movements from mice.
+    // Displays on which all pointer scaling, including linear scaling based on the
+    // user's pointer speed setting, should be disabled for mice. This differs from
+    // disabling acceleration via the 'mousePointerAccelerationEnabled' setting, where
+    // the pointer speed setting still influences the scaling factor.
     std::set<ui::LogicalDisplayId> displaysWithMousePointerAccelerationDisabled;
+
+    // True if the connected mouse should exhibit pointer acceleration. If false,
+    // a flat acceleration curve (linear scaling) is used, but the user's pointer
+    // speed setting still affects the scaling factor.
+    bool mousePointerAccelerationEnabled;
 
     // Velocity control parameters for touchpad pointer movements on the old touchpad stack (based
     // on TouchInputMapper).
@@ -245,6 +253,9 @@ struct InputReaderConfiguration {
     // True to use three-finger tap as a customizable shortcut; false to use it as a middle-click.
     bool touchpadThreeFingerTapShortcutEnabled;
 
+    // True to enable system gestures (three- and four-finger swipes) on touchpads.
+    bool touchpadSystemGesturesEnabled;
+
     // The set of currently disabled input devices.
     std::set<int32_t> disabledDevices;
 
@@ -272,11 +283,15 @@ struct InputReaderConfiguration {
             defaultPointerDisplayId(ui::LogicalDisplayId::DEFAULT),
             mousePointerSpeed(0),
             displaysWithMousePointerAccelerationDisabled(),
+            mousePointerAccelerationEnabled(true),
             pointerVelocityControlParameters(1.0f, 500.0f, 3000.0f,
                                              static_cast<float>(
                                                      android::os::IInputConstants::
                                                              DEFAULT_POINTER_ACCELERATION)),
-            wheelVelocityControlParameters(1.0f, 15.0f, 50.0f, 4.0f),
+            wheelVelocityControlParameters(1.0f, 15.0f, 50.0f,
+                                           static_cast<float>(
+                                                   android::os::IInputConstants::
+                                                           DEFAULT_MOUSE_WHEEL_ACCELERATION)),
             pointerGesturesEnabled(true),
             pointerGestureQuietInterval(100 * 1000000LL),            // 100 ms
             pointerGestureDragMinSwitchSpeed(50),                    // 50 pixels per second
@@ -297,6 +312,7 @@ struct InputReaderConfiguration {
             shouldNotifyTouchpadHardwareState(false),
             touchpadRightClickZoneEnabled(false),
             touchpadThreeFingerTapShortcutEnabled(false),
+            touchpadSystemGesturesEnabled(true),
             stylusButtonMotionEventsEnabled(true),
             stylusPointerIconEnabled(false),
             mouseReverseVerticalScrollingEnabled(false),
@@ -361,6 +377,9 @@ public:
 
     /* Toggle Caps Lock */
     virtual void toggleCapsLockState(int32_t deviceId) = 0;
+
+    /* Resets locked modifier state */
+    virtual void resetLockedModifierState() = 0;
 
     /* Determine whether physical keys exist for the given framework-domain key codes. */
     virtual bool hasKeys(int32_t deviceId, uint32_t sourceMask,

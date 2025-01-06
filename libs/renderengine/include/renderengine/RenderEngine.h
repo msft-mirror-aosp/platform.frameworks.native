@@ -38,6 +38,14 @@
 #define PROPERTY_DEBUG_RENDERENGINE_BACKEND "debug.renderengine.backend"
 
 /**
+ * Allows opting particular devices into an initial preview rollout of RenderEngine on Graphite.
+ *
+ * Only applicable within SurfaceFlinger, and if relevant aconfig flags are enabled.
+ */
+#define PROPERTY_DEBUG_RENDERENGINE_GRAPHITE_PREVIEW_OPTIN \
+    "debug.renderengine.graphite_preview_optin"
+
+/**
  * Turns on recording of skia commands in SkiaGL version of the RE. This property
  * defines number of milliseconds for the recording to take place. A non zero value
  * turns on the recording.
@@ -209,12 +217,17 @@ public:
                                                 const std::shared_ptr<ExternalTexture>& buffer,
                                                 base::unique_fd&& bufferFence);
 
-    virtual ftl::Future<FenceResult> drawGainmap(const std::shared_ptr<ExternalTexture>& sdr,
-                                                 base::borrowed_fd&& sdrFence,
-                                                 const std::shared_ptr<ExternalTexture>& hdr,
-                                                 base::borrowed_fd&& hdrFence, float hdrSdrRatio,
-                                                 ui::Dataspace dataspace,
-                                                 const std::shared_ptr<ExternalTexture>& gainmap);
+    // Tonemaps an HDR input image and draws an SDR rendition, plus a gainmap
+    // describing how to recover the HDR image.
+    //
+    // The HDR input image is ALWAYS encoded with an sRGB transfer function and
+    // is a floating point format. Accordingly, the hdrSdrRatio describes the
+    // max luminance in the HDR input image above SDR, and the dataspace
+    // describes the input primaries.
+    virtual ftl::Future<FenceResult> tonemapAndDrawGainmap(
+            const std::shared_ptr<ExternalTexture>& hdr, base::borrowed_fd&& hdrFence,
+            float hdrSdrRatio, ui::Dataspace dataspace, const std::shared_ptr<ExternalTexture>& sdr,
+            const std::shared_ptr<ExternalTexture>& gainmap);
 
     // Clean-up method that should be called on the main thread after the
     // drawFence returned by drawLayers fires. This method will free up
@@ -302,11 +315,10 @@ protected:
             const DisplaySettings& display, const std::vector<LayerSettings>& layers,
             const std::shared_ptr<ExternalTexture>& buffer, base::unique_fd&& bufferFence) = 0;
 
-    virtual void drawGainmapInternal(
+    virtual void tonemapAndDrawGainmapInternal(
             const std::shared_ptr<std::promise<FenceResult>>&& resultPromise,
-            const std::shared_ptr<ExternalTexture>& sdr, base::borrowed_fd&& sdrFence,
             const std::shared_ptr<ExternalTexture>& hdr, base::borrowed_fd&& hdrFence,
-            float hdrSdrRatio, ui::Dataspace dataspace,
+            float hdrSdrRatio, ui::Dataspace dataspace, const std::shared_ptr<ExternalTexture>& sdr,
             const std::shared_ptr<ExternalTexture>& gainmap) = 0;
 };
 

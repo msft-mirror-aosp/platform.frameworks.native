@@ -17,7 +17,7 @@
 #pragma once
 
 #include <atomic>
-#include <chrono>
+#include <future>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -30,25 +30,30 @@
 #pragma clang diagnostic ignored "-Wconversion"
 #include <aidl/android/hardware/power/IPower.h>
 #include <fmq/AidlMessageQueue.h>
-#include <powermanager/PowerHalController.h>
 #pragma clang diagnostic pop
 
-#include <compositionengine/impl/OutputCompositionState.h>
 #include <scheduler/Time.h>
 #include <ui/DisplayIdentification.h>
 #include "../Scheduler/OneShotTimer.h"
+
+#include "SessionManager.h"
 
 using namespace std::chrono_literals;
 
 namespace android {
 
-class SurfaceFlinger;
+namespace power {
+class PowerHalController;
+class PowerHintSessionWrapper;
+} // namespace power
 
-namespace Hwc2 {
+namespace adpf {
+
+namespace hal = aidl::android::hardware::power;
 
 class PowerAdvisor {
 public:
-    virtual ~PowerAdvisor();
+    virtual ~PowerAdvisor() = default;
 
     // Initializes resources that cannot be initialized on construction
     virtual void init() = 0;
@@ -101,21 +106,27 @@ public:
     virtual void setDisplays(std::vector<DisplayId>& displayIds) = 0;
     // Sets the target duration for the entire pipeline including the gpu
     virtual void setTotalFrameTargetWorkDuration(Duration targetDuration) = 0;
+    // Get the session manager, if it exists
+    virtual std::shared_ptr<SessionManager> getSessionManager() = 0;
 
     // --- The following methods may run on threads besides SF main ---
     // Send a hint about an upcoming increase in the CPU workload
     virtual void notifyCpuLoadUp() = 0;
     // Send a hint about the imminent start of a new CPU workload
     virtual void notifyDisplayUpdateImminentAndCpuReset() = 0;
+
+    // --- The following methods specifically run on binder threads ---
+    // Retrieve  a SessionManager for HintManagerService to call
+    virtual sp<IBinder> getOrCreateSessionManagerForBinder(uid_t uid) = 0;
 };
 
 namespace impl {
 
 // PowerAdvisor is a wrapper around IPower HAL which takes into account the
 // full state of the system when sending out power hints to things like the GPU.
-class PowerAdvisor final : public Hwc2::PowerAdvisor {
+class PowerAdvisor final : public adpf::PowerAdvisor {
 public:
-    PowerAdvisor(SurfaceFlinger& flinger);
+    PowerAdvisor(std::function<void()>&& function, std::chrono::milliseconds timeout);
     ~PowerAdvisor() override;
 
     void init() override;
@@ -145,10 +156,14 @@ public:
     void setCompositeEnd(TimePoint compositeEndTime) override;
     void setDisplays(std::vector<DisplayId>& displayIds) override;
     void setTotalFrameTargetWorkDuration(Duration targetDuration) override;
+    std::shared_ptr<SessionManager> getSessionManager() override;
 
     // --- The following methods may run on threads besides SF main ---
     void notifyCpuLoadUp() override;
     void notifyDisplayUpdateImminentAndCpuReset() override;
+
+    // --- The following methods specifically run on binder threads ---
+    sp<IBinder> getOrCreateSessionManagerForBinder(uid_t uid) override;
 
 private:
     friend class PowerAdvisorTest;
@@ -159,7 +174,6 @@ private:
     std::unordered_set<DisplayId> mExpensiveDisplays;
     bool mNotifiedExpensiveRendering = false;
 
-    SurfaceFlinger& mFlinger;
     std::atomic_bool mSendUpdateImminent = true;
     std::atomic<nsecs_t> mLastScreenUpdatedTime = 0;
     std::optional<scheduler::OneShotTimer> mScreenUpdateTimer;
@@ -323,8 +337,10 @@ private:
     template <aidl::android::hardware::power::ChannelMessage::ChannelMessageContents::Tag T,
               class In>
     bool writeHintSessionMessage(In* elements, size_t count) REQUIRES(mHintSessionMutex);
+
+    std::shared_ptr<SessionManager> mSessionManager;
 };
 
 } // namespace impl
-} // namespace Hwc2
+} // namespace adpf
 } // namespace android

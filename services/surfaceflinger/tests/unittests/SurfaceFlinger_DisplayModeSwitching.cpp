@@ -34,7 +34,7 @@ using namespace com::android::graphics::surfaceflinger;
                                                static_cast<hal::HWConfigId>(        \
                                                        ftl::to_underlying(modeId)), \
                                                _, _))                               \
-            .WillOnce(DoAll(SetArgPointee<3>(timeline), Return(Error::NONE)))
+            .WillOnce(DoAll(SetArgPointee<3>(timeline), Return(hal::Error::NONE)))
 
 namespace android {
 namespace {
@@ -126,8 +126,9 @@ public:
 
     static constexpr HWDisplayId kInnerDisplayHwcId = PrimaryDisplayVariant::HWC_DISPLAY_ID;
     static constexpr HWDisplayId kOuterDisplayHwcId = kInnerDisplayHwcId + 1;
-
-    static constexpr PhysicalDisplayId kOuterDisplayId = PhysicalDisplayId::fromPort(254u);
+    static constexpr uint8_t kOuterDisplayPort = 254u;
+    static constexpr PhysicalDisplayId kOuterDisplayId =
+            PhysicalDisplayId::fromPort(kOuterDisplayPort);
 
     auto injectOuterDisplay() {
         // For the inner display, this is handled by setupHwcHotplugCallExpectations.
@@ -149,6 +150,7 @@ public:
                                              kModeId120);
                 },
                 {.displayId = kOuterDisplayId,
+                 .port = kOuterDisplayPort,
                  .hwcDisplayId = kOuterDisplayHwcId,
                  .isPrimary = kIsPrimary});
 
