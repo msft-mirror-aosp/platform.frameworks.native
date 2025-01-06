@@ -418,7 +418,7 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const IdGenerator& idGenerato
     if (inputTarget.useDefaultPointerTransform() && !zeroCoords) {
         const ui::Transform& transform = inputTarget.getDefaultPointerTransform();
         return std::make_unique<DispatchEntry>(eventEntry, inputTargetFlags, transform,
-                                               inputTarget.displayTransform,
+                                               inputTarget.rawTransform,
                                                inputTarget.globalScaleFactor, uid, vsyncId,
                                                windowId);
     }
@@ -439,7 +439,7 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const IdGenerator& idGenerato
         transform =
                 &inputTarget.getTransformForPointer(firstMarkedBit(inputTarget.getPointerIds()));
         const ui::Transform inverseTransform = transform->inverse();
-        displayTransform = &inputTarget.displayTransform;
+        displayTransform = &inputTarget.rawTransform;
 
         // Iterate through all pointers in the event to normalize against the first.
         for (size_t i = 0; i < motionEntry.getPointerCount(); i++) {
@@ -929,7 +929,7 @@ InputTarget createInputTarget(const std::shared_ptr<Connection>& connection,
                               const sp<android::gui::WindowInfoHandle>& windowHandle,
                               InputTarget::DispatchMode dispatchMode,
                               ftl::Flags<InputTarget::Flags> targetFlags,
-                              const ui::Transform& displayTransform,
+                              const ui::Transform& rawTransform,
                               std::optional<nsecs_t> firstDownTimeInTarget) {
     LOG_ALWAYS_FATAL_IF(connection == nullptr);
     InputTarget inputTarget{connection};
@@ -937,7 +937,7 @@ InputTarget createInputTarget(const std::shared_ptr<Connection>& connection,
     inputTarget.dispatchMode = dispatchMode;
     inputTarget.flags = targetFlags;
     inputTarget.globalScaleFactor = windowHandle->getInfo()->globalScaleFactor;
-    inputTarget.displayTransform = displayTransform;
+    inputTarget.rawTransform = rawTransform;
     inputTarget.firstDownTimeInTarget = firstDownTimeInTarget;
     return inputTarget;
 }
@@ -3105,8 +3105,8 @@ void InputDispatcher::addGlobalMonitoringTargetsLocked(std::vector<InputTarget>&
         InputTarget target{monitor.connection};
         // target.firstDownTimeInTarget is not set for global monitors. It is only required in split
         // touch and global monitoring works as intended even without setting firstDownTimeInTarget
-        target.displayTransform = mWindowInfos.getDisplayTransform(displayId);
-        target.setDefaultPointerTransform(target.displayTransform);
+        target.rawTransform = mWindowInfos.getDisplayTransform(displayId);
+        target.setDefaultPointerTransform(target.rawTransform);
         inputTargets.push_back(target);
     }
 }
@@ -4293,7 +4293,7 @@ void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
                     targets.emplace_back(fallbackTarget);
                     const ui::Transform displayTransform =
                             mWindowInfos.getDisplayTransform(motionEntry.displayId);
-                    targets.back().displayTransform = displayTransform;
+                    targets.back().rawTransform = displayTransform;
                     targets.back().setDefaultPointerTransform(displayTransform);
                 }
                 logOutboundMotionDetails("cancel - ", motionEntry);
@@ -4378,7 +4378,7 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
                     targets.emplace_back(connection, targetFlags);
                     const ui::Transform displayTransform =
                             mWindowInfos.getDisplayTransform(motionEntry.displayId);
-                    targets.back().displayTransform = displayTransform;
+                    targets.back().rawTransform = displayTransform;
                     targets.back().setDefaultPointerTransform(displayTransform);
                 }
                 logOutboundMotionDetails("down - ", motionEntry);
