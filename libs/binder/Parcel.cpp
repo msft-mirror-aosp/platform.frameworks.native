@@ -3389,14 +3389,6 @@ void Parcel::scanForFds() const {
 }
 
 #ifdef BINDER_WITH_KERNEL_IPC
-size_t Parcel::getBlobAshmemSize() const
-{
-    // This used to return the size of all blobs that were written to ashmem, now we're returning
-    // the ashmem currently referenced by this Parcel, which should be equivalent.
-    // TODO(b/202029388): Remove method once ABI can be changed.
-    return getOpenAshmemSize();
-}
-
 size_t Parcel::getOpenAshmemSize() const
 {
     auto* kernelFields = maybeKernelFields();
