@@ -220,8 +220,13 @@ struct WindowInfo : public Parcelable {
     // An alpha of 1.0 means fully opaque and 0.0 means fully transparent.
     float alpha;
 
-    // Transform applied to individual windows.
+    // Transform applied to individual windows for input.
+    // Maps display coordinates to the window's input coordinate space.
     ui::Transform transform;
+
+    // Transform applied to get to the layer stack space of the cloned window for input.
+    // Maps display coordinates of the clone window to the layer stack space of the cloned window.
+    std::optional<ui::Transform> cloneLayerStackTransform;
 
     /*
      * This is filled in by the WM relative to the frame and then translated

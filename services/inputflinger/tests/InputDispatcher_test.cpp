@@ -6505,19 +6505,47 @@ TEST_F(InputDispatcherDisplayProjectionTest, WindowGetsEventsInCorrectCoordinate
                                ui::LogicalDisplayId::DEFAULT, {PointF{150, 220}}));
 
     firstWindow->assertNoEvents();
-    std::unique_ptr<MotionEvent> event = secondWindow->consumeMotionEvent();
-    ASSERT_NE(nullptr, event);
-    EXPECT_EQ(AMOTION_EVENT_ACTION_DOWN, event->getAction());
+    secondWindow->consumeMotionEvent(
+            AllOf(WithMotionAction(ACTION_DOWN),
+                  // Ensure that the events from the "getRaw" API are in logical display
+                  // coordinates, which has an x-scale of 2 and y-scale of 4.
+                  WithRawCoords(300, 880),
+                  // Ensure that the x and y values are in the window's coordinate space.
+                  // The left-top of the second window is at (100, 200) in display space, which is
+                  // (200, 800) in the logical display space. This will be the origin of the window
+                  // space.
+                  WithCoords(100, 80)));
+}
 
-    // Ensure that the events from the "getRaw" API are in logical display coordinates.
-    EXPECT_EQ(300, event->getRawX(0));
-    EXPECT_EQ(880, event->getRawY(0));
+TEST_F(InputDispatcherDisplayProjectionTest, UseCloneLayerStackTransformForRawCoordinates) {
+    SCOPED_FLAG_OVERRIDE(use_cloned_screen_coordinates_as_raw, true);
 
-    // Ensure that the x and y values are in the window's coordinate space.
-    // The left-top of the second window is at (100, 200) in display space, which is (200, 800) in
-    // the logical display space. This will be the origin of the window space.
-    EXPECT_EQ(100, event->getX(0));
-    EXPECT_EQ(80, event->getY(0));
+    auto [firstWindow, secondWindow] = setupScaledDisplayScenario();
+
+    const std::array<float, 9> matrix = {1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 0.0, 0.0, 1.0};
+    ui::Transform secondDisplayTransform;
+    secondDisplayTransform.set(matrix);
+    addDisplayInfo(SECOND_DISPLAY_ID, secondDisplayTransform);
+
+    // When a clone layer stack transform is provided for a window, we should use that as the
+    // "display transform" for input going to that window.
+    sp<FakeWindowHandle> secondWindowClone = secondWindow->clone(SECOND_DISPLAY_ID);
+    secondWindowClone->editInfo()->cloneLayerStackTransform = ui::Transform();
+    secondWindowClone->editInfo()->cloneLayerStackTransform->set(0.5, 0, 0, 0.25);
+    addWindow(secondWindowClone);
+
+    // Touch down on the clone window, and ensure its raw coordinates use
+    // the clone layer stack transform.
+    mDispatcher->notifyMotion(generateMotionArgs(ACTION_DOWN, AINPUT_SOURCE_TOUCHSCREEN,
+                                                 SECOND_DISPLAY_ID, {PointF{150, 220}}));
+    secondWindowClone->consumeMotionEvent(
+            AllOf(WithMotionAction(ACTION_DOWN),
+                  // Ensure the x and y coordinates are in the window's coordinate space.
+                  // See previous test case for calculation.
+                  WithCoords(100, 80),
+                  // Ensure the "getRaw" API uses the clone layer stack transform when it is
+                  // provided for the window. It has an x-scale of 0.5 and y-scale of 0.25.
+                  WithRawCoords(75, 55)));
 }
 
 TEST_F(InputDispatcherDisplayProjectionTest, CancelMotionWithCorrectCoordinates) {
