@@ -998,7 +998,7 @@ InputDispatcher::~InputDispatcher() {
 
     while (!mConnectionsByToken.empty()) {
         std::shared_ptr<Connection> connection = mConnectionsByToken.begin()->second;
-        removeInputChannelLocked(connection->getToken(), /*notify=*/false);
+        removeInputChannelLocked(connection, /*notify=*/false);
     }
 }
 
@@ -3929,7 +3929,7 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                           "event to it, status=%s(%d)",
                           connection->getInputChannelName().c_str(), statusToString(status).c_str(),
                           status);
-                    abortBrokenDispatchCycleLocked(currentTime, connection, /*notify=*/true);
+                    abortBrokenDispatchCycleLocked(connection, /*notify=*/true);
                 } else {
                     // Pipe is full and we are waiting for the app to finish process some events
                     // before sending more events to it.
@@ -3944,7 +3944,7 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                       "status=%s(%d)",
                       connection->getInputChannelName().c_str(), statusToString(status).c_str(),
                       status);
-                abortBrokenDispatchCycleLocked(currentTime, connection, /*notify=*/true);
+                abortBrokenDispatchCycleLocked(connection, /*notify=*/true);
             }
             return;
         }
@@ -4019,8 +4019,7 @@ void InputDispatcher::finishDispatchCycleLocked(nsecs_t currentTime,
     postCommandLocked(std::move(command));
 }
 
-void InputDispatcher::abortBrokenDispatchCycleLocked(nsecs_t currentTime,
-                                                     const std::shared_ptr<Connection>& connection,
+void InputDispatcher::abortBrokenDispatchCycleLocked(const std::shared_ptr<Connection>& connection,
                                                      bool notify) {
     if (DEBUG_DISPATCH_CYCLE) {
         LOG(INFO) << "channel '" << connection->getInputChannelName() << "'~ " << __func__
@@ -4136,7 +4135,7 @@ int InputDispatcher::handleReceiveCallback(int events, sp<IBinder> connectionTok
     }
 
     // Remove the channel.
-    removeInputChannelLocked(connection->getToken(), notify);
+    removeInputChannelLocked(connection, notify);
     return 0; // remove the callback
 }
 
@@ -6313,8 +6312,14 @@ Result<std::unique_ptr<InputChannel>> InputDispatcher::createInputMonitor(
 status_t InputDispatcher::removeInputChannel(const sp<IBinder>& connectionToken) {
     { // acquire lock
         std::scoped_lock _l(mLock);
+        std::shared_ptr<Connection> connection = getConnectionLocked(connectionToken);
+        if (connection == nullptr) {
+            // Connection can be removed via socket hang up or an explicit call to
+            // 'removeInputChannel'
+            return BAD_VALUE;
+        }
 
-        status_t status = removeInputChannelLocked(connectionToken, /*notify=*/false);
+        status_t status = removeInputChannelLocked(connection, /*notify=*/false);
         if (status) {
             return status;
         }
@@ -6326,24 +6331,17 @@ status_t InputDispatcher::removeInputChannel(const sp<IBinder>& connectionToken)
     return OK;
 }
 
-status_t InputDispatcher::removeInputChannelLocked(const sp<IBinder>& connectionToken,
+status_t InputDispatcher::removeInputChannelLocked(const std::shared_ptr<Connection>& connection,
                                                    bool notify) {
-    std::shared_ptr<Connection> connection = getConnectionLocked(connectionToken);
-    if (connection == nullptr) {
-        // Connection can be removed via socket hang up or an explicit call to 'removeInputChannel'
-        return BAD_VALUE;
-    }
-
+    LOG_ALWAYS_FATAL_IF(connection == nullptr);
+    abortBrokenDispatchCycleLocked(connection, notify);
     removeConnectionLocked(connection);
 
     if (connection->monitor) {
-        removeMonitorChannelLocked(connectionToken);
+        removeMonitorChannelLocked(connection->getToken());
     }
 
     mLooper->removeFd(connection->inputPublisher.getChannel().getFd());
-
-    nsecs_t currentTime = now();
-    abortBrokenDispatchCycleLocked(currentTime, connection, notify);
 
     connection->status = Connection::Status::ZOMBIE;
     return OK;

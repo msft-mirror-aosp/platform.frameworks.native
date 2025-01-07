@@ -649,8 +649,7 @@ private:
     void finishDispatchCycleLocked(nsecs_t currentTime,
                                    const std::shared_ptr<Connection>& connection, uint32_t seq,
                                    bool handled, nsecs_t consumeTime) REQUIRES(mLock);
-    void abortBrokenDispatchCycleLocked(nsecs_t currentTime,
-                                        const std::shared_ptr<Connection>& connection, bool notify)
+    void abortBrokenDispatchCycleLocked(const std::shared_ptr<Connection>& connection, bool notify)
             REQUIRES(mLock);
     void drainDispatchQueue(std::deque<std::unique_ptr<DispatchEntry>>& queue);
     void releaseDispatchEntry(std::unique_ptr<DispatchEntry> dispatchEntry);
@@ -696,7 +695,7 @@ private:
 
     // Registration.
     void removeMonitorChannelLocked(const sp<IBinder>& connectionToken) REQUIRES(mLock);
-    status_t removeInputChannelLocked(const sp<IBinder>& connectionToken, bool notify)
+    status_t removeInputChannelLocked(const std::shared_ptr<Connection>& connection, bool notify)
             REQUIRES(mLock);
 
     // Interesting events that we might like to log or tell the framework about.
