@@ -117,8 +117,12 @@ static constexpr gui::Uid SECONDARY_WINDOW_UID{1012};
 // An arbitrary pid of the gesture monitor window
 static constexpr gui::Pid MONITOR_PID{2001};
 
+static constexpr int32_t FLAG_WINDOW_IS_OBSCURED = AMOTION_EVENT_FLAG_WINDOW_IS_OBSCURED;
+static constexpr int32_t FLAG_WINDOW_IS_PARTIALLY_OBSCURED =
+        AMOTION_EVENT_FLAG_WINDOW_IS_PARTIALLY_OBSCURED;
+
 static constexpr int EXPECTED_WALLPAPER_FLAGS =
-        AMOTION_EVENT_FLAG_WINDOW_IS_OBSCURED | AMOTION_EVENT_FLAG_WINDOW_IS_PARTIALLY_OBSCURED;
+        FLAG_WINDOW_IS_OBSCURED | FLAG_WINDOW_IS_PARTIALLY_OBSCURED;
 
 using ReservedInputDeviceId::VIRTUAL_KEYBOARD_ID;
 
@@ -14682,6 +14686,221 @@ TEST_F(InputDispatcherPointerInWindowTest, MultipleDevicesControllingOneMouse) {
 TEST_F(InputDispatcherTest, FocusedDisplayChangeIsNotified) {
     mDispatcher->setFocusedDisplay(SECOND_DISPLAY_ID);
     mFakePolicy->assertFocusedDisplayNotified(SECOND_DISPLAY_ID);
+}
+
+class InputDispatcherObscuredFlagTest : public InputDispatcherTest {
+protected:
+    std::shared_ptr<FakeApplicationHandle> mApplication;
+    std::shared_ptr<FakeApplicationHandle> mOcclusionApplication;
+    sp<FakeWindowHandle> mWindow;
+    sp<FakeWindowHandle> mOcclusionWindow;
+
+    void SetUp() override {
+        InputDispatcherTest::SetUp();
+        mDispatcher->setMaximumObscuringOpacityForTouch(0.8f);
+        mApplication = std::make_shared<FakeApplicationHandle>();
+        mOcclusionApplication = std::make_shared<FakeApplicationHandle>();
+        mWindow = sp<FakeWindowHandle>::make(mApplication, mDispatcher, "Window", DISPLAY_ID);
+        mWindow->setOwnerInfo(WINDOW_PID, WINDOW_UID);
+
+        mOcclusionWindow = sp<FakeWindowHandle>::make(mOcclusionApplication, mDispatcher,
+                                                      "Occlusion Window", DISPLAY_ID);
+
+        mOcclusionWindow->setTouchable(false);
+        mOcclusionWindow->setTouchOcclusionMode(TouchOcclusionMode::USE_OPACITY);
+        mOcclusionWindow->setAlpha(0.7f);
+        mOcclusionWindow->setOwnerInfo(SECONDARY_WINDOW_PID, SECONDARY_WINDOW_UID);
+    }
+};
+
+/**
+ * Two windows. An untouchable window partially occludes a touchable region below it.
+ * Use a finger to touch the bottom window.
+ * When the finger touches down in the obscured area, the motion event should always have the
+ * FLAG_WINDOW_IS_OBSCURED flag, regardless of where it is moved to. If it starts from a
+ * non-obscured area, the motion event should always with a FLAG_WINDOW_IS_PARTIALLY_OBSCURED flag,
+ * regardless of where it is moved to.
+ */
+TEST_F(InputDispatcherObscuredFlagTest, TouchObscuredTest) {
+    mWindow->setFrame({0, 0, 100, 100});
+    mOcclusionWindow->setFrame({0, 0, 100, 50});
+
+    mDispatcher->onWindowInfosChanged(
+            {{*mOcclusionWindow->getInfo(), *mWindow->getInfo()}, {}, 0, 0});
+
+    // If the finger touch goes down in the region that is obscured.
+    // Expect the entire stream to use FLAG_WINDOW_IS_OBSCURED.
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_DOWN, AINPUT_SOURCE_TOUCHSCREEN)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::FINGER).x(50).y(10))
+                    .build());
+
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_DOWN),
+                                      WithFlags(FLAG_WINDOW_IS_OBSCURED),
+                                      WithDisplayId(DISPLAY_ID)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_MOVE, AINPUT_SOURCE_TOUCHSCREEN)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::FINGER).x(50).y(60))
+                    .build());
+
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_MOVE),
+                                      WithFlags(FLAG_WINDOW_IS_OBSCURED),
+                                      WithDisplayId(DISPLAY_ID)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_UP, AINPUT_SOURCE_TOUCHSCREEN)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::FINGER).x(50).y(110))
+                    .build());
+
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_UP),
+                                      WithFlags(FLAG_WINDOW_IS_OBSCURED),
+                                      WithDisplayId(DISPLAY_ID)));
+}
+
+/**
+ * Two windows. An untouchable window partially occludes a touchable region below it.
+ * Use a finger to touch the bottom window.
+ * When the finger starts from a non-obscured area, the motion event should always have the
+ * FLAG_WINDOW_IS_PARTIALLY_OBSCURED flag, regardless of where it is moved to.
+ */
+TEST_F(InputDispatcherObscuredFlagTest, TouchPartiallyObscuredTest) {
+    mWindow->setFrame({0, 0, 100, 100});
+    mOcclusionWindow->setFrame({0, 0, 100, 50});
+
+    mDispatcher->onWindowInfosChanged(
+            {{*mOcclusionWindow->getInfo(), *mWindow->getInfo()}, {}, 0, 0});
+
+    // If the finger touch goes down in the region that is not directly obscured by the overlay.
+    // Expect the entire stream to use FLAG_WINDOW_IS_PARTIALLY_OBSCURED.
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_DOWN, AINPUT_SOURCE_TOUCHSCREEN)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::FINGER).x(50).y(60))
+                    .build());
+
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_DOWN),
+                                      WithFlags(FLAG_WINDOW_IS_PARTIALLY_OBSCURED),
+                                      WithDisplayId(DISPLAY_ID)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_MOVE, AINPUT_SOURCE_TOUCHSCREEN)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::FINGER).x(50).y(80))
+                    .build());
+
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_MOVE),
+                                      WithFlags(FLAG_WINDOW_IS_PARTIALLY_OBSCURED),
+                                      WithDisplayId(DISPLAY_ID)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_UP, AINPUT_SOURCE_TOUCHSCREEN)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::FINGER).x(50).y(110))
+                    .build());
+
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_UP),
+                                      WithFlags(FLAG_WINDOW_IS_PARTIALLY_OBSCURED),
+                                      WithDisplayId(DISPLAY_ID)));
+}
+
+/**
+ * Two windows. An untouchable window partially occludes a touchable region below it.
+ * Use the mouse to hover over the bottom window.
+ * When the hover happens over the occluded area, the window below should receive a motion
+ * event with the FLAG_WINDOW_IS_OBSCURED flag. When the hover event moves to the non-occluded area,
+ * the window below should receive a motion event with the FLAG_WINDOW_IS_PARTIALLY_OBSCURED flag.
+ */
+TEST_F(InputDispatcherObscuredFlagTest, MouseHoverObscuredTest) {
+    mWindow->setFrame({0, 0, 100, 100});
+    mOcclusionWindow->setFrame({0, 0, 100, 40});
+
+    mDispatcher->onWindowInfosChanged(
+            {{*mOcclusionWindow->getInfo(), *mWindow->getInfo()}, {}, 0, 0});
+
+    // TODO(b/328160937): The window should receive a motion event with the FLAG_WINDOW_IS_OBSCURED
+    // flag.
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::MOUSE).x(50).y(20))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_HOVER_ENTER), WithFlags(0)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::MOUSE).x(50).y(30))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_HOVER_MOVE), WithFlags(0)));
+
+    // TODO(b/328160937): The window should receive a motion event with the
+    // FLAG_WINDOW_IS_PARTIALLY_OBSCURED flag.
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::MOUSE).x(50).y(50))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_HOVER_MOVE), WithFlags(0)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::MOUSE).x(50).y(60))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_HOVER_MOVE), WithFlags(0)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::MOUSE).x(50).y(110))
+                    .build());
+
+    // TODO(b/328160937): The window should receive a HOVER_EXIT with the
+    //  FLAG_WINDOW_IS_PARTIALLY_OBSCURED flag. The cause of the current issue is that we moved the
+    //  mouse to a location where there are no windows, so the HOVER_EXIT event cannot be generated.
+    mWindow->assertNoEvents();
+}
+
+/**
+ * Two windows. An untouchable window partially occludes a touchable region below it.
+ * Use the stylus to hover over the bottom window.
+ * When the hover happens over the occluded area, the window below should receive a motion
+ * event with the FLAG_WINDOW_IS_OBSCURED flag. When the hover event moves to the non-occluded area,
+ * the window below should receive a motion event with the FLAG_WINDOW_IS_PARTIALLY_OBSCURED flag.
+ */
+TEST_F(InputDispatcherObscuredFlagTest, StylusHoverObscuredTest) {
+    mWindow->setFrame({0, 0, 100, 100});
+    mOcclusionWindow->setFrame({0, 0, 100, 40});
+
+    mDispatcher->onWindowInfosChanged(
+            {{*mOcclusionWindow->getInfo(), *mWindow->getInfo()}, {}, 0, 0});
+
+    // TODO(b/328160937): The window should receive a motion event with the FLAG_WINDOW_IS_OBSCURED
+    // flag.
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_ENTER, AINPUT_SOURCE_STYLUS)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::STYLUS).x(50).y(20))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_HOVER_ENTER), WithFlags(0)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_STYLUS)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::STYLUS).x(50).y(30))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_HOVER_MOVE), WithFlags(0)));
+
+    // TODO(b/328160937): The window should receive a motion event with the
+    // FLAG_WINDOW_IS_PARTIALLY_OBSCURED flag.
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_STYLUS)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::STYLUS).x(50).y(50))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_HOVER_MOVE), WithFlags(0)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_MOVE, AINPUT_SOURCE_STYLUS)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::STYLUS).x(50).y(60))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_HOVER_MOVE), WithFlags(0)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(ACTION_HOVER_EXIT, AINPUT_SOURCE_STYLUS)
+                    .pointer(PointerBuilder(/*id=*/0, ToolType::STYLUS).x(50).y(70))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(ACTION_HOVER_EXIT), WithFlags(0)));
 }
 
 } // namespace android::inputdispatcher
