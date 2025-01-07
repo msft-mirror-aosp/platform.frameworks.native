@@ -1482,14 +1482,15 @@ public:
      * Note: for historical reasons, this does not include ashmem memory which
      * is referenced by this Parcel, but which this parcel doesn't own (e.g.
      * writeFileDescriptor is called without 'takeOwnership' true).
+     *
+     * WARNING: you should not use this, but rather, unparcel, and inspect
+     * each FD independently. This counts ashmem size, but there may be
+     * other resources used for non-ashmem FDs, such as other types of
+     * shared memory, files, etc..
      */
     LIBBINDER_EXPORTED size_t getOpenAshmemSize() const;
 
 private:
-    // TODO(b/202029388): Remove 'getBlobAshmemSize' once no prebuilts reference
-    // this
-    LIBBINDER_EXPORTED size_t getBlobAshmemSize() const;
-
     // Needed so that we can save object metadata to the disk
     friend class android::binder::debug::RecordedTransaction;
 };
