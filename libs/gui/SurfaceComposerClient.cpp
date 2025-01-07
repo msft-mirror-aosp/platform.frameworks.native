@@ -1695,6 +1695,29 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setCorne
     return *this;
 }
 
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setClientDrawnCornerRadius(
+        const sp<SurfaceControl>& sc, float clientDrawnCornerRadius) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+    s->what |= layer_state_t::eClientDrawnCornerRadiusChanged;
+    s->clientDrawnCornerRadius = clientDrawnCornerRadius;
+    return *this;
+}
+
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setClientDrawnShadowRadius(
+        const sp<SurfaceControl>& sc, float clientDrawnShadowRadius) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+    s->what |= layer_state_t::eClientDrawnShadowsChanged;
+    s->clientDrawnShadowRadius = clientDrawnShadowRadius;
+    return *this;
+}
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBackgroundBlurRadius(
         const sp<SurfaceControl>& sc, int backgroundBlurRadius) {
     layer_state_t* s = getLayerState(sc);
