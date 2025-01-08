@@ -384,6 +384,9 @@ private:
         // Get the transform for display, returns Identity-transform if display is missing.
         ui::Transform getDisplayTransform(ui::LogicalDisplayId displayId) const;
 
+        // Get the raw transform to use for motion events going to the given window.
+        ui::Transform getRawTransform(const android::gui::WindowInfo&) const;
+
         // Lookup for WindowInfoHandle from token and optionally a display-id. In cases where
         // display-id is not provided lookup is done for all displays.
         sp<android::gui::WindowInfoHandle> findWindowHandle(
@@ -646,8 +649,7 @@ private:
     void finishDispatchCycleLocked(nsecs_t currentTime,
                                    const std::shared_ptr<Connection>& connection, uint32_t seq,
                                    bool handled, nsecs_t consumeTime) REQUIRES(mLock);
-    void abortBrokenDispatchCycleLocked(nsecs_t currentTime,
-                                        const std::shared_ptr<Connection>& connection, bool notify)
+    void abortBrokenDispatchCycleLocked(const std::shared_ptr<Connection>& connection, bool notify)
             REQUIRES(mLock);
     void drainDispatchQueue(std::deque<std::unique_ptr<DispatchEntry>>& queue);
     void releaseDispatchEntry(std::unique_ptr<DispatchEntry> dispatchEntry);
@@ -693,7 +695,7 @@ private:
 
     // Registration.
     void removeMonitorChannelLocked(const sp<IBinder>& connectionToken) REQUIRES(mLock);
-    status_t removeInputChannelLocked(const sp<IBinder>& connectionToken, bool notify)
+    status_t removeInputChannelLocked(const std::shared_ptr<Connection>& connection, bool notify)
             REQUIRES(mLock);
 
     // Interesting events that we might like to log or tell the framework about.
@@ -732,10 +734,6 @@ private:
     static std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
     findTouchStateWindowAndDisplay(
             const sp<IBinder>& token,
-            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
-
-    static bool windowHasTouchingPointers(
-            const sp<android::gui::WindowInfoHandle>& windowHandle, DeviceId deviceId,
             const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
 
     // Statistics gathering.

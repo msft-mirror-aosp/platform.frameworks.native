@@ -418,7 +418,7 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const IdGenerator& idGenerato
     if (inputTarget.useDefaultPointerTransform() && !zeroCoords) {
         const ui::Transform& transform = inputTarget.getDefaultPointerTransform();
         return std::make_unique<DispatchEntry>(eventEntry, inputTargetFlags, transform,
-                                               inputTarget.displayTransform,
+                                               inputTarget.rawTransform,
                                                inputTarget.globalScaleFactor, uid, vsyncId,
                                                windowId);
     }
@@ -439,7 +439,7 @@ std::unique_ptr<DispatchEntry> createDispatchEntry(const IdGenerator& idGenerato
         transform =
                 &inputTarget.getTransformForPointer(firstMarkedBit(inputTarget.getPointerIds()));
         const ui::Transform inverseTransform = transform->inverse();
-        displayTransform = &inputTarget.displayTransform;
+        displayTransform = &inputTarget.rawTransform;
 
         // Iterate through all pointers in the event to normalize against the first.
         for (size_t i = 0; i < motionEntry.getPointerCount(); i++) {
@@ -788,38 +788,14 @@ void filterUntrustedTargets(TouchState& touchState, std::vector<InputTarget>& ta
     });
 }
 
-/**
- * In general, touch should be always split between windows. Some exceptions:
- * 1. Don't split touch if all of the below is true:
- *     (a) we have an active pointer down *and*
- *     (b) a new pointer is going down that's from the same device *and*
- *     (c) the window that's receiving the current pointer does not support split touch.
- * 2. Don't split mouse events
- */
-bool shouldSplitTouch(const TouchState& touchState, const MotionEntry& entry) {
-    if (isFromSource(entry.source, AINPUT_SOURCE_MOUSE)) {
-        // We should never split mouse events
-        return false;
-    }
-    for (const TouchedWindow& touchedWindow : touchState.windows) {
-        if (touchedWindow.windowHandle->getInfo()->isSpy()) {
-            // Spy windows should not affect whether or not touch is split.
-            continue;
-        }
-        if (touchedWindow.windowHandle->getInfo()->supportsSplitTouch()) {
-            continue;
-        }
-        if (touchedWindow.windowHandle->getInfo()->inputConfig.test(
-                    gui::WindowInfo::InputConfig::IS_WALLPAPER)) {
-            // Wallpaper window should not affect whether or not touch is split
-            continue;
-        }
-
-        if (touchedWindow.hasTouchingPointers(entry.deviceId)) {
-            return false;
-        }
-    }
-    return true;
+bool shouldSplitTouch(int32_t source) {
+    // We should never split mouse events. This is because the events that are produced by touchpad
+    // are sent to InputDispatcher as two fingers (for example, pinch zoom), but they need to be
+    // dispatched to the same window. In those cases, the behaviour is also slightly different from
+    // default because the events should be sent to the cursor position rather than the x,y values
+    // of each of the fingers.
+    // The "normal" (uncaptured) events produced by touchpad and by mouse have SOURCE_MOUSE.
+    return !isFromSource(source, AINPUT_SOURCE_MOUSE);
 }
 
 /**
@@ -929,7 +905,7 @@ InputTarget createInputTarget(const std::shared_ptr<Connection>& connection,
                               const sp<android::gui::WindowInfoHandle>& windowHandle,
                               InputTarget::DispatchMode dispatchMode,
                               ftl::Flags<InputTarget::Flags> targetFlags,
-                              const ui::Transform& displayTransform,
+                              const ui::Transform& rawTransform,
                               std::optional<nsecs_t> firstDownTimeInTarget) {
     LOG_ALWAYS_FATAL_IF(connection == nullptr);
     InputTarget inputTarget{connection};
@@ -937,7 +913,7 @@ InputTarget createInputTarget(const std::shared_ptr<Connection>& connection,
     inputTarget.dispatchMode = dispatchMode;
     inputTarget.flags = targetFlags;
     inputTarget.globalScaleFactor = windowHandle->getInfo()->globalScaleFactor;
-    inputTarget.displayTransform = displayTransform;
+    inputTarget.rawTransform = rawTransform;
     inputTarget.firstDownTimeInTarget = firstDownTimeInTarget;
     return inputTarget;
 }
@@ -998,7 +974,7 @@ InputDispatcher::~InputDispatcher() {
 
     while (!mConnectionsByToken.empty()) {
         std::shared_ptr<Connection> connection = mConnectionsByToken.begin()->second;
-        removeInputChannelLocked(connection->getToken(), /*notify=*/false);
+        removeInputChannelLocked(connection, /*notify=*/false);
     }
 }
 
@@ -1528,20 +1504,8 @@ std::vector<sp<WindowInfoHandle>> InputDispatcher::DispatcherWindowInfo::findTou
         const WindowInfo& info = *windowHandle->getInfo();
         if (!windowAcceptsTouchAt(info, displayId, x, y, isStylus,
                                   getDisplayTransform(displayId))) {
-            // Generally, we would skip any pointer that's outside of the window. However, if the
-            // spy prevents splitting, and already has some of the pointers from this device, then
-            // it should get more pointers from the same device, even if they are outside of that
-            // window
-            if (info.supportsSplitTouch()) {
-                continue;
-            }
-
-            // We know that split touch is not supported. Skip this window only if it doesn't have
-            // any touching pointers for this device already.
-            if (!windowHasTouchingPointers(windowHandle, deviceId, touchStatesByDisplay)) {
-                continue;
-            }
-            // If it already has pointers down for this device, then give it this pointer, too.
+            // Skip if the pointer is outside of the window.
+            continue;
         }
         if (!info.isSpy()) {
             // The first touched non-spy window was found, so return the spy windows touched so far.
@@ -2448,7 +2412,7 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
         tempTouchState = *oldState;
     }
 
-    bool isSplit = shouldSplitTouch(tempTouchState, entry);
+    bool isSplit = shouldSplitTouch(entry.source);
 
     const bool isHoverAction = (maskedAction == AMOTION_EVENT_ACTION_HOVER_MOVE ||
                                 maskedAction == AMOTION_EVENT_ACTION_HOVER_ENTER ||
@@ -2501,17 +2465,6 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
         LOG_IF(INFO, newTouchedWindowHandle == nullptr)
                 << "No new touched window at (" << std::format("{:.1f}, {:.1f}", x, y)
                 << ") in display " << displayId;
-        // Handle the case where we did not find a window.
-        if (!input_flags::split_all_touches()) {
-            // If we are force splitting all touches, then touches outside of the window should
-            // be dropped, even if this device already has pointers down in another window.
-            if (newTouchedWindowHandle == nullptr) {
-                // Try to assign the pointer to the first foreground window we find, if there is
-                // one.
-                newTouchedWindowHandle =
-                        tempTouchState.getFirstForegroundWindowHandle(entry.deviceId);
-            }
-        }
 
         // Verify targeted injection.
         if (const auto err = verifyTargetedInjection(newTouchedWindowHandle, entry); err) {
@@ -2519,24 +2472,7 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
             return injectionError(InputEventInjectionResult::TARGET_MISMATCH);
         }
 
-        // Figure out whether splitting will be allowed for this window.
-        if (newTouchedWindowHandle != nullptr) {
-            if (newTouchedWindowHandle->getInfo()->supportsSplitTouch()) {
-                // New window supports splitting, but we should never split mouse events.
-                isSplit = !isFromMouse;
-            } else if (isSplit) {
-                // New window does not support splitting but we have already split events.
-                // Ignore the new window.
-                LOG(INFO) << "Skipping " << newTouchedWindowHandle->getName()
-                          << " because it doesn't support split touch";
-                newTouchedWindowHandle = nullptr;
-            }
-        } else {
-            // No window is touched, so set split to true. This will allow the next pointer down to
-            // be delivered to a new window which supports split touch. Pointers from a mouse device
-            // should never be split.
-            isSplit = !isFromMouse;
-        }
+        isSplit = !isFromMouse;
 
         std::vector<sp<WindowInfoHandle>> newTouchedWindows =
                 mWindowInfos.findTouchedSpyWindowsAt(displayId, x, y, isStylus, entry.deviceId,
@@ -2711,9 +2647,7 @@ InputDispatcher::findTouchedWindowTargetsLocked(nsecs_t currentTime, const Motio
                                              targets);
 
                 // Make a slippery entrance into the new window.
-                if (newTouchedWindowHandle->getInfo()->supportsSplitTouch()) {
-                    isSplit = !isFromMouse;
-                }
+                isSplit = !isFromMouse;
 
                 ftl::Flags<InputTarget::Flags> targetFlags;
                 if (canReceiveForegroundTouches(*newTouchedWindowHandle->getInfo())) {
@@ -3013,11 +2947,10 @@ void InputDispatcher::addWindowTargetLocked(const sp<WindowInfoHandle>& windowHa
                   windowHandle->getName().c_str());
             return;
         }
-        inputTargets.push_back(createInputTarget(connection, windowHandle, dispatchMode,
-                                                 targetFlags,
-                                                 mWindowInfos.getDisplayTransform(
-                                                         windowHandle->getInfo()->displayId),
-                                                 firstDownTimeInTarget));
+        inputTargets.push_back(
+                createInputTarget(connection, windowHandle, dispatchMode, targetFlags,
+                                  mWindowInfos.getRawTransform(*windowHandle->getInfo()),
+                                  firstDownTimeInTarget));
         it = inputTargets.end() - 1;
     }
 
@@ -3068,11 +3001,10 @@ void InputDispatcher::addPointerWindowTargetLocked(
                   windowHandle->getName().c_str());
             return;
         }
-        inputTargets.push_back(createInputTarget(connection, windowHandle, dispatchMode,
-                                                 targetFlags,
-                                                 mWindowInfos.getDisplayTransform(
-                                                         windowHandle->getInfo()->displayId),
-                                                 firstDownTimeInTarget));
+        inputTargets.push_back(
+                createInputTarget(connection, windowHandle, dispatchMode, targetFlags,
+                                  mWindowInfos.getRawTransform(*windowHandle->getInfo()),
+                                  firstDownTimeInTarget));
         it = inputTargets.end() - 1;
     }
 
@@ -3104,9 +3036,10 @@ void InputDispatcher::addGlobalMonitoringTargetsLocked(std::vector<InputTarget>&
     for (const Monitor& monitor : selectResponsiveMonitorsLocked(monitorsIt->second)) {
         InputTarget target{monitor.connection};
         // target.firstDownTimeInTarget is not set for global monitors. It is only required in split
-        // touch and global monitoring works as intended even without setting firstDownTimeInTarget
-        target.displayTransform = mWindowInfos.getDisplayTransform(displayId);
-        target.setDefaultPointerTransform(target.displayTransform);
+        // touch and global monitoring works as intended even without setting firstDownTimeInTarget.
+        // Since global monitors don't have windows, use the display transform as the raw transform.
+        target.rawTransform = mWindowInfos.getDisplayTransform(displayId);
+        target.setDefaultPointerTransform(target.rawTransform);
         inputTargets.push_back(target);
     }
 }
@@ -3930,7 +3863,7 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                           "event to it, status=%s(%d)",
                           connection->getInputChannelName().c_str(), statusToString(status).c_str(),
                           status);
-                    abortBrokenDispatchCycleLocked(currentTime, connection, /*notify=*/true);
+                    abortBrokenDispatchCycleLocked(connection, /*notify=*/true);
                 } else {
                     // Pipe is full and we are waiting for the app to finish process some events
                     // before sending more events to it.
@@ -3945,7 +3878,7 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                       "status=%s(%d)",
                       connection->getInputChannelName().c_str(), statusToString(status).c_str(),
                       status);
-                abortBrokenDispatchCycleLocked(currentTime, connection, /*notify=*/true);
+                abortBrokenDispatchCycleLocked(connection, /*notify=*/true);
             }
             return;
         }
@@ -4020,8 +3953,7 @@ void InputDispatcher::finishDispatchCycleLocked(nsecs_t currentTime,
     postCommandLocked(std::move(command));
 }
 
-void InputDispatcher::abortBrokenDispatchCycleLocked(nsecs_t currentTime,
-                                                     const std::shared_ptr<Connection>& connection,
+void InputDispatcher::abortBrokenDispatchCycleLocked(const std::shared_ptr<Connection>& connection,
                                                      bool notify) {
     if (DEBUG_DISPATCH_CYCLE) {
         LOG(INFO) << "channel '" << connection->getInputChannelName() << "'~ " << __func__
@@ -4137,7 +4069,7 @@ int InputDispatcher::handleReceiveCallback(int events, sp<IBinder> connectionTok
     }
 
     // Remove the channel.
-    removeInputChannelLocked(connection->getToken(), notify);
+    removeInputChannelLocked(connection, notify);
     return 0; // remove the callback
 }
 
@@ -4291,9 +4223,10 @@ void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
                                                  motionEntry.downTime, targets);
                 } else {
                     targets.emplace_back(fallbackTarget);
+                    // Since we don't have a window, use the display transform as the raw transform.
                     const ui::Transform displayTransform =
                             mWindowInfos.getDisplayTransform(motionEntry.displayId);
-                    targets.back().displayTransform = displayTransform;
+                    targets.back().rawTransform = displayTransform;
                     targets.back().setDefaultPointerTransform(displayTransform);
                 }
                 logOutboundMotionDetails("cancel - ", motionEntry);
@@ -4376,9 +4309,10 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
                                                  targets);
                 } else {
                     targets.emplace_back(connection, targetFlags);
+                    // Since we don't have a window, use the display transform as the raw transform.
                     const ui::Transform displayTransform =
                             mWindowInfos.getDisplayTransform(motionEntry.displayId);
-                    targets.back().displayTransform = displayTransform;
+                    targets.back().rawTransform = displayTransform;
                     targets.back().setDefaultPointerTransform(displayTransform);
                 }
                 logOutboundMotionDetails("down - ", motionEntry);
@@ -5289,6 +5223,16 @@ ui::Transform InputDispatcher::DispatcherWindowInfo::getDisplayTransform(
                                                 : kIdentityTransform;
 }
 
+ui::Transform InputDispatcher::DispatcherWindowInfo::getRawTransform(
+        const android::gui::WindowInfo& windowInfo) const {
+    // If the window has a cloneLayerStackTransform, always use it as the transform for the "getRaw"
+    // APIs. If not, fall back to using the DisplayInfo transform of the window's display.
+    return (input_flags::use_cloned_screen_coordinates_as_raw() &&
+            windowInfo.cloneLayerStackTransform)
+            ? *windowInfo.cloneLayerStackTransform
+            : getDisplayTransform(windowInfo.displayId);
+}
+
 std::string InputDispatcher::DispatcherWindowInfo::dumpDisplayAndWindowInfo() const {
     std::string dump;
     if (!mWindowHandlesByDisplay.empty()) {
@@ -5835,18 +5779,6 @@ InputDispatcher::findTouchStateWindowAndDisplay(
                            const_cast<TouchedWindow*>(constTouchedWindow), displayId);
 }
 
-bool InputDispatcher::windowHasTouchingPointers(
-        const sp<WindowInfoHandle>& windowHandle, DeviceId deviceId,
-        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
-    const auto& [touchState, touchedWindow, _] =
-            findTouchStateWindowAndDisplay(windowHandle->getToken(), touchStatesByDisplay);
-    if (touchState == nullptr) {
-        // No touching pointers at all
-        return false;
-    }
-    return touchState->hasTouchingPointers(deviceId);
-}
-
 bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
                                            bool isDragDrop) {
     if (fromToken == toToken) {
@@ -6302,8 +6234,14 @@ Result<std::unique_ptr<InputChannel>> InputDispatcher::createInputMonitor(
 status_t InputDispatcher::removeInputChannel(const sp<IBinder>& connectionToken) {
     { // acquire lock
         std::scoped_lock _l(mLock);
+        std::shared_ptr<Connection> connection = getConnectionLocked(connectionToken);
+        if (connection == nullptr) {
+            // Connection can be removed via socket hang up or an explicit call to
+            // 'removeInputChannel'
+            return BAD_VALUE;
+        }
 
-        status_t status = removeInputChannelLocked(connectionToken, /*notify=*/false);
+        status_t status = removeInputChannelLocked(connection, /*notify=*/false);
         if (status) {
             return status;
         }
@@ -6315,24 +6253,17 @@ status_t InputDispatcher::removeInputChannel(const sp<IBinder>& connectionToken)
     return OK;
 }
 
-status_t InputDispatcher::removeInputChannelLocked(const sp<IBinder>& connectionToken,
+status_t InputDispatcher::removeInputChannelLocked(const std::shared_ptr<Connection>& connection,
                                                    bool notify) {
-    std::shared_ptr<Connection> connection = getConnectionLocked(connectionToken);
-    if (connection == nullptr) {
-        // Connection can be removed via socket hang up or an explicit call to 'removeInputChannel'
-        return BAD_VALUE;
-    }
-
+    LOG_ALWAYS_FATAL_IF(connection == nullptr);
+    abortBrokenDispatchCycleLocked(connection, notify);
     removeConnectionLocked(connection);
 
     if (connection->monitor) {
-        removeMonitorChannelLocked(connectionToken);
+        removeMonitorChannelLocked(connection->getToken());
     }
 
     mLooper->removeFd(connection->inputPublisher.getChannel().getFd());
-
-    nsecs_t currentTime = now();
-    abortBrokenDispatchCycleLocked(currentTime, connection, notify);
 
     connection->status = Connection::Status::ZOMBIE;
     return OK;
@@ -6567,9 +6498,8 @@ void InputDispatcher::doDispatchCycleFinishedCommand(nsecs_t finishTime,
                                            createInputTarget(connection, windowHandle,
                                                              InputTarget::DispatchMode::AS_IS,
                                                              dispatchEntry->targetFlags,
-                                                             mWindowInfos.getDisplayTransform(
-                                                                     windowHandle->getInfo()
-                                                                             ->displayId),
+                                                             mWindowInfos.getRawTransform(
+                                                                     *windowHandle->getInfo()),
                                                              downTime));
             }
         }
@@ -7168,13 +7098,6 @@ void InputDispatcher::onWindowInfosChanged(const gui::WindowInfosUpdate& update)
     for (const auto& info : update.windowInfos) {
         handlesPerDisplay.emplace(info.displayId, std::vector<sp<WindowInfoHandle>>());
         handlesPerDisplay[info.displayId].push_back(sp<WindowInfoHandle>::make(info));
-        if (input_flags::split_all_touches()) {
-            handlesPerDisplay[info.displayId]
-                    .back()
-                    ->editInfo()
-                    ->setInputConfig(android::gui::WindowInfo::InputConfig::PREVENT_SPLITTING,
-                                     false);
-        }
     }
 
     { // acquire lock
