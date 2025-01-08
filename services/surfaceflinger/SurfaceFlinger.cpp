@@ -879,6 +879,8 @@ renderengine::RenderEngine::BlurAlgorithm chooseBlurAlgorithm(bool supportsBlur)
         return renderengine::RenderEngine::BlurAlgorithm::GAUSSIAN;
     } else if (algorithm == "kawase2") {
         return renderengine::RenderEngine::BlurAlgorithm::KAWASE_DUAL_FILTER;
+    } else if (algorithm == "kawase") {
+        return renderengine::RenderEngine::BlurAlgorithm::KAWASE;
     } else {
         if (FlagManager::getInstance().window_blur_kawase2()) {
             return renderengine::RenderEngine::BlurAlgorithm::KAWASE_DUAL_FILTER;
