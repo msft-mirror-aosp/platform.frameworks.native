@@ -224,7 +224,7 @@ private:
     volatile int32_t mObitsSent;
     Vector<Obituary>* mObituaries;
     std::unique_ptr<FrozenStateChange> mFrozen;
-    ObjectManager mObjects;
+    ObjectManager mObjectMgr;
     mutable String16 mDescriptorCache;
     int32_t mTrackedUid;
 
