@@ -215,7 +215,9 @@ Status BackendUnifiedServiceManager::getService(const ::std::string& name,
                                                 sp<IBinder>* _aidl_return) {
     os::Service service;
     Status status = getService2(name, &service);
-    *_aidl_return = service.get<os::Service::Tag::serviceWithMetadata>().service;
+    if (status.isOk()) {
+        *_aidl_return = service.get<os::Service::Tag::serviceWithMetadata>().service;
+    }
     return status;
 }
 
