@@ -78,7 +78,16 @@ BpBinder::ObjectManager::ObjectManager()
 
 BpBinder::ObjectManager::~ObjectManager()
 {
-    kill();
+    const size_t N = mObjects.size();
+    ALOGV("Killing %zu objects in manager %p", N, this);
+    for (auto i : mObjects) {
+        const entry_t& e = i.second;
+        if (e.func != nullptr) {
+            e.func(i.first, e.object, e.cleanupCookie);
+        }
+    }
+
+    mObjects.clear();
 }
 
 void* BpBinder::ObjectManager::attach(const void* objectID, void* object, void* cleanupCookie,
@@ -142,20 +151,6 @@ sp<IBinder> BpBinder::ObjectManager::lookupOrCreateWeak(const void* objectID, ob
     e.func = cleanWeak;
 
     return newObj;
-}
-
-void BpBinder::ObjectManager::kill()
-{
-    const size_t N = mObjects.size();
-    ALOGV("Killing %zu objects in manager %p", N, this);
-    for (auto i : mObjects) {
-        const entry_t& e = i.second;
-        if (e.func != nullptr) {
-            e.func(i.first, e.object, e.cleanupCookie);
-        }
-    }
-
-    mObjects.clear();
 }
 
 // ---------------------------------------------------------------------------

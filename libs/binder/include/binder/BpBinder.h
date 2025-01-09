@@ -104,6 +104,7 @@ public:
     // Stop the current recording.
     LIBBINDER_EXPORTED status_t stopRecordingBinder();
 
+    // Note: This class is not thread safe so protect uses of it when necessary
     class ObjectManager {
     public:
         ObjectManager();
@@ -115,8 +116,6 @@ public:
         void* detach(const void* objectID);
         sp<IBinder> lookupOrCreateWeak(const void* objectID, IBinder::object_make_func make,
                                        const void* makeArgs);
-
-        void kill();
 
     private:
         ObjectManager(const ObjectManager&);
