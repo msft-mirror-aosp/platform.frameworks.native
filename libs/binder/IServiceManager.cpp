@@ -624,7 +624,7 @@ sp<IBinder> CppBackendShim::getService(const String16& name) const {
 
 sp<IBinder> CppBackendShim::checkService(const String16& name) const {
     Service ret;
-    if (!mUnifiedServiceManager->checkService(String8(name).c_str(), &ret).isOk()) {
+    if (!mUnifiedServiceManager->checkService2(String8(name).c_str(), &ret).isOk()) {
         return nullptr;
     }
     return ret.get<Service::Tag::serviceWithMetadata>().service;
