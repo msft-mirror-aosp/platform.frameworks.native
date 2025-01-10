@@ -260,12 +260,30 @@ private:
             const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay,
             ui::LogicalDisplayId displayId);
 
+    std::shared_ptr<Connection> getConnectionLocked(const sp<IBinder>& inputConnectionToken) const
+            REQUIRES(mLock);
+
+    std::string getConnectionNameLocked(const sp<IBinder>& connectionToken) const REQUIRES(mLock);
+
+    void removeConnectionLocked(const std::shared_ptr<Connection>& connection) REQUIRES(mLock);
+
     status_t pilferPointersLocked(const sp<IBinder>& token) REQUIRES(mLock);
 
     template <typename T>
     struct StrongPointerHash {
         std::size_t operator()(const sp<T>& b) const { return std::hash<T*>{}(b.get()); }
     };
+
+    // All registered connections mapped by input channel token.
+    std::unordered_map<sp<IBinder>, std::shared_ptr<Connection>, StrongPointerHash<IBinder>>
+            mConnectionsByToken GUARDED_BY(mLock);
+
+    // Find a monitor pid by the provided token.
+    std::optional<gui::Pid> findMonitorPidByTokenLocked(const sp<IBinder>& token) REQUIRES(mLock);
+
+    // Input channels that will receive a copy of all input events sent to the provided display.
+    std::unordered_map<ui::LogicalDisplayId, std::vector<Monitor>> mGlobalMonitorsByDisplay
+            GUARDED_BY(mLock);
 
     const HmacKeyManager mHmacKeyManager;
     const std::array<uint8_t, 32> getSignature(const MotionEntry& motionEntry,
@@ -398,48 +416,6 @@ private:
     };
 
     DispatcherWindowInfo mWindowInfos GUARDED_BY(mLock);
-
-    class ConnectionManager {
-    public:
-        ConnectionManager(sp<Looper> lopper);
-        ~ConnectionManager();
-
-        std::shared_ptr<Connection> getConnection(const sp<IBinder>& inputConnectionToken) const;
-
-        // Find a monitor pid by the provided token.
-        std::optional<gui::Pid> findMonitorPidByToken(const sp<IBinder>& token) const;
-        void forEachGlobalMonitorConnection(
-                std::function<void(const std::shared_ptr<Connection>&)> f) const;
-        void forEachGlobalMonitorConnection(
-                ui::LogicalDisplayId displayId,
-                std::function<void(const std::shared_ptr<Connection>&)> f) const;
-
-        void createGlobalInputMonitor(ui::LogicalDisplayId displayId,
-                                      std::unique_ptr<InputChannel>&& inputChannel,
-                                      const IdGenerator& idGenerator, gui::Pid pid);
-
-        status_t removeInputChannel(const std::shared_ptr<Connection>& connection);
-        void removeConnection(const std::shared_ptr<Connection>& connection);
-
-        void createConnection(std::unique_ptr<InputChannel>&& inputChannel,
-                              const IdGenerator& idGenerator);
-
-        std::string dump(nsecs_t currentTime) const;
-
-    private:
-        sp<Looper> mLooper;
-
-        // All registered connections mapped by input channel token.
-        std::unordered_map<sp<IBinder>, std::shared_ptr<Connection>, StrongPointerHash<IBinder>>
-                mConnectionsByToken;
-
-        // Input channels that will receive a copy of all input events sent to the provided display.
-        std::unordered_map<ui::LogicalDisplayId, std::vector<Monitor>> mGlobalMonitorsByDisplay;
-
-        void removeMonitorChannel(const sp<IBinder>& connectionToken);
-    };
-
-    ConnectionManager mConnectionManager GUARDED_BY(mLock);
 
     void setInputWindowsLocked(
             const std::vector<sp<android::gui::WindowInfoHandle>>& inputWindowHandles,
@@ -606,6 +582,8 @@ private:
                                   nsecs_t& nextWakeupTime) REQUIRES(mLock);
     base::Result<std::vector<InputTarget>, android::os::InputEventInjectionResult>
     findTouchedWindowTargetsLocked(nsecs_t currentTime, const MotionEntry& entry) REQUIRES(mLock);
+    std::vector<Monitor> selectResponsiveMonitorsLocked(
+            const std::vector<Monitor>& gestureMonitors) const REQUIRES(mLock);
 
     void addWindowTargetLocked(const sp<android::gui::WindowInfoHandle>& windowHandle,
                                InputTarget::DispatchMode dispatchMode,
@@ -711,9 +689,12 @@ private:
 
     // Dump state.
     void dumpDispatchStateLocked(std::string& dump) const REQUIRES(mLock);
+    void dumpMonitors(std::string& dump, const std::vector<Monitor>& monitors) const;
     void logDispatchStateLocked() const REQUIRES(mLock);
     std::string dumpPointerCaptureStateLocked() const REQUIRES(mLock);
 
+    // Registration.
+    void removeMonitorChannelLocked(const sp<IBinder>& connectionToken) REQUIRES(mLock);
     status_t removeInputChannelLocked(const std::shared_ptr<Connection>& connection, bool notify)
             REQUIRES(mLock);
 
