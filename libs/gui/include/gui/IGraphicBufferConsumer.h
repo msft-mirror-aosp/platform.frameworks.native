@@ -40,15 +40,8 @@ class NativeHandle;
 /*
  * See IGraphicBufferProducer for details on SLOT_COUNT.
  */
-#ifndef NO_BINDER
-class IGraphicBufferConsumer : public IInterface {
-public:
-    DECLARE_META_INTERFACE(GraphicBufferConsumer)
-#else
 class IGraphicBufferConsumer : public RefBase {
 public:
-#endif
-
     enum {
         // Returned by releaseBuffer, after which the consumer must free any references to the
         // just-released buffer that it might have.
@@ -321,19 +314,5 @@ public:
         result.append(returned);
     }
 };
-
-#ifndef NO_BINDER
-class BnGraphicBufferConsumer : public SafeBnInterface<IGraphicBufferConsumer> {
-public:
-    BnGraphicBufferConsumer()
-          : SafeBnInterface<IGraphicBufferConsumer>("BnGraphicBufferConsumer") {}
-
-    status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
-                        uint32_t flags = 0) override;
-};
-#else
-class BnGraphicBufferConsumer : public IGraphicBufferConsumer {
-};
-#endif
 
 } // namespace android
