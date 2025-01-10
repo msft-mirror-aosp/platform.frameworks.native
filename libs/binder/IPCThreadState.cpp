@@ -853,12 +853,8 @@ status_t IPCThreadState::handlePolledCommands()
 
 void IPCThreadState::stopProcess(bool /*immediate*/)
 {
-    //ALOGI("**** STOPPING PROCESS");
-    flushCommands();
-    int fd = mProcess->mDriverFD;
-    mProcess->mDriverFD = -1;
-    close(fd);
-    //kill(getpid(), SIGKILL);
+    ALOGI("IPCThreadState::stopProcess() (deprecated) called. Exiting process.");
+    exit(0);
 }
 
 status_t IPCThreadState::transact(int32_t handle,
