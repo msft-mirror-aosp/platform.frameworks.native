@@ -302,6 +302,11 @@ struct layer_state_t {
     static constexpr uint64_t VISIBLE_REGION_CHANGES = layer_state_t::GEOMETRY_CHANGES |
             layer_state_t::HIERARCHY_CHANGES | layer_state_t::eAlphaChanged;
 
+    // Changes that force GPU composition.
+    static constexpr uint64_t COMPOSITION_EFFECTS = layer_state_t::eBackgroundBlurRadiusChanged |
+            layer_state_t::eBlurRegionsChanged | layer_state_t::eCornerRadiusChanged |
+            layer_state_t::eShadowRadiusChanged | layer_state_t::eStretchChanged;
+
     bool hasValidBuffer() const;
     void sanitize(int32_t permissions);
 

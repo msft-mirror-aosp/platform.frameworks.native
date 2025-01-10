@@ -427,4 +427,14 @@ ftl::Future<FenceResult> LayerFE::createReleaseFenceFuture() {
 LayerFE::ReleaseFencePromiseStatus LayerFE::getReleaseFencePromiseStatus() {
     return mReleaseFencePromiseStatus;
 }
+
+void LayerFE::setHwcCompositionType(
+        aidl::android::hardware::graphics::composer3::Composition type) {
+    mLastHwcCompositionType = type;
+}
+
+aidl::android::hardware::graphics::composer3::Composition LayerFE::getHwcCompositionType() const {
+    return mLastHwcCompositionType;
+}
+
 } // namespace android
