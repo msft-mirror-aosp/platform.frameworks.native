@@ -352,15 +352,6 @@ private:
 
     class DispatcherTouchState {
     public:
-        static base::Result<std::vector<InputTarget>, android::os::InputEventInjectionResult>
-        findTouchedWindowTargets(nsecs_t currentTime, const MotionEntry& entry,
-                                 const ConnectionManager& connections,
-                                 const DispatcherWindowInfo& windowInfos,
-                                 std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStates,
-                                 const sp<android::gui::WindowInfoHandle> dragWindow,
-                                 std::function<void(const MotionEntry&)> addDragEvent,
-                                 std::function<void()> dump);
-
         static void addPointerWindowTarget(const sp<android::gui::WindowInfoHandle>& windowHandle,
                                            InputTarget::DispatchMode dispatchMode,
                                            ftl::Flags<InputTarget::Flags> targetFlags,
@@ -371,9 +362,18 @@ private:
                                            std::function<void()> dump,
                                            std::vector<InputTarget>& inputTargets);
 
-        static sp<android::gui::WindowInfoHandle> findTouchedForegroundWindow(
-                const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay,
-                ui::LogicalDisplayId displayId);
+        base::Result<std::vector<InputTarget>, android::os::InputEventInjectionResult>
+        findTouchedWindowTargets(nsecs_t currentTime, const MotionEntry& entry,
+                                 const ConnectionManager& connections,
+                                 const DispatcherWindowInfo& windowInfos,
+                                 const sp<android::gui::WindowInfoHandle> dragWindow,
+                                 std::function<void(const MotionEntry&)> addDragEvent,
+                                 std::function<void()> dump);
+
+        sp<android::gui::WindowInfoHandle> findTouchedForegroundWindow(
+                ui::LogicalDisplayId displayId) const;
+
+        std::unordered_map<ui::LogicalDisplayId, TouchState> mTouchStatesByDisplay;
 
     private:
         static std::vector<InputTarget> findOutsideTargets(
@@ -408,6 +408,8 @@ private:
                 const sp<android::gui::WindowInfoHandle>& targetWindow, vec2 targetPosition,
                 bool isSplit, const DispatcherWindowInfo& windowInfos);
     };
+
+    DispatcherTouchState mTouchStates GUARDED_BY(mLock);
 
     // With each iteration, InputDispatcher nominally processes one queued event,
     // a timeout, or a response from an input consumer.
@@ -540,8 +542,6 @@ private:
             const std::vector<sp<android::gui::WindowInfoHandle>>& inputWindowHandles,
             ui::LogicalDisplayId displayId) REQUIRES(mLock);
 
-    std::unordered_map<ui::LogicalDisplayId /*displayId*/, TouchState> mTouchStatesByDisplay
-            GUARDED_BY(mLock);
     std::unique_ptr<DragState> mDragState GUARDED_BY(mLock);
 
     void setFocusedApplicationLocked(
