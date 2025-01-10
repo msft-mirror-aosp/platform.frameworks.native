@@ -290,8 +290,6 @@ private:
 
         void removeDisplay(ui::LogicalDisplayId displayId);
 
-        void setMaximumObscuringOpacityForTouch(float opacity);
-
         // Get a reference to window handles by display, return an empty vector if not found.
         const std::vector<sp<android::gui::WindowInfoHandle>>& getWindowHandlesForDisplay(
                 ui::LogicalDisplayId displayId) const;
@@ -336,8 +334,6 @@ private:
         sp<android::gui::WindowInfoHandle> findWallpaperWindowBelow(
                 const sp<android::gui::WindowInfoHandle>& windowHandle) const;
 
-        bool isTouchTrusted(const TouchOcclusionInfo& occlusionInfo) const;
-
         std::string dumpDisplayAndWindowInfo() const;
 
     private:
@@ -346,7 +342,6 @@ private:
                 mWindowHandlesByDisplay;
         std::unordered_map<ui::LogicalDisplayId /*displayId*/, android::gui::DisplayInfo>
                 mDisplayInfos;
-        float mMaximumObscuringOpacityForTouch{1.0f};
     };
 
     DispatcherWindowInfo mWindowInfos GUARDED_BY(mLock);
@@ -448,6 +443,7 @@ private:
     bool mDispatchEnabled GUARDED_BY(mLock);
     bool mDispatchFrozen GUARDED_BY(mLock);
     bool mInputFilterEnabled GUARDED_BY(mLock);
+    float mMaximumObscuringOpacityForTouch GUARDED_BY(mLock);
 
     // This map is not really needed, but it helps a lot with debugging (dumpsys input).
     // In the java layer, touch mode states are spread across multiple DisplayContent objects,
@@ -650,6 +646,8 @@ private:
     void addDragEventLocked(const MotionEntry& entry) REQUIRES(mLock);
     void finishDragAndDrop(ui::LogicalDisplayId displayId, float x, float y) REQUIRES(mLock);
 
+    bool isTouchTrustedLocked(const DispatcherWindowInfo::TouchOcclusionInfo& occlusionInfo) const
+            REQUIRES(mLock);
     std::string getApplicationWindowLabel(const InputApplicationHandle* applicationHandle,
                                           const sp<android::gui::WindowInfoHandle>& windowHandle);
 
