@@ -918,21 +918,6 @@ InputTarget createInputTarget(const std::shared_ptr<Connection>& connection,
     return inputTarget;
 }
 
-std::string dumpWindowForTouchOcclusion(const WindowInfo& info, bool isTouchedWindow) {
-    return StringPrintf(INDENT2 "* %spackage=%s/%s, id=%" PRId32 ", mode=%s, alpha=%.2f, "
-                                "frame=[%" PRId32 ",%" PRId32 "][%" PRId32 ",%" PRId32
-                                "], touchableRegion=%s, window={%s}, inputConfig={%s}, "
-                                "hasToken=%s, applicationInfo.name=%s, applicationInfo.token=%s\n",
-                        isTouchedWindow ? "[TOUCHED] " : "", info.packageName.c_str(),
-                        info.ownerUid.toString().c_str(), info.id,
-                        toString(info.touchOcclusionMode).c_str(), info.alpha, info.frame.left,
-                        info.frame.top, info.frame.right, info.frame.bottom,
-                        dumpRegion(info.touchableRegion).c_str(), info.name.c_str(),
-                        info.inputConfig.string().c_str(), toString(info.token != nullptr),
-                        info.applicationInfo.name.c_str(),
-                        binderToString(info.applicationInfo.token).c_str());
-}
-
 } // namespace
 
 // --- InputDispatcher ---
@@ -948,13 +933,13 @@ InputDispatcher::InputDispatcher(InputDispatcherPolicyInterface& policy,
         mLastDropReason(DropReason::NOT_DROPPED),
         mIdGenerator(IdGenerator::Source::INPUT_DISPATCHER),
         mMinTimeBetweenUserActivityPokes(DEFAULT_USER_ACTIVITY_POKE_INTERVAL),
-        mConnectionManager(mLooper),
         mNextUnblockedEvent(nullptr),
         mMonitorDispatchingTimeout(DEFAULT_INPUT_DISPATCHING_TIMEOUT),
         mDispatchEnabled(false),
         mDispatchFrozen(false),
         mInputFilterEnabled(false),
         mMaximumObscuringOpacityForTouch(1.0f),
+        mConnectionManager(mLooper),
         mFocusedDisplayId(ui::LogicalDisplayId::DEFAULT),
         mWindowTokenWithPointerCapture(nullptr),
         mAwaitedApplicationDisplayId(ui::LogicalDisplayId::INVALID),
@@ -3108,12 +3093,12 @@ static bool canBeObscuredBy(const sp<WindowInfoHandle>& windowHandle,
  *
  * If neither of those is true, then it means the touch can be allowed.
  */
-InputDispatcher::DispatcherWindowInfo::TouchOcclusionInfo
-InputDispatcher::DispatcherWindowInfo::computeTouchOcclusionInfo(
+InputDispatcher::TouchOcclusionInfo InputDispatcher::computeTouchOcclusionInfoLocked(
         const sp<WindowInfoHandle>& windowHandle, float x, float y) const {
     const WindowInfo* windowInfo = windowHandle->getInfo();
     ui::LogicalDisplayId displayId = windowInfo->displayId;
-    const std::vector<sp<WindowInfoHandle>>& windowHandles = getWindowHandlesForDisplay(displayId);
+    const std::vector<sp<WindowInfoHandle>>& windowHandles =
+            mWindowInfos.getWindowHandlesForDisplay(displayId);
     TouchOcclusionInfo info;
     info.hasBlockingOcclusion = false;
     info.obscuringOpacity = 0;
@@ -3125,11 +3110,12 @@ InputDispatcher::DispatcherWindowInfo::computeTouchOcclusionInfo(
         }
         const WindowInfo* otherInfo = otherHandle->getInfo();
         if (canBeObscuredBy(windowHandle, otherHandle) &&
-            windowOccludesTouchAt(*otherInfo, displayId, x, y, getDisplayTransform(displayId)) &&
+            windowOccludesTouchAt(*otherInfo, displayId, x, y,
+                                  mWindowInfos.getDisplayTransform(displayId)) &&
             !haveSameApplicationToken(windowInfo, otherInfo)) {
             if (DEBUG_TOUCH_OCCLUSION) {
                 info.debugInfo.push_back(
-                        dumpWindowForTouchOcclusion(*otherInfo, /*isTouchedWindow=*/false));
+                        dumpWindowForTouchOcclusion(otherInfo, /*isTouchedWindow=*/false));
             }
             // canBeObscuredBy() has returned true above, which means this window is untrusted, so
             // we perform the checks below to see if the touch can be propagated or not based on the
@@ -3157,14 +3143,28 @@ InputDispatcher::DispatcherWindowInfo::computeTouchOcclusionInfo(
         }
     }
     if (DEBUG_TOUCH_OCCLUSION) {
-        info.debugInfo.push_back(
-                dumpWindowForTouchOcclusion(*windowInfo, /*isTouchedWindow=*/true));
+        info.debugInfo.push_back(dumpWindowForTouchOcclusion(windowInfo, /*isTouchedWindow=*/true));
     }
     return info;
 }
 
-bool InputDispatcher::isTouchTrustedLocked(
-        const DispatcherWindowInfo::TouchOcclusionInfo& occlusionInfo) const {
+std::string InputDispatcher::dumpWindowForTouchOcclusion(const WindowInfo* info,
+                                                         bool isTouchedWindow) const {
+    return StringPrintf(INDENT2 "* %spackage=%s/%s, id=%" PRId32 ", mode=%s, alpha=%.2f, "
+                                "frame=[%" PRId32 ",%" PRId32 "][%" PRId32 ",%" PRId32
+                                "], touchableRegion=%s, window={%s}, inputConfig={%s}, "
+                                "hasToken=%s, applicationInfo.name=%s, applicationInfo.token=%s\n",
+                        isTouchedWindow ? "[TOUCHED] " : "", info->packageName.c_str(),
+                        info->ownerUid.toString().c_str(), info->id,
+                        toString(info->touchOcclusionMode).c_str(), info->alpha, info->frame.left,
+                        info->frame.top, info->frame.right, info->frame.bottom,
+                        dumpRegion(info->touchableRegion).c_str(), info->name.c_str(),
+                        info->inputConfig.string().c_str(), toString(info->token != nullptr),
+                        info->applicationInfo.name.c_str(),
+                        binderToString(info->applicationInfo.token).c_str());
+}
+
+bool InputDispatcher::isTouchTrustedLocked(const TouchOcclusionInfo& occlusionInfo) const {
     if (occlusionInfo.hasBlockingOcclusion) {
         ALOGW("Untrusted touch due to occlusion by %s/%s", occlusionInfo.obscuringPackage.c_str(),
               occlusionInfo.obscuringUid.toString().c_str());
@@ -5306,8 +5306,7 @@ bool InputDispatcher::canWindowReceiveMotionLocked(const sp<WindowInfoHandle>& w
 
     // Drop events that can't be trusted due to occlusion
     const auto [x, y] = resolveTouchedPosition(motionEntry);
-    DispatcherWindowInfo::TouchOcclusionInfo occlusionInfo =
-            mWindowInfos.computeTouchOcclusionInfo(window, x, y);
+    TouchOcclusionInfo occlusionInfo = computeTouchOcclusionInfoLocked(window, x, y);
     if (!isTouchTrustedLocked(occlusionInfo)) {
         if (DEBUG_TOUCH_OCCLUSION) {
             ALOGD("Stack of obscuring windows during untrusted touch (%.1f, %.1f):", x, y);
