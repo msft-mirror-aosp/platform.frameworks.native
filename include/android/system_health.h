@@ -417,7 +417,6 @@ __INTRODUCED_IN(36);
  * @param outMinIntervalMillis Non-null output pointer to a int64_t, which
  *                will be set to the minimum polling interval in milliseconds.
  * @return 0 on success.
- *         EPIPE if failed to get the minimum polling interval.
  *         ENOTSUP if API is unsupported.
  */
 int ASystemHealth_getCpuHeadroomMinIntervalMillis(int64_t* _Nonnull outMinIntervalMillis)
@@ -434,7 +433,6 @@ __INTRODUCED_IN(36);
  * @param outMinIntervalMillis Non-null output pointer to a int64_t, which
  *                will be set to the minimum polling interval in milliseconds.
  * @return 0 on success.
- *         EPIPE if failed to get the minimum polling interval.
  *         ENOTSUP if API is unsupported.
  */
 int ASystemHealth_getGpuHeadroomMinIntervalMillis(int64_t* _Nonnull outMinIntervalMillis)

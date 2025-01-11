@@ -982,6 +982,8 @@ void LayerSnapshotBuilder::updateRoundedCorner(LayerSnapshot& snapshot,
         parentRoundedCorner.cropRect = t.transform(parentRoundedCorner.cropRect);
         parentRoundedCorner.radius.x *= t.getScaleX();
         parentRoundedCorner.radius.y *= t.getScaleY();
+        parentRoundedCorner.requestedRadius.x *= t.getScaleX();
+        parentRoundedCorner.requestedRadius.y *= t.getScaleY();
     }
 
     FloatRect layerCropRect = snapshot.croppedBufferSize;
