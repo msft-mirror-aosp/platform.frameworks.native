@@ -1267,14 +1267,9 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t& nextWakeupTime) {
             if (dropReason == DropReason::NOT_DROPPED && isStaleEvent(currentTime, *motionEntry)) {
                 // The event is stale. However, only drop stale events if there isn't an ongoing
                 // gesture. That would allow us to complete the processing of the current stroke.
-                const auto touchStateIt =
-                        mTouchStates.mTouchStatesByDisplay.find(motionEntry->displayId);
-                if (touchStateIt != mTouchStates.mTouchStatesByDisplay.end()) {
-                    const TouchState& touchState = touchStateIt->second;
-                    if (!touchState.hasTouchingPointers(motionEntry->deviceId) &&
-                        !touchState.hasHoveringPointers(motionEntry->deviceId)) {
-                        dropReason = DropReason::STALE;
-                    }
+                if (!mTouchStates.hasTouchingOrHoveringPointers(motionEntry->displayId,
+                                                                motionEntry->deviceId)) {
+                    dropReason = DropReason::STALE;
                 }
             }
             if (dropReason == DropReason::NOT_DROPPED && mNextUnblockedEvent) {
@@ -1716,9 +1711,7 @@ bool InputDispatcher::dispatchDeviceResetLocked(nsecs_t currentTime,
     synthesizeCancelationEventsForAllConnectionsLocked(options);
 
     // Remove all active pointers from this device
-    for (auto& [_, touchState] : mTouchStates.mTouchStatesByDisplay) {
-        touchState.removeAllPointersForDevice(entry.deviceId);
-    }
+    mTouchStates.removeAllPointersForDevice(entry.deviceId);
     return true;
 }
 
@@ -4581,13 +4574,8 @@ void InputDispatcher::notifyMotion(const NotifyMotionArgs& args) {
         if (!(policyFlags & POLICY_FLAG_PASS_TO_USER)) {
             // Set the flag anyway if we already have an ongoing gesture. That would allow us to
             // complete the processing of the current stroke.
-            const auto touchStateIt = mTouchStates.mTouchStatesByDisplay.find(args.displayId);
-            if (touchStateIt != mTouchStates.mTouchStatesByDisplay.end()) {
-                const TouchState& touchState = touchStateIt->second;
-                if (touchState.hasTouchingPointers(args.deviceId) ||
-                    touchState.hasHoveringPointers(args.deviceId)) {
-                    policyFlags |= POLICY_FLAG_PASS_TO_USER;
-                }
+            if (mTouchStates.hasTouchingOrHoveringPointers(args.displayId, args.deviceId)) {
+                policyFlags |= POLICY_FLAG_PASS_TO_USER;
             }
         }
 
@@ -4893,13 +4881,8 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             if (!(policyFlags & POLICY_FLAG_PASS_TO_USER)) {
                 // Set the flag anyway if we already have an ongoing motion gesture. That
                 // would allow us to complete the processing of the current stroke.
-                const auto touchStateIt = mTouchStates.mTouchStatesByDisplay.find(displayId);
-                if (touchStateIt != mTouchStates.mTouchStatesByDisplay.end()) {
-                    const TouchState& touchState = touchStateIt->second;
-                    if (touchState.hasTouchingPointers(resolvedDeviceId) ||
-                        touchState.hasHoveringPointers(resolvedDeviceId)) {
-                        policyFlags |= POLICY_FLAG_PASS_TO_USER;
-                    }
+                if (mTouchStates.hasTouchingOrHoveringPointers(displayId, resolvedDeviceId)) {
+                    policyFlags |= POLICY_FLAG_PASS_TO_USER;
                 }
             }
 
@@ -5978,7 +5961,7 @@ void InputDispatcher::resetAndDropEverythingLocked(const char* reason) {
     resetNoFocusedWindowTimeoutLocked();
 
     mAnrTracker.clear();
-    mTouchStates.mTouchStatesByDisplay.clear();
+    mTouchStates.clear();
 }
 
 void InputDispatcher::logDispatchStateLocked() const {
@@ -6036,15 +6019,7 @@ void InputDispatcher::dumpDispatchStateLocked(std::string& dump) const {
     dump += mFocusResolver.dump();
     dump += dumpPointerCaptureStateLocked();
 
-    if (!mTouchStates.mTouchStatesByDisplay.empty()) {
-        dump += StringPrintf(INDENT "TouchStatesByDisplay:\n");
-        for (const auto& [displayId, state] : mTouchStates.mTouchStatesByDisplay) {
-            std::string touchStateDump = addLinePrefix(state.dump(), INDENT2);
-            dump += INDENT2 + displayId.toString() + " : " + touchStateDump;
-        }
-    } else {
-        dump += INDENT "TouchStates: <no displays touched>\n";
-    }
+    dump += addLinePrefix(mTouchStates.dump(), INDENT);
 
     if (mDragState) {
         dump += StringPrintf(INDENT "DragState:\n");
@@ -7093,7 +7068,7 @@ void InputDispatcher::cancelCurrentTouch() {
                                    "cancel current touch", traceContext.getTracker());
         synthesizeCancelationEventsForAllConnectionsLocked(options);
 
-        mTouchStates.mTouchStatesByDisplay.clear();
+        mTouchStates.clear();
     }
     // Wake up poll loop since there might be work to do.
     mLooper->wake();
@@ -7228,18 +7203,7 @@ bool InputDispatcher::isPointerInWindow(const sp<android::IBinder>& token,
                                         ui::LogicalDisplayId displayId, DeviceId deviceId,
                                         int32_t pointerId) {
     std::scoped_lock _l(mLock);
-    auto touchStateIt = mTouchStates.mTouchStatesByDisplay.find(displayId);
-    if (touchStateIt == mTouchStates.mTouchStatesByDisplay.end()) {
-        return false;
-    }
-    for (const TouchedWindow& window : touchStateIt->second.windows) {
-        if (window.windowHandle->getToken() == token &&
-            (window.hasTouchingPointer(deviceId, pointerId) ||
-             window.hasHoveringPointer(deviceId, pointerId))) {
-            return true;
-        }
-    }
-    return false;
+    return mTouchStates.isPointerInWindow(token, displayId, deviceId, pointerId);
 }
 
 void InputDispatcher::setInputMethodConnectionIsActive(bool isActive) {
@@ -7401,6 +7365,58 @@ ftl::Flags<InputTarget::Flags> InputDispatcher::DispatcherTouchState::getTargetF
         targetFlags |= InputTarget::Flags::WINDOW_IS_PARTIALLY_OBSCURED;
     }
     return targetFlags;
+}
+
+bool InputDispatcher::DispatcherTouchState::hasTouchingOrHoveringPointers(
+        ui::LogicalDisplayId displayId, int32_t deviceId) const {
+    const auto touchStateIt = mTouchStatesByDisplay.find(displayId);
+    if (touchStateIt == mTouchStatesByDisplay.end()) {
+        return false;
+    }
+    return touchStateIt->second.hasTouchingPointers(deviceId) ||
+            touchStateIt->second.hasHoveringPointers(deviceId);
+}
+
+bool InputDispatcher::DispatcherTouchState::isPointerInWindow(const sp<android::IBinder>& token,
+                                                              ui::LogicalDisplayId displayId,
+                                                              android::DeviceId deviceId,
+                                                              int32_t pointerId) const {
+    const auto touchStateIt = mTouchStatesByDisplay.find(displayId);
+    if (touchStateIt == mTouchStatesByDisplay.end()) {
+        return false;
+    }
+    for (const TouchedWindow& window : touchStateIt->second.windows) {
+        if (window.windowHandle->getToken() == token &&
+            (window.hasTouchingPointer(deviceId, pointerId) ||
+             window.hasHoveringPointer(deviceId, pointerId))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string InputDispatcher::DispatcherTouchState::dump() const {
+    std::string dump;
+    if (!mTouchStatesByDisplay.empty()) {
+        dump += StringPrintf("TouchStatesByDisplay:\n");
+        for (const auto& [displayId, state] : mTouchStatesByDisplay) {
+            std::string touchStateDump = addLinePrefix(state.dump(), INDENT);
+            dump += INDENT + displayId.toString() + " : " + touchStateDump;
+        }
+    } else {
+        dump += "TouchStates: <no displays touched>\n";
+    }
+    return dump;
+}
+
+void InputDispatcher::DispatcherTouchState::removeAllPointersForDevice(android::DeviceId deviceId) {
+    for (auto& [_, touchState] : mTouchStatesByDisplay) {
+        touchState.removeAllPointersForDevice(deviceId);
+    }
+}
+
+void InputDispatcher::DispatcherTouchState::clear() {
+    mTouchStatesByDisplay.clear();
 }
 
 } // namespace android::inputdispatcher

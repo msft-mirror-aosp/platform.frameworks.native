@@ -373,6 +373,17 @@ private:
         sp<android::gui::WindowInfoHandle> findTouchedForegroundWindow(
                 ui::LogicalDisplayId displayId) const;
 
+        bool hasTouchingOrHoveringPointers(ui::LogicalDisplayId displayId, int32_t deviceId) const;
+
+        bool isPointerInWindow(const sp<android::IBinder>& token, ui::LogicalDisplayId displayId,
+                               DeviceId deviceId, int32_t pointerId) const;
+
+        std::string dump() const;
+
+        void removeAllPointersForDevice(DeviceId deviceId);
+
+        void clear();
+
         std::unordered_map<ui::LogicalDisplayId, TouchState> mTouchStatesByDisplay;
 
     private:
