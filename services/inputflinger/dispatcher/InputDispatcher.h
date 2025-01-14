@@ -352,6 +352,12 @@ private:
 
     class DispatcherTouchState {
     public:
+        struct CancellationArgs {
+            const sp<gui::WindowInfoHandle> windowHandle;
+            CancelationOptions::Mode mode;
+            std::optional<DeviceId> deviceId;
+        };
+
         static void addPointerWindowTarget(const sp<android::gui::WindowInfoHandle>& windowHandle,
                                            InputTarget::DispatchMode dispatchMode,
                                            ftl::Flags<InputTarget::Flags> targetFlags,
@@ -380,6 +386,11 @@ private:
 
         std::string dump() const;
 
+        // Updates the touchState for display from WindowInfo,
+        // return vector of CancellationArgs for every cancelled touch
+        std::list<CancellationArgs> updateFromWindowInfo(ui::LogicalDisplayId displayId,
+                                                         const DispatcherWindowInfo& windowInfos);
+
         void removeAllPointersForDevice(DeviceId deviceId);
 
         void clear();
@@ -387,11 +398,18 @@ private:
         std::unordered_map<ui::LogicalDisplayId, TouchState> mTouchStatesByDisplay;
 
     private:
+        static std::list<CancellationArgs> eraseRemovedWindowsFromWindowInfo(
+                TouchState& state, ui::LogicalDisplayId displayId,
+                const DispatcherWindowInfo& windowInfos);
+
+        static std::list<CancellationArgs> updateHoveringStateFromWindowInfo(
+                TouchState& state, ui::LogicalDisplayId displayId,
+                const DispatcherWindowInfo& windowInfos);
+
         static std::vector<InputTarget> findOutsideTargets(
-                ui::LogicalDisplayId displayId,
-                const sp<android::gui::WindowInfoHandle>& touchedWindow, int32_t pointerId,
-                const ConnectionManager& connections, const DispatcherWindowInfo& windowInfos,
-                std::function<void()> dump);
+                ui::LogicalDisplayId displayId, const sp<gui::WindowInfoHandle>& touchedWindow,
+                int32_t pointerId, const ConnectionManager& connections,
+                const DispatcherWindowInfo& windowInfos, std::function<void()> dump);
 
         /**
          * Slip the wallpaper touch if necessary.
