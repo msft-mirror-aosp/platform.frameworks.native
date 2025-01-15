@@ -5836,52 +5836,33 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
     { // acquire lock
         std::scoped_lock _l(mLock);
 
-        // Find the target touch state and touched window by fromToken.
-        auto [state, touchedWindow, displayId] =
-                findTouchStateWindowAndDisplay(fromToken, mTouchStates.mTouchStatesByDisplay);
+        ScopedSyntheticEventTracer traceContext(mTracer);
+        CancelationOptions options(CancelationOptions::Mode::CANCEL_POINTER_EVENTS,
+                                   "transferring touch from this window to another window",
+                                   traceContext.getTracker());
 
-        if (state == nullptr || touchedWindow == nullptr) {
-            ALOGD("Touch transfer failed because from window is not being touched.");
-            return false;
-        }
-        std::set<DeviceId> deviceIds = touchedWindow->getTouchingDeviceIds();
-        if (deviceIds.size() != 1) {
-            LOG(INFO) << "Can't transfer touch. Currently touching devices: "
-                      << dumpContainer(deviceIds) << " for window: " << touchedWindow->dump();
-            return false;
-        }
-        const DeviceId deviceId = *deviceIds.begin();
-
-        const sp<WindowInfoHandle> fromWindowHandle = touchedWindow->windowHandle;
-        const sp<WindowInfoHandle> toWindowHandle =
-                mWindowInfos.findWindowHandle(toToken, displayId);
-        if (!toWindowHandle) {
-            ALOGW("Cannot transfer touch because the transfer target window was not found.");
+        auto result = mTouchStates.transferTouchGesture(fromToken, toToken, mWindowInfos,
+                                                        mConnectionManager);
+        if (!result.has_value()) {
             return false;
         }
 
-        if (DEBUG_FOCUS) {
-            ALOGD("%s: fromWindowHandle=%s, toWindowHandle=%s", __func__,
-                  touchedWindow->windowHandle->getName().c_str(),
-                  toWindowHandle->getName().c_str());
+        const auto [toWindowHandle, deviceId, pointers, cancellations, pointerDowns] =
+                result.value();
+
+        for (const auto& cancellationArgs : cancellations) {
+            LOG_ALWAYS_FATAL_IF(cancellationArgs.mode !=
+                                CancelationOptions::Mode::CANCEL_POINTER_EVENTS);
+            LOG_ALWAYS_FATAL_IF(cancellationArgs.deviceId.has_value());
+            synthesizeCancelationEventsForWindowLocked(cancellationArgs.windowHandle, options);
         }
 
-        // Erase old window.
-        ftl::Flags<InputTarget::Flags> oldTargetFlags = touchedWindow->targetFlags;
-        std::vector<PointerProperties> pointers = touchedWindow->getTouchingPointers(deviceId);
-        state->removeWindowByToken(fromToken);
-
-        // Add new window.
-        nsecs_t downTimeInTarget = now();
-        ftl::Flags<InputTarget::Flags> newTargetFlags =
-                oldTargetFlags & (InputTarget::Flags::SPLIT);
-        if (canReceiveForegroundTouches(*toWindowHandle->getInfo())) {
-            newTargetFlags |= InputTarget::Flags::FOREGROUND;
+        for (const auto& pointerDownArgs : pointerDowns) {
+            synthesizePointerDownEventsForConnectionLocked(pointerDownArgs.downTimeInTarget,
+                                                           pointerDownArgs.connection,
+                                                           pointerDownArgs.targetFlags,
+                                                           traceContext.getTracker());
         }
-        // Transferring touch focus using this API should not effect the focused window.
-        newTargetFlags |= InputTarget::Flags::NO_FOCUS_CHANGE;
-        state->addOrUpdateWindow(toWindowHandle, InputTarget::DispatchMode::AS_IS, newTargetFlags,
-                                 deviceId, pointers, downTimeInTarget);
 
         // Store the dragging window.
         if (isDragDrop) {
@@ -5894,51 +5875,90 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
             const size_t id = pointers.begin()->id;
             mDragState = std::make_unique<DragState>(toWindowHandle, deviceId, id);
         }
-
-        // Synthesize cancel for old window and down for new window.
-        ScopedSyntheticEventTracer traceContext(mTracer);
-        std::shared_ptr<Connection> fromConnection = mConnectionManager.getConnection(fromToken);
-        std::shared_ptr<Connection> toConnection = mConnectionManager.getConnection(toToken);
-        if (fromConnection != nullptr && toConnection != nullptr) {
-            fromConnection->inputState.mergePointerStateTo(toConnection->inputState);
-            CancelationOptions options(CancelationOptions::Mode::CANCEL_POINTER_EVENTS,
-                                       "transferring touch from this window to another window",
-                                       traceContext.getTracker());
-            synthesizeCancelationEventsForWindowLocked(fromWindowHandle, options, fromConnection);
-
-            // Check if the wallpaper window should deliver the corresponding event.
-            const auto [cancellations, pointerDowns] =
-                    mTouchStates.transferWallpaperTouch(fromWindowHandle, toWindowHandle, displayId,
-                                                        deviceId, pointers, oldTargetFlags,
-                                                        newTargetFlags, mWindowInfos,
-                                                        mConnectionManager);
-            for (const auto& cancellationArgs : cancellations) {
-                // touch should be cancelled for old wallpaper window
-                LOG_ALWAYS_FATAL_IF(cancellationArgs.mode !=
-                                    CancelationOptions::Mode::CANCEL_POINTER_EVENTS);
-                synthesizeCancelationEventsForWindowLocked(cancellationArgs.windowHandle, options);
-            }
-            for (const auto& pointerDownArgs : pointerDowns) {
-                // expect pointer down on new the wallpaper window
-                synthesizePointerDownEventsForConnectionLocked(pointerDownArgs.downTimeInTarget,
-                                                               pointerDownArgs.connection,
-                                                               pointerDownArgs.targetFlags,
-                                                               traceContext.getTracker());
-            }
-
-            // Because new window may have a wallpaper window, it will merge input state from it
-            // parent window, after this the firstNewPointerIdx in input state will be reset, then
-            // it will cause new move event be thought inconsistent, so we should synthesize the
-            // down event after it reset.
-            synthesizePointerDownEventsForConnectionLocked(downTimeInTarget, toConnection,
-                                                           newTargetFlags,
-                                                           traceContext.getTracker());
-        }
     } // release lock
 
     // Wake up poll loop since it may need to make new input dispatching choices.
     mLooper->wake();
     return true;
+}
+
+std::optional<std::tuple<sp<gui::WindowInfoHandle>, DeviceId, std::vector<PointerProperties>,
+                         std::list<InputDispatcher::DispatcherTouchState::CancellationArgs>,
+                         std::list<InputDispatcher::DispatcherTouchState::PointerDownArgs>>>
+InputDispatcher::DispatcherTouchState::transferTouchGesture(const sp<android::IBinder>& fromToken,
+                                                            const sp<android::IBinder>& toToken,
+                                                            const DispatcherWindowInfo& windowInfos,
+                                                            const ConnectionManager& connections) {
+    // Find the target touch state and touched window by fromToken.
+    auto touchStateWindowAndDisplay = findTouchStateWindowAndDisplay(fromToken);
+    if (!touchStateWindowAndDisplay.has_value()) {
+        ALOGD("Touch transfer failed because from window is not being touched.");
+        return std::nullopt;
+    }
+
+    auto [state, touchedWindow, displayId] = touchStateWindowAndDisplay.value();
+    std::set<DeviceId> deviceIds = touchedWindow.getTouchingDeviceIds();
+    if (deviceIds.size() != 1) {
+        LOG(INFO) << "Can't transfer touch. Currently touching devices: "
+                  << dumpContainer(deviceIds) << " for window: " << touchedWindow.dump();
+        return std::nullopt;
+    }
+    const DeviceId deviceId = *deviceIds.begin();
+
+    const sp<WindowInfoHandle> fromWindowHandle = touchedWindow.windowHandle;
+    const sp<WindowInfoHandle> toWindowHandle = windowInfos.findWindowHandle(toToken, displayId);
+    if (!toWindowHandle) {
+        ALOGW("Cannot transfer touch because the transfer target window was not found.");
+        return std::nullopt;
+    }
+
+    if (DEBUG_FOCUS) {
+        ALOGD("%s: fromWindowHandle=%s, toWindowHandle=%s", __func__,
+              fromWindowHandle->getName().c_str(), toWindowHandle->getName().c_str());
+    }
+
+    // Erase old window.
+    ftl::Flags<InputTarget::Flags> oldTargetFlags = touchedWindow.targetFlags;
+    std::vector<PointerProperties> pointers = touchedWindow.getTouchingPointers(deviceId);
+    state.removeWindowByToken(fromToken);
+
+    // Add new window.
+    nsecs_t downTimeInTarget = now();
+    ftl::Flags<InputTarget::Flags> newTargetFlags = oldTargetFlags & (InputTarget::Flags::SPLIT);
+    if (canReceiveForegroundTouches(*toWindowHandle->getInfo())) {
+        newTargetFlags |= InputTarget::Flags::FOREGROUND;
+    }
+    // Transferring touch focus using this API should not effect the focused window.
+    newTargetFlags |= InputTarget::Flags::NO_FOCUS_CHANGE;
+    state.addOrUpdateWindow(toWindowHandle, InputTarget::DispatchMode::AS_IS, newTargetFlags,
+                            deviceId, pointers, downTimeInTarget);
+
+    // Synthesize cancel for old window and down for new window.
+    std::shared_ptr<Connection> fromConnection = connections.getConnection(fromToken);
+    std::shared_ptr<Connection> toConnection = connections.getConnection(toToken);
+    std::list<CancellationArgs> cancellations;
+    std::list<PointerDownArgs> pointerDowns;
+    if (fromConnection != nullptr && toConnection != nullptr) {
+        fromConnection->inputState.mergePointerStateTo(toConnection->inputState);
+        cancellations.emplace_back(fromWindowHandle,
+                                   CancelationOptions::Mode::CANCEL_POINTER_EVENTS, std::nullopt);
+
+        // Check if the wallpaper window should deliver the corresponding event.
+        auto [wallpaperCancellations, wallpaperPointerDowns] =
+                transferWallpaperTouch(fromWindowHandle, toWindowHandle, state, deviceId, pointers,
+                                       oldTargetFlags, newTargetFlags, windowInfos, connections);
+
+        cancellations.splice(cancellations.end(), wallpaperCancellations);
+        pointerDowns.splice(pointerDowns.end(), wallpaperPointerDowns);
+
+        // Because new window may have a wallpaper window, it will merge input state from it
+        // parent window, after this the firstNewPointerIdx in input state will be reset, then
+        // it will cause new move event be thought inconsistent, so we should synthesize the
+        // down event after it reset.
+        pointerDowns.emplace_back(downTimeInTarget, toConnection, newTargetFlags);
+    }
+
+    return std::make_tuple(toWindowHandle, deviceId, pointers, cancellations, pointerDowns);
 }
 
 /**
@@ -7176,13 +7196,11 @@ std::pair<std::list<InputDispatcher::DispatcherTouchState::CancellationArgs>,
           std::list<InputDispatcher::DispatcherTouchState::PointerDownArgs>>
 InputDispatcher::DispatcherTouchState::transferWallpaperTouch(
         const sp<gui::WindowInfoHandle> fromWindowHandle,
-        const sp<gui::WindowInfoHandle> toWindowHandle, ui::LogicalDisplayId displayId,
+        const sp<gui::WindowInfoHandle> toWindowHandle, TouchState& state,
         android::DeviceId deviceId, const std::vector<PointerProperties>& pointers,
         ftl::Flags<InputTarget::Flags> oldTargetFlags,
         ftl::Flags<InputTarget::Flags> newTargetFlags, const DispatcherWindowInfo& windowInfos,
         const ConnectionManager& connections) {
-    TouchState& state = getTouchState(displayId);
-
     const bool oldHasWallpaper = oldTargetFlags.test(InputTarget::Flags::FOREGROUND) &&
             fromWindowHandle->getInfo()->inputConfig.test(
                     gui::WindowInfo::InputConfig::DUPLICATE_TOUCH_TO_WALLPAPER);
@@ -7478,10 +7496,17 @@ void InputDispatcher::DispatcherTouchState::clear() {
     mTouchStatesByDisplay.clear();
 }
 
-TouchState& InputDispatcher::DispatcherTouchState::getTouchState(ui::LogicalDisplayId displayId) {
-    auto touchStateIt = mTouchStatesByDisplay.find(displayId);
-    LOG_ALWAYS_FATAL_IF(touchStateIt == mTouchStatesByDisplay.end());
-    return touchStateIt->second;
+std::optional<std::tuple<TouchState&, TouchedWindow&, ui::LogicalDisplayId>>
+InputDispatcher::DispatcherTouchState::findTouchStateWindowAndDisplay(
+        const sp<android::IBinder>& token) {
+    for (auto& [displayId, state] : mTouchStatesByDisplay) {
+        for (TouchedWindow& w : state.windows) {
+            if (w.windowHandle->getToken() == token) {
+                return std::make_tuple(std::ref(state), std::ref(w), displayId);
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace android::inputdispatcher

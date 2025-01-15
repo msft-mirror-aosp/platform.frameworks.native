@@ -399,20 +399,30 @@ private:
 
         void removeAllPointersForDevice(DeviceId deviceId);
 
-        std::pair<std::list<CancellationArgs>, std::list<PointerDownArgs>> transferWallpaperTouch(
-                const sp<gui::WindowInfoHandle> fromWindowHandle,
-                const sp<gui::WindowInfoHandle> toWindowHandle, ui::LogicalDisplayId displayId,
-                DeviceId deviceId, const std::vector<PointerProperties>& pointers,
-                ftl::Flags<InputTarget::Flags> oldTargetFlags,
-                ftl::Flags<InputTarget::Flags> newTargetFlags,
-                const DispatcherWindowInfo& windowInfos, const ConnectionManager& connections);
+        // transfer touch between provided tokens, returns destination WindowHandle, deviceId,
+        // pointers, list of cancelled windows and pointers on successful transfer.
+        std::optional<
+                std::tuple<sp<gui::WindowInfoHandle>, DeviceId, std::vector<PointerProperties>,
+                           std::list<CancellationArgs>, std::list<PointerDownArgs>>>
+        transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
+                             const DispatcherWindowInfo& windowInfos,
+                             const ConnectionManager& connections);
 
         void clear();
 
         std::unordered_map<ui::LogicalDisplayId, TouchState> mTouchStatesByDisplay;
 
     private:
-        TouchState& getTouchState(ui::LogicalDisplayId displayId);
+        std::optional<std::tuple<TouchState&, TouchedWindow&, ui::LogicalDisplayId>>
+        findTouchStateWindowAndDisplay(const sp<IBinder>& token);
+
+        std::pair<std::list<CancellationArgs>, std::list<PointerDownArgs>> transferWallpaperTouch(
+                const sp<gui::WindowInfoHandle> fromWindowHandle,
+                const sp<gui::WindowInfoHandle> toWindowHandle, TouchState& state,
+                DeviceId deviceId, const std::vector<PointerProperties>& pointers,
+                ftl::Flags<InputTarget::Flags> oldTargetFlags,
+                ftl::Flags<InputTarget::Flags> newTargetFlags,
+                const DispatcherWindowInfo& windowInfos, const ConnectionManager& connections);
 
         static std::list<CancellationArgs> eraseRemovedWindowsFromWindowInfo(
                 TouchState& state, ui::LogicalDisplayId displayId,
