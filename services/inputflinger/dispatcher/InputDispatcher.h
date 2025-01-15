@@ -358,6 +358,12 @@ private:
             std::optional<DeviceId> deviceId;
         };
 
+        struct PointerDownArgs {
+            const nsecs_t downTimeInTarget;
+            const std::shared_ptr<Connection> connection;
+            const ftl::Flags<InputTarget::Flags> targetFlags;
+        };
+
         static void addPointerWindowTarget(const sp<android::gui::WindowInfoHandle>& windowHandle,
                                            InputTarget::DispatchMode dispatchMode,
                                            ftl::Flags<InputTarget::Flags> targetFlags,
@@ -387,17 +393,27 @@ private:
         std::string dump() const;
 
         // Updates the touchState for display from WindowInfo,
-        // return vector of CancellationArgs for every cancelled touch
+        // returns list of CancellationArgs for every cancelled touch
         std::list<CancellationArgs> updateFromWindowInfo(ui::LogicalDisplayId displayId,
                                                          const DispatcherWindowInfo& windowInfos);
 
         void removeAllPointersForDevice(DeviceId deviceId);
+
+        std::pair<std::list<CancellationArgs>, std::list<PointerDownArgs>> transferWallpaperTouch(
+                const sp<gui::WindowInfoHandle> fromWindowHandle,
+                const sp<gui::WindowInfoHandle> toWindowHandle, ui::LogicalDisplayId displayId,
+                DeviceId deviceId, const std::vector<PointerProperties>& pointers,
+                ftl::Flags<InputTarget::Flags> oldTargetFlags,
+                ftl::Flags<InputTarget::Flags> newTargetFlags,
+                const DispatcherWindowInfo& windowInfos, const ConnectionManager& connections);
 
         void clear();
 
         std::unordered_map<ui::LogicalDisplayId, TouchState> mTouchStatesByDisplay;
 
     private:
+        TouchState& getTouchState(ui::LogicalDisplayId displayId);
+
         static std::list<CancellationArgs> eraseRemovedWindowsFromWindowInfo(
                 TouchState& state, ui::LogicalDisplayId displayId,
                 const DispatcherWindowInfo& windowInfos);
@@ -848,15 +864,6 @@ private:
     bool recentWindowsAreOwnedByLocked(gui::Pid pid, gui::Uid uid) REQUIRES(mLock);
 
     sp<InputReporterInterface> mReporter;
-
-    void transferWallpaperTouch(ftl::Flags<InputTarget::Flags> oldTargetFlags,
-                                ftl::Flags<InputTarget::Flags> newTargetFlags,
-                                const sp<android::gui::WindowInfoHandle> fromWindowHandle,
-                                const sp<android::gui::WindowInfoHandle> toWindowHandle,
-                                TouchState& state, DeviceId deviceId,
-                                const std::vector<PointerProperties>& pointers,
-                                const std::unique_ptr<trace::EventTrackerInterface>& traceTracker)
-            REQUIRES(mLock);
 
     /** Stores the value of the input flag for per device input latency metrics. */
     const bool mPerDeviceInputLatencyMetricsFlag =

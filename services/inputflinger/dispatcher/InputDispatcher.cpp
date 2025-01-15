@@ -5907,8 +5907,24 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
             synthesizeCancelationEventsForWindowLocked(fromWindowHandle, options, fromConnection);
 
             // Check if the wallpaper window should deliver the corresponding event.
-            transferWallpaperTouch(oldTargetFlags, newTargetFlags, fromWindowHandle, toWindowHandle,
-                                   *state, deviceId, pointers, traceContext.getTracker());
+            const auto [cancellations, pointerDowns] =
+                    mTouchStates.transferWallpaperTouch(fromWindowHandle, toWindowHandle, displayId,
+                                                        deviceId, pointers, oldTargetFlags,
+                                                        newTargetFlags, mWindowInfos,
+                                                        mConnectionManager);
+            for (const auto& cancellationArgs : cancellations) {
+                // touch should be cancelled for old wallpaper window
+                LOG_ALWAYS_FATAL_IF(cancellationArgs.mode !=
+                                    CancelationOptions::Mode::CANCEL_POINTER_EVENTS);
+                synthesizeCancelationEventsForWindowLocked(cancellationArgs.windowHandle, options);
+            }
+            for (const auto& pointerDownArgs : pointerDowns) {
+                // expect pointer down on new the wallpaper window
+                synthesizePointerDownEventsForConnectionLocked(pointerDownArgs.downTimeInTarget,
+                                                               pointerDownArgs.connection,
+                                                               pointerDownArgs.targetFlags,
+                                                               traceContext.getTracker());
+            }
 
             // Because new window may have a wallpaper window, it will merge input state from it
             // parent window, after this the firstNewPointerIdx in input state will be reset, then
@@ -7156,12 +7172,17 @@ void InputDispatcher::DispatcherTouchState::slipWallpaperTouch(
     }
 }
 
-void InputDispatcher::transferWallpaperTouch(
+std::pair<std::list<InputDispatcher::DispatcherTouchState::CancellationArgs>,
+          std::list<InputDispatcher::DispatcherTouchState::PointerDownArgs>>
+InputDispatcher::DispatcherTouchState::transferWallpaperTouch(
+        const sp<gui::WindowInfoHandle> fromWindowHandle,
+        const sp<gui::WindowInfoHandle> toWindowHandle, ui::LogicalDisplayId displayId,
+        android::DeviceId deviceId, const std::vector<PointerProperties>& pointers,
         ftl::Flags<InputTarget::Flags> oldTargetFlags,
-        ftl::Flags<InputTarget::Flags> newTargetFlags, const sp<WindowInfoHandle> fromWindowHandle,
-        const sp<WindowInfoHandle> toWindowHandle, TouchState& state, DeviceId deviceId,
-        const std::vector<PointerProperties>& pointers,
-        const std::unique_ptr<trace::EventTrackerInterface>& traceTracker) {
+        ftl::Flags<InputTarget::Flags> newTargetFlags, const DispatcherWindowInfo& windowInfos,
+        const ConnectionManager& connections) {
+    TouchState& state = getTouchState(displayId);
+
     const bool oldHasWallpaper = oldTargetFlags.test(InputTarget::Flags::FOREGROUND) &&
             fromWindowHandle->getInfo()->inputConfig.test(
                     gui::WindowInfo::InputConfig::DUPLICATE_TOUCH_TO_WALLPAPER);
@@ -7172,16 +7193,17 @@ void InputDispatcher::transferWallpaperTouch(
     const sp<WindowInfoHandle> oldWallpaper =
             oldHasWallpaper ? state.getWallpaperWindow(deviceId) : nullptr;
     const sp<WindowInfoHandle> newWallpaper =
-            newHasWallpaper ? mWindowInfos.findWallpaperWindowBelow(toWindowHandle) : nullptr;
+            newHasWallpaper ? windowInfos.findWallpaperWindowBelow(toWindowHandle) : nullptr;
     if (oldWallpaper == newWallpaper) {
-        return;
+        return {};
     }
 
+    std::list<CancellationArgs> cancellations;
+    std::list<PointerDownArgs> pointerDowns;
     if (oldWallpaper != nullptr) {
-        CancelationOptions options(CancelationOptions::Mode::CANCEL_POINTER_EVENTS,
-                                   "transferring touch focus to another window", traceTracker);
         state.removeWindowByToken(oldWallpaper->getToken());
-        synthesizeCancelationEventsForWindowLocked(oldWallpaper, options);
+        cancellations.emplace_back(oldWallpaper, CancelationOptions::Mode::CANCEL_POINTER_EVENTS,
+                                   /*deviceId*/ std::nullopt);
     }
 
     if (newWallpaper != nullptr) {
@@ -7193,15 +7215,16 @@ void InputDispatcher::transferWallpaperTouch(
         state.addOrUpdateWindow(newWallpaper, InputTarget::DispatchMode::AS_IS, wallpaperFlags,
                                 deviceId, pointers, downTimeInTarget);
         std::shared_ptr<Connection> wallpaperConnection =
-                mConnectionManager.getConnection(newWallpaper->getToken());
+                connections.getConnection(newWallpaper->getToken());
         if (wallpaperConnection != nullptr) {
             std::shared_ptr<Connection> toConnection =
-                    mConnectionManager.getConnection(toWindowHandle->getToken());
+                    connections.getConnection(toWindowHandle->getToken());
             toConnection->inputState.mergePointerStateTo(wallpaperConnection->inputState);
-            synthesizePointerDownEventsForConnectionLocked(downTimeInTarget, wallpaperConnection,
-                                                           wallpaperFlags, traceTracker);
+            pointerDowns.emplace_back(downTimeInTarget, wallpaperConnection, wallpaperFlags);
         }
+        pointerDowns.emplace_back(downTimeInTarget, wallpaperConnection, wallpaperFlags);
     }
+    return {cancellations, pointerDowns};
 }
 
 sp<WindowInfoHandle> InputDispatcher::DispatcherWindowInfo::findWallpaperWindowBelow(
@@ -7453,6 +7476,12 @@ void InputDispatcher::DispatcherTouchState::removeAllPointersForDevice(android::
 
 void InputDispatcher::DispatcherTouchState::clear() {
     mTouchStatesByDisplay.clear();
+}
+
+TouchState& InputDispatcher::DispatcherTouchState::getTouchState(ui::LogicalDisplayId displayId) {
+    auto touchStateIt = mTouchStatesByDisplay.find(displayId);
+    LOG_ALWAYS_FATAL_IF(touchStateIt == mTouchStatesByDisplay.end());
+    return touchStateIt->second;
 }
 
 } // namespace android::inputdispatcher
