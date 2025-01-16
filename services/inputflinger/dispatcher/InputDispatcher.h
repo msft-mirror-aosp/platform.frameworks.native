@@ -396,6 +396,12 @@ private:
         std::optional<std::tuple<const sp<gui::WindowInfoHandle>&, ui::LogicalDisplayId>>
         findTouchedWindowHandleAndDisplay(const sp<IBinder>& token) const;
 
+        void forAllTouchedWindows(std::function<void(const sp<gui::WindowInfoHandle>&)> f) const;
+
+        void forAllTouchedWindowsOnDisplay(
+                ui::LogicalDisplayId displayId,
+                std::function<void(const sp<gui::WindowInfoHandle>&)> f) const;
+
         std::string dump() const;
 
         // Updates the touchState for display from WindowInfo,

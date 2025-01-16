@@ -4072,13 +4072,17 @@ void InputDispatcher::synthesizeCancelationEventsForAllConnectionsLocked(
     // Generate cancellations for touched windows first. This is to avoid generating cancellations
     // through a non-touched window if there are more than one window for an input channel.
     if (cancelPointers) {
-        for (const auto& [displayId, touchState] : mTouchStates.mTouchStatesByDisplay) {
-            if (options.displayId.has_value() && options.displayId != displayId) {
-                continue;
-            }
-            for (const auto& touchedWindow : touchState.windows) {
-                synthesizeCancelationEventsForWindowLocked(touchedWindow.windowHandle, options);
-            }
+        if (options.displayId.has_value()) {
+            mTouchStates.forAllTouchedWindowsOnDisplay(
+                    options.displayId.value(), [&](const sp<gui::WindowInfoHandle>& windowHandle) {
+                        base::ScopedLockAssertion assumeLocked(mLock);
+                        synthesizeCancelationEventsForWindowLocked(windowHandle, options);
+                    });
+        } else {
+            mTouchStates.forAllTouchedWindows([&](const sp<gui::WindowInfoHandle>& windowHandle) {
+                base::ScopedLockAssertion assumeLocked(mLock);
+                synthesizeCancelationEventsForWindowLocked(windowHandle, options);
+            });
         }
     }
     // Follow up by generating cancellations for all windows, because we don't explicitly track
@@ -7473,6 +7477,27 @@ InputDispatcher::DispatcherTouchState::findTouchedWindowHandleAndDisplay(
         }
     }
     return std::nullopt;
+}
+
+void InputDispatcher::DispatcherTouchState::forAllTouchedWindows(
+        std::function<void(const sp<gui::WindowInfoHandle>&)> f) const {
+    for (const auto& [_, state] : mTouchStatesByDisplay) {
+        for (const TouchedWindow& window : state.windows) {
+            f(window.windowHandle);
+        }
+    }
+}
+
+void InputDispatcher::DispatcherTouchState::forAllTouchedWindowsOnDisplay(
+        ui::LogicalDisplayId displayId,
+        std::function<void(const sp<gui::WindowInfoHandle>&)> f) const {
+    const auto touchStateIt = mTouchStatesByDisplay.find(displayId);
+    if (touchStateIt == mTouchStatesByDisplay.end()) {
+        return;
+    }
+    for (const TouchedWindow& window : touchStateIt->second.windows) {
+        f(window.windowHandle);
+    }
 }
 
 std::string InputDispatcher::DispatcherTouchState::dump() const {
