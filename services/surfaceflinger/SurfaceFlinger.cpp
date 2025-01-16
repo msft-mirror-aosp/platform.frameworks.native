@@ -134,7 +134,6 @@
 #include "DisplayDevice.h"
 #include "DisplayHardware/ComposerHal.h"
 #include "DisplayHardware/FramebufferSurface.h"
-#include "DisplayHardware/HWComposer.h"
 #include "DisplayHardware/Hal.h"
 #include "DisplayHardware/VirtualDisplaySurface.h"
 #include "DisplayRenderArea.h"
@@ -2287,12 +2286,12 @@ void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t t
 void SurfaceFlinger::onComposerHalHotplugEvent(hal::HWDisplayId hwcDisplayId,
                                                DisplayHotplugEvent event) {
     if (event == DisplayHotplugEvent::CONNECTED || event == DisplayHotplugEvent::DISCONNECTED) {
-        hal::Connection connection = (event == DisplayHotplugEvent::CONNECTED)
-                ? hal::Connection::CONNECTED
-                : hal::Connection::DISCONNECTED;
+        const HWComposer::HotplugEvent hotplugEvent = event == DisplayHotplugEvent::CONNECTED
+                ? HWComposer::HotplugEvent::Connected
+                : HWComposer::HotplugEvent::Disconnected;
         {
             std::lock_guard<std::mutex> lock(mHotplugMutex);
-            mPendingHotplugEvents.push_back(HotplugEvent{hwcDisplayId, connection});
+            mPendingHotplugEvents.push_back(HotplugEvent{hwcDisplayId, hotplugEvent});
         }
 
         if (mScheduler) {
@@ -3599,13 +3598,13 @@ bool SurfaceFlinger::configureLocked() {
         events = std::move(mPendingHotplugEvents);
     }
 
-    for (const auto [hwcDisplayId, connection] : events) {
-        if (auto info = getHwComposer().onHotplug(hwcDisplayId, connection)) {
+    for (const auto [hwcDisplayId, event] : events) {
+        if (auto info = getHwComposer().onHotplug(hwcDisplayId, event)) {
             const auto displayId = info->id;
             const ftl::Concat displayString("display ", displayId.value, "(HAL ID ", hwcDisplayId,
                                             ')');
 
-            if (connection == hal::Connection::CONNECTED) {
+            if (event == HWComposer::HotplugEvent::Connected) {
                 const auto activeModeIdOpt =
                         processHotplugConnect(displayId, hwcDisplayId, std::move(*info),
                                               displayString.c_str());
