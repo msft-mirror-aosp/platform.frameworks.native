@@ -392,6 +392,10 @@ private:
         bool isPointerInWindow(const sp<android::IBinder>& token, ui::LogicalDisplayId displayId,
                                DeviceId deviceId, int32_t pointerId) const;
 
+        // Find touched windowHandle and display by token.
+        std::optional<std::tuple<const sp<gui::WindowInfoHandle>&, ui::LogicalDisplayId>>
+        findTouchedWindowHandleAndDisplay(const sp<IBinder>& token) const;
+
         std::string dump() const;
 
         // Updates the touchState for display from WindowInfo,
@@ -854,17 +858,6 @@ private:
     std::unique_ptr<const KeyEntry> afterKeyEventLockedInterruptable(
             const std::shared_ptr<Connection>& connection, DispatchEntry* dispatchEntry,
             bool handled) REQUIRES(mLock);
-
-    // Find touched state and touched window by token.
-    static std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
-    findTouchStateWindowAndDisplay(
-            const sp<IBinder>& token,
-            std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
-
-    static std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
-    findTouchStateWindowAndDisplay(
-            const sp<IBinder>& token,
-            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay);
 
     // Statistics gathering.
     nsecs_t mLastStatisticPushTime = 0;
