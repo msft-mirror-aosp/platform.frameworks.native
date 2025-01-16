@@ -23,10 +23,11 @@ use crate::{
 use binder_ndk_sys::{
     APersistableBundle, APersistableBundle_delete, APersistableBundle_dup,
     APersistableBundle_erase, APersistableBundle_getBoolean, APersistableBundle_getDouble,
-    APersistableBundle_getInt, APersistableBundle_getLong, APersistableBundle_isEqual,
-    APersistableBundle_new, APersistableBundle_putBoolean, APersistableBundle_putBooleanVector,
-    APersistableBundle_putDouble, APersistableBundle_putDoubleVector, APersistableBundle_putInt,
-    APersistableBundle_putIntVector, APersistableBundle_putLong, APersistableBundle_putLongVector,
+    APersistableBundle_getInt, APersistableBundle_getLong, APersistableBundle_getPersistableBundle,
+    APersistableBundle_isEqual, APersistableBundle_new, APersistableBundle_putBoolean,
+    APersistableBundle_putBooleanVector, APersistableBundle_putDouble,
+    APersistableBundle_putDoubleVector, APersistableBundle_putInt, APersistableBundle_putIntVector,
+    APersistableBundle_putLong, APersistableBundle_putLongVector,
     APersistableBundle_putPersistableBundle, APersistableBundle_putString,
     APersistableBundle_putStringVector, APersistableBundle_readFromParcel, APersistableBundle_size,
     APersistableBundle_writeToParcel,
@@ -371,6 +372,28 @@ impl PersistableBundle {
             Ok(None)
         }
     }
+
+    /// Gets the `PersistableBundle` value associated with the given key.
+    ///
+    /// Returns an error if the key contains a NUL character, or `Ok(None)` if the key doesn't exist
+    /// in the bundle.
+    pub fn get_persistable_bundle(&self, key: &str) -> Result<Option<Self>, NulError> {
+        let key = CString::new(key)?;
+        let mut value = null_mut();
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`. The value pointer must be valid because it comes
+        // from a reference.
+        if unsafe {
+            APersistableBundle_getPersistableBundle(self.0.as_ptr(), key.as_ptr(), &mut value)
+        } {
+            Ok(Some(Self(NonNull::new(value).expect(
+                "APersistableBundle_getPersistableBundle returned true but didn't set outBundle",
+            ))))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 // SAFETY: The underlying *APersistableBundle can be moved between threads.
@@ -547,10 +570,14 @@ mod test {
     }
 
     #[test]
-    fn insert_bundle() {
+    fn insert_get_bundle() {
         let mut bundle = PersistableBundle::new();
 
-        let sub_bundle = PersistableBundle::new();
+        let mut sub_bundle = PersistableBundle::new();
+        assert_eq!(sub_bundle.insert_int("int", 42), Ok(()));
+        assert_eq!(sub_bundle.size(), 1);
         assert_eq!(bundle.insert_persistable_bundle("bundle", &sub_bundle), Ok(()));
+
+        assert_eq!(bundle.get_persistable_bundle("bundle"), Ok(Some(sub_bundle)));
     }
 }
