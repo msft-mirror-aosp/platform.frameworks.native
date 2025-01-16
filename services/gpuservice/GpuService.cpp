@@ -24,7 +24,9 @@
 #include <binder/IResultReceiver.h>
 #include <binder/Parcel.h>
 #include <binder/PermissionCache.h>
+#include <com_android_frameworks_gpuservice_flags.h>
 #include <cutils/properties.h>
+#include <cutils/multiuser.h>
 #include <gpumem/GpuMem.h>
 #include <gpuwork/GpuWork.h>
 #include <gpustats/GpuStats.h>
@@ -37,6 +39,8 @@
 
 #include <thread>
 #include <memory>
+
+namespace gpuservice_flags = com::android::frameworks::gpuservice::flags;
 
 namespace android {
 
@@ -113,11 +117,22 @@ void GpuService::toggleAngleAsSystemDriver(bool enabled) {
 
     // only system_server with the ACCESS_GPU_SERVICE permission is allowed to set
     // persist.graphics.egl
-    if (uid != AID_SYSTEM ||
-        !PermissionCache::checkPermission(sAccessGpuServicePermission, pid, uid)) {
-        ALOGE("Permission Denial: can't set persist.graphics.egl from setAngleAsSystemDriver() "
+    if (gpuservice_flags::multiuser_permission_check()) {
+        // retrieve the appid of Settings app on multiuser builds
+        const int multiuserappid = multiuser_get_app_id(uid);
+        if (multiuserappid != AID_SYSTEM ||
+            !PermissionCache::checkPermission(sAccessGpuServicePermission, pid, uid)) {
+            ALOGE("Permission Denial: can't set persist.graphics.egl from setAngleAsSystemDriver() "
+                "pid=%d, uid=%d\n, multiuserappid=%d", pid, uid, multiuserappid);
+            return;
+        }
+    } else {
+        if (uid != AID_SYSTEM ||
+            !PermissionCache::checkPermission(sAccessGpuServicePermission, pid, uid)) {
+            ALOGE("Permission Denial: can't set persist.graphics.egl from setAngleAsSystemDriver() "
                 "pid=%d, uid=%d\n", pid, uid);
-        return;
+            return;
+        }
     }
 
     std::lock_guard<std::mutex> lock(mLock);
