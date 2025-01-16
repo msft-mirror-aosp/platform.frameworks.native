@@ -355,7 +355,9 @@ private:
         struct CancellationArgs {
             const sp<gui::WindowInfoHandle> windowHandle;
             CancelationOptions::Mode mode;
-            std::optional<DeviceId> deviceId;
+            std::optional<DeviceId> deviceId{std::nullopt};
+            ui::LogicalDisplayId displayId{ui::LogicalDisplayId::INVALID};
+            std::bitset<MAX_POINTER_ID + 1> pointerIds{};
         };
 
         struct PointerDownArgs {
@@ -407,6 +409,9 @@ private:
         transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
                              const DispatcherWindowInfo& windowInfos,
                              const ConnectionManager& connections);
+
+        base::Result<std::list<CancellationArgs>, status_t> pilferPointers(
+                const sp<IBinder>& token, const Connection& requestingConnection);
 
         void clear();
 
