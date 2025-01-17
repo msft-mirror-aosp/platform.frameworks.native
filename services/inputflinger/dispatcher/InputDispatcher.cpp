@@ -1092,6 +1092,9 @@ nsecs_t InputDispatcher::processAnrsLocked() {
             mConnectionManager.getConnection(mAnrTracker.firstToken());
     if (connection == nullptr) {
         ALOGE("Could not find connection for entry %" PRId64, mAnrTracker.firstTimeout());
+        // As we no longer have entry for this connection, remove it form Anr tracker to prevent
+        // samme error being logged multiple times.
+        mAnrTracker.eraseToken(mAnrTracker.firstToken());
         return nextAnrCheck;
     }
     connection->responsive = false;
