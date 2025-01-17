@@ -244,12 +244,6 @@ BLASTBufferQueue::BLASTBufferQueue(const std::string& name, bool updateDestinati
     BQA_LOGV("BLASTBufferQueue created");
 }
 
-BLASTBufferQueue::BLASTBufferQueue(const std::string& name, const sp<SurfaceControl>& surface,
-                                   int width, int height, int32_t format)
-      : BLASTBufferQueue(name) {
-    update(surface, width, height, format);
-}
-
 BLASTBufferQueue::~BLASTBufferQueue() {
     TransactionCompletedListener::getInstance()->removeQueueStallListener(this);
     if (mPendingTransactions.empty()) {
