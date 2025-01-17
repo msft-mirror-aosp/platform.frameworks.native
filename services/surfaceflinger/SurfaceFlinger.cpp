@@ -7116,7 +7116,7 @@ status_t SurfaceFlinger::setSchedFifo(bool enabled) {
 
     struct sched_param param = {0};
     int sched_policy;
-    if (enabled) {
+    if (enabled && !FlagManager::getInstance().disable_sched_fifo_sf()) {
         sched_policy = SCHED_FIFO;
         param.sched_priority = kFifoPriority;
     } else {
