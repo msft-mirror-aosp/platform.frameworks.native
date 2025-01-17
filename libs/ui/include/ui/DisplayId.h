@@ -20,7 +20,6 @@
 #include <ostream>
 #include <string>
 
-#include <ftl/hash.h>
 #include <ftl/optional.h>
 
 namespace android {
@@ -31,16 +30,12 @@ struct DisplayId {
     // Flag indicating that the display is virtual.
     static constexpr uint64_t FLAG_VIRTUAL = 1ULL << 63;
 
-    // Flag indicating that the ID is stable across reboots.
-    static constexpr uint64_t FLAG_STABLE = 1ULL << 62;
-
     // TODO(b/162612135) Remove default constructor
     DisplayId() = default;
     constexpr DisplayId(const DisplayId&) = default;
     DisplayId& operator=(const DisplayId&) = default;
 
     constexpr bool isVirtual() const { return value & FLAG_VIRTUAL; }
-    constexpr bool isStable() const { return value & FLAG_STABLE; }
 
     uint64_t value;
 
@@ -106,6 +101,9 @@ struct PhysicalDisplayId : DisplayId {
     constexpr uint8_t getPort() const { return static_cast<uint8_t>(value); }
 
 private:
+    // Flag indicating that the ID is stable across reboots.
+    static constexpr uint64_t FLAG_STABLE = 1ULL << 62;
+
     constexpr PhysicalDisplayId(uint64_t flags, uint8_t port, uint16_t manufacturerId,
                                 uint32_t modelHash)
           : DisplayId(flags | (static_cast<uint64_t>(manufacturerId) << 40) |
@@ -149,13 +147,6 @@ private:
 struct GpuVirtualDisplayId : VirtualDisplayId {
     explicit constexpr GpuVirtualDisplayId(BaseId baseId) : VirtualDisplayId(FLAG_GPU | baseId) {}
 
-    static constexpr std::optional<GpuVirtualDisplayId> fromUniqueId(const std::string& uniqueId) {
-        if (const auto hashOpt = ftl::stable_hash(uniqueId)) {
-            return GpuVirtualDisplayId(HashTag{}, *hashOpt);
-        }
-        return {};
-    }
-
     static constexpr std::optional<GpuVirtualDisplayId> tryCast(DisplayId id) {
         if (id.isVirtual() && (id.value & FLAG_GPU)) {
             return GpuVirtualDisplayId(id);
@@ -164,10 +155,6 @@ struct GpuVirtualDisplayId : VirtualDisplayId {
     }
 
 private:
-    struct HashTag {}; // Disambiguate with BaseId constructor.
-    constexpr GpuVirtualDisplayId(HashTag, uint64_t hash)
-          : VirtualDisplayId(FLAG_STABLE | FLAG_GPU | hash) {}
-
     explicit constexpr GpuVirtualDisplayId(DisplayId other) : VirtualDisplayId(other) {}
 };
 
