@@ -17,6 +17,7 @@
 #include <android/binder_ibinder.h>
 #include <android/binder_parcel.h>
 #include <android/binder_status.h>
+#include <android/persistable_bundle.h>
 
 /* Platform only */
 #if defined(ANDROID_PLATFORM) || defined(__ANDROID_VENDOR__)
