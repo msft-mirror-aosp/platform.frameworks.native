@@ -22,9 +22,13 @@ use crate::{
 };
 use binder_ndk_sys::{
     APersistableBundle, APersistableBundle_delete, APersistableBundle_dup,
-    APersistableBundle_isEqual, APersistableBundle_new, APersistableBundle_readFromParcel,
+    APersistableBundle_erase, APersistableBundle_getBoolean, APersistableBundle_getDouble,
+    APersistableBundle_getInt, APersistableBundle_getLong, APersistableBundle_isEqual,
+    APersistableBundle_new, APersistableBundle_putBoolean, APersistableBundle_putDouble,
+    APersistableBundle_putInt, APersistableBundle_putLong, APersistableBundle_readFromParcel,
     APersistableBundle_size, APersistableBundle_writeToParcel,
 };
+use std::ffi::{CString, NulError};
 use std::ptr::{null_mut, NonNull};
 
 /// A mapping from string keys to values of various types.
@@ -46,6 +50,154 @@ impl PersistableBundle {
         unsafe { APersistableBundle_size(self.0.as_ptr()) }
             .try_into()
             .expect("APersistableBundle_size returned a negative size")
+    }
+
+    /// Removes any entry with the given key.
+    ///
+    /// Returns an error if the given key contains a NUL character, otherwise returns whether there
+    /// was any entry to remove.
+    pub fn remove(&mut self, key: &str) -> Result<bool, NulError> {
+        let key = CString::new(key)?;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`.
+        Ok(unsafe { APersistableBundle_erase(self.0.as_ptr(), key.as_ptr()) != 0 })
+    }
+
+    /// Inserts a key-value pair into the bundle.
+    ///
+    /// If the key is already present then its value will be overwritten by the given value.
+    ///
+    /// Returns an error if the key contains a NUL character.
+    pub fn insert_bool(&mut self, key: &str, value: bool) -> Result<(), NulError> {
+        let key = CString::new(key)?;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`.
+        unsafe {
+            APersistableBundle_putBoolean(self.0.as_ptr(), key.as_ptr(), value);
+        }
+        Ok(())
+    }
+
+    /// Inserts a key-value pair into the bundle.
+    ///
+    /// If the key is already present then its value will be overwritten by the given value.
+    ///
+    /// Returns an error if the key contains a NUL character.
+    pub fn insert_int(&mut self, key: &str, value: i32) -> Result<(), NulError> {
+        let key = CString::new(key)?;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`.
+        unsafe {
+            APersistableBundle_putInt(self.0.as_ptr(), key.as_ptr(), value);
+        }
+        Ok(())
+    }
+
+    /// Inserts a key-value pair into the bundle.
+    ///
+    /// If the key is already present then its value will be overwritten by the given value.
+    ///
+    /// Returns an error if the key contains a NUL character.
+    pub fn insert_long(&mut self, key: &str, value: i64) -> Result<(), NulError> {
+        let key = CString::new(key)?;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`.
+        unsafe {
+            APersistableBundle_putLong(self.0.as_ptr(), key.as_ptr(), value);
+        }
+        Ok(())
+    }
+
+    /// Inserts a key-value pair into the bundle.
+    ///
+    /// If the key is already present then its value will be overwritten by the given value.
+    ///
+    /// Returns an error if the key contains a NUL character.
+    pub fn insert_double(&mut self, key: &str, value: f64) -> Result<(), NulError> {
+        let key = CString::new(key)?;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`.
+        unsafe {
+            APersistableBundle_putDouble(self.0.as_ptr(), key.as_ptr(), value);
+        }
+        Ok(())
+    }
+
+    /// Gets the boolean value associated with the given key.
+    ///
+    /// Returns an error if the key contains a NUL character, or `Ok(None)` if the key doesn't exist
+    /// in the bundle.
+    pub fn get_bool(&self, key: &str) -> Result<Option<bool>, NulError> {
+        let key = CString::new(key)?;
+        let mut value = false;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`. The value pointer must be valid because it comes
+        // from a reference.
+        if unsafe { APersistableBundle_getBoolean(self.0.as_ptr(), key.as_ptr(), &mut value) } {
+            Ok(Some(value))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Gets the i32 value associated with the given key.
+    ///
+    /// Returns an error if the key contains a NUL character, or `Ok(None)` if the key doesn't exist
+    /// in the bundle.
+    pub fn get_int(&self, key: &str) -> Result<Option<i32>, NulError> {
+        let key = CString::new(key)?;
+        let mut value = 0;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`. The value pointer must be valid because it comes
+        // from a reference.
+        if unsafe { APersistableBundle_getInt(self.0.as_ptr(), key.as_ptr(), &mut value) } {
+            Ok(Some(value))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Gets the i64 value associated with the given key.
+    ///
+    /// Returns an error if the key contains a NUL character, or `Ok(None)` if the key doesn't exist
+    /// in the bundle.
+    pub fn get_long(&self, key: &str) -> Result<Option<i64>, NulError> {
+        let key = CString::new(key)?;
+        let mut value = 0;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`. The value pointer must be valid because it comes
+        // from a reference.
+        if unsafe { APersistableBundle_getLong(self.0.as_ptr(), key.as_ptr(), &mut value) } {
+            Ok(Some(value))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Gets the f64 value associated with the given key.
+    ///
+    /// Returns an error if the key contains a NUL character, or `Ok(None)` if the key doesn't exist
+    /// in the bundle.
+    pub fn get_double(&self, key: &str) -> Result<Option<f64>, NulError> {
+        let key = CString::new(key)?;
+        let mut value = 0.0;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`. The value pointer must be valid because it comes
+        // from a reference.
+        if unsafe { APersistableBundle_getDouble(self.0.as_ptr(), key.as_ptr(), &mut value) } {
+            Ok(Some(value))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -130,5 +282,61 @@ mod test {
         let bundle = PersistableBundle::new();
         let duplicate = bundle.clone();
         assert_eq!(bundle, duplicate);
+    }
+
+    #[test]
+    fn get_empty() {
+        let bundle = PersistableBundle::new();
+        assert_eq!(bundle.get_bool("foo"), Ok(None));
+        assert_eq!(bundle.get_int("foo"), Ok(None));
+        assert_eq!(bundle.get_long("foo"), Ok(None));
+        assert_eq!(bundle.get_double("foo"), Ok(None));
+    }
+
+    #[test]
+    fn remove_empty() {
+        let mut bundle = PersistableBundle::new();
+        assert_eq!(bundle.remove("foo"), Ok(false));
+    }
+
+    #[test]
+    fn insert_get_primitives() {
+        let mut bundle = PersistableBundle::new();
+
+        assert_eq!(bundle.insert_bool("bool", true), Ok(()));
+        assert_eq!(bundle.insert_int("int", 42), Ok(()));
+        assert_eq!(bundle.insert_long("long", 66), Ok(()));
+        assert_eq!(bundle.insert_double("double", 123.4), Ok(()));
+
+        assert_eq!(bundle.get_bool("bool"), Ok(Some(true)));
+        assert_eq!(bundle.get_int("int"), Ok(Some(42)));
+        assert_eq!(bundle.get_long("long"), Ok(Some(66)));
+        assert_eq!(bundle.get_double("double"), Ok(Some(123.4)));
+        assert_eq!(bundle.size(), 4);
+
+        // Getting the wrong type should return nothing.
+        assert_eq!(bundle.get_int("bool"), Ok(None));
+        assert_eq!(bundle.get_long("bool"), Ok(None));
+        assert_eq!(bundle.get_double("bool"), Ok(None));
+        assert_eq!(bundle.get_bool("int"), Ok(None));
+        assert_eq!(bundle.get_long("int"), Ok(None));
+        assert_eq!(bundle.get_double("int"), Ok(None));
+        assert_eq!(bundle.get_bool("long"), Ok(None));
+        assert_eq!(bundle.get_int("long"), Ok(None));
+        assert_eq!(bundle.get_double("long"), Ok(None));
+        assert_eq!(bundle.get_bool("double"), Ok(None));
+        assert_eq!(bundle.get_int("double"), Ok(None));
+        assert_eq!(bundle.get_long("double"), Ok(None));
+
+        // If they are removed they should no longer be present.
+        assert_eq!(bundle.remove("bool"), Ok(true));
+        assert_eq!(bundle.remove("int"), Ok(true));
+        assert_eq!(bundle.remove("long"), Ok(true));
+        assert_eq!(bundle.remove("double"), Ok(true));
+        assert_eq!(bundle.get_bool("bool"), Ok(None));
+        assert_eq!(bundle.get_int("int"), Ok(None));
+        assert_eq!(bundle.get_long("long"), Ok(None));
+        assert_eq!(bundle.get_double("double"), Ok(None));
+        assert_eq!(bundle.size(), 0);
     }
 }
