@@ -215,7 +215,9 @@ Status BackendUnifiedServiceManager::getService(const ::std::string& name,
                                                 sp<IBinder>* _aidl_return) {
     os::Service service;
     Status status = getService2(name, &service);
-    *_aidl_return = service.get<os::Service::Tag::serviceWithMetadata>().service;
+    if (status.isOk()) {
+        *_aidl_return = service.get<os::Service::Tag::serviceWithMetadata>().service;
+    }
     return status;
 }
 
@@ -238,7 +240,17 @@ Status BackendUnifiedServiceManager::getService2(const ::std::string& name, os::
     return status;
 }
 
-Status BackendUnifiedServiceManager::checkService(const ::std::string& name, os::Service* _out) {
+Status BackendUnifiedServiceManager::checkService(const ::std::string& name,
+                                                  sp<IBinder>* _aidl_return) {
+    os::Service service;
+    Status status = checkService2(name, &service);
+    if (status.isOk()) {
+        *_aidl_return = service.get<os::Service::Tag::serviceWithMetadata>().service;
+    }
+    return status;
+}
+
+Status BackendUnifiedServiceManager::checkService2(const ::std::string& name, os::Service* _out) {
     os::Service service;
     if (returnIfCached(name, _out)) {
         return Status::ok();
@@ -246,7 +258,7 @@ Status BackendUnifiedServiceManager::checkService(const ::std::string& name, os:
 
     Status status = Status::ok();
     if (mTheRealServiceManager) {
-        status = mTheRealServiceManager->checkService(name, &service);
+        status = mTheRealServiceManager->checkService2(name, &service);
     }
     if (status.isOk()) {
         status = toBinderService(name, service, _out);
