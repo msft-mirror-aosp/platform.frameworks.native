@@ -2339,9 +2339,19 @@ void SurfaceFlinger::onComposerHalHotplugEvent(hal::HWDisplayId hwcDisplayId,
         return;
     }
 
-    if (event == DisplayHotplugEvent::ERROR_LINK_UNSTABLE &&
-        !FlagManager::getInstance().display_config_error_hal()) {
-        return;
+    if (event == DisplayHotplugEvent::ERROR_LINK_UNSTABLE) {
+        if (!FlagManager::getInstance().display_config_error_hal()) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mHotplugMutex);
+            mPendingHotplugEvents.push_back(
+                    HotplugEvent{hwcDisplayId, HWComposer::HotplugEvent::LinkUnstable});
+        }
+        if (mScheduler) {
+            mScheduler->scheduleConfigure();
+        }
+        // do not return to also report the error.
     }
 
     // TODO(b/311403559): use enum type instead of int
@@ -3719,11 +3729,12 @@ bool SurfaceFlinger::configureLocked() {
             const auto displayId = info->id;
             const ftl::Concat displayString("display ", displayId.value, "(HAL ID ", hwcDisplayId,
                                             ')');
-
-            if (event == HWComposer::HotplugEvent::Connected) {
+            // TODO: b/393126541 - replace if with switch as all cases are handled.
+            if (event == HWComposer::HotplugEvent::Connected ||
+                event == HWComposer::HotplugEvent::LinkUnstable) {
                 const auto activeModeIdOpt =
                         processHotplugConnect(displayId, hwcDisplayId, std::move(*info),
-                                              displayString.c_str());
+                                              displayString.c_str(), event);
                 if (!activeModeIdOpt) {
                     mScheduler->dispatchHotplugError(
                             static_cast<int32_t>(DisplayHotplugEvent::ERROR_UNKNOWN));
@@ -3749,7 +3760,7 @@ bool SurfaceFlinger::configureLocked() {
                 LOG_ALWAYS_FATAL_IF(!snapshotOpt);
 
                 mDisplayModeController.registerDisplay(*snapshotOpt, *activeModeIdOpt, config);
-            } else {
+            } else { // event == HWComposer::HotplugEvent::Disconnected
                 // Unregister before destroying the DisplaySnapshot below.
                 mDisplayModeController.unregisterDisplay(displayId);
 
@@ -3764,7 +3775,8 @@ bool SurfaceFlinger::configureLocked() {
 std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDisplayId displayId,
                                                                    hal::HWDisplayId hwcDisplayId,
                                                                    DisplayIdentificationInfo&& info,
-                                                                   const char* displayString) {
+                                                                   const char* displayString,
+                                                                   HWComposer::HotplugEvent event) {
     auto [displayModes, activeMode] = loadDisplayModes(displayId);
     if (!activeMode) {
         ALOGE("Failed to hotplug %s", displayString);
@@ -3799,6 +3811,9 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
         state.physical->port = port;
         ALOGI("Reconnecting %s", displayString);
         return activeModeId;
+    } else if (event == HWComposer::HotplugEvent::LinkUnstable) {
+        ALOGE("Failed to reconnect unknown %s", displayString);
+        return std::nullopt;
     }
 
     const sp<IBinder> token = sp<BBinder>::make();
