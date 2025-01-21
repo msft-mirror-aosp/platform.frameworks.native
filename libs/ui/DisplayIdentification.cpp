@@ -392,10 +392,6 @@ std::optional<PnpId> getPnpId(uint16_t manufacturerId) {
     return a && b && c ? std::make_optional(PnpId{a, b, c}) : std::nullopt;
 }
 
-std::optional<PnpId> getPnpId(PhysicalDisplayId displayId) {
-    return getPnpId(displayId.getManufacturerId());
-}
-
 std::optional<DisplayIdentificationInfo> parseDisplayIdentificationData(
         uint8_t port, const DisplayIdentificationData& data) {
     if (data.empty()) {

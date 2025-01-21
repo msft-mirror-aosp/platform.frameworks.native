@@ -462,18 +462,6 @@ TEST(DisplayIdentificationTest, deviceProductInfo) {
     }
 }
 
-TEST(DisplayIdentificationTest, fromPort) {
-    // Manufacturer ID should be invalid.
-    ASSERT_FALSE(getPnpId(PhysicalDisplayId::fromPort(0)));
-    ASSERT_FALSE(getPnpId(PhysicalDisplayId::fromPort(0xffu)));
-}
-
-TEST(DisplayIdentificationTest, getVirtualDisplayId) {
-    // Manufacturer ID should be invalid.
-    ASSERT_FALSE(getPnpId(getVirtualDisplayId(0)));
-    ASSERT_FALSE(getPnpId(getVirtualDisplayId(0xffff'ffffu)));
-}
-
 } // namespace android
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues

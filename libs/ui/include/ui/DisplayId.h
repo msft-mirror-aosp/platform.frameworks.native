@@ -97,7 +97,6 @@ struct PhysicalDisplayId : DisplayId {
     // TODO(b/162612135) Remove default constructor
     PhysicalDisplayId() = default;
 
-    constexpr uint16_t getManufacturerId() const { return static_cast<uint16_t>(value >> 40); }
     constexpr uint8_t getPort() const { return static_cast<uint8_t>(value); }
 
 private:

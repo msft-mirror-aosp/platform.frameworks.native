@@ -85,7 +85,6 @@ struct Edid {
 bool isEdid(const DisplayIdentificationData&);
 std::optional<Edid> parseEdid(const DisplayIdentificationData&);
 std::optional<PnpId> getPnpId(uint16_t manufacturerId);
-std::optional<PnpId> getPnpId(PhysicalDisplayId);
 
 std::optional<DisplayIdentificationInfo> parseDisplayIdentificationData(
         uint8_t port, const DisplayIdentificationData&);

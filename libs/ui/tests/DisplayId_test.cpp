@@ -26,7 +26,6 @@ TEST(DisplayIdTest, createPhysicalIdFromEdid) {
     constexpr uint32_t modelHash = 42;
     const PhysicalDisplayId id = PhysicalDisplayId::fromEdid(port, manufacturerId, modelHash);
     EXPECT_EQ(port, id.getPort());
-    EXPECT_EQ(manufacturerId, id.getManufacturerId());
     EXPECT_FALSE(VirtualDisplayId::tryCast(id));
     EXPECT_FALSE(HalVirtualDisplayId::tryCast(id));
     EXPECT_FALSE(GpuVirtualDisplayId::tryCast(id));
