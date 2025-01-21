@@ -1461,6 +1461,10 @@ Error HidlComposer::getMaxLayerPictureProfiles(Display, int32_t*) {
     return Error::UNSUPPORTED;
 }
 
+Error HidlComposer::startHdcpNegotiation(Display, const aidl::android::hardware::drm::HdcpLevels&) {
+    return Error::UNSUPPORTED;
+}
+
 Error HidlComposer::getLuts(Display, const std::vector<sp<GraphicBuffer>>&,
                             std::vector<aidl::android::hardware::graphics::composer3::Luts>*) {
     return Error::UNSUPPORTED;
