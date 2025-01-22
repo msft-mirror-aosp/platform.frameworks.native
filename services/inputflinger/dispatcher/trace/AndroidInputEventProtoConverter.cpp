@@ -51,11 +51,15 @@ void AndroidInputEventProtoConverter::toProtoMotionEvent(const TracedMotionEvent
     outProto.set_classification(static_cast<int32_t>(event.classification));
     outProto.set_flags(event.flags);
     outProto.set_policy_flags(event.policyFlags);
+    outProto.set_button_state(event.buttonState);
+    outProto.set_action_button(event.actionButton);
 
     if (!isRedacted) {
         outProto.set_cursor_position_x(event.xCursorPosition);
         outProto.set_cursor_position_y(event.yCursorPosition);
         outProto.set_meta_state(event.metaState);
+        outProto.set_precision_x(event.xPrecision);
+        outProto.set_precision_y(event.yPrecision);
     }
 
     for (uint32_t i = 0; i < event.pointerProperties.size(); i++) {
