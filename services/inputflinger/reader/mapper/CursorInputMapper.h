@@ -115,7 +115,6 @@ private:
     ui::Rotation mOrientation{ui::ROTATION_0};
     FloatRect mBoundsInLogicalDisplay{};
 
-    // The button state as of the last sync.
     int32_t mButtonState;
     nsecs_t mDownTime;
     nsecs_t mLastEventTime;

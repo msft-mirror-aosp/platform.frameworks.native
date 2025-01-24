@@ -4541,9 +4541,8 @@ void InputDispatcher::notifyMotion(const NotifyMotionArgs& args) {
                                                              args.displayId.toString().c_str()));
         Result<void> result =
                 it->second.processMovement(args.deviceId, args.source, args.action,
-                                           args.actionButton, args.getPointerCount(),
-                                           args.pointerProperties.data(), args.pointerCoords.data(),
-                                           args.flags, args.buttonState);
+                                           args.getPointerCount(), args.pointerProperties.data(),
+                                           args.pointerCoords.data(), args.flags);
         if (!result.ok()) {
             LOG(FATAL) << "Bad stream: " << result.error() << " caused by " << args.dump();
         }
@@ -4744,10 +4743,9 @@ bool InputDispatcher::shouldRejectInjectedMotionLocked(const MotionEvent& motion
 
     Result<void> result =
             verifier.processMovement(deviceId, motionEvent.getSource(), motionEvent.getAction(),
-                                     motionEvent.getActionButton(), motionEvent.getPointerCount(),
+                                     motionEvent.getPointerCount(),
                                      motionEvent.getPointerProperties(),
-                                     motionEvent.getSamplePointerCoords(), flags,
-                                     motionEvent.getButtonState());
+                                     motionEvent.getSamplePointerCoords(), flags);
     if (!result.ok()) {
         logDispatchStateLocked();
         LOG(ERROR) << "Inconsistent event: " << motionEvent << ", reason: " << result.error();

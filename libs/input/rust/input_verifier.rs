@@ -17,28 +17,19 @@
 //! Contains the InputVerifier, used to validate a stream of input events.
 
 use crate::ffi::RustPointerProperties;
-use crate::input::{DeviceId, MotionAction, MotionButton, MotionFlags, Source, SourceClass};
+use crate::input::{DeviceId, MotionAction, MotionFlags, Source, SourceClass};
 use log::info;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 fn verify_event(
     action: MotionAction,
-    action_button: MotionButton,
     pointer_properties: &[RustPointerProperties],
     flags: &MotionFlags,
 ) -> Result<(), String> {
     let pointer_count = pointer_properties.len();
     if pointer_count < 1 {
         return Err(format!("Invalid {} event: no pointers", action));
-    }
-    if action_button != MotionButton::empty()
-        && action != MotionAction::ButtonPress
-        && action != MotionAction::ButtonRelease
-    {
-        return Err(format!(
-            "Invalid {action} event: has action button {action_button:?} but is not a button action"
-        ));
     }
     match action {
         MotionAction::Down
@@ -69,109 +60,9 @@ fn verify_event(
             }
         }
 
-        MotionAction::ButtonPress | MotionAction::ButtonRelease => {
-            let button_count = action_button.iter().count();
-            if button_count != 1 {
-                return Err(format!(
-                    "Invalid {action} event: must specify a single action button, not \
-                     {button_count} action buttons"
-                ));
-            }
-        }
-
         _ => {}
     }
     Ok(())
-}
-
-/// Keeps track of the button state for a single device and verifies events against it.
-#[derive(Default)]
-struct ButtonVerifier {
-    /// The current button state of the device.
-    button_state: MotionButton,
-
-    /// The set of "pending buttons", which were seen in the last DOWN event's button state but
-    /// for which we haven't seen BUTTON_PRESS events yet.
-    ///
-    /// We allow DOWN events to include buttons in their state for which BUTTON_PRESS events haven't
-    /// been sent yet. In that case, the DOWN should be immediately followed by BUTTON_PRESS events
-    /// for those buttons, building up to a button state matching that of the DOWN. For example, if
-    /// the user presses the primary and secondary buttons at exactly the same time, we'd expect
-    /// this sequence:
-    ///
-    /// | Action         | Action button | Button state           |
-    /// |----------------|---------------|------------------------|
-    /// | `HOVER_EXIT`   | -             | -                      |
-    /// | `DOWN`         | -             | `PRIMARY`, `SECONDARY` |
-    /// | `BUTTON_PRESS` | `PRIMARY`     | `PRIMARY`              |
-    /// | `BUTTON_PRESS` | `SECONDARY`   | `PRIMARY`, `SECONDARY` |
-    /// | `MOVE`         | -             | `PRIMARY`, `SECONDARY` |
-    pending_buttons: MotionButton,
-}
-
-impl ButtonVerifier {
-    pub fn process_action(
-        &mut self,
-        action: MotionAction,
-        action_button: MotionButton,
-        button_state: MotionButton,
-    ) -> Result<(), String> {
-        if !self.pending_buttons.is_empty() {
-            // We just saw a DOWN with some additional buttons in its state, so it should be
-            // immediately followed by ButtonPress events for those buttons.
-            if action != MotionAction::ButtonPress || !self.pending_buttons.contains(action_button)
-            {
-                return Err(format!(
-                    "After DOWN event, expected BUTTON_PRESS event(s) for {:?}, but got {} with \
-                     action button {:?}",
-                    self.pending_buttons, action, action_button
-                ));
-            } else {
-                self.pending_buttons -= action_button;
-            }
-        }
-        let expected_state = match action {
-            MotionAction::Down => {
-                if self.button_state - button_state != MotionButton::empty() {
-                    return Err(format!(
-                        "DOWN event button state is missing {:?}",
-                        self.button_state - button_state
-                    ));
-                }
-                self.pending_buttons = button_state - self.button_state;
-                // We've already checked that the state isn't missing any already-down buttons, and
-                // extra buttons are valid on DOWN actions, so bypass the expected state check.
-                button_state
-            }
-            MotionAction::ButtonPress => {
-                if self.button_state.contains(action_button) {
-                    return Err(format!(
-                        "Duplicate BUTTON_PRESS; button state already contains {action_button:?}"
-                    ));
-                }
-                self.button_state | action_button
-            }
-            MotionAction::ButtonRelease => {
-                if !self.button_state.contains(action_button) {
-                    return Err(format!(
-                        "Invalid BUTTON_RELEASE; button state doesn't contain {action_button:?}"
-                    ));
-                }
-                self.button_state - action_button
-            }
-            _ => self.button_state,
-        };
-        if button_state != expected_state {
-            return Err(format!(
-                "Expected {action} button state to be {expected_state:?}, but was {button_state:?}"
-            ));
-        }
-        // DOWN events can have pending buttons, so don't update the state for them.
-        if action != MotionAction::Down {
-            self.button_state = button_state;
-        }
-        Ok(())
-    }
 }
 
 /// The InputVerifier is used to validate a stream of input events.
@@ -180,7 +71,6 @@ pub struct InputVerifier {
     should_log: bool,
     touching_pointer_ids_by_device: HashMap<DeviceId, HashSet<i32>>,
     hovering_pointer_ids_by_device: HashMap<DeviceId, HashSet<i32>>,
-    button_verifier_by_device: HashMap<DeviceId, ButtonVerifier>,
 }
 
 impl InputVerifier {
@@ -196,22 +86,18 @@ impl InputVerifier {
             should_log,
             touching_pointer_ids_by_device: HashMap::new(),
             hovering_pointer_ids_by_device: HashMap::new(),
-            button_verifier_by_device: HashMap::new(),
         }
     }
 
     /// Process a pointer movement event from an InputDevice.
     /// If the event is not valid, we return an error string that describes the issue.
-    #[allow(clippy::too_many_arguments)]
     pub fn process_movement(
         &mut self,
         device_id: DeviceId,
         source: Source,
         action: u32,
-        action_button: MotionButton,
         pointer_properties: &[RustPointerProperties],
         flags: MotionFlags,
-        button_state: MotionButton,
     ) -> Result<(), String> {
         if !source.is_from_class(SourceClass::Pointer) {
             // Skip non-pointer sources like MOUSE_RELATIVE for now
@@ -228,13 +114,7 @@ impl InputVerifier {
             );
         }
 
-        verify_event(action.into(), action_button, pointer_properties, &flags)?;
-
-        self.button_verifier_by_device.entry(device_id).or_default().process_action(
-            action.into(),
-            action_button,
-            button_state,
-        )?;
+        verify_event(action.into(), pointer_properties, &flags)?;
 
         match action.into() {
             MotionAction::Down => {
@@ -408,7 +288,6 @@ impl InputVerifier {
 
 #[cfg(test)]
 mod tests {
-    use crate::input::MotionButton;
     use crate::input_verifier::InputVerifier;
     use crate::DeviceId;
     use crate::MotionFlags;
@@ -428,10 +307,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_err());
     }
@@ -445,10 +322,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         assert!(verifier
@@ -456,10 +331,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         assert!(verifier
@@ -467,10 +340,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_UP,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
     }
@@ -484,10 +355,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         // POINTER 1 DOWN
@@ -499,10 +368,8 @@ mod tests {
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_POINTER_DOWN
                     | (1 << input_bindgen::AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT),
-                MotionButton::empty(),
                 &two_pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         // POINTER 0 UP
@@ -512,10 +379,8 @@ mod tests {
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_POINTER_UP
                     | (0 << input_bindgen::AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT),
-                MotionButton::empty(),
                 &two_pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         // ACTION_UP for pointer id=1
@@ -525,10 +390,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_UP,
-                MotionButton::empty(),
                 &pointer_1_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
     }
@@ -542,10 +405,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         assert!(verifier
@@ -553,10 +414,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         assert!(verifier
@@ -564,10 +423,8 @@ mod tests {
                 DeviceId(2),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         assert!(verifier
@@ -575,10 +432,8 @@ mod tests {
                 DeviceId(2),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         assert!(verifier
@@ -586,10 +441,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_UP,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
     }
@@ -603,10 +456,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         assert!(verifier
@@ -614,10 +465,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_CANCEL,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::CANCELED,
-                MotionButton::empty(),
             )
             .is_ok());
     }
@@ -631,10 +480,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         assert!(verifier
@@ -642,10 +489,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_CANCEL,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(), // forgot to set FLAG_CANCELED
-                MotionButton::empty(),
             )
             .is_err());
     }
@@ -659,10 +504,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_UP,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_err());
     }
@@ -676,10 +519,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
 
@@ -688,10 +529,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_HOVER_MOVE,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
 
@@ -700,10 +539,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_HOVER_EXIT,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
 
@@ -712,10 +549,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
     }
@@ -729,10 +564,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
 
@@ -741,10 +574,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_err());
     }
@@ -760,10 +591,8 @@ mod tests {
                 DeviceId(2),
                 Source::MouseRelative,
                 input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
     }
@@ -778,10 +607,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         // POINTER 1 DOWN
@@ -793,10 +620,8 @@ mod tests {
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_POINTER_DOWN
                     | (1 << input_bindgen::AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT),
-                MotionButton::empty(),
                 &two_pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_ok());
         // MOVE event with 1 pointer missing (the pointer with id = 1). It should be rejected
@@ -805,470 +630,8 @@ mod tests {
                 DeviceId(1),
                 Source::Touchscreen,
                 input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                MotionButton::empty(),
                 &pointer_properties,
                 MotionFlags::empty(),
-                MotionButton::empty(),
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn correct_button_press() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Primary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_ok());
-    }
-
-    #[test]
-    fn button_press_without_action_button() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::empty(),
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn button_press_with_multiple_action_buttons() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Back | MotionButton::Forward,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Back | MotionButton::Forward,
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn button_press_without_action_button_in_state() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Primary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::empty(),
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn button_release_with_action_button_in_state() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Primary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_RELEASE,
-                MotionButton::Primary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn nonbutton_action_with_action_button() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                MotionButton::Primary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::empty(),
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn nonbutton_action_with_action_button_and_state() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                MotionButton::Primary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn nonbutton_action_with_button_state_change() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::empty(),
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_HOVER_MOVE,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Back,
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn nonbutton_action_missing_button_state() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::empty(),
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Back,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Back,
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_HOVER_MOVE,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::empty(),
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn up_without_button_release() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Primary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_ok());
-        // This UP event shouldn't change the button state; a BUTTON_RELEASE before it should.
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_UP,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::empty(),
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn button_press_for_already_pressed_button() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Back,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Back,
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Back,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Back,
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn button_release_for_unpressed_button() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_RELEASE,
-                MotionButton::Back,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::empty(),
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn correct_multiple_button_presses_without_down() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Back,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Back,
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Forward,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Back | MotionButton::Forward,
-            )
-            .is_ok());
-    }
-
-    #[test]
-    fn correct_down_with_button_press() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary | MotionButton::Secondary,
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Primary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Secondary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary | MotionButton::Secondary,
-            )
-            .is_ok());
-        // Also check that the MOVE afterwards is OK, as that's where errors would be raised if not
-        // enough BUTTON_PRESSes were sent.
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary | MotionButton::Secondary,
-            )
-            .is_ok());
-    }
-
-    #[test]
-    fn down_with_button_state_change_not_followed_by_button_press() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_ok());
-        // The DOWN event itself is OK, but it needs to be immediately followed by a BUTTON_PRESS.
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn down_with_button_state_change_not_followed_by_enough_button_presses() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary | MotionButton::Secondary,
-            )
-            .is_ok());
-        // The DOWN event itself is OK, but it needs to be immediately followed by two
-        // BUTTON_PRESSes, one for each button.
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Primary,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Primary,
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn down_missing_already_pressed_button() {
-        let mut verifier = InputVerifier::new("Test", /*should_log*/ false);
-        let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                MotionButton::Back,
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::Back,
-            )
-            .is_ok());
-        assert!(verifier
-            .process_movement(
-                DeviceId(1),
-                Source::Mouse,
-                input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                MotionButton::empty(),
-                &pointer_properties,
-                MotionFlags::empty(),
-                MotionButton::empty(),
             )
             .is_err());
     }

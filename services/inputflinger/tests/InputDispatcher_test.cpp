@@ -12371,69 +12371,43 @@ protected:
     }
 
     void injectDown(int fromSource = AINPUT_SOURCE_TOUCHSCREEN) {
-        bool consumeButtonPress = false;
         switch (fromSource) {
-            case AINPUT_SOURCE_TOUCHSCREEN: {
+            case AINPUT_SOURCE_TOUCHSCREEN:
                 ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
                           injectMotionDown(*mDispatcher, AINPUT_SOURCE_TOUCHSCREEN,
                                            ui::LogicalDisplayId::DEFAULT, {50, 50}))
                         << "Inject motion event should return InputEventInjectionResult::SUCCEEDED";
                 break;
-            }
-            case AINPUT_SOURCE_STYLUS: {
-                PointerBuilder pointer = PointerBuilder(0, ToolType::STYLUS).x(50).y(50);
+            case AINPUT_SOURCE_STYLUS:
                 ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
                           injectMotionEvent(*mDispatcher,
                                             MotionEventBuilder(AMOTION_EVENT_ACTION_DOWN,
                                                                AINPUT_SOURCE_STYLUS)
                                                     .buttonState(
                                                             AMOTION_EVENT_BUTTON_STYLUS_PRIMARY)
-                                                    .pointer(pointer)
+                                                    .pointer(PointerBuilder(0, ToolType::STYLUS)
+                                                                     .x(50)
+                                                                     .y(50))
                                                     .build()));
-                ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
-                          injectMotionEvent(*mDispatcher,
-                                            MotionEventBuilder(AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                                                               AINPUT_SOURCE_STYLUS)
-                                                    .actionButton(
-                                                            AMOTION_EVENT_BUTTON_STYLUS_PRIMARY)
-                                                    .buttonState(
-                                                            AMOTION_EVENT_BUTTON_STYLUS_PRIMARY)
-                                                    .pointer(pointer)
-                                                    .build()));
-                consumeButtonPress = true;
                 break;
-            }
-            case AINPUT_SOURCE_MOUSE: {
-                PointerBuilder pointer =
-                        PointerBuilder(MOUSE_POINTER_ID, ToolType::MOUSE).x(50).y(50);
+            case AINPUT_SOURCE_MOUSE:
                 ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
                           injectMotionEvent(*mDispatcher,
                                             MotionEventBuilder(AMOTION_EVENT_ACTION_DOWN,
                                                                AINPUT_SOURCE_MOUSE)
                                                     .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
-                                                    .pointer(pointer)
+                                                    .pointer(PointerBuilder(MOUSE_POINTER_ID,
+                                                                            ToolType::MOUSE)
+                                                                     .x(50)
+                                                                     .y(50))
                                                     .build()));
-                ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
-                          injectMotionEvent(*mDispatcher,
-                                            MotionEventBuilder(AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                                                               AINPUT_SOURCE_MOUSE)
-                                                    .actionButton(AMOTION_EVENT_BUTTON_PRIMARY)
-                                                    .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
-                                                    .pointer(pointer)
-                                                    .build()));
-                consumeButtonPress = true;
                 break;
-            }
-            default: {
+            default:
                 FAIL() << "Source " << fromSource << " doesn't support drag and drop";
-            }
         }
 
         // Window should receive motion event.
         mWindow->consumeMotionDown(ui::LogicalDisplayId::DEFAULT);
-        if (consumeButtonPress) {
-            mWindow->consumeMotionEvent(WithMotionAction(AMOTION_EVENT_ACTION_BUTTON_PRESS));
-        }
         // Spy window should also receive motion event
         mSpyWindow->consumeMotionDown(ui::LogicalDisplayId::DEFAULT);
     }
@@ -12631,16 +12605,6 @@ TEST_F(InputDispatcherDragTests, StylusDragAndDrop) {
     mSecondWindow->assertNoEvents();
 
     // Move to another window and release button, expect to drop item.
-    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
-              injectMotionEvent(*mDispatcher,
-                                MotionEventBuilder(AMOTION_EVENT_ACTION_BUTTON_RELEASE,
-                                                   AINPUT_SOURCE_STYLUS)
-                                        .actionButton(AMOTION_EVENT_BUTTON_STYLUS_PRIMARY)
-                                        .buttonState(0)
-                                        .pointer(PointerBuilder(0, ToolType::STYLUS).x(150).y(50))
-                                        .build()))
-            << "Inject motion event should return InputEventInjectionResult::SUCCEEDED";
-    mDragWindow->consumeMotionEvent(WithMotionAction(AMOTION_EVENT_ACTION_BUTTON_RELEASE));
     ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
               injectMotionEvent(*mDispatcher,
                                 MotionEventBuilder(AMOTION_EVENT_ACTION_MOVE, AINPUT_SOURCE_STYLUS)
@@ -12882,18 +12846,6 @@ TEST_F(InputDispatcherDragTests, MouseDragAndDrop) {
     mSecondWindow->consumeDragEvent(false, 50, 50);
 
     // drop to another window.
-    ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
-              injectMotionEvent(*mDispatcher,
-                                MotionEventBuilder(AMOTION_EVENT_ACTION_BUTTON_RELEASE,
-                                                   AINPUT_SOURCE_MOUSE)
-                                        .actionButton(AMOTION_EVENT_BUTTON_PRIMARY)
-                                        .buttonState(0)
-                                        .pointer(PointerBuilder(MOUSE_POINTER_ID, ToolType::MOUSE)
-                                                         .x(150)
-                                                         .y(50))
-                                        .build()))
-            << "Inject motion event should return InputEventInjectionResult::SUCCEEDED";
-    mDragWindow->consumeMotionEvent(WithMotionAction(AMOTION_EVENT_ACTION_BUTTON_RELEASE));
     ASSERT_EQ(InputEventInjectionResult::SUCCEEDED,
               injectMotionEvent(*mDispatcher,
                                 MotionEventBuilder(AMOTION_EVENT_ACTION_UP, AINPUT_SOURCE_MOUSE)
