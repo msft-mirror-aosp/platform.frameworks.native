@@ -5802,8 +5802,8 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
         }
         std::set<DeviceId> deviceIds = touchedWindow->getTouchingDeviceIds();
         if (deviceIds.size() != 1) {
-            LOG(INFO) << "Can't transfer touch. Currently touching devices: " << dumpSet(deviceIds)
-                      << " for window: " << touchedWindow->dump();
+            LOG(INFO) << "Can't transfer touch. Currently touching devices: "
+                      << dumpContainer(deviceIds) << " for window: " << touchedWindow->dump();
             return false;
         }
         const DeviceId deviceId = *deviceIds.begin();

@@ -37,16 +37,29 @@ using testing::Return;
 using testing::SetArgPointee;
 using testing::VariantWith;
 
-static constexpr ui::LogicalDisplayId DISPLAY_ID = ui::LogicalDisplayId::DEFAULT;
-static constexpr int32_t DISPLAY_WIDTH = 480;
-static constexpr int32_t DISPLAY_HEIGHT = 800;
-static constexpr std::optional<uint8_t> NO_PORT = std::nullopt; // no physical port is specified
-static constexpr int32_t SLOT_COUNT = 5;
+namespace {
 
-static constexpr int32_t ACTION_POINTER_0_UP =
+constexpr ui::LogicalDisplayId DISPLAY_ID = ui::LogicalDisplayId::DEFAULT;
+constexpr ui::LogicalDisplayId SECOND_DISPLAY_ID = ui::LogicalDisplayId{DISPLAY_ID.val() + 1};
+constexpr int32_t DISPLAY_WIDTH = 480;
+constexpr int32_t DISPLAY_HEIGHT = 800;
+constexpr std::optional<uint8_t> NO_PORT = std::nullopt; // no physical port is specified
+constexpr int32_t SLOT_COUNT = 5;
+
+constexpr int32_t ACTION_DOWN = AMOTION_EVENT_ACTION_DOWN;
+constexpr int32_t ACTION_CANCEL = AMOTION_EVENT_ACTION_CANCEL;
+constexpr int32_t ACTION_POINTER_0_UP =
         AMOTION_EVENT_ACTION_POINTER_UP | (0 << AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
-static constexpr int32_t ACTION_POINTER_1_DOWN =
+constexpr int32_t ACTION_POINTER_1_DOWN =
         AMOTION_EVENT_ACTION_POINTER_DOWN | (1 << AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+
+template <typename... Args>
+void assertNotifyArgs(const std::list<NotifyArgs>& args, Args... matchers) {
+    ASSERT_THAT(args, ElementsAre(matchers...))
+            << "Got instead: " << dumpContainer(args, streamableToString);
+}
+
+} // namespace
 
 /**
  * Unit tests for MultiTouchInputMapper.
@@ -268,6 +281,58 @@ TEST_F(MultiTouchInputMapperUnitTest, MultiFingerGestureWithUnexpectedReset) {
     ASSERT_THAT(args,
                 ElementsAre(
                         VariantWith<NotifyMotionArgs>(WithMotionAction(AMOTION_EVENT_ACTION_UP))));
+}
+
+class ExternalMultiTouchInputMapperTest : public MultiTouchInputMapperUnitTest {
+protected:
+    void SetUp() override { MultiTouchInputMapperUnitTest::SetUp(/*bus=*/0, /*isExternal=*/true); }
+};
+
+/**
+ * Expect fallback to internal viewport if device is external and external viewport is not present.
+ */
+TEST_F(ExternalMultiTouchInputMapperTest, Viewports_Fallback) {
+    std::list<NotifyArgs> args;
+
+    // Expect the event to be sent to the internal viewport,
+    // because an external viewport is not present.
+    args += processKey(BTN_TOUCH, 1);
+    args += processId(1);
+    args += processPosition(100, 200);
+    args += processSync();
+
+    assertNotifyArgs(args,
+                     VariantWith<NotifyMotionArgs>(
+                             AllOf(WithMotionAction(ACTION_DOWN), WithDisplayId(DISPLAY_ID))));
+
+    // Expect the event to be sent to the external viewport if it is present.
+    DisplayViewport externalViewport =
+            createViewport(SECOND_DISPLAY_ID, DISPLAY_WIDTH, DISPLAY_HEIGHT, ui::ROTATION_0,
+                           /*isActive=*/true, "local:1", NO_PORT, ViewportType::EXTERNAL);
+    mFakePolicy->addDisplayViewport(externalViewport);
+    std::optional<DisplayViewport> internalViewport =
+            mFakePolicy->getDisplayViewportByUniqueId("local:0");
+    mReaderConfiguration.setDisplayViewports({*internalViewport, externalViewport});
+    args = mMapper->reconfigure(systemTime(SYSTEM_TIME_MONOTONIC), mReaderConfiguration,
+                                InputReaderConfiguration::Change::DISPLAY_INFO);
+
+    assertNotifyArgs(args,
+                     VariantWith<NotifyMotionArgs>(AllOf(WithMotionAction(ACTION_CANCEL),
+                                                         WithDisplayId(SECOND_DISPLAY_ID))),
+                     VariantWith<NotifyDeviceResetArgs>(WithDeviceId(DEVICE_ID)));
+    // Lift up the old pointer.
+    processKey(BTN_TOUCH, 0);
+    args = processId(-1);
+    args += processSync();
+
+    // Send new pointer
+    args += processKey(BTN_TOUCH, 1);
+    args += processId(2);
+    args += processPosition(111, 211);
+    args += processSync();
+    assertNotifyArgs(args,
+                     VariantWith<NotifyMotionArgs>(AllOf(WithMotionAction(ACTION_DOWN),
+                                                         WithDisplayId(SECOND_DISPLAY_ID))));
 }
 
 class MultiTouchInputMapperPointerModeUnitTest : public MultiTouchInputMapperUnitTest {
