@@ -164,6 +164,8 @@ public:
 
     void setInputMethodConnectionIsActive(bool isActive) override;
 
+    void setDisplayTopology(const DisplayTopologyGraph& displayTopologyGraph) override;
+
 private:
     enum class DropReason {
         NOT_DROPPED,
@@ -291,6 +293,8 @@ private:
 
         void setMaximumObscuringOpacityForTouch(float opacity);
 
+        void setDisplayTopology(const DisplayTopologyGraph& displayTopologyGraph);
+
         // Get a reference to window handles by display, return an empty vector if not found.
         const std::vector<sp<android::gui::WindowInfoHandle>>& getWindowHandlesForDisplay(
                 ui::LogicalDisplayId displayId) const;
@@ -341,6 +345,11 @@ private:
         std::unordered_map<ui::LogicalDisplayId /*displayId*/, android::gui::DisplayInfo>
                 mDisplayInfos;
         float mMaximumObscuringOpacityForTouch{1.0f};
+
+        // Topology is initialized with default-constructed value, which is an empty topology until
+        // we receive setDisplayTopology call. Meanwhile we will treat every display as an
+        // independent display.
+        DisplayTopologyGraph mTopology;
     };
 
     DispatcherWindowInfo mWindowInfos GUARDED_BY(mLock);
