@@ -68,7 +68,7 @@ public:
     MOCK_METHOD(InputReaderPolicyInterface*, getPolicy, (), (override));
     MOCK_METHOD(EventHubInterface*, getEventHub, (), (override));
 
-    int32_t getNextId() override { return 1; };
+    int32_t getNextId() const override { return 1; };
 
     MOCK_METHOD(void, updateLedMetaState, (int32_t metaState), (override));
     MOCK_METHOD(int32_t, getLedMetaState, (), (override));
