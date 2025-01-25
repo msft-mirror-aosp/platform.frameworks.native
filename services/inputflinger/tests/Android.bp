@@ -48,6 +48,7 @@ cc_test {
     ],
     srcs: [
         ":inputdispatcher_common_test_sources",
+        "AndroidInputEventProtoConverter_test.cpp",
         "AnrTracker_test.cpp",
         "CapturedTouchpadEventConverter_test.cpp",
         "CursorInputMapper_test.cpp",
