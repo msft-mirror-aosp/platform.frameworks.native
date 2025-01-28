@@ -3974,9 +3974,6 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
                                                  displaySurface, producer);
 
     if (mScheduler && !display->isVirtual()) {
-        // TODO(b/241285876): Annotate `processDisplayAdded` instead.
-        ftl::FakeGuard guard(kMainThreadContext);
-
         // For hotplug reconnect, renew the registration since display modes have been reloaded.
         mScheduler->registerDisplay(display->getPhysicalId(), display->holdRefreshRateSelector(),
                                     mActiveDisplayId);
