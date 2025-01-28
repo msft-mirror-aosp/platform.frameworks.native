@@ -74,6 +74,7 @@ struct Edid {
     std::optional<uint64_t> hashedDescriptorBlockSerialNumberOpt;
     PnpId pnpId;
     uint32_t modelHash;
+    // Up to 13 characters of ASCII text terminated by LF and padded with SP.
     std::string_view displayName;
     uint8_t manufactureOrModelYear;
     uint8_t manufactureWeek;
@@ -90,5 +91,9 @@ std::optional<DisplayIdentificationInfo> parseDisplayIdentificationData(
         uint8_t port, const DisplayIdentificationData&);
 
 PhysicalDisplayId getVirtualDisplayId(uint32_t id);
+
+// Generates a consistent, stable, and hashed display ID that is based on the
+// display's parsed EDID fields.
+PhysicalDisplayId generateEdidDisplayId(const Edid& edid);
 
 } // namespace android
