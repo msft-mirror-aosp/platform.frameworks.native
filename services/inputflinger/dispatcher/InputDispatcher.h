@@ -432,6 +432,29 @@ private:
     private:
         std::unordered_map<ui::LogicalDisplayId, TouchState> mTouchStatesByDisplay;
 
+        // As there can be only one CursorState per topology group, we will treat all displays in
+        // the topology as one connected display-group. These will be identified by
+        // DisplayTopologyGraph::primaryDisplayId.
+        // Cursor on the any of the displays that are not part of the topology will be identified by
+        // the displayId similar to mTouchStatesByDisplay.
+        std::unordered_map<ui::LogicalDisplayId, TouchState> mCursorStateByDisplay;
+
+        // The supplied lambda is invoked for each touch and cursor state of the display.
+        // The function iterates until the lambda returns true, effectively performing a 'break'
+        // from the iteration.
+        void forTouchAndCursorStatesOnDisplay(ui::LogicalDisplayId displayId,
+                                              std::function<bool(const TouchState&)> f) const;
+
+        void forTouchAndCursorStatesOnDisplay(ui::LogicalDisplayId displayId,
+                                              std::function<bool(TouchState&)> f);
+
+        // The supplied lambda is invoked for each touchState. The function iterates until
+        // the lambda returns true, effectively performing a 'break' from the iteration.
+        void forAllTouchAndCursorStates(
+                std::function<bool(ui::LogicalDisplayId, const TouchState&)> f) const;
+
+        void forAllTouchAndCursorStates(std::function<bool(ui::LogicalDisplayId, TouchState&)> f);
+
         std::optional<std::tuple<TouchState&, TouchedWindow&, ui::LogicalDisplayId>>
         findTouchStateWindowAndDisplay(const sp<IBinder>& token);
 
@@ -443,7 +466,14 @@ private:
                 ftl::Flags<InputTarget::Flags> newTargetFlags,
                 const DispatcherWindowInfo& windowInfos, const ConnectionManager& connections);
 
-        bool canWindowReceiveMotion(const sp<android::gui::WindowInfoHandle>& window,
+        void saveTouchStateForMotionEntry(const MotionEntry& entry, TouchState&& touchState);
+
+        void eraseTouchStateForMotionEntry(const MotionEntry& entry);
+
+        const TouchState* getTouchStateForMotionEntry(
+                const android::inputdispatcher::MotionEntry& entry) const;
+
+        bool canWindowReceiveMotion(const sp<gui::WindowInfoHandle>& window,
                                     const MotionEntry& motionEntry,
                                     const ConnectionManager& connections,
                                     const DispatcherWindowInfo& windowInfos) const;

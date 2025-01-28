@@ -165,6 +165,8 @@ constexpr int LOGTAG_INPUT_INTERACTION = 62000;
 constexpr int LOGTAG_INPUT_FOCUS = 62001;
 constexpr int LOGTAG_INPUT_CANCEL = 62003;
 
+static const bool USE_TOPOLOGY = com::android::input::flags::connected_displays_cursor();
+
 const ui::Transform kIdentityTransform;
 
 inline nsecs_t now() {
@@ -917,6 +919,13 @@ std::string dumpWindowForTouchOcclusion(const WindowInfo& info, bool isTouchedWi
                         info.inputConfig.string().c_str(), toString(info.token != nullptr),
                         info.applicationInfo.name.c_str(),
                         binderToString(info.applicationInfo.token).c_str());
+}
+
+bool isMouseOrTouchpad(uint32_t sources) {
+    // Check if this is a mouse or touchpad, but not a drawing tablet.
+    return isFromSource(sources, AINPUT_SOURCE_MOUSE_RELATIVE) ||
+            (isFromSource(sources, AINPUT_SOURCE_MOUSE) &&
+             !isFromSource(sources, AINPUT_SOURCE_STYLUS));
 }
 
 } // namespace
@@ -2387,12 +2396,11 @@ InputDispatcher::DispatcherTouchState::findTouchedWindowTargets(
     const int32_t maskedAction = MotionEvent::getActionMasked(action);
 
     // Copy current touch state into tempTouchState.
-    // This state will be used to update mTouchStatesByDisplay at the end of this function.
+    // This state will be used to update saved touch state at the end of this function.
     // If no state for the specified display exists, then our initial state will be empty.
-    const TouchState* oldState = nullptr;
+    const TouchState* oldState = getTouchStateForMotionEntry(entry);
     TouchState tempTouchState;
-    if (const auto it = mTouchStatesByDisplay.find(displayId); it != mTouchStatesByDisplay.end()) {
-        oldState = &(it->second);
+    if (oldState != nullptr) {
         tempTouchState = *oldState;
     }
 
@@ -2779,14 +2787,10 @@ InputDispatcher::DispatcherTouchState::findTouchedWindowTargets(
     if (maskedAction != AMOTION_EVENT_ACTION_SCROLL) {
         if (displayId >= ui::LogicalDisplayId::DEFAULT) {
             tempTouchState.clearWindowsWithoutPointers();
-            mTouchStatesByDisplay[displayId] = tempTouchState;
+            saveTouchStateForMotionEntry(entry, std::move(tempTouchState));
         } else {
-            mTouchStatesByDisplay.erase(displayId);
+            eraseTouchStateForMotionEntry(entry);
         }
-    }
-
-    if (tempTouchState.windows.empty()) {
-        mTouchStatesByDisplay.erase(displayId);
     }
 
     return targets;
@@ -5439,12 +5443,13 @@ std::list<InputDispatcher::DispatcherTouchState::CancellationArgs>
 InputDispatcher::DispatcherTouchState::updateFromWindowInfo(
         ui::LogicalDisplayId displayId, const DispatcherWindowInfo& windowInfos) {
     std::list<CancellationArgs> cancellations;
-    if (const auto& it = mTouchStatesByDisplay.find(displayId); it != mTouchStatesByDisplay.end()) {
-        TouchState& state = it->second;
-        cancellations = eraseRemovedWindowsFromWindowInfo(state, displayId, windowInfos);
+    forTouchAndCursorStatesOnDisplay(displayId, [&](TouchState& state) {
+        cancellations.splice(cancellations.end(),
+                             eraseRemovedWindowsFromWindowInfo(state, displayId, windowInfos));
         cancellations.splice(cancellations.end(),
                              updateHoveringStateFromWindowInfo(state, displayId, windowInfos));
-    }
+        return false;
+    });
     return cancellations;
 }
 
@@ -5866,26 +5871,25 @@ InputDispatcher::DispatcherTouchState::transferTouchGesture(const sp<android::IB
  */
 sp<WindowInfoHandle> InputDispatcher::DispatcherTouchState::findTouchedForegroundWindow(
         ui::LogicalDisplayId displayId) const {
-    const auto stateIt = mTouchStatesByDisplay.find(displayId);
-    if (stateIt == mTouchStatesByDisplay.end()) {
-        ALOGI("No touch state on display %s", displayId.toString().c_str());
-        return nullptr;
-    }
-
-    const TouchState& state = stateIt->second;
     sp<WindowInfoHandle> touchedForegroundWindow;
-    // If multiple foreground windows are touched, return nullptr
-    for (const TouchedWindow& window : state.windows) {
-        if (window.targetFlags.test(InputTarget::Flags::FOREGROUND)) {
-            if (touchedForegroundWindow != nullptr) {
-                ALOGI("Two or more foreground windows: %s and %s",
-                      touchedForegroundWindow->getName().c_str(),
-                      window.windowHandle->getName().c_str());
-                return nullptr;
+    forTouchAndCursorStatesOnDisplay(displayId, [&](const TouchState& state) {
+        // If multiple foreground windows are touched, return nullptr
+        for (const TouchedWindow& window : state.windows) {
+            if (window.targetFlags.test(InputTarget::Flags::FOREGROUND)) {
+                if (touchedForegroundWindow != nullptr) {
+                    ALOGI("Two or more foreground windows: %s and %s",
+                          touchedForegroundWindow->getName().c_str(),
+                          window.windowHandle->getName().c_str());
+                    touchedForegroundWindow = nullptr;
+                    return true;
+                }
+                touchedForegroundWindow = window.windowHandle;
             }
-            touchedForegroundWindow = window.windowHandle;
         }
-    }
+        return false;
+    });
+    ALOGI_IF(touchedForegroundWindow == nullptr,
+             "No touch state or no touched foreground window on display %d", displayId.val());
     return touchedForegroundWindow;
 }
 
@@ -7366,101 +7370,209 @@ ftl::Flags<InputTarget::Flags> InputDispatcher::DispatcherTouchState::getTargetF
 
 bool InputDispatcher::DispatcherTouchState::hasTouchingOrHoveringPointers(
         ui::LogicalDisplayId displayId, int32_t deviceId) const {
-    const auto touchStateIt = mTouchStatesByDisplay.find(displayId);
-    if (touchStateIt == mTouchStatesByDisplay.end()) {
-        return false;
-    }
-    return touchStateIt->second.hasTouchingPointers(deviceId) ||
-            touchStateIt->second.hasHoveringPointers(deviceId);
+    bool hasTouchingOrHoveringPointers = false;
+    forTouchAndCursorStatesOnDisplay(displayId, [&](const TouchState& state) {
+        hasTouchingOrHoveringPointers =
+                state.hasTouchingPointers(deviceId) || state.hasHoveringPointers(deviceId);
+        return hasTouchingOrHoveringPointers;
+    });
+    return hasTouchingOrHoveringPointers;
 }
 
 bool InputDispatcher::DispatcherTouchState::isPointerInWindow(const sp<android::IBinder>& token,
                                                               ui::LogicalDisplayId displayId,
                                                               android::DeviceId deviceId,
                                                               int32_t pointerId) const {
-    const auto touchStateIt = mTouchStatesByDisplay.find(displayId);
-    if (touchStateIt == mTouchStatesByDisplay.end()) {
-        return false;
-    }
-    for (const TouchedWindow& window : touchStateIt->second.windows) {
-        if (window.windowHandle->getToken() == token &&
-            (window.hasTouchingPointer(deviceId, pointerId) ||
-             window.hasHoveringPointer(deviceId, pointerId))) {
-            return true;
+    bool isPointerInWindow = false;
+    forTouchAndCursorStatesOnDisplay(displayId, [&](const TouchState& state) {
+        for (const TouchedWindow& window : state.windows) {
+            if (window.windowHandle->getToken() == token &&
+                (window.hasTouchingPointer(deviceId, pointerId) ||
+                 window.hasHoveringPointer(deviceId, pointerId))) {
+                isPointerInWindow = true;
+                return true;
+            }
         }
-    }
-    return false;
+        return false;
+    });
+    return isPointerInWindow;
 }
 
 std::tuple<const sp<gui::WindowInfoHandle>&, ui::LogicalDisplayId>
 InputDispatcher::DispatcherTouchState::findExistingTouchedWindowHandleAndDisplay(
         const sp<android::IBinder>& token) const {
-    for (const auto& [displayId, state] : mTouchStatesByDisplay) {
+    std::optional<std::tuple<const sp<gui::WindowInfoHandle>&, ui::LogicalDisplayId>>
+            touchedWindowHandleAndDisplay;
+    forAllTouchAndCursorStates([&](ui::LogicalDisplayId displayId, const TouchState& state) {
         for (const TouchedWindow& w : state.windows) {
             if (w.windowHandle->getToken() == token) {
-                return std::make_tuple(std::ref(w.windowHandle), displayId);
+                touchedWindowHandleAndDisplay.emplace(std::ref(w.windowHandle), displayId);
+                return true;
             }
         }
-    }
-    LOG_ALWAYS_FATAL("%s : Touch state is out of sync: No touched window for token", __func__);
+        return false;
+    });
+    LOG_ALWAYS_FATAL_IF(!touchedWindowHandleAndDisplay.has_value(),
+                        "%s : Touch state is out of sync: No touched window for token", __func__);
+    return touchedWindowHandleAndDisplay.value();
 }
 
 void InputDispatcher::DispatcherTouchState::forAllTouchedWindows(
         std::function<void(const sp<gui::WindowInfoHandle>&)> f) const {
-    for (const auto& [_, state] : mTouchStatesByDisplay) {
+    forAllTouchAndCursorStates([&](ui::LogicalDisplayId displayId, const TouchState& state) {
         for (const TouchedWindow& window : state.windows) {
             f(window.windowHandle);
         }
-    }
+        return false;
+    });
 }
 
 void InputDispatcher::DispatcherTouchState::forAllTouchedWindowsOnDisplay(
         ui::LogicalDisplayId displayId,
         std::function<void(const sp<gui::WindowInfoHandle>&)> f) const {
-    const auto touchStateIt = mTouchStatesByDisplay.find(displayId);
-    if (touchStateIt == mTouchStatesByDisplay.end()) {
-        return;
-    }
-    for (const TouchedWindow& window : touchStateIt->second.windows) {
-        f(window.windowHandle);
-    }
+    forTouchAndCursorStatesOnDisplay(displayId, [&](const TouchState& state) {
+        for (const TouchedWindow& window : state.windows) {
+            f(window.windowHandle);
+        }
+        return false;
+    });
 }
 
 std::string InputDispatcher::DispatcherTouchState::dump() const {
     std::string dump;
-    if (!mTouchStatesByDisplay.empty()) {
-        dump += StringPrintf("TouchStatesByDisplay:\n");
+    if (mTouchStatesByDisplay.empty()) {
+        dump += "TouchStatesByDisplay: <no displays touched>\n";
+    } else {
+        dump += "TouchStatesByDisplay:\n";
         for (const auto& [displayId, state] : mTouchStatesByDisplay) {
             std::string touchStateDump = addLinePrefix(state.dump(), INDENT);
             dump += INDENT + displayId.toString() + " : " + touchStateDump;
         }
+    }
+    if (mCursorStateByDisplay.empty()) {
+        dump += "CursorStatesByDisplay: <no displays touched by cursor>\n";
     } else {
-        dump += "TouchStates: <no displays touched>\n";
+        dump += "CursorStatesByDisplay:\n";
+        for (const auto& [displayId, state] : mCursorStateByDisplay) {
+            std::string touchStateDump = addLinePrefix(state.dump(), INDENT);
+            dump += INDENT + displayId.toString() + " : " + touchStateDump;
+        }
     }
     return dump;
 }
 
 void InputDispatcher::DispatcherTouchState::removeAllPointersForDevice(android::DeviceId deviceId) {
-    for (auto& [_, touchState] : mTouchStatesByDisplay) {
-        touchState.removeAllPointersForDevice(deviceId);
-    }
+    forAllTouchAndCursorStates([&](ui::LogicalDisplayId displayId, TouchState& state) {
+        state.removeAllPointersForDevice(deviceId);
+        return false;
+    });
 }
 
 void InputDispatcher::DispatcherTouchState::clear() {
     mTouchStatesByDisplay.clear();
+    mCursorStateByDisplay.clear();
+}
+
+void InputDispatcher::DispatcherTouchState::saveTouchStateForMotionEntry(
+        const android::inputdispatcher::MotionEntry& entry,
+        android::inputdispatcher::TouchState&& touchState) {
+    if (touchState.windows.empty()) {
+        eraseTouchStateForMotionEntry(entry);
+        return;
+    }
+
+    if (USE_TOPOLOGY && isMouseOrTouchpad(entry.source)) {
+        mCursorStateByDisplay[entry.displayId] = std::move(touchState);
+    } else {
+        mTouchStatesByDisplay[entry.displayId] = std::move(touchState);
+    }
+}
+
+void InputDispatcher::DispatcherTouchState::eraseTouchStateForMotionEntry(
+        const android::inputdispatcher::MotionEntry& entry) {
+    if (USE_TOPOLOGY && isMouseOrTouchpad(entry.source)) {
+        mCursorStateByDisplay.erase(entry.displayId);
+    } else {
+        mTouchStatesByDisplay.erase(entry.displayId);
+    }
+}
+
+const TouchState* InputDispatcher::DispatcherTouchState::getTouchStateForMotionEntry(
+        const android::inputdispatcher::MotionEntry& entry) const {
+    if (USE_TOPOLOGY && isMouseOrTouchpad(entry.source)) {
+        auto touchStateIt = mCursorStateByDisplay.find(entry.displayId);
+        if (touchStateIt != mCursorStateByDisplay.end()) {
+            return &touchStateIt->second;
+        }
+    } else {
+        auto touchStateIt = mTouchStatesByDisplay.find(entry.displayId);
+        if (touchStateIt != mTouchStatesByDisplay.end()) {
+            return &touchStateIt->second;
+        }
+    }
+    return nullptr;
+}
+
+void InputDispatcher::DispatcherTouchState::forTouchAndCursorStatesOnDisplay(
+        ui::LogicalDisplayId displayId, std::function<bool(const TouchState&)> f) const {
+    const auto touchStateIt = mTouchStatesByDisplay.find(displayId);
+    if (touchStateIt != mTouchStatesByDisplay.end() && f(touchStateIt->second)) {
+        return;
+    }
+
+    // TODO(b/383092013): This is currently not accounting for the "topology group" concept.
+    // Proper implementation requires looking tghrough all the displays in the topology group.
+    const auto cursorStateIt = mCursorStateByDisplay.find(displayId);
+    if (cursorStateIt != mCursorStateByDisplay.end()) {
+        f(cursorStateIt->second);
+    }
+}
+
+void InputDispatcher::DispatcherTouchState::forTouchAndCursorStatesOnDisplay(
+        ui::LogicalDisplayId displayId, std::function<bool(TouchState&)> f) {
+    const_cast<const DispatcherTouchState&>(*this)
+            .forTouchAndCursorStatesOnDisplay(displayId, [&](const TouchState& state) {
+                return f(const_cast<TouchState&>(state));
+            });
+}
+
+void InputDispatcher::DispatcherTouchState::forAllTouchAndCursorStates(
+        std::function<bool(ui::LogicalDisplayId, const TouchState&)> f) const {
+    for (auto& [displayId, state] : mTouchStatesByDisplay) {
+        if (f(displayId, state)) {
+            return;
+        }
+    }
+    for (auto& [displayId, state] : mCursorStateByDisplay) {
+        if (f(displayId, state)) {
+            return;
+        }
+    }
+}
+
+void InputDispatcher::DispatcherTouchState::forAllTouchAndCursorStates(
+        std::function<bool(ui::LogicalDisplayId, TouchState&)> f) {
+    const_cast<const DispatcherTouchState&>(*this).forAllTouchAndCursorStates(
+            [&](ui::LogicalDisplayId displayId, const TouchState& constState) {
+                return f(displayId, const_cast<TouchState&>(constState));
+            });
 }
 
 std::optional<std::tuple<TouchState&, TouchedWindow&, ui::LogicalDisplayId>>
 InputDispatcher::DispatcherTouchState::findTouchStateWindowAndDisplay(
         const sp<android::IBinder>& token) {
-    for (auto& [displayId, state] : mTouchStatesByDisplay) {
+    std::optional<std::tuple<TouchState&, TouchedWindow&, ui::LogicalDisplayId>>
+            touchStateWindowAndDisplay;
+    forAllTouchAndCursorStates([&](ui::LogicalDisplayId displayId, TouchState& state) {
         for (TouchedWindow& w : state.windows) {
             if (w.windowHandle->getToken() == token) {
-                return std::make_tuple(std::ref(state), std::ref(w), displayId);
+                touchStateWindowAndDisplay.emplace(std::ref(state), std::ref(w), displayId);
+                return true;
             }
         }
-    }
-    return std::nullopt;
+        return false;
+    });
+    return touchStateWindowAndDisplay;
 }
 
 bool InputDispatcher::DispatcherTouchState::isStylusActiveInDisplay(
