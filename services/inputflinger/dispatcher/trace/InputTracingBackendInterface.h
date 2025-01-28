@@ -70,7 +70,7 @@ struct TracedMotionEvent {
     uint32_t policyFlags;
     int32_t deviceId;
     uint32_t source;
-    ui::LogicalDisplayId displayId;
+    ui::LogicalDisplayId displayId = ui::LogicalDisplayId::INVALID;
     int32_t action;
     int32_t actionButton;
     int32_t flags;

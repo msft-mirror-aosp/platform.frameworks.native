@@ -1,0 +1,261 @@
+/*
+ * Copyright 2025 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "../dispatcher/trace/AndroidInputEventProtoConverter.h"
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+namespace android::inputdispatcher::trace {
+
+namespace {
+
+using testing::Return, testing::_;
+
+class MockProtoAxisValue {
+public:
+    MOCK_METHOD(void, set_axis, (int32_t));
+    MOCK_METHOD(void, set_value, (float));
+};
+
+class MockProtoPointer {
+public:
+    MOCK_METHOD(void, set_pointer_id, (uint32_t));
+    MOCK_METHOD(void, set_tool_type, (int32_t));
+    MOCK_METHOD(MockProtoAxisValue*, add_axis_value, ());
+};
+
+class MockProtoMotion {
+public:
+    MOCK_METHOD(void, set_event_id, (uint32_t));
+    MOCK_METHOD(void, set_event_time_nanos, (int64_t));
+    MOCK_METHOD(void, set_down_time_nanos, (int64_t));
+    MOCK_METHOD(void, set_source, (uint32_t));
+    MOCK_METHOD(void, set_action, (int32_t));
+    MOCK_METHOD(void, set_device_id, (uint32_t));
+    MOCK_METHOD(void, set_display_id, (uint32_t));
+    MOCK_METHOD(void, set_classification, (int32_t));
+    MOCK_METHOD(void, set_flags, (uint32_t));
+    MOCK_METHOD(void, set_policy_flags, (uint32_t));
+    MOCK_METHOD(void, set_button_state, (uint32_t));
+    MOCK_METHOD(void, set_action_button, (uint32_t));
+    MOCK_METHOD(void, set_cursor_position_x, (float));
+    MOCK_METHOD(void, set_cursor_position_y, (float));
+    MOCK_METHOD(void, set_meta_state, (uint32_t));
+    MOCK_METHOD(void, set_precision_x, (float));
+    MOCK_METHOD(void, set_precision_y, (float));
+    MOCK_METHOD(MockProtoPointer*, add_pointer, ());
+};
+
+using TestProtoConverter = AndroidInputEventProtoConverter<MockProtoMotion, proto::AndroidKeyEvent,
+                                                           proto::AndroidWindowInputDispatchEvent,
+                                                           proto::AndroidInputEventConfig::Decoder>;
+
+TEST(AndroidInputEventProtoConverterTest, ToProtoMotionEvent) {
+    TracedMotionEvent event{};
+    event.id = 1;
+    event.eventTime = 2;
+    event.downTime = 3;
+    event.source = AINPUT_SOURCE_MOUSE;
+    event.action = AMOTION_EVENT_ACTION_BUTTON_PRESS;
+    event.deviceId = 4;
+    event.displayId = ui::LogicalDisplayId(5);
+    event.classification = MotionClassification::PINCH;
+    event.flags = 6;
+    event.policyFlags = 7;
+    event.buttonState = 8;
+    event.actionButton = 9;
+    event.xCursorPosition = 10.0f;
+    event.yCursorPosition = 11.0f;
+    event.metaState = 12;
+    event.xPrecision = 13.0f;
+    event.yPrecision = 14.0f;
+    event.pointerProperties.emplace_back(PointerProperties{
+            .id = 15,
+            .toolType = ToolType::MOUSE,
+    });
+    event.pointerProperties.emplace_back(PointerProperties{
+            .id = 16,
+            .toolType = ToolType::FINGER,
+    });
+    event.pointerCoords.emplace_back();
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_X, 17.0f);
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_Y, 18.0f);
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_PRESSURE, 19.0f);
+    event.pointerCoords.emplace_back();
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_X, 20.0f);
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_Y, 21.0f);
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_PRESSURE, 22.0f);
+
+    testing::StrictMock<MockProtoMotion> proto;
+    testing::StrictMock<MockProtoPointer> pointer1;
+    testing::StrictMock<MockProtoPointer> pointer2;
+    testing::StrictMock<MockProtoAxisValue> axisValue1;
+    testing::StrictMock<MockProtoAxisValue> axisValue2;
+    testing::StrictMock<MockProtoAxisValue> axisValue3;
+    testing::StrictMock<MockProtoAxisValue> axisValue4;
+    testing::StrictMock<MockProtoAxisValue> axisValue5;
+    testing::StrictMock<MockProtoAxisValue> axisValue6;
+
+    EXPECT_CALL(proto, set_event_id(1));
+    EXPECT_CALL(proto, set_event_time_nanos(2));
+    EXPECT_CALL(proto, set_down_time_nanos(3));
+    EXPECT_CALL(proto, set_source(AINPUT_SOURCE_MOUSE));
+    EXPECT_CALL(proto, set_action(AMOTION_EVENT_ACTION_BUTTON_PRESS));
+    EXPECT_CALL(proto, set_device_id(4));
+    EXPECT_CALL(proto, set_display_id(5));
+    EXPECT_CALL(proto, set_classification(AMOTION_EVENT_CLASSIFICATION_PINCH));
+    EXPECT_CALL(proto, set_flags(6));
+    EXPECT_CALL(proto, set_policy_flags(7));
+    EXPECT_CALL(proto, set_button_state(8));
+    EXPECT_CALL(proto, set_action_button(9));
+    EXPECT_CALL(proto, set_cursor_position_x(10.0f));
+    EXPECT_CALL(proto, set_cursor_position_y(11.0f));
+    EXPECT_CALL(proto, set_meta_state(12));
+    EXPECT_CALL(proto, set_precision_x(13.0f));
+    EXPECT_CALL(proto, set_precision_y(14.0f));
+
+    EXPECT_CALL(proto, add_pointer()).WillOnce(Return(&pointer1)).WillOnce(Return(&pointer2));
+
+    EXPECT_CALL(pointer1, set_pointer_id(15));
+    EXPECT_CALL(pointer1, set_tool_type(AMOTION_EVENT_TOOL_TYPE_MOUSE));
+    EXPECT_CALL(pointer1, add_axis_value())
+            .WillOnce(Return(&axisValue1))
+            .WillOnce(Return(&axisValue2))
+            .WillOnce(Return(&axisValue3));
+    EXPECT_CALL(axisValue1, set_axis(AMOTION_EVENT_AXIS_X));
+    EXPECT_CALL(axisValue1, set_value(17.0f));
+    EXPECT_CALL(axisValue2, set_axis(AMOTION_EVENT_AXIS_Y));
+    EXPECT_CALL(axisValue2, set_value(18.0f));
+    EXPECT_CALL(axisValue3, set_axis(AMOTION_EVENT_AXIS_PRESSURE));
+    EXPECT_CALL(axisValue3, set_value(19.0f));
+
+    EXPECT_CALL(pointer2, set_pointer_id(16));
+    EXPECT_CALL(pointer2, set_tool_type(AMOTION_EVENT_TOOL_TYPE_FINGER));
+    EXPECT_CALL(pointer2, add_axis_value())
+            .WillOnce(Return(&axisValue4))
+            .WillOnce(Return(&axisValue5))
+            .WillOnce(Return(&axisValue6));
+    EXPECT_CALL(axisValue4, set_axis(AMOTION_EVENT_AXIS_X));
+    EXPECT_CALL(axisValue4, set_value(20.0f));
+    EXPECT_CALL(axisValue5, set_axis(AMOTION_EVENT_AXIS_Y));
+    EXPECT_CALL(axisValue5, set_value(21.0f));
+    EXPECT_CALL(axisValue6, set_axis(AMOTION_EVENT_AXIS_PRESSURE));
+    EXPECT_CALL(axisValue6, set_value(22.0f));
+
+    TestProtoConverter::toProtoMotionEvent(event, proto, /*isRedacted=*/false);
+}
+
+TEST(AndroidInputEventProtoConverterTest, ToProtoMotionEvent_Redacted) {
+    TracedMotionEvent event{};
+    event.id = 1;
+    event.eventTime = 2;
+    event.downTime = 3;
+    event.source = AINPUT_SOURCE_MOUSE;
+    event.action = AMOTION_EVENT_ACTION_BUTTON_PRESS;
+    event.deviceId = 4;
+    event.displayId = ui::LogicalDisplayId(5);
+    event.classification = MotionClassification::PINCH;
+    event.flags = 6;
+    event.policyFlags = 7;
+    event.buttonState = 8;
+    event.actionButton = 9;
+    event.xCursorPosition = 10.0f;
+    event.yCursorPosition = 11.0f;
+    event.metaState = 12;
+    event.xPrecision = 13.0f;
+    event.yPrecision = 14.0f;
+    event.pointerProperties.emplace_back(PointerProperties{
+            .id = 15,
+            .toolType = ToolType::MOUSE,
+    });
+    event.pointerProperties.emplace_back(PointerProperties{
+            .id = 16,
+            .toolType = ToolType::FINGER,
+    });
+    event.pointerCoords.emplace_back();
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_X, 17.0f);
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_Y, 18.0f);
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_PRESSURE, 19.0f);
+    event.pointerCoords.emplace_back();
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_X, 20.0f);
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_Y, 21.0f);
+    event.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_PRESSURE, 22.0f);
+
+    testing::StrictMock<MockProtoMotion> proto;
+    testing::StrictMock<MockProtoPointer> pointer1;
+    testing::StrictMock<MockProtoPointer> pointer2;
+    testing::StrictMock<MockProtoAxisValue> axisValue1;
+    testing::StrictMock<MockProtoAxisValue> axisValue2;
+    testing::StrictMock<MockProtoAxisValue> axisValue3;
+    testing::StrictMock<MockProtoAxisValue> axisValue4;
+    testing::StrictMock<MockProtoAxisValue> axisValue5;
+    testing::StrictMock<MockProtoAxisValue> axisValue6;
+
+    EXPECT_CALL(proto, set_event_id(1));
+    EXPECT_CALL(proto, set_event_time_nanos(2));
+    EXPECT_CALL(proto, set_down_time_nanos(3));
+    EXPECT_CALL(proto, set_source(AINPUT_SOURCE_MOUSE));
+    EXPECT_CALL(proto, set_action(AMOTION_EVENT_ACTION_BUTTON_PRESS));
+    EXPECT_CALL(proto, set_device_id(4));
+    EXPECT_CALL(proto, set_display_id(5));
+    EXPECT_CALL(proto, set_classification(AMOTION_EVENT_CLASSIFICATION_PINCH));
+    EXPECT_CALL(proto, set_flags(6));
+    EXPECT_CALL(proto, set_policy_flags(7));
+    EXPECT_CALL(proto, set_button_state(8));
+    EXPECT_CALL(proto, set_action_button(9));
+
+    EXPECT_CALL(proto, add_pointer()).WillOnce(Return(&pointer1)).WillOnce(Return(&pointer2));
+
+    EXPECT_CALL(pointer1, set_pointer_id(15));
+    EXPECT_CALL(pointer1, set_tool_type(AMOTION_EVENT_TOOL_TYPE_MOUSE));
+    EXPECT_CALL(pointer1, add_axis_value())
+            .WillOnce(Return(&axisValue1))
+            .WillOnce(Return(&axisValue2))
+            .WillOnce(Return(&axisValue3));
+    EXPECT_CALL(axisValue1, set_axis(AMOTION_EVENT_AXIS_X));
+    EXPECT_CALL(axisValue2, set_axis(AMOTION_EVENT_AXIS_Y));
+    EXPECT_CALL(axisValue3, set_axis(AMOTION_EVENT_AXIS_PRESSURE));
+
+    EXPECT_CALL(pointer2, set_pointer_id(16));
+    EXPECT_CALL(pointer2, set_tool_type(AMOTION_EVENT_TOOL_TYPE_FINGER));
+    EXPECT_CALL(pointer2, add_axis_value())
+            .WillOnce(Return(&axisValue4))
+            .WillOnce(Return(&axisValue5))
+            .WillOnce(Return(&axisValue6));
+    EXPECT_CALL(axisValue4, set_axis(AMOTION_EVENT_AXIS_X));
+    EXPECT_CALL(axisValue5, set_axis(AMOTION_EVENT_AXIS_Y));
+    EXPECT_CALL(axisValue6, set_axis(AMOTION_EVENT_AXIS_PRESSURE));
+
+    // Redacted fields
+    EXPECT_CALL(proto, set_meta_state(_)).Times(0);
+    EXPECT_CALL(proto, set_cursor_position_x(_)).Times(0);
+    EXPECT_CALL(proto, set_cursor_position_y(_)).Times(0);
+    EXPECT_CALL(proto, set_precision_x(_)).Times(0);
+    EXPECT_CALL(proto, set_precision_y(_)).Times(0);
+    EXPECT_CALL(axisValue1, set_value(_)).Times(0);
+    EXPECT_CALL(axisValue2, set_value(_)).Times(0);
+    EXPECT_CALL(axisValue3, set_value(_)).Times(0);
+    EXPECT_CALL(axisValue4, set_value(_)).Times(0);
+    EXPECT_CALL(axisValue5, set_value(_)).Times(0);
+    EXPECT_CALL(axisValue6, set_value(_)).Times(0);
+
+    TestProtoConverter::toProtoMotionEvent(event, proto, /*isRedacted=*/true);
+}
+
+} // namespace
+
+} // namespace android::inputdispatcher::trace
