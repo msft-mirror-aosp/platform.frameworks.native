@@ -196,14 +196,14 @@ public:
 class MockInputDevice : public InputDevice {
 public:
     MockInputDevice(InputReaderContext* context, int32_t id, int32_t generation,
-                    const InputDeviceIdentifier& identifier)
-          : InputDevice(context, id, generation, identifier) {}
+                    const InputDeviceIdentifier& identifier, bool isExternal)
+          : InputDevice(context, id, generation, identifier), mIsExternal(isExternal) {}
 
     MOCK_METHOD(uint32_t, getSources, (), (const, override));
     MOCK_METHOD(std::optional<DisplayViewport>, getAssociatedViewport, (), (const));
     MOCK_METHOD(KeyboardType, getKeyboardType, (), (const, override));
     MOCK_METHOD(bool, isEnabled, (), ());
-    MOCK_METHOD(bool, isExternal, (), (override));
+    bool isExternal() override { return mIsExternal; }
 
     MOCK_METHOD(void, dump, (std::string& dump, const std::string& eventHubDevStr), ());
     MOCK_METHOD(void, addEmptyEventHubDevice, (int32_t eventHubId), ());
@@ -266,5 +266,6 @@ public:
 
 private:
     int32_t mGeneration = 0;
+    const bool mIsExternal;
 };
 } // namespace android
