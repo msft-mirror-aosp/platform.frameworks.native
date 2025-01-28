@@ -41,6 +41,16 @@ const impl::TraceConfig CONFIG_TRACE_ALL{
                                   .matchImeConnectionActive = {}}},
 };
 
+template <typename Pointer>
+void writeAxisValue(Pointer* pointer, int32_t axis, float value, bool isRedacted) {
+    auto* axisEntry = pointer->add_axis_value();
+    axisEntry->set_axis(axis);
+
+    if (!isRedacted) {
+        axisEntry->set_value(value);
+    }
+}
+
 } // namespace internal
 
 /**
@@ -85,14 +95,20 @@ public:
 
             const auto& coords = event.pointerCoords[i];
             auto bits = BitSet64(coords.bits);
+
+            if (isFromSource(event.source, AINPUT_SOURCE_CLASS_POINTER)) {
+                // Always include the X and Y axes for pointer events, since the
+                // bits will not be marked if the value is 0.
+                for (const auto axis : {AMOTION_EVENT_AXIS_X, AMOTION_EVENT_AXIS_Y}) {
+                    if (!bits.hasBit(axis)) {
+                        internal::writeAxisValue(pointer, axis, 0.0f, isRedacted);
+                    }
+                }
+            }
+
             for (int32_t axisIndex = 0; !bits.isEmpty(); axisIndex++) {
                 const auto axis = bits.clearFirstMarkedBit();
-                auto axisEntry = pointer->add_axis_value();
-                axisEntry->set_axis(axis);
-
-                if (!isRedacted) {
-                    axisEntry->set_value(coords.values[axisIndex]);
-                }
+                internal::writeAxisValue(pointer, axis, coords.values[axisIndex], isRedacted);
             }
         }
     }
