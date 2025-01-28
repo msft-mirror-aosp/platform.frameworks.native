@@ -1070,7 +1070,8 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
 void SurfaceFlinger::initBootProperties() {
     property_set("service.sf.present_timestamp", mHasReliablePresentFences ? "1" : "0");
 
-    if (base::GetBoolProperty("debug.sf.boot_animation"s, true)) {
+    if (base::GetBoolProperty("debug.sf.boot_animation"s, true) &&
+        (base::GetIntProperty("debug.sf.nobootanimation"s, 0) == 0)) {
         // Reset and (if needed) start BootAnimation.
         property_set("service.bootanim.exit", "0");
         property_set("service.bootanim.progress", "0");
