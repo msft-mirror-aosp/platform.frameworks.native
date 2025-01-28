@@ -25,16 +25,19 @@ use binder_ndk_sys::{
     APersistableBundle_erase, APersistableBundle_getBoolean, APersistableBundle_getBooleanVector,
     APersistableBundle_getDouble, APersistableBundle_getDoubleVector, APersistableBundle_getInt,
     APersistableBundle_getIntVector, APersistableBundle_getLong, APersistableBundle_getLongVector,
-    APersistableBundle_getPersistableBundle, APersistableBundle_isEqual, APersistableBundle_new,
-    APersistableBundle_putBoolean, APersistableBundle_putBooleanVector,
-    APersistableBundle_putDouble, APersistableBundle_putDoubleVector, APersistableBundle_putInt,
-    APersistableBundle_putIntVector, APersistableBundle_putLong, APersistableBundle_putLongVector,
+    APersistableBundle_getPersistableBundle, APersistableBundle_getString,
+    APersistableBundle_isEqual, APersistableBundle_new, APersistableBundle_putBoolean,
+    APersistableBundle_putBooleanVector, APersistableBundle_putDouble,
+    APersistableBundle_putDoubleVector, APersistableBundle_putInt, APersistableBundle_putIntVector,
+    APersistableBundle_putLong, APersistableBundle_putLongVector,
     APersistableBundle_putPersistableBundle, APersistableBundle_putString,
     APersistableBundle_putStringVector, APersistableBundle_readFromParcel, APersistableBundle_size,
-    APersistableBundle_writeToParcel, APERSISTABLEBUNDLE_KEY_NOT_FOUND,
+    APersistableBundle_writeToParcel, APERSISTABLEBUNDLE_ALLOCATOR_FAILED,
+    APERSISTABLEBUNDLE_KEY_NOT_FOUND,
 };
-use std::ffi::{c_char, CString, NulError};
-use std::ptr::{null_mut, NonNull};
+use std::ffi::{c_char, c_void, CString, NulError};
+use std::ptr::{null_mut, slice_from_raw_parts_mut, NonNull};
+use zerocopy::FromZeros;
 
 /// A mapping from string keys to values of various types.
 #[derive(Debug)]
@@ -374,6 +377,53 @@ impl PersistableBundle {
         }
     }
 
+    /// Gets the string value associated with the given key.
+    ///
+    /// Returns an error if the key contains a NUL character, or `Ok(None)` if the key doesn't exist
+    /// in the bundle.
+    pub fn get_string(&self, key: &str) -> Result<Option<String>, NulError> {
+        let key = CString::new(key)?;
+        let mut value = null_mut();
+        let mut allocated_size: usize = 0;
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. The pointer returned by `key.as_ptr()` is guaranteed
+        // to be valid for the lifetime of `key`. The value pointer must be valid because it comes
+        // from a reference.
+        let value_size_bytes = unsafe {
+            APersistableBundle_getString(
+                self.0.as_ptr(),
+                key.as_ptr(),
+                &mut value,
+                Some(string_allocator),
+                (&raw mut allocated_size).cast(),
+            )
+        };
+        match value_size_bytes {
+            APERSISTABLEBUNDLE_KEY_NOT_FOUND => Ok(None),
+            APERSISTABLEBUNDLE_ALLOCATOR_FAILED => {
+                panic!("APersistableBundle_getString failed to allocate string");
+            }
+            _ => {
+                let raw_slice = slice_from_raw_parts_mut(value.cast(), allocated_size);
+                // SAFETY: The pointer was returned from string_allocator, which used
+                // `Box::into_raw`, and we've got the appropriate size back from allocated_size.
+                let boxed_slice: Box<[u8]> = unsafe { Box::from_raw(raw_slice) };
+                assert_eq!(
+                    allocated_size,
+                    usize::try_from(value_size_bytes)
+                        .expect("APersistableBundle_getString returned negative value size")
+                        + 1
+                );
+                let c_string = CString::from_vec_with_nul(boxed_slice.into())
+                    .expect("APersistableBundle_getString returned string missing NUL byte");
+                let string = c_string
+                    .into_string()
+                    .expect("APersistableBundle_getString returned invalid UTF-8");
+                Ok(Some(string))
+            }
+        }
+    }
+
     /// Gets the vector of `T` associated with the given key.
     ///
     /// Returns an error if the key contains a NUL character, or `Ok(None)` if the key doesn't exist
@@ -558,6 +608,26 @@ impl UnstructuredParcelable for PersistableBundle {
     }
 }
 
+/// Allocates a boxed slice of the given size in bytes, returns a pointer to it and writes its size
+/// to `*context`.
+///
+/// # Safety
+///
+/// `context` must point to a `usize` to which we can write.
+unsafe extern "C" fn string_allocator(size: i32, context: *mut c_void) -> *mut c_char {
+    let Ok(size) = size.try_into() else {
+        return null_mut();
+    };
+    let Ok(boxed_slice) = <[c_char]>::new_box_zeroed_with_elems(size) else {
+        return null_mut();
+    };
+    // SAFETY: The caller promised that `context` points to a `usize` to which we can write.
+    unsafe {
+        *context.cast::<usize>() = size;
+    }
+    Box::into_raw(boxed_slice).cast()
+}
+
 impl_deserialize_for_unstructured_parcelable!(PersistableBundle);
 impl_serialize_for_unstructured_parcelable!(PersistableBundle);
 
@@ -589,6 +659,7 @@ mod test {
         assert_eq!(bundle.get_int_vec("foo"), Ok(None));
         assert_eq!(bundle.get_long_vec("foo"), Ok(None));
         assert_eq!(bundle.get_double_vec("foo"), Ok(None));
+        assert_eq!(bundle.get_string("foo"), Ok(None));
     }
 
     #[test]
@@ -639,10 +710,15 @@ mod test {
     }
 
     #[test]
-    fn insert_string() {
+    fn insert_get_string() {
         let mut bundle = PersistableBundle::new();
+
         assert_eq!(bundle.insert_string("string", "foo"), Ok(()));
-        assert_eq!(bundle.size(), 1);
+        assert_eq!(bundle.insert_string("empty", ""), Ok(()));
+        assert_eq!(bundle.size(), 2);
+
+        assert_eq!(bundle.get_string("string"), Ok(Some("foo".to_string())));
+        assert_eq!(bundle.get_string("empty"), Ok(Some("".to_string())));
     }
 
     #[test]
