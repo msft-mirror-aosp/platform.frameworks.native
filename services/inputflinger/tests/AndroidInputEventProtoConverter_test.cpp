@@ -60,7 +60,24 @@ public:
     MOCK_METHOD(MockProtoPointer*, add_pointer, ());
 };
 
-using TestProtoConverter = AndroidInputEventProtoConverter<MockProtoMotion, proto::AndroidKeyEvent,
+class MockProtoKey {
+public:
+    MOCK_METHOD(void, set_event_id, (uint32_t));
+    MOCK_METHOD(void, set_event_time_nanos, (int64_t));
+    MOCK_METHOD(void, set_down_time_nanos, (int64_t));
+    MOCK_METHOD(void, set_source, (uint32_t));
+    MOCK_METHOD(void, set_action, (int32_t));
+    MOCK_METHOD(void, set_device_id, (uint32_t));
+    MOCK_METHOD(void, set_display_id, (uint32_t));
+    MOCK_METHOD(void, set_repeat_count, (uint32_t));
+    MOCK_METHOD(void, set_flags, (uint32_t));
+    MOCK_METHOD(void, set_policy_flags, (uint32_t));
+    MOCK_METHOD(void, set_key_code, (uint32_t));
+    MOCK_METHOD(void, set_scan_code, (uint32_t));
+    MOCK_METHOD(void, set_meta_state, (uint32_t));
+};
+
+using TestProtoConverter = AndroidInputEventProtoConverter<MockProtoMotion, MockProtoKey,
                                                            proto::AndroidWindowInputDispatchEvent,
                                                            proto::AndroidInputEventConfig::Decoder>;
 
@@ -344,6 +361,78 @@ TEST(AndroidInputEventProtoConverterTest, ToProtoMotionEvent_ZeroValues) {
     EXPECT_CALL(axisValue4, set_value(0.0f));
 
     TestProtoConverter::toProtoMotionEvent(event, proto, /*isRedacted=*/false);
+}
+
+TEST(AndroidInputEventProtoConverterTest, ToProtoKeyEvent) {
+    TracedKeyEvent event{};
+    event.id = 1;
+    event.eventTime = 2;
+    event.downTime = 3;
+    event.source = AINPUT_SOURCE_KEYBOARD;
+    event.action = AKEY_EVENT_ACTION_DOWN;
+    event.deviceId = 4;
+    event.displayId = ui::LogicalDisplayId(5);
+    event.repeatCount = 6;
+    event.flags = 7;
+    event.policyFlags = 8;
+    event.keyCode = 9;
+    event.scanCode = 10;
+    event.metaState = 11;
+
+    testing::StrictMock<MockProtoKey> proto;
+
+    EXPECT_CALL(proto, set_event_id(1));
+    EXPECT_CALL(proto, set_event_time_nanos(2));
+    EXPECT_CALL(proto, set_down_time_nanos(3));
+    EXPECT_CALL(proto, set_source(AINPUT_SOURCE_KEYBOARD));
+    EXPECT_CALL(proto, set_action(AKEY_EVENT_ACTION_DOWN));
+    EXPECT_CALL(proto, set_device_id(4));
+    EXPECT_CALL(proto, set_display_id(5));
+    EXPECT_CALL(proto, set_repeat_count(6));
+    EXPECT_CALL(proto, set_flags(7));
+    EXPECT_CALL(proto, set_policy_flags(8));
+    EXPECT_CALL(proto, set_key_code(9));
+    EXPECT_CALL(proto, set_scan_code(10));
+    EXPECT_CALL(proto, set_meta_state(11));
+
+    TestProtoConverter::toProtoKeyEvent(event, proto, /*isRedacted=*/false);
+}
+
+TEST(AndroidInputEventProtoConverterTest, ToProtoKeyEvent_Redacted) {
+    TracedKeyEvent event{};
+    event.id = 1;
+    event.eventTime = 2;
+    event.downTime = 3;
+    event.source = AINPUT_SOURCE_KEYBOARD;
+    event.action = AKEY_EVENT_ACTION_DOWN;
+    event.deviceId = 4;
+    event.displayId = ui::LogicalDisplayId(5);
+    event.repeatCount = 6;
+    event.flags = 7;
+    event.policyFlags = 8;
+    event.keyCode = 9;
+    event.scanCode = 10;
+    event.metaState = 11;
+
+    testing::StrictMock<MockProtoKey> proto;
+
+    EXPECT_CALL(proto, set_event_id(1));
+    EXPECT_CALL(proto, set_event_time_nanos(2));
+    EXPECT_CALL(proto, set_down_time_nanos(3));
+    EXPECT_CALL(proto, set_source(AINPUT_SOURCE_KEYBOARD));
+    EXPECT_CALL(proto, set_action(AKEY_EVENT_ACTION_DOWN));
+    EXPECT_CALL(proto, set_device_id(4));
+    EXPECT_CALL(proto, set_display_id(5));
+    EXPECT_CALL(proto, set_repeat_count(6));
+    EXPECT_CALL(proto, set_flags(7));
+    EXPECT_CALL(proto, set_policy_flags(8));
+
+    // Redacted fields
+    EXPECT_CALL(proto, set_key_code(_)).Times(0);
+    EXPECT_CALL(proto, set_scan_code(_)).Times(0);
+    EXPECT_CALL(proto, set_meta_state(_)).Times(0);
+
+    TestProtoConverter::toProtoKeyEvent(event, proto, /*isRedacted=*/true);
 }
 
 } // namespace
