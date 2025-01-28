@@ -139,12 +139,17 @@ public:
     //               * the buffer slot was invalid
     //               * the fence was NULL
     //               * the buffer slot specified is not in the acquired state
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_GL_FENCE_CLEANUP)
+    virtual status_t releaseBuffer(int buf, uint64_t frameNumber,
+                                   const sp<Fence>& releaseFence) = 0;
+#else
     virtual status_t releaseBuffer(int buf, uint64_t frameNumber, EGLDisplay display,
                                    EGLSyncKHR fence, const sp<Fence>& releaseFence) = 0;
 
     status_t releaseBuffer(int buf, uint64_t frameNumber, const sp<Fence>& releaseFence) {
         return releaseBuffer(buf, frameNumber, EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, releaseFence);
     }
+#endif
 
     // consumerConnect connects a consumer to the BufferQueue. Only one consumer may be connected,
     // and when that consumer disconnects the BufferQueue is placed into the "abandoned" state,

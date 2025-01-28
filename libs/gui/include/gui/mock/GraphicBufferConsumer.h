@@ -18,6 +18,7 @@
 
 #include <gmock/gmock.h>
 
+#include <com_android_graphics_libgui_flags.h>
 #include <gui/IGraphicBufferConsumer.h>
 
 #include <utils/RefBase.h>
@@ -33,7 +34,11 @@ public:
     MOCK_METHOD3(acquireBuffer, status_t(BufferItem*, nsecs_t, uint64_t));
     MOCK_METHOD1(detachBuffer, status_t(int));
     MOCK_METHOD2(attachBuffer, status_t(int*, const sp<GraphicBuffer>&));
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_GL_FENCE_CLEANUP)
+    MOCK_METHOD3(releaseBuffer, status_t(int, uint64_t, const sp<Fence>&));
+#else
     MOCK_METHOD5(releaseBuffer, status_t(int, uint64_t, EGLDisplay, EGLSyncKHR, const sp<Fence>&));
+#endif
     MOCK_METHOD2(consumerConnect, status_t(const sp<IConsumerListener>&, bool));
     MOCK_METHOD0(consumerDisconnect, status_t());
     MOCK_METHOD1(getReleasedBuffers, status_t(uint64_t*));

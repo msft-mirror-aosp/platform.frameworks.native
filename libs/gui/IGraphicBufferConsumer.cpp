@@ -85,6 +85,12 @@ public:
         return callRemote<Signature>(Tag::ATTACH_BUFFER, slot, buffer);
     }
 
+#if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(BQ_GL_FENCE_CLEANUP)
+    status_t releaseBuffer(int buf, uint64_t frameNumber, const sp<Fence>& releaseFence) override {
+        using Signature = status_t (IGraphicBufferConsumer::*)(int, uint64_t, const sp<Fence>&);
+        return callRemote<Signature>(Tag::RELEASE_BUFFER, buf, frameNumber, releaseFence);
+    }
+#else
     status_t releaseBuffer(int buf, uint64_t frameNumber,
                            EGLDisplay display __attribute__((unused)),
                            EGLSyncKHR fence __attribute__((unused)),
@@ -92,6 +98,7 @@ public:
         using Signature = status_t (IGraphicBufferConsumer::*)(int, uint64_t, const sp<Fence>&);
         return callRemote<Signature>(Tag::RELEASE_BUFFER, buf, frameNumber, releaseFence);
     }
+#endif
 
     status_t consumerConnect(const sp<IConsumerListener>& consumer, bool controlledByApp) override {
         using Signature = decltype(&IGraphicBufferConsumer::consumerConnect);
