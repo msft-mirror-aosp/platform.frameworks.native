@@ -505,8 +505,8 @@ public:
         }
 
         if (mPointerIds != actualPointerIds) {
-            *os << "expected pointer ids " << dumpSet(mPointerIds) << ", but got "
-                << dumpSet(actualPointerIds);
+            *os << "expected pointer ids " << dumpContainer(mPointerIds) << ", but got "
+                << dumpContainer(actualPointerIds);
             return false;
         }
         return true;
@@ -519,14 +519,16 @@ public:
         }
 
         if (mPointerIds != actualPointerIds) {
-            *os << "expected pointer ids " << dumpSet(mPointerIds) << ", but got "
-                << dumpSet(actualPointerIds);
+            *os << "expected pointer ids " << dumpContainer(mPointerIds) << ", but got "
+                << dumpContainer(actualPointerIds);
             return false;
         }
         return true;
     }
 
-    void DescribeTo(std::ostream* os) const { *os << "with pointer ids " << dumpSet(mPointerIds); }
+    void DescribeTo(std::ostream* os) const {
+        *os << "with pointer ids " << dumpContainer(mPointerIds);
+    }
 
     void DescribeNegationTo(std::ostream* os) const { *os << "wrong pointer ids"; }
 
