@@ -108,7 +108,7 @@ struct WindowDispatchArgs {
     TracedEvent eventEntry;
     nsecs_t deliveryTime;
     int32_t resolvedFlags;
-    gui::Uid targetUid;
+    gui::Uid targetUid = gui::Uid::INVALID;
     int64_t vsyncId;
     int32_t windowId;
     ui::Transform transform;
