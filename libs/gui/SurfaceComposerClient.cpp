@@ -1415,9 +1415,8 @@ std::vector<PhysicalDisplayId> SurfaceComposerClient::getPhysicalDisplayIds() {
             ComposerServiceAIDL::getComposerService()->getPhysicalDisplayIds(&displayIds);
     if (status.isOk()) {
         physicalDisplayIds.reserve(displayIds.size());
-        for (auto item : displayIds) {
-            auto id = DisplayId::fromValue<PhysicalDisplayId>(static_cast<uint64_t>(item));
-            physicalDisplayIds.push_back(*id);
+        for (auto id : displayIds) {
+            physicalDisplayIds.push_back(PhysicalDisplayId::fromValue(static_cast<uint64_t>(id)));
         }
     }
     return physicalDisplayIds;
