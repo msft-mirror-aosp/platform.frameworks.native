@@ -77,9 +77,26 @@ public:
     MOCK_METHOD(void, set_meta_state, (uint32_t));
 };
 
-using TestProtoConverter = AndroidInputEventProtoConverter<MockProtoMotion, MockProtoKey,
-                                                           proto::AndroidWindowInputDispatchEvent,
-                                                           proto::AndroidInputEventConfig::Decoder>;
+class MockProtoDispatchPointer {
+public:
+    MOCK_METHOD(void, set_pointer_id, (uint32_t));
+    MOCK_METHOD(void, set_x_in_display, (float));
+    MOCK_METHOD(void, set_y_in_display, (float));
+    MOCK_METHOD(MockProtoAxisValue*, add_axis_value_in_window, ());
+};
+
+class MockProtoDispatch {
+public:
+    MOCK_METHOD(void, set_event_id, (uint32_t));
+    MOCK_METHOD(void, set_vsync_id, (uint32_t));
+    MOCK_METHOD(void, set_window_id, (uint32_t));
+    MOCK_METHOD(void, set_resolved_flags, (uint32_t));
+    MOCK_METHOD(MockProtoDispatchPointer*, add_dispatched_pointer, ());
+};
+
+using TestProtoConverter =
+        AndroidInputEventProtoConverter<MockProtoMotion, MockProtoKey, MockProtoDispatch,
+                                        proto::AndroidInputEventConfig::Decoder>;
 
 TEST(AndroidInputEventProtoConverterTest, ToProtoMotionEvent) {
     TracedMotionEvent event{};
@@ -433,6 +450,135 @@ TEST(AndroidInputEventProtoConverterTest, ToProtoKeyEvent_Redacted) {
     EXPECT_CALL(proto, set_meta_state(_)).Times(0);
 
     TestProtoConverter::toProtoKeyEvent(event, proto, /*isRedacted=*/true);
+}
+
+TEST(AndroidInputEventProtoConverterTest, ToProtoWindowDispatchEvent_Motion_IdentityTransform) {
+    TracedMotionEvent motion{};
+    motion.pointerProperties.emplace_back(PointerProperties{
+            .id = 4,
+            .toolType = ToolType::MOUSE,
+    });
+    motion.pointerCoords.emplace_back();
+    motion.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_X, 5.0f);
+    motion.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_Y, 6.0f);
+
+    WindowDispatchArgs args{};
+    args.eventEntry = motion;
+    args.vsyncId = 1;
+    args.windowId = 2;
+    args.resolvedFlags = 3;
+    args.rawTransform = ui::Transform{};
+    args.transform = ui::Transform{};
+
+    testing::StrictMock<MockProtoDispatch> proto;
+    testing::StrictMock<MockProtoDispatchPointer> pointer;
+
+    EXPECT_CALL(proto, set_event_id(0));
+    EXPECT_CALL(proto, set_vsync_id(1));
+    EXPECT_CALL(proto, set_window_id(2));
+    EXPECT_CALL(proto, set_resolved_flags(3));
+    EXPECT_CALL(proto, add_dispatched_pointer()).WillOnce(Return(&pointer));
+    EXPECT_CALL(pointer, set_pointer_id(4));
+
+    // Since we are using identity transforms, the axis values will be identical to those in the
+    // traced event, so they should not be traced here.
+    EXPECT_CALL(pointer, add_axis_value_in_window()).Times(0);
+    EXPECT_CALL(pointer, set_x_in_display(_)).Times(0);
+    EXPECT_CALL(pointer, set_y_in_display(_)).Times(0);
+
+    TestProtoConverter::toProtoWindowDispatchEvent(args, proto, /*isRedacted=*/false);
+}
+
+TEST(AndroidInputEventProtoConverterTest, ToProtoWindowDispatchEvent_Motion_CustomTransform) {
+    TracedMotionEvent motion{};
+    motion.pointerProperties.emplace_back(PointerProperties{
+            .id = 4,
+            .toolType = ToolType::MOUSE,
+    });
+    motion.pointerCoords.emplace_back();
+    motion.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_X, 8.0f);
+    motion.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_Y, 6.0f);
+
+    WindowDispatchArgs args{};
+    args.eventEntry = motion;
+    args.vsyncId = 1;
+    args.windowId = 2;
+    args.resolvedFlags = 3;
+    args.rawTransform.set(2, 0, 0, 0.5);
+    args.transform.set(1.0, 0, 0, 0.5);
+
+    testing::StrictMock<MockProtoDispatch> proto;
+    testing::StrictMock<MockProtoDispatchPointer> pointer;
+    testing::StrictMock<MockProtoAxisValue> axisValue1;
+
+    EXPECT_CALL(proto, set_event_id(0));
+    EXPECT_CALL(proto, set_vsync_id(1));
+    EXPECT_CALL(proto, set_window_id(2));
+    EXPECT_CALL(proto, set_resolved_flags(3));
+    EXPECT_CALL(proto, add_dispatched_pointer()).WillOnce(Return(&pointer));
+    EXPECT_CALL(pointer, set_pointer_id(4));
+
+    // Only the transformed axis-values that differ from the traced event will be traced.
+    EXPECT_CALL(pointer, add_axis_value_in_window()).WillOnce(Return(&axisValue1));
+    EXPECT_CALL(pointer, set_x_in_display(16.0f)); // MotionEvent::getRawX
+    EXPECT_CALL(pointer, set_y_in_display(3.0f));  // MotionEvent::getRawY
+
+    EXPECT_CALL(axisValue1, set_axis(AMOTION_EVENT_AXIS_Y));
+    EXPECT_CALL(axisValue1, set_value(3.0f));
+
+    TestProtoConverter::toProtoWindowDispatchEvent(args, proto, /*isRedacted=*/false);
+}
+
+TEST(AndroidInputEventProtoConverterTest, ToProtoWindowDispatchEvent_Motion_Redacted) {
+    TracedMotionEvent motion{};
+    motion.pointerProperties.emplace_back(PointerProperties{
+            .id = 4,
+            .toolType = ToolType::MOUSE,
+    });
+    motion.pointerCoords.emplace_back();
+    motion.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_X, 5.0f);
+    motion.pointerCoords.back().setAxisValue(AMOTION_EVENT_AXIS_Y, 6.0f);
+
+    WindowDispatchArgs args{};
+    args.eventEntry = motion;
+    args.vsyncId = 1;
+    args.windowId = 2;
+    args.resolvedFlags = 3;
+    args.rawTransform = ui::Transform{};
+    args.transform = ui::Transform{};
+
+    testing::StrictMock<MockProtoDispatch> proto;
+
+    EXPECT_CALL(proto, set_event_id(0));
+    EXPECT_CALL(proto, set_vsync_id(1));
+    EXPECT_CALL(proto, set_window_id(2));
+    EXPECT_CALL(proto, set_resolved_flags(3));
+
+    // Redacted fields
+    EXPECT_CALL(proto, add_dispatched_pointer()).Times(0);
+
+    TestProtoConverter::toProtoWindowDispatchEvent(args, proto, /*isRedacted=*/true);
+}
+
+TEST(AndroidInputEventProtoConverterTest, ToProtoWindowDispatchEvent_Key) {
+    TracedKeyEvent key{};
+
+    WindowDispatchArgs args{};
+    args.eventEntry = key;
+    args.vsyncId = 1;
+    args.windowId = 2;
+    args.resolvedFlags = 3;
+    args.rawTransform = ui::Transform{};
+    args.transform = ui::Transform{};
+
+    testing::StrictMock<MockProtoDispatch> proto;
+
+    EXPECT_CALL(proto, set_event_id(0));
+    EXPECT_CALL(proto, set_vsync_id(1));
+    EXPECT_CALL(proto, set_window_id(2));
+    EXPECT_CALL(proto, set_resolved_flags(3));
+
+    TestProtoConverter::toProtoWindowDispatchEvent(args, proto, /*isRedacted=*/true);
 }
 
 } // namespace
