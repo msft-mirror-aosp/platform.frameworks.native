@@ -28,8 +28,7 @@ namespace android {
 
 class BufferQueueCore;
 
-class BufferQueueConsumer : public BnGraphicBufferConsumer {
-
+class BufferQueueConsumer : public IGraphicBufferConsumer {
 public:
     explicit BufferQueueConsumer(const sp<BufferQueueCore>& core);
     ~BufferQueueConsumer() override;
