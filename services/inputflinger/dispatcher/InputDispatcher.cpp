@@ -2808,8 +2808,9 @@ void InputDispatcher::finishDragAndDrop(ui::LogicalDisplayId displayId, float x,
 }
 
 void InputDispatcher::addDragEventLocked(const MotionEntry& entry) {
-    if (!mDragState || mDragState->dragWindow->getInfo()->displayId != entry.displayId ||
-        mDragState->deviceId != entry.deviceId) {
+    if (!mDragState || mDragState->deviceId != entry.deviceId ||
+        !mWindowInfos.areDisplaysConnected(mDragState->dragWindow->getInfo()->displayId,
+                                           entry.displayId)) {
         return;
     }
 
@@ -5196,6 +5197,12 @@ ui::LogicalDisplayId InputDispatcher::DispatcherWindowInfo::getPrimaryDisplayId(
         return mTopology.primaryDisplayId;
     }
     return displayId;
+}
+
+bool InputDispatcher::DispatcherWindowInfo::areDisplaysConnected(
+        ui::LogicalDisplayId display1, ui::LogicalDisplayId display2) const {
+    return display1 == display2 ||
+            (mTopology.graph.contains(display1) && mTopology.graph.contains(display2));
 }
 
 std::string InputDispatcher::DispatcherWindowInfo::dumpDisplayAndWindowInfo() const {

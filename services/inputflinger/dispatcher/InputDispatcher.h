@@ -343,6 +343,9 @@ private:
         // same displayId.
         ui::LogicalDisplayId getPrimaryDisplayId(ui::LogicalDisplayId displayId) const;
 
+        bool areDisplaysConnected(ui::LogicalDisplayId display1,
+                                  ui::LogicalDisplayId display2) const;
+
         std::string dumpDisplayAndWindowInfo() const;
 
     private:
