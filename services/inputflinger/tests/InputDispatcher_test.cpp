@@ -8101,6 +8101,17 @@ TEST_F(InputDispatcherTest, VerifyInputEvent_KeyEvent) {
     ASSERT_EQ(keyArgs.scanCode, verifiedKey.scanCode);
     ASSERT_EQ(keyArgs.metaState, verifiedKey.metaState);
     ASSERT_EQ(0, verifiedKey.repeatCount);
+
+    // InputEvent and subclasses don't have a virtual destructor and only
+    // InputEvent's destructor gets called when `verified` goes out of scope,
+    // even if `verifyInputEvent` returns an object of a subclass.  To fix this,
+    // we should either consider using std::variant in some way, or introduce an
+    // intermediate POD data structure that we will put the data into just prior
+    // to signing.  Adding virtual functions to these classes is undesirable as
+    // the bytes in these objects are getting signed.  As a temporary fix, cast
+    // the pointer to the correct class (which is statically known) before
+    // destruction.
+    delete (VerifiedKeyEvent*)verified.release();
 }
 
 TEST_F(InputDispatcherTest, VerifyInputEvent_MotionEvent) {
@@ -8148,6 +8159,10 @@ TEST_F(InputDispatcherTest, VerifyInputEvent_MotionEvent) {
     EXPECT_EQ(motionArgs.downTime, verifiedMotion.downTimeNanos);
     EXPECT_EQ(motionArgs.metaState, verifiedMotion.metaState);
     EXPECT_EQ(motionArgs.buttonState, verifiedMotion.buttonState);
+
+    // Cast to the correct type before destruction.  See explanation at the end
+    // of the VerifyInputEvent_KeyEvent test.
+    delete (VerifiedMotionEvent*)verified.release();
 }
 
 /**
