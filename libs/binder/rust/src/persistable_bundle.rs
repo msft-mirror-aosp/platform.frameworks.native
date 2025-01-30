@@ -22,20 +22,26 @@ use crate::{
 };
 use binder_ndk_sys::{
     APersistableBundle, APersistableBundle_delete, APersistableBundle_dup,
-    APersistableBundle_erase, APersistableBundle_getBoolean, APersistableBundle_getBooleanVector,
-    APersistableBundle_getDouble, APersistableBundle_getDoubleVector, APersistableBundle_getInt,
-    APersistableBundle_getIntVector, APersistableBundle_getLong, APersistableBundle_getLongVector,
-    APersistableBundle_getPersistableBundle, APersistableBundle_getString,
-    APersistableBundle_isEqual, APersistableBundle_new, APersistableBundle_putBoolean,
-    APersistableBundle_putBooleanVector, APersistableBundle_putDouble,
-    APersistableBundle_putDoubleVector, APersistableBundle_putInt, APersistableBundle_putIntVector,
-    APersistableBundle_putLong, APersistableBundle_putLongVector,
+    APersistableBundle_erase, APersistableBundle_getBoolean, APersistableBundle_getBooleanKeys,
+    APersistableBundle_getBooleanVector, APersistableBundle_getBooleanVectorKeys,
+    APersistableBundle_getDouble, APersistableBundle_getDoubleKeys,
+    APersistableBundle_getDoubleVector, APersistableBundle_getDoubleVectorKeys,
+    APersistableBundle_getInt, APersistableBundle_getIntKeys, APersistableBundle_getIntVector,
+    APersistableBundle_getIntVectorKeys, APersistableBundle_getLong,
+    APersistableBundle_getLongKeys, APersistableBundle_getLongVector,
+    APersistableBundle_getLongVectorKeys, APersistableBundle_getPersistableBundle,
+    APersistableBundle_getPersistableBundleKeys, APersistableBundle_getString,
+    APersistableBundle_getStringKeys, APersistableBundle_getStringVector,
+    APersistableBundle_getStringVectorKeys, APersistableBundle_isEqual, APersistableBundle_new,
+    APersistableBundle_putBoolean, APersistableBundle_putBooleanVector,
+    APersistableBundle_putDouble, APersistableBundle_putDoubleVector, APersistableBundle_putInt,
+    APersistableBundle_putIntVector, APersistableBundle_putLong, APersistableBundle_putLongVector,
     APersistableBundle_putPersistableBundle, APersistableBundle_putString,
     APersistableBundle_putStringVector, APersistableBundle_readFromParcel, APersistableBundle_size,
     APersistableBundle_writeToParcel, APERSISTABLEBUNDLE_ALLOCATOR_FAILED,
     APERSISTABLEBUNDLE_KEY_NOT_FOUND,
 };
-use std::ffi::{c_char, c_void, CString, NulError};
+use std::ffi::{c_char, c_void, CStr, CString, NulError};
 use std::ptr::{null_mut, slice_from_raw_parts_mut, NonNull};
 use zerocopy::FromZeros;
 
@@ -438,9 +444,10 @@ impl PersistableBundle {
     /// call. It must allow a null pointer for the buffer, and must return the size in bytes of
     /// buffer it requires. If it is given a non-null buffer pointer it must write that number of
     /// bytes to the buffer, which must be a whole number of valid `T` values.
-    unsafe fn get_vec<T: Clone + Default>(
+    unsafe fn get_vec<T: Clone>(
         &self,
         key: &str,
+        default: T,
         get_func: unsafe extern "C" fn(
             *const APersistableBundle,
             *const c_char,
@@ -454,9 +461,12 @@ impl PersistableBundle {
         // to be valid for the lifetime of `key`. A null pointer is allowed for the buffer.
         match unsafe { get_func(self.0.as_ptr(), key.as_ptr(), null_mut(), 0) } {
             APERSISTABLEBUNDLE_KEY_NOT_FOUND => Ok(None),
+            APERSISTABLEBUNDLE_ALLOCATOR_FAILED => {
+                panic!("APersistableBundle_getStringVector failed to allocate string");
+            }
             required_buffer_size => {
                 let mut value = vec![
-                    T::default();
+                    default;
                     usize::try_from(required_buffer_size).expect(
                         "APersistableBundle_get*Vector returned invalid size"
                     ) / size_of::<T>()
@@ -476,6 +486,9 @@ impl PersistableBundle {
                     APERSISTABLEBUNDLE_KEY_NOT_FOUND => {
                         panic!("APersistableBundle_get*Vector failed to find key after first finding it");
                     }
+                    APERSISTABLEBUNDLE_ALLOCATOR_FAILED => {
+                        panic!("APersistableBundle_getStringVector failed to allocate string");
+                    }
                     _ => Ok(Some(value)),
                 }
             }
@@ -489,7 +502,7 @@ impl PersistableBundle {
     pub fn get_bool_vec(&self, key: &str) -> Result<Option<Vec<bool>>, NulError> {
         // SAFETY: APersistableBundle_getBooleanVector fulfils all the safety requirements of
         // `get_vec`.
-        unsafe { self.get_vec(key, APersistableBundle_getBooleanVector) }
+        unsafe { self.get_vec(key, Default::default(), APersistableBundle_getBooleanVector) }
     }
 
     /// Gets the i32 vector value associated with the given key.
@@ -499,7 +512,7 @@ impl PersistableBundle {
     pub fn get_int_vec(&self, key: &str) -> Result<Option<Vec<i32>>, NulError> {
         // SAFETY: APersistableBundle_getIntVector fulfils all the safety requirements of
         // `get_vec`.
-        unsafe { self.get_vec(key, APersistableBundle_getIntVector) }
+        unsafe { self.get_vec(key, Default::default(), APersistableBundle_getIntVector) }
     }
 
     /// Gets the i64 vector value associated with the given key.
@@ -509,7 +522,7 @@ impl PersistableBundle {
     pub fn get_long_vec(&self, key: &str) -> Result<Option<Vec<i64>>, NulError> {
         // SAFETY: APersistableBundle_getLongVector fulfils all the safety requirements of
         // `get_vec`.
-        unsafe { self.get_vec(key, APersistableBundle_getLongVector) }
+        unsafe { self.get_vec(key, Default::default(), APersistableBundle_getLongVector) }
     }
 
     /// Gets the f64 vector value associated with the given key.
@@ -519,7 +532,45 @@ impl PersistableBundle {
     pub fn get_double_vec(&self, key: &str) -> Result<Option<Vec<f64>>, NulError> {
         // SAFETY: APersistableBundle_getDoubleVector fulfils all the safety requirements of
         // `get_vec`.
-        unsafe { self.get_vec(key, APersistableBundle_getDoubleVector) }
+        unsafe { self.get_vec(key, Default::default(), APersistableBundle_getDoubleVector) }
+    }
+
+    /// Gets the string vector value associated with the given key.
+    ///
+    /// Returns an error if the key contains a NUL character, or `Ok(None)` if the key doesn't exist
+    /// in the bundle.
+    pub fn get_string_vec(&self, key: &str) -> Result<Option<Vec<String>>, NulError> {
+        if let Some(value) =
+            // SAFETY: `get_string_vector_with_allocator` fulfils all the safety requirements of
+            // `get_vec`.
+            unsafe { self.get_vec(key, null_mut(), get_string_vector_with_allocator) }?
+        {
+            Ok(Some(
+                value
+                    .into_iter()
+                    .map(|s| {
+                        // SAFETY: The pointer was returned from `string_allocator`, which used
+                        // `Box::into_raw`, and `APersistableBundle_getStringVector` should have
+                        // written valid bytes to it including a NUL terminator in the last
+                        // position.
+                        let string_length = unsafe { CStr::from_ptr(s) }.count_bytes();
+                        let raw_slice = slice_from_raw_parts_mut(s.cast(), string_length + 1);
+                        // SAFETY: The pointer was returned from `string_allocator`, which used
+                        // `Box::into_raw`, and we've got the appropriate size back by checking the
+                        // length of the string.
+                        let boxed_slice: Box<[u8]> = unsafe { Box::from_raw(raw_slice) };
+                        let c_string = CString::from_vec_with_nul(boxed_slice.into()).expect(
+                            "APersistableBundle_getStringVector returned string missing NUL byte",
+                        );
+                        c_string
+                            .into_string()
+                            .expect("APersistableBundle_getStringVector returned invalid UTF-8")
+                    })
+                    .collect(),
+            ))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Gets the `PersistableBundle` value associated with the given key.
@@ -542,6 +593,201 @@ impl PersistableBundle {
         } else {
             Ok(None)
         }
+    }
+
+    /// Calls the appropriate `APersistableBundle_get*Keys` function for the given `value_type`,
+    /// with our `string_allocator` and a null context pointer.
+    ///
+    /// # Safety
+    ///
+    /// `out_keys` must either be null or point to a buffer of at least `buffer_size_bytes` bytes,
+    /// properly aligned for `T`, and not otherwise accessed for the duration of the call.
+    unsafe fn get_keys_raw(
+        &self,
+        value_type: ValueType,
+        out_keys: *mut *mut c_char,
+        buffer_size_bytes: i32,
+    ) -> i32 {
+        // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for the
+        // lifetime of the `PersistableBundle`. Our caller guarantees an appropriate value for
+        // `out_keys` and `buffer_size_bytes`.
+        unsafe {
+            match value_type {
+                ValueType::Boolean => APersistableBundle_getBooleanKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::Integer => APersistableBundle_getIntKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::Long => APersistableBundle_getLongKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::Double => APersistableBundle_getDoubleKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::String => APersistableBundle_getStringKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::BooleanVector => APersistableBundle_getBooleanVectorKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::IntegerVector => APersistableBundle_getIntVectorKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::LongVector => APersistableBundle_getLongVectorKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::DoubleVector => APersistableBundle_getDoubleVectorKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::StringVector => APersistableBundle_getStringVectorKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+                ValueType::PersistableBundle => APersistableBundle_getPersistableBundleKeys(
+                    self.0.as_ptr(),
+                    out_keys,
+                    buffer_size_bytes,
+                    Some(string_allocator),
+                    null_mut(),
+                ),
+            }
+        }
+    }
+
+    /// Gets all the keys associated with values of the given type.
+    pub fn keys_for_type(&self, value_type: ValueType) -> Vec<String> {
+        // SAFETY: A null pointer is allowed for the buffer.
+        match unsafe { self.get_keys_raw(value_type, null_mut(), 0) } {
+            APERSISTABLEBUNDLE_ALLOCATOR_FAILED => {
+                panic!("APersistableBundle_get*Keys failed to allocate string");
+            }
+            required_buffer_size => {
+                let required_buffer_size_usize = usize::try_from(required_buffer_size)
+                    .expect("APersistableBundle_get*Keys returned invalid size");
+                assert_eq!(required_buffer_size_usize % size_of::<*mut c_char>(), 0);
+                let mut keys =
+                    vec![null_mut(); required_buffer_size_usize / size_of::<*mut c_char>()];
+                // SAFETY: The wrapped `APersistableBundle` pointer is guaranteed to be valid for
+                // the lifetime of the `PersistableBundle`. The keys buffer pointer is valid as it
+                // comes from the Vec we just allocated.
+                if unsafe { self.get_keys_raw(value_type, keys.as_mut_ptr(), required_buffer_size) }
+                    == APERSISTABLEBUNDLE_ALLOCATOR_FAILED
+                {
+                    panic!("APersistableBundle_get*Keys failed to allocate string");
+                }
+                keys.into_iter()
+                    .map(|key| {
+                        // SAFETY: The pointer was returned from `string_allocator`, which used
+                        // `Box::into_raw`, and `APersistableBundle_getStringVector` should have
+                        // written valid bytes to it including a NUL terminator in the last
+                        // position.
+                        let string_length = unsafe { CStr::from_ptr(key) }.count_bytes();
+                        let raw_slice = slice_from_raw_parts_mut(key.cast(), string_length + 1);
+                        // SAFETY: The pointer was returned from `string_allocator`, which used
+                        // `Box::into_raw`, and we've got the appropriate size back by checking the
+                        // length of the string.
+                        let boxed_slice: Box<[u8]> = unsafe { Box::from_raw(raw_slice) };
+                        let c_string = CString::from_vec_with_nul(boxed_slice.into())
+                            .expect("APersistableBundle_get*Keys returned string missing NUL byte");
+                        c_string
+                            .into_string()
+                            .expect("APersistableBundle_get*Keys returned invalid UTF-8")
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// Returns an iterator over all keys in the bundle, along with the type of their associated
+    /// value.
+    pub fn keys(&self) -> impl Iterator<Item = (String, ValueType)> + use<'_> {
+        [
+            ValueType::Boolean,
+            ValueType::Integer,
+            ValueType::Long,
+            ValueType::Double,
+            ValueType::String,
+            ValueType::BooleanVector,
+            ValueType::IntegerVector,
+            ValueType::LongVector,
+            ValueType::DoubleVector,
+            ValueType::StringVector,
+            ValueType::PersistableBundle,
+        ]
+        .iter()
+        .flat_map(|value_type| {
+            self.keys_for_type(*value_type).into_iter().map(|key| (key, *value_type))
+        })
+    }
+}
+
+/// Wrapper around `APersistableBundle_getStringVector` to pass `string_allocator` and a null
+/// context pointer.
+///
+/// # Safety
+///
+/// * `bundle` must point to a valid `APersistableBundle` which is not modified for the duration of
+///   the call.
+/// * `key` must point to a valid NUL-terminated C string.
+/// * `buffer` must either be null or point to a buffer of at least `buffer_size_bytes` bytes,
+///   properly aligned for `T`, and not otherwise accessed for the duration of the call.
+unsafe extern "C" fn get_string_vector_with_allocator(
+    bundle: *const APersistableBundle,
+    key: *const c_char,
+    buffer: *mut *mut c_char,
+    buffer_size_bytes: i32,
+) -> i32 {
+    // SAFETY: The safety requirements are all guaranteed by our caller according to the safety
+    // documentation above.
+    unsafe {
+        APersistableBundle_getStringVector(
+            bundle,
+            key,
+            buffer,
+            buffer_size_bytes,
+            Some(string_allocator),
+            null_mut(),
+        )
     }
 }
 
@@ -613,7 +859,7 @@ impl UnstructuredParcelable for PersistableBundle {
 ///
 /// # Safety
 ///
-/// `context` must point to a `usize` to which we can write.
+/// `context` must either be null or point to a `usize` to which we can write.
 unsafe extern "C" fn string_allocator(size: i32, context: *mut c_void) -> *mut c_char {
     let Ok(size) = size.try_into() else {
         return null_mut();
@@ -621,15 +867,45 @@ unsafe extern "C" fn string_allocator(size: i32, context: *mut c_void) -> *mut c
     let Ok(boxed_slice) = <[c_char]>::new_box_zeroed_with_elems(size) else {
         return null_mut();
     };
-    // SAFETY: The caller promised that `context` points to a `usize` to which we can write.
-    unsafe {
-        *context.cast::<usize>() = size;
+    if !context.is_null() {
+        // SAFETY: The caller promised that `context` is either null or points to a `usize` to which
+        // we can write, and we just checked that it's not null.
+        unsafe {
+            *context.cast::<usize>() = size;
+        }
     }
     Box::into_raw(boxed_slice).cast()
 }
 
 impl_deserialize_for_unstructured_parcelable!(PersistableBundle);
 impl_serialize_for_unstructured_parcelable!(PersistableBundle);
+
+/// The types which may be stored as values in a [`PersistableBundle`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ValueType {
+    /// A `bool`.
+    Boolean,
+    /// An `i32`.
+    Integer,
+    /// An `i64`.
+    Long,
+    /// An `f64`.
+    Double,
+    /// A string.
+    String,
+    /// A vector of `bool`s.
+    BooleanVector,
+    /// A vector of `i32`s.
+    IntegerVector,
+    /// A vector of `i64`s.
+    LongVector,
+    /// A vector of `f64`s.
+    DoubleVector,
+    /// A vector of strings.
+    StringVector,
+    /// A nested `PersistableBundle`.
+    PersistableBundle,
+}
 
 #[cfg(test)]
 mod test {
@@ -751,6 +1027,10 @@ mod test {
         assert_eq!(bundle.get_int_vec("int"), Ok(Some(vec![42])));
         assert_eq!(bundle.get_long_vec("long"), Ok(Some(vec![66, 67, 68])));
         assert_eq!(bundle.get_double_vec("double"), Ok(Some(vec![123.4])));
+        assert_eq!(
+            bundle.get_string_vec("string"),
+            Ok(Some(vec!["foo".to_string(), "bar".to_string(), "baz".to_string()]))
+        );
     }
 
     #[test]
@@ -763,5 +1043,34 @@ mod test {
         assert_eq!(bundle.insert_persistable_bundle("bundle", &sub_bundle), Ok(()));
 
         assert_eq!(bundle.get_persistable_bundle("bundle"), Ok(Some(sub_bundle)));
+    }
+
+    #[test]
+    fn get_keys() {
+        let mut bundle = PersistableBundle::new();
+
+        assert_eq!(bundle.keys_for_type(ValueType::Boolean), Vec::<String>::new());
+        assert_eq!(bundle.keys_for_type(ValueType::Integer), Vec::<String>::new());
+        assert_eq!(bundle.keys_for_type(ValueType::StringVector), Vec::<String>::new());
+
+        assert_eq!(bundle.insert_bool("bool1", false), Ok(()));
+        assert_eq!(bundle.insert_bool("bool2", true), Ok(()));
+        assert_eq!(bundle.insert_int("int", 42), Ok(()));
+
+        assert_eq!(
+            bundle.keys_for_type(ValueType::Boolean),
+            vec!["bool1".to_string(), "bool2".to_string()]
+        );
+        assert_eq!(bundle.keys_for_type(ValueType::Integer), vec!["int".to_string()]);
+        assert_eq!(bundle.keys_for_type(ValueType::StringVector), Vec::<String>::new());
+
+        assert_eq!(
+            bundle.keys().collect::<Vec<_>>(),
+            vec![
+                ("bool1".to_string(), ValueType::Boolean),
+                ("bool2".to_string(), ValueType::Boolean),
+                ("int".to_string(), ValueType::Integer),
+            ]
+        );
     }
 }
