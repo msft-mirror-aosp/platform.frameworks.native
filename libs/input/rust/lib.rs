@@ -27,7 +27,7 @@ pub use input::{
     DeviceClass, DeviceId, InputDevice, KeyboardType, ModifierState, MotionAction, MotionButton,
     MotionFlags, Source,
 };
-pub use input_verifier::InputVerifier;
+pub use input_verifier::{InputVerifier, NotifyMotionArgs};
 pub use keyboard_classifier::KeyboardClassifier;
 
 #[cxx::bridge(namespace = "android::input")]
@@ -155,15 +155,15 @@ fn process_movement(
              buttons need to be added to MotionButton."
         );
     }
-    let result = verifier.process_movement(
-        DeviceId(device_id),
-        Source::from_bits(source).unwrap(),
+    let result = verifier.process_movement(NotifyMotionArgs {
+        device_id: DeviceId(device_id),
+        source: Source::from_bits(source).unwrap(),
         action,
-        motion_action_button.unwrap(),
+        action_button: motion_action_button.unwrap(),
         pointer_properties,
-        motion_flags.unwrap(),
-        motion_button_state.unwrap(),
-    );
+        flags: motion_flags.unwrap(),
+        button_state: motion_button_state.unwrap(),
+    });
     match result {
         Ok(()) => "".to_string(),
         Err(e) => e,

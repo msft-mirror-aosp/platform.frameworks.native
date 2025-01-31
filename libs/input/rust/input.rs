@@ -50,7 +50,7 @@ pub enum SourceClass {
 
 bitflags! {
     /// Source of the input device or input events.
-    #[derive(Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct Source: u32 {
         // Constants from SourceClass, added here for compatibility reasons
         /// SourceClass::Button
@@ -219,7 +219,7 @@ bitflags! {
     /// MotionEvent flags.
     /// The source of truth for the flag definitions are the MotionEventFlag AIDL enum.
     /// The flag values are redefined here as a bitflags API.
-    #[derive(Debug)]
+    #[derive(Clone, Copy, Debug)]
     pub struct MotionFlags: u32 {
         /// FLAG_WINDOW_IS_OBSCURED
         const WINDOW_IS_OBSCURED = MotionEventFlag::WINDOW_IS_OBSCURED.0 as u32;
