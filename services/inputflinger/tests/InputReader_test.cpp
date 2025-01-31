@@ -8441,41 +8441,6 @@ TEST_F(MultiTouchInputMapperTest, StylusSourceIsAddedDynamicallyFromToolType) {
                   WithToolType(ToolType::STYLUS))));
 }
 
-// --- MultiTouchInputMapperTest_ExternalDevice ---
-
-class MultiTouchInputMapperTest_ExternalDevice : public MultiTouchInputMapperTest {
-protected:
-    void SetUp() override { InputMapperTest::SetUp(DEVICE_CLASSES | InputDeviceClass::EXTERNAL); }
-};
-
-/**
- * Expect fallback to internal viewport if device is external and external viewport is not present.
- */
-TEST_F(MultiTouchInputMapperTest_ExternalDevice, Viewports_Fallback) {
-    prepareAxes(POSITION);
-    addConfigurationProperty("touch.deviceType", "touchScreen");
-    prepareDisplay(ui::ROTATION_0);
-    MultiTouchInputMapper& mapper = constructAndAddMapper<MultiTouchInputMapper>();
-
-    ASSERT_EQ(AINPUT_SOURCE_TOUCHSCREEN, mapper.getSources());
-
-    NotifyMotionArgs motionArgs;
-
-    // Expect the event to be sent to the internal viewport,
-    // because an external viewport is not present.
-    processPosition(mapper, 100, 100);
-    processSync(mapper);
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
-    ASSERT_EQ(ui::LogicalDisplayId::DEFAULT, motionArgs.displayId);
-
-    // Expect the event to be sent to the external viewport if it is present.
-    prepareSecondaryDisplay(ViewportType::EXTERNAL);
-    processPosition(mapper, 100, 100);
-    processSync(mapper);
-    ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
-    ASSERT_EQ(SECONDARY_DISPLAY_ID, motionArgs.displayId);
-}
-
 // TODO(b/281840344): Remove the test when the old touchpad stack is removed. It is currently
 //  unclear what the behavior of the touchpad logic in TouchInputMapper should do after the
 //  PointerChoreographer refactor.

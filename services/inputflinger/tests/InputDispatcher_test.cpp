@@ -9905,6 +9905,15 @@ TEST_F(InputFilterInjectionPolicyTest,
                        AMOTION_EVENT_FLAG_IS_ACCESSIBILITY_EVENT);
 }
 
+TEST_F(InputFilterInjectionPolicyTest,
+       MotionEventsInjectedFromAccessibilityTool_HaveAccessibilityFlags) {
+    testInjectedMotion(POLICY_FLAG_FILTERED | POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY |
+                               POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY_TOOL,
+                       /*injectedDeviceId=*/3, /*resolvedDeviceId=*/3,
+                       AMOTION_EVENT_FLAG_IS_ACCESSIBILITY_EVENT |
+                               AMOTION_EVENT_FLAG_INJECTED_FROM_ACCESSIBILITY_TOOL);
+}
+
 TEST_F(InputFilterInjectionPolicyTest, RegularInjectedEvents_ReceiveVirtualDeviceId) {
     testInjectedKey(/*policyFlags=*/0, /*injectedDeviceId=*/3,
                     /*resolvedDeviceId=*/VIRTUAL_KEYBOARD_ID, /*flags=*/0);

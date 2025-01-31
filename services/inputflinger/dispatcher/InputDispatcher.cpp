@@ -4856,6 +4856,10 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
                 flags |= AMOTION_EVENT_FLAG_IS_ACCESSIBILITY_EVENT;
             }
 
+            if (policyFlags & POLICY_FLAG_INJECTED_FROM_ACCESSIBILITY_TOOL) {
+                flags |= AMOTION_EVENT_FLAG_INJECTED_FROM_ACCESSIBILITY_TOOL;
+            }
+
             mLock.lock();
 
             if (shouldRejectInjectedMotionLocked(motionEvent, resolvedDeviceId, displayId,
@@ -5797,8 +5801,8 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
         }
         std::set<DeviceId> deviceIds = touchedWindow->getTouchingDeviceIds();
         if (deviceIds.size() != 1) {
-            LOG(INFO) << "Can't transfer touch. Currently touching devices: " << dumpSet(deviceIds)
-                      << " for window: " << touchedWindow->dump();
+            LOG(INFO) << "Can't transfer touch. Currently touching devices: "
+                      << dumpContainer(deviceIds) << " for window: " << touchedWindow->dump();
             return false;
         }
         const DeviceId deviceId = *deviceIds.begin();
