@@ -133,36 +133,33 @@ fn process_movement(
     flags: u32,
     button_state: u32,
 ) -> String {
-    let motion_flags = MotionFlags::from_bits(flags);
-    if motion_flags.is_none() {
+    let Some(motion_flags) = MotionFlags::from_bits(flags) else {
         panic!(
             "The conversion of flags 0x{:08x} failed, please check if some flags have not been \
             added to MotionFlags.",
             flags
         );
-    }
-    let motion_action_button = MotionButton::from_bits(action_button);
-    if motion_action_button.is_none() {
+    };
+    let Some(motion_action_button) = MotionButton::from_bits(action_button) else {
         panic!(
             "The conversion of action button 0x{action_button:08x} failed, please check if some \
              buttons need to be added to MotionButton."
         );
-    }
-    let motion_button_state = MotionButton::from_bits(button_state);
-    if motion_button_state.is_none() {
+    };
+    let Some(motion_button_state) = MotionButton::from_bits(button_state) else {
         panic!(
             "The conversion of button state 0x{button_state:08x} failed, please check if some \
              buttons need to be added to MotionButton."
         );
-    }
+    };
     let result = verifier.process_movement(NotifyMotionArgs {
         device_id: DeviceId(device_id),
         source: Source::from_bits(source).unwrap(),
         action,
-        action_button: motion_action_button.unwrap(),
+        action_button: motion_action_button,
         pointer_properties,
-        flags: motion_flags.unwrap(),
-        button_state: motion_button_state.unwrap(),
+        flags: motion_flags,
+        button_state: motion_button_state,
     });
     match result {
         Ok(()) => "".to_string(),
