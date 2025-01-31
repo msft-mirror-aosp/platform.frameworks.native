@@ -32,11 +32,8 @@ pub struct NotifyMotionArgs<'a> {
     /// The type of device that emitted the event.
     pub source: Source,
 
-    /// The type of event that took place, as one of the `input_bindgen::AMOTION_EVENT_…` constants.
-    pub action: u32,
-
-    /// For `BUTTON_PRESS` and `BUTTON_RELEASE` actions, the button being pressed or released.
-    pub action_button: MotionButton,
+    /// The type of event that took place.
+    pub action: MotionAction,
 
     /// The properties of each of the pointers involved in the event.
     pub pointer_properties: &'a [RustPointerProperties],
@@ -64,21 +61,11 @@ pub struct NotifyMotionArgs<'a> {
 
 /// Verifies the properties of an event that should always be true, regardless of the current state.
 fn verify_event(event: NotifyMotionArgs<'_>, verify_buttons: bool) -> Result<(), String> {
-    let action: MotionAction = event.action.into();
     let pointer_count = event.pointer_properties.len();
     if pointer_count < 1 {
-        return Err(format!("Invalid {action} event: no pointers"));
+        return Err(format!("Invalid {} event: no pointers", event.action));
     }
-    if event.action_button != MotionButton::empty()
-        && action != MotionAction::ButtonPress
-        && action != MotionAction::ButtonRelease
-    {
-        return Err(format!(
-            "Invalid {} event: has action button {:?} but is not a button action",
-            action, event.action_button
-        ));
-    }
-    match action {
+    match event.action {
         MotionAction::Down
         | MotionAction::HoverEnter
         | MotionAction::HoverExit
@@ -86,7 +73,8 @@ fn verify_event(event: NotifyMotionArgs<'_>, verify_buttons: bool) -> Result<(),
         | MotionAction::Up => {
             if pointer_count != 1 {
                 return Err(format!(
-                    "Invalid {action} event: there are {pointer_count} pointers in the event",
+                    "Invalid {} event: there are {} pointers in the event",
+                    event.action, pointer_count
                 ));
             }
         }
@@ -102,17 +90,22 @@ fn verify_event(event: NotifyMotionArgs<'_>, verify_buttons: bool) -> Result<(),
 
         MotionAction::PointerDown { action_index } | MotionAction::PointerUp { action_index } => {
             if action_index >= pointer_count {
-                return Err(format!("Got {action}, but event has {pointer_count} pointer(s)"));
+                return Err(format!(
+                    "Got {}, but event has {} pointer(s)",
+                    event.action, pointer_count
+                ));
             }
         }
 
-        MotionAction::ButtonPress | MotionAction::ButtonRelease => {
+        MotionAction::ButtonPress { action_button }
+        | MotionAction::ButtonRelease { action_button } => {
             if verify_buttons {
-                let button_count = event.action_button.iter().count();
+                let button_count = action_button.iter().count();
                 if button_count != 1 {
                     return Err(format!(
-                        "Invalid {action} event: must specify a single action button, not \
-                         {button_count} action buttons"
+                        "Invalid {} event: must specify a single action button, not {} action \
+                         buttons",
+                        event.action, button_count
                     ));
                 }
             }
@@ -136,23 +129,24 @@ struct ButtonVerifier {
 
 impl ButtonVerifier {
     pub fn process_event(&mut self, event: NotifyMotionArgs<'_>) -> Result<(), String> {
-        let action: MotionAction = event.action.into();
         if !self.pending_buttons.is_empty() {
             // We just saw a DOWN with some additional buttons in its state, so it should be
             // immediately followed by ButtonPress events for those buttons.
-            if action != MotionAction::ButtonPress
-                || !self.pending_buttons.contains(event.action_button)
-            {
-                return Err(format!(
-                    "After DOWN event, expected BUTTON_PRESS event(s) for {:?}, but got {} with \
-                     action button {:?}",
-                    self.pending_buttons, action, event.action_button
-                ));
-            } else {
-                self.pending_buttons -= event.action_button;
+            match event.action {
+                MotionAction::ButtonPress { action_button }
+                    if self.pending_buttons.contains(action_button) =>
+                {
+                    self.pending_buttons -= action_button;
+                }
+                _ => {
+                    return Err(format!(
+                        "After DOWN event, expected BUTTON_PRESS event(s) for {:?}, but got {}",
+                        self.pending_buttons, event.action
+                    ));
+                }
             }
         }
-        let expected_state = match action {
+        let expected_state = match event.action {
             MotionAction::Down => {
                 if self.button_state - event.button_state != MotionButton::empty() {
                     return Err(format!(
@@ -165,34 +159,32 @@ impl ButtonVerifier {
                 // extra buttons are valid on DOWN actions, so bypass the expected state check.
                 event.button_state
             }
-            MotionAction::ButtonPress => {
-                if self.button_state.contains(event.action_button) {
+            MotionAction::ButtonPress { action_button } => {
+                if self.button_state.contains(action_button) {
                     return Err(format!(
-                        "Duplicate BUTTON_PRESS; button state already contains {:?}",
-                        event.action_button
+                        "Duplicate BUTTON_PRESS; button state already contains {action_button:?}"
                     ));
                 }
-                self.button_state | event.action_button
+                self.button_state | action_button
             }
-            MotionAction::ButtonRelease => {
-                if !self.button_state.contains(event.action_button) {
+            MotionAction::ButtonRelease { action_button } => {
+                if !self.button_state.contains(action_button) {
                     return Err(format!(
-                        "Invalid BUTTON_RELEASE; button state doesn't contain {:?}",
-                        event.action_button
+                        "Invalid BUTTON_RELEASE; button state doesn't contain {action_button:?}",
                     ));
                 }
-                self.button_state - event.action_button
+                self.button_state - action_button
             }
             _ => self.button_state,
         };
         if event.button_state != expected_state {
             return Err(format!(
-                "Expected {action} button state to be {expected_state:?}, but was {:?}",
-                event.button_state
+                "Expected {} button state to be {:?}, but was {:?}",
+                event.action, expected_state, event.button_state
             ));
         }
         // DOWN events can have pending buttons, so don't update the state for them.
-        if action != MotionAction::Down {
+        if event.action != MotionAction::Down {
             self.button_state = event.button_state;
         }
         Ok(())
@@ -237,7 +229,7 @@ impl InputVerifier {
         if self.should_log {
             info!(
                 "Processing {} for device {:?} ({} pointer{}) on {}",
-                MotionAction::from(event.action).to_string(),
+                event.action,
                 event.device_id,
                 event.pointer_properties.len(),
                 if event.pointer_properties.len() == 1 { "" } else { "s" },
@@ -254,7 +246,7 @@ impl InputVerifier {
                 .process_event(event)?;
         }
 
-        match event.action.into() {
+        match event.action {
             MotionAction::Down => {
                 if self.touching_pointer_ids_by_device.contains_key(&event.device_id) {
                     return Err(format!(
@@ -430,6 +422,7 @@ mod tests {
     use crate::input_verifier::InputVerifier;
     use crate::input_verifier::NotifyMotionArgs;
     use crate::DeviceId;
+    use crate::MotionAction;
     use crate::MotionFlags;
     use crate::RustPointerProperties;
     use crate::Source;
@@ -438,8 +431,7 @@ mod tests {
     const BASE_EVENT: NotifyMotionArgs = NotifyMotionArgs {
         device_id: DeviceId(1),
         source: Source::Touchscreen,
-        action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-        action_button: MotionButton::empty(),
+        action: MotionAction::Down,
         pointer_properties: &BASE_POINTER_PROPERTIES,
         flags: MotionFlags::empty(),
         button_state: MotionButton::empty(),
@@ -458,7 +450,7 @@ mod tests {
             Vec::from([RustPointerProperties { id: 0 }, RustPointerProperties { id: 1 }]);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
+                action: MotionAction::Down,
                 pointer_properties: &pointer_properties,
                 ..BASE_EVENT
             })
@@ -472,21 +464,21 @@ mod tests {
         let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
+                action: MotionAction::Down,
                 pointer_properties: &pointer_properties,
                 ..BASE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_MOVE,
+                action: MotionAction::Move,
                 pointer_properties: &pointer_properties,
                 ..BASE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_UP,
+                action: MotionAction::Up,
                 pointer_properties: &pointer_properties,
                 ..BASE_EVENT
             })
@@ -500,7 +492,7 @@ mod tests {
         let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
+                action: MotionAction::Down,
                 pointer_properties: &pointer_properties,
                 ..BASE_EVENT
             })
@@ -510,8 +502,7 @@ mod tests {
             Vec::from([RustPointerProperties { id: 0 }, RustPointerProperties { id: 1 }]);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_POINTER_DOWN
-                    | (1 << input_bindgen::AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT),
+                action: MotionAction::PointerDown { action_index: 1 },
                 pointer_properties: &two_pointer_properties,
                 ..BASE_EVENT
             })
@@ -519,8 +510,7 @@ mod tests {
         // POINTER 0 UP
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_POINTER_UP
-                    | (0 << input_bindgen::AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT),
+                action: MotionAction::PointerUp { action_index: 0 },
                 pointer_properties: &two_pointer_properties,
                 ..BASE_EVENT
             })
@@ -529,7 +519,7 @@ mod tests {
         let pointer_1_properties = Vec::from([RustPointerProperties { id: 1 }]);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_UP,
+                action: MotionAction::Up,
                 pointer_properties: &pointer_1_properties,
                 ..BASE_EVENT
             })
@@ -543,35 +533,35 @@ mod tests {
         assert!(verifier
             .process_movement(NotifyMotionArgs {
                 device_id: DeviceId(1),
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
+                action: MotionAction::Down,
                 ..BASE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
                 device_id: DeviceId(1),
-                action: input_bindgen::AMOTION_EVENT_ACTION_MOVE,
+                action: MotionAction::Move,
                 ..BASE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
                 device_id: DeviceId(2),
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
+                action: MotionAction::Down,
                 ..BASE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
                 device_id: DeviceId(2),
-                action: input_bindgen::AMOTION_EVENT_ACTION_MOVE,
+                action: MotionAction::Move,
                 ..BASE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
                 device_id: DeviceId(1),
-                action: input_bindgen::AMOTION_EVENT_ACTION_UP,
+                action: MotionAction::Up,
                 ..BASE_EVENT
             })
             .is_ok());
@@ -583,14 +573,14 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
+                action: MotionAction::Down,
                 flags: MotionFlags::empty(),
                 ..BASE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_CANCEL,
+                action: MotionAction::Cancel,
                 flags: MotionFlags::CANCELED,
                 ..BASE_EVENT
             })
@@ -602,16 +592,10 @@ mod tests {
         let mut verifier =
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                ..BASE_EVENT
-            })
+            .process_movement(NotifyMotionArgs { action: MotionAction::Down, ..BASE_EVENT })
             .is_ok());
         assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_CANCEL,
-                ..BASE_EVENT
-            })
+            .process_movement(NotifyMotionArgs { action: MotionAction::Cancel, ..BASE_EVENT })
             .is_err());
     }
 
@@ -620,10 +604,7 @@ mod tests {
         let mut verifier =
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_UP,
-                ..BASE_EVENT
-            })
+            .process_movement(NotifyMotionArgs { action: MotionAction::Up, ..BASE_EVENT })
             .is_err());
     }
 
@@ -632,31 +613,19 @@ mod tests {
         let mut verifier =
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                ..BASE_EVENT
-            })
+            .process_movement(NotifyMotionArgs { action: MotionAction::HoverEnter, ..BASE_EVENT })
             .is_ok());
 
         assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_MOVE,
-                ..BASE_EVENT
-            })
+            .process_movement(NotifyMotionArgs { action: MotionAction::HoverMove, ..BASE_EVENT })
             .is_ok());
 
         assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_EXIT,
-                ..BASE_EVENT
-            })
+            .process_movement(NotifyMotionArgs { action: MotionAction::HoverExit, ..BASE_EVENT })
             .is_ok());
 
         assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                ..BASE_EVENT
-            })
+            .process_movement(NotifyMotionArgs { action: MotionAction::HoverEnter, ..BASE_EVENT })
             .is_ok());
     }
 
@@ -665,17 +634,11 @@ mod tests {
         let mut verifier =
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                ..BASE_EVENT
-            })
+            .process_movement(NotifyMotionArgs { action: MotionAction::HoverEnter, ..BASE_EVENT })
             .is_ok());
 
         assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                ..BASE_EVENT
-            })
+            .process_movement(NotifyMotionArgs { action: MotionAction::HoverEnter, ..BASE_EVENT })
             .is_err());
     }
 
@@ -689,7 +652,7 @@ mod tests {
             .process_movement(NotifyMotionArgs {
                 device_id: DeviceId(2),
                 source: Source::MouseRelative,
-                action: input_bindgen::AMOTION_EVENT_ACTION_MOVE,
+                action: MotionAction::Move,
                 ..BASE_EVENT
             })
             .is_ok());
@@ -703,7 +666,7 @@ mod tests {
         let pointer_properties = Vec::from([RustPointerProperties { id: 0 }]);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
+                action: MotionAction::Down,
                 pointer_properties: &pointer_properties,
                 ..BASE_EVENT
             })
@@ -713,8 +676,7 @@ mod tests {
             Vec::from([RustPointerProperties { id: 0 }, RustPointerProperties { id: 1 }]);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_POINTER_DOWN
-                    | (1 << input_bindgen::AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT),
+                action: MotionAction::PointerDown { action_index: 1 },
                 pointer_properties: &two_pointer_properties,
                 ..BASE_EVENT
             })
@@ -722,7 +684,7 @@ mod tests {
         // MOVE event with 1 pointer missing (the pointer with id = 1). It should be rejected
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_MOVE,
+                action: MotionAction::Move,
                 pointer_properties: &pointer_properties,
                 ..BASE_EVENT
             })
@@ -735,8 +697,7 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Primary,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Primary },
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
@@ -749,8 +710,7 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::empty(),
+                action: MotionAction::ButtonPress { action_button: MotionButton::empty() },
                 button_state: MotionButton::empty(),
                 ..BASE_MOUSE_EVENT
             })
@@ -763,8 +723,9 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Back | MotionButton::Forward,
+                action: MotionAction::ButtonPress {
+                    action_button: MotionButton::Back | MotionButton::Forward
+                },
                 button_state: MotionButton::Back | MotionButton::Forward,
                 ..BASE_MOUSE_EVENT
             })
@@ -777,8 +738,7 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Primary,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Primary },
                 button_state: MotionButton::empty(),
                 ..BASE_MOUSE_EVENT
             })
@@ -791,44 +751,14 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Primary,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Primary },
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_RELEASE,
-                action_button: MotionButton::Primary,
-                button_state: MotionButton::Primary,
-                ..BASE_MOUSE_EVENT
-            })
-            .is_err());
-    }
-
-    #[test]
-    fn nonbutton_action_with_action_button() {
-        let mut verifier =
-            InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
-        assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                action_button: MotionButton::Primary,
-                button_state: MotionButton::empty(),
-                ..BASE_MOUSE_EVENT
-            })
-            .is_err());
-    }
-
-    #[test]
-    fn nonbutton_action_with_action_button_and_state() {
-        let mut verifier =
-            InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
-        assert!(verifier
-            .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                action_button: MotionButton::Primary,
+                action: MotionAction::ButtonRelease { action_button: MotionButton::Primary },
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
@@ -841,16 +771,14 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                action_button: MotionButton::empty(),
+                action: MotionAction::HoverEnter,
                 button_state: MotionButton::empty(),
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_MOVE,
-                action_button: MotionButton::empty(),
+                action: MotionAction::HoverMove,
                 button_state: MotionButton::Back,
                 ..BASE_MOUSE_EVENT
             })
@@ -863,24 +791,21 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_ENTER,
-                action_button: MotionButton::empty(),
+                action: MotionAction::HoverEnter,
                 button_state: MotionButton::empty(),
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Back,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Back },
                 button_state: MotionButton::Back,
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_HOVER_MOVE,
-                action_button: MotionButton::empty(),
+                action: MotionAction::HoverMove,
                 button_state: MotionButton::empty(),
                 ..BASE_MOUSE_EVENT
             })
@@ -893,16 +818,14 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                action_button: MotionButton::empty(),
+                action: MotionAction::Down,
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Primary,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Primary },
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
@@ -910,8 +833,7 @@ mod tests {
         // This UP event shouldn't change the button state; a BUTTON_RELEASE before it should.
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_UP,
-                action_button: MotionButton::empty(),
+                action: MotionAction::Up,
                 button_state: MotionButton::empty(),
                 ..BASE_MOUSE_EVENT
             })
@@ -924,16 +846,14 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Back,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Back },
                 button_state: MotionButton::Back,
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Back,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Back },
                 button_state: MotionButton::Back,
                 ..BASE_MOUSE_EVENT
             })
@@ -946,8 +866,7 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_RELEASE,
-                action_button: MotionButton::Back,
+                action: MotionAction::ButtonRelease { action_button: MotionButton::Back },
                 button_state: MotionButton::empty(),
                 ..BASE_MOUSE_EVENT
             })
@@ -960,16 +879,14 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Back,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Back },
                 button_state: MotionButton::Back,
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Forward,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Forward },
                 button_state: MotionButton::Back | MotionButton::Forward,
                 ..BASE_MOUSE_EVENT
             })
@@ -982,24 +899,21 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                action_button: MotionButton::empty(),
+                action: MotionAction::Down,
                 button_state: MotionButton::Primary | MotionButton::Secondary,
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Primary,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Primary },
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Secondary,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Secondary },
                 button_state: MotionButton::Primary | MotionButton::Secondary,
                 ..BASE_MOUSE_EVENT
             })
@@ -1008,8 +922,7 @@ mod tests {
         // enough BUTTON_PRESSes were sent.
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                action_button: MotionButton::empty(),
+                action: MotionAction::Move,
                 button_state: MotionButton::Primary | MotionButton::Secondary,
                 ..BASE_MOUSE_EVENT
             })
@@ -1022,8 +935,7 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                action_button: MotionButton::empty(),
+                action: MotionAction::Down,
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
@@ -1031,8 +943,7 @@ mod tests {
         // The DOWN event itself is OK, but it needs to be immediately followed by a BUTTON_PRESS.
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                action_button: MotionButton::empty(),
+                action: MotionAction::Move,
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
@@ -1045,8 +956,7 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                action_button: MotionButton::empty(),
+                action: MotionAction::Down,
                 button_state: MotionButton::Primary | MotionButton::Secondary,
                 ..BASE_MOUSE_EVENT
             })
@@ -1055,16 +965,14 @@ mod tests {
         // BUTTON_PRESSes, one for each button.
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Primary,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Primary },
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_MOVE,
-                action_button: MotionButton::empty(),
+                action: MotionAction::Move,
                 button_state: MotionButton::Primary,
                 ..BASE_MOUSE_EVENT
             })
@@ -1077,16 +985,14 @@ mod tests {
             InputVerifier::new("Test", /*should_log*/ false, /*verify_buttons*/ true);
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_BUTTON_PRESS,
-                action_button: MotionButton::Back,
+                action: MotionAction::ButtonPress { action_button: MotionButton::Back },
                 button_state: MotionButton::Back,
                 ..BASE_MOUSE_EVENT
             })
             .is_ok());
         assert!(verifier
             .process_movement(NotifyMotionArgs {
-                action: input_bindgen::AMOTION_EVENT_ACTION_DOWN,
-                action_button: MotionButton::empty(),
+                action: MotionAction::Down,
                 button_state: MotionButton::empty(),
                 ..BASE_MOUSE_EVENT
             })
