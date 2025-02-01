@@ -2978,22 +2978,21 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     }
 
     int index = 0;
-    std::array<char, WorkloadTracer::COMPOSITION_SUMMARY_SIZE> compositionSummary = {0};
+    ftl::StaticVector<char, WorkloadTracer::COMPOSITION_SUMMARY_SIZE> compositionSummary;
     auto lastLayerStack = ui::INVALID_LAYER_STACK;
     for (auto& [layer, layerFE] : layers) {
         CompositionResult compositionResult{layerFE->stealCompositionResult()};
-        if (index < compositionSummary.size()) {
-            if (lastLayerStack != ui::INVALID_LAYER_STACK &&
-                lastLayerStack != layerFE->mSnapshot->outputFilter.layerStack) {
+        if (lastLayerStack != layerFE->mSnapshot->outputFilter.layerStack) {
+            if (lastLayerStack != ui::INVALID_LAYER_STACK) {
                 // add a space to separate displays
-                compositionSummary[index++] = ' ';
+                compositionSummary.push_back(' ');
             }
             lastLayerStack = layerFE->mSnapshot->outputFilter.layerStack;
-            compositionSummary[index++] = layerFE->mSnapshot->classifyCompositionForDebug(
-                    layerFE->getHwcCompositionType());
-            if (layerFE->mSnapshot->hasEffect()) {
-                compositedWorkload |= adpf::Workload::EFFECTS;
-            }
+        }
+        compositionSummary.push_back(
+                layerFE->mSnapshot->classifyCompositionForDebug(layerFE->getHwcCompositionType()));
+        if (layerFE->mSnapshot->hasEffect()) {
+            compositedWorkload |= adpf::Workload::EFFECTS;
         }
 
         if (compositionResult.lastClientCompositionFence) {
@@ -3010,7 +3009,8 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     SFTRACE_INSTANT_FOR_TRACK(WorkloadTracer::TRACK_NAME,
                               ftl::Concat("Layers: ", layers.size(), " ",
                                           ftl::truncated<WorkloadTracer::COMPOSITION_SUMMARY_SIZE>(
-                                                  compositionSummary.data()))
+                                                  std::string_view(compositionSummary.begin(),
+                                                                   compositionSummary.size())))
                                       .c_str());
 
     mPowerAdvisor->setCompositedWorkload(compositedWorkload);
