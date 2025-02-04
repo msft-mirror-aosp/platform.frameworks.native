@@ -9959,57 +9959,63 @@ TEST_F_WITH_FLAGS(
         InputDispatcherUserActivityPokeTests, MinPokeTimeObserved,
         REQUIRES_FLAGS_ENABLED(ACONFIG_FLAG(com::android::input::flags,
                                             rate_limit_user_activity_poke_in_dispatcher))) {
+    // Use current time otherwise events may be dropped due to being stale.
+    const nsecs_t currentTime = systemTime(SYSTEM_TIME_MONOTONIC);
+
     mDispatcher->setMinTimeBetweenUserActivityPokes(50ms);
 
     // First event of type TOUCH. Should poke.
     notifyAndConsumeMotion(ACTION_DOWN, AINPUT_SOURCE_TOUCHSCREEN, ui::LogicalDisplayId::DEFAULT,
-                           milliseconds_to_nanoseconds(50));
+                           currentTime + milliseconds_to_nanoseconds(50));
     mFakePolicy->assertUserActivityPoked(
-            {{milliseconds_to_nanoseconds(50), USER_ACTIVITY_EVENT_TOUCH,
+            {{currentTime + milliseconds_to_nanoseconds(50), USER_ACTIVITY_EVENT_TOUCH,
               ui::LogicalDisplayId::DEFAULT}});
 
     // 80ns > 50ns has passed since previous TOUCH event. Should poke.
     notifyAndConsumeMotion(ACTION_MOVE, AINPUT_SOURCE_TOUCHSCREEN, ui::LogicalDisplayId::DEFAULT,
-                           milliseconds_to_nanoseconds(130));
+                           currentTime + milliseconds_to_nanoseconds(130));
     mFakePolicy->assertUserActivityPoked(
-            {{milliseconds_to_nanoseconds(130), USER_ACTIVITY_EVENT_TOUCH,
+            {{currentTime + milliseconds_to_nanoseconds(130), USER_ACTIVITY_EVENT_TOUCH,
               ui::LogicalDisplayId::DEFAULT}});
 
     // First event of type OTHER. Should poke (despite being within 50ns of previous TOUCH event).
     notifyAndConsumeMotion(ACTION_SCROLL, AINPUT_SOURCE_ROTARY_ENCODER,
-                           ui::LogicalDisplayId::DEFAULT, milliseconds_to_nanoseconds(135));
+                           ui::LogicalDisplayId::DEFAULT,
+                           currentTime + milliseconds_to_nanoseconds(135));
     mFakePolicy->assertUserActivityPoked(
-            {{milliseconds_to_nanoseconds(135), USER_ACTIVITY_EVENT_OTHER,
+            {{currentTime + milliseconds_to_nanoseconds(135), USER_ACTIVITY_EVENT_OTHER,
               ui::LogicalDisplayId::DEFAULT}});
 
     // Within 50ns of previous TOUCH event. Should NOT poke.
     notifyAndConsumeMotion(ACTION_UP, AINPUT_SOURCE_TOUCHSCREEN, ui::LogicalDisplayId::DEFAULT,
-                           milliseconds_to_nanoseconds(140));
+                           currentTime + milliseconds_to_nanoseconds(140));
     mFakePolicy->assertUserActivityNotPoked();
 
     // Within 50ns of previous OTHER event. Should NOT poke.
     notifyAndConsumeMotion(ACTION_SCROLL, AINPUT_SOURCE_ROTARY_ENCODER,
-                           ui::LogicalDisplayId::DEFAULT, milliseconds_to_nanoseconds(150));
+                           ui::LogicalDisplayId::DEFAULT,
+                           currentTime + milliseconds_to_nanoseconds(150));
     mFakePolicy->assertUserActivityNotPoked();
 
     // Within 50ns of previous TOUCH event (which was at time 130). Should NOT poke.
     // Note that STYLUS is mapped to TOUCH user activity, since it's a pointer-type source.
     notifyAndConsumeMotion(ACTION_DOWN, AINPUT_SOURCE_STYLUS, ui::LogicalDisplayId::DEFAULT,
-                           milliseconds_to_nanoseconds(160));
+                           currentTime + milliseconds_to_nanoseconds(160));
     mFakePolicy->assertUserActivityNotPoked();
 
     // 65ns > 50ns has passed since previous OTHER event. Should poke.
     notifyAndConsumeMotion(ACTION_SCROLL, AINPUT_SOURCE_ROTARY_ENCODER,
-                           ui::LogicalDisplayId::DEFAULT, milliseconds_to_nanoseconds(200));
+                           ui::LogicalDisplayId::DEFAULT,
+                           currentTime + milliseconds_to_nanoseconds(200));
     mFakePolicy->assertUserActivityPoked(
-            {{milliseconds_to_nanoseconds(200), USER_ACTIVITY_EVENT_OTHER,
+            {{currentTime + milliseconds_to_nanoseconds(200), USER_ACTIVITY_EVENT_OTHER,
               ui::LogicalDisplayId::DEFAULT}});
 
     // 170ns > 50ns has passed since previous TOUCH event. Should poke.
     notifyAndConsumeMotion(ACTION_UP, AINPUT_SOURCE_STYLUS, ui::LogicalDisplayId::DEFAULT,
-                           milliseconds_to_nanoseconds(300));
+                           currentTime + milliseconds_to_nanoseconds(300));
     mFakePolicy->assertUserActivityPoked(
-            {{milliseconds_to_nanoseconds(300), USER_ACTIVITY_EVENT_TOUCH,
+            {{currentTime + milliseconds_to_nanoseconds(300), USER_ACTIVITY_EVENT_TOUCH,
               ui::LogicalDisplayId::DEFAULT}});
 
     // Assert that there's no more user activity poke event.
@@ -10020,20 +10026,22 @@ TEST_F_WITH_FLAGS(
         InputDispatcherUserActivityPokeTests, DefaultMinPokeTimeOf100MsUsed,
         REQUIRES_FLAGS_ENABLED(ACONFIG_FLAG(com::android::input::flags,
                                             rate_limit_user_activity_poke_in_dispatcher))) {
+    // Use current time otherwise events may be dropped due to being stale.
+    const nsecs_t currentTime = systemTime(SYSTEM_TIME_MONOTONIC);
     notifyAndConsumeMotion(ACTION_DOWN, AINPUT_SOURCE_TOUCHSCREEN, ui::LogicalDisplayId::DEFAULT,
-                           milliseconds_to_nanoseconds(200));
+                           currentTime + milliseconds_to_nanoseconds(200));
     mFakePolicy->assertUserActivityPoked(
-            {{milliseconds_to_nanoseconds(200), USER_ACTIVITY_EVENT_TOUCH,
+            {{currentTime + milliseconds_to_nanoseconds(200), USER_ACTIVITY_EVENT_TOUCH,
               ui::LogicalDisplayId::DEFAULT}});
 
     notifyAndConsumeMotion(ACTION_MOVE, AINPUT_SOURCE_TOUCHSCREEN, ui::LogicalDisplayId::DEFAULT,
-                           milliseconds_to_nanoseconds(280));
+                           currentTime + milliseconds_to_nanoseconds(280));
     mFakePolicy->assertUserActivityNotPoked();
 
     notifyAndConsumeMotion(ACTION_UP, AINPUT_SOURCE_TOUCHSCREEN, ui::LogicalDisplayId::DEFAULT,
-                           milliseconds_to_nanoseconds(340));
+                           currentTime + milliseconds_to_nanoseconds(340));
     mFakePolicy->assertUserActivityPoked(
-            {{milliseconds_to_nanoseconds(340), USER_ACTIVITY_EVENT_TOUCH,
+            {{currentTime + milliseconds_to_nanoseconds(340), USER_ACTIVITY_EVENT_TOUCH,
               ui::LogicalDisplayId::DEFAULT}});
 }
 
@@ -10041,14 +10049,16 @@ TEST_F_WITH_FLAGS(
         InputDispatcherUserActivityPokeTests, ZeroMinPokeTimeDisablesRateLimiting,
         REQUIRES_FLAGS_ENABLED(ACONFIG_FLAG(com::android::input::flags,
                                             rate_limit_user_activity_poke_in_dispatcher))) {
+    // Use current time otherwise events may be dropped due to being stale.
+    const nsecs_t currentTime = systemTime(SYSTEM_TIME_MONOTONIC);
     mDispatcher->setMinTimeBetweenUserActivityPokes(0ms);
 
     notifyAndConsumeMotion(ACTION_DOWN, AINPUT_SOURCE_TOUCHSCREEN, ui::LogicalDisplayId::DEFAULT,
-                           20);
+                           currentTime + 20);
     mFakePolicy->assertUserActivityPoked();
 
     notifyAndConsumeMotion(ACTION_MOVE, AINPUT_SOURCE_TOUCHSCREEN, ui::LogicalDisplayId::DEFAULT,
-                           30);
+                           currentTime + 30);
     mFakePolicy->assertUserActivityPoked();
 }
 
