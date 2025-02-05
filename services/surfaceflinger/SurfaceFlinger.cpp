@@ -2980,6 +2980,8 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     int index = 0;
     ftl::StaticVector<char, WorkloadTracer::COMPOSITION_SUMMARY_SIZE> compositionSummary;
     auto lastLayerStack = ui::INVALID_LAYER_STACK;
+
+    uint64_t prevOverrideBufferId = 0;
     for (auto& [layer, layerFE] : layers) {
         CompositionResult compositionResult{layerFE->stealCompositionResult()};
         if (lastLayerStack != layerFE->mSnapshot->outputFilter.layerStack) {
@@ -2989,8 +2991,37 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
             }
             lastLayerStack = layerFE->mSnapshot->outputFilter.layerStack;
         }
+
+        // If there are N layers in a cached set they should all share the same buffer id.
+        // The first layer in the cached set will be not skipped and layers 1..N-1 will be skipped.
+        // We expect all layers in the cached set to be marked as composited by HWC.
+        // Here is a made up example of how it is visualized
+        //
+        //      [b:rrc][s:cc]
+        //
+        // This should be interpreted to mean that there are 2 cached sets.
+        // So there are only 2 non skipped layers -- b and s.
+        // The layers rrc and cc are flattened into layers b and s respectively.
+        const LayerFE::HwcLayerDebugState &hwcState = layerFE->getLastHwcState();
+        if (hwcState.overrideBufferId != prevOverrideBufferId) {
+            // End the existing run.
+            if (prevOverrideBufferId) {
+                compositionSummary.push_back(']');
+            }
+            // Start a new run.
+            if (hwcState.overrideBufferId) {
+                compositionSummary.push_back('[');
+            }
+        }
+
         compositionSummary.push_back(
-                layerFE->mSnapshot->classifyCompositionForDebug(layerFE->getHwcCompositionType()));
+                layerFE->mSnapshot->classifyCompositionForDebug(hwcState));
+
+        if (hwcState.overrideBufferId && !hwcState.wasSkipped) {
+                compositionSummary.push_back(':');
+        }
+        prevOverrideBufferId = hwcState.overrideBufferId;
+
         if (layerFE->mSnapshot->hasEffect()) {
             compositedWorkload |= adpf::Workload::EFFECTS;
         }
@@ -3001,6 +3032,10 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         if (com_android_graphics_libgui_flags_apply_picture_profiles()) {
             mActivePictureTracker.onLayerComposed(*layer, *layerFE, compositionResult);
         }
+    }
+    // End the last run.
+    if (prevOverrideBufferId) {
+        compositionSummary.push_back(']');
     }
 
     // Concisely describe the layers composited this frame using single chars. GPU composited layers
