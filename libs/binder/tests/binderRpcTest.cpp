@@ -2771,7 +2771,9 @@ INSTANTIATE_TEST_SUITE_P(
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
+#ifndef __ANDROID__
     __android_log_set_logger(__android_log_stderr_logger);
+#endif
 
     return RUN_ALL_TESTS();
 }
