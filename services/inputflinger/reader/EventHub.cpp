@@ -1620,41 +1620,47 @@ std::shared_ptr<const EventHub::AssociatedDevice> EventHub::obtainAssociatedDevi
 
     const auto& path = *sysfsRootPathOpt;
 
-    std::shared_ptr<const AssociatedDevice> associatedDevice = std::make_shared<AssociatedDevice>(
-            AssociatedDevice{.sysfsRootPath = path,
-                             .batteryInfos = readBatteryConfiguration(path),
-                             .lightInfos = readLightsConfiguration(path),
-                             .layoutInfo = readLayoutConfiguration(path)});
-
-    bool associatedDeviceChanged = false;
+    std::shared_ptr<const AssociatedDevice> associatedDevice;
     for (const auto& [id, dev] : mDevices) {
-        if (dev->associatedDevice && dev->associatedDevice->sysfsRootPath == path) {
-            if (*associatedDevice != *dev->associatedDevice) {
-                associatedDeviceChanged = true;
-                dev->associatedDevice = associatedDevice;
-            }
-            associatedDevice = dev->associatedDevice;
+        if (!dev->associatedDevice || dev->associatedDevice->sysfsRootPath != path) {
+            continue;
         }
+        if (!associatedDevice) {
+            // Found matching associated device for the first time.
+            associatedDevice = dev->associatedDevice;
+            // Reload this associated device if needed.
+            const auto reloadedDevice = AssociatedDevice(path);
+            if (reloadedDevice != *dev->associatedDevice) {
+                ALOGI("The AssociatedDevice changed for path '%s'. Using new AssociatedDevice: %s",
+                      path.c_str(), associatedDevice->dump().c_str());
+                associatedDevice = std::make_shared<AssociatedDevice>(std::move(reloadedDevice));
+            }
+        }
+        // Update the associatedDevice.
+        dev->associatedDevice = associatedDevice;
     }
-    ALOGI_IF(associatedDeviceChanged,
-             "The AssociatedDevice changed for path '%s'. Using new AssociatedDevice: %s",
-             path.c_str(), associatedDevice->dump().c_str());
+
+    if (!associatedDevice) {
+        // No existing associated device found for this path, so create a new one.
+        associatedDevice = std::make_shared<AssociatedDevice>(path);
+    }
 
     return associatedDevice;
 }
 
-bool EventHub::AssociatedDevice::isChanged() const {
-    std::unordered_map<int32_t, RawBatteryInfo> newBatteryInfos =
-            readBatteryConfiguration(sysfsRootPath);
-    std::unordered_map<int32_t, RawLightInfo> newLightInfos =
-            readLightsConfiguration(sysfsRootPath);
-    std::optional<RawLayoutInfo> newLayoutInfo = readLayoutConfiguration(sysfsRootPath);
+EventHub::AssociatedDevice::AssociatedDevice(const std::filesystem::path& sysfsRootPath)
+      : sysfsRootPath(sysfsRootPath),
+        batteryInfos(readBatteryConfiguration(sysfsRootPath)),
+        lightInfos(readLightsConfiguration(sysfsRootPath)),
+        layoutInfo(readLayoutConfiguration(sysfsRootPath)) {}
 
-    if (newBatteryInfos == batteryInfos && newLightInfos == lightInfos &&
-        newLayoutInfo == layoutInfo) {
-        return false;
-    }
-    return true;
+bool EventHub::AssociatedDevice::isChanged() const {
+    return AssociatedDevice(sysfsRootPath) != *this;
+}
+
+std::string EventHub::AssociatedDevice::dump() const {
+    return StringPrintf("path=%s, numBatteries=%zu, numLight=%zu", sysfsRootPath.c_str(),
+                        batteryInfos.size(), lightInfos.size());
 }
 
 void EventHub::vibrate(int32_t deviceId, const VibrationElement& element) {
@@ -2970,11 +2976,6 @@ void EventHub::dump(std::string& dump) const {
 void EventHub::monitor() const {
     // Acquire and release the lock to ensure that the event hub has not deadlocked.
     std::unique_lock<std::mutex> lock(mLock);
-}
-
-std::string EventHub::AssociatedDevice::dump() const {
-    return StringPrintf("path=%s, numBatteries=%zu, numLight=%zu", sysfsRootPath.c_str(),
-                        batteryInfos.size(), lightInfos.size());
 }
 
 } // namespace android
