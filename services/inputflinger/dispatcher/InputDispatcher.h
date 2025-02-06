@@ -355,7 +355,15 @@ private:
         struct CancellationArgs {
             const sp<gui::WindowInfoHandle> windowHandle;
             CancelationOptions::Mode mode;
-            std::optional<DeviceId> deviceId;
+            std::optional<DeviceId> deviceId{std::nullopt};
+            ui::LogicalDisplayId displayId{ui::LogicalDisplayId::INVALID};
+            std::bitset<MAX_POINTER_ID + 1> pointerIds{};
+        };
+
+        struct PointerDownArgs {
+            const nsecs_t downTimeInTarget;
+            const std::shared_ptr<Connection> connection;
+            const ftl::Flags<InputTarget::Flags> targetFlags;
         };
 
         static void addPointerWindowTarget(const sp<android::gui::WindowInfoHandle>& windowHandle,
@@ -387,17 +395,40 @@ private:
         std::string dump() const;
 
         // Updates the touchState for display from WindowInfo,
-        // return vector of CancellationArgs for every cancelled touch
+        // returns list of CancellationArgs for every cancelled touch
         std::list<CancellationArgs> updateFromWindowInfo(ui::LogicalDisplayId displayId,
                                                          const DispatcherWindowInfo& windowInfos);
 
         void removeAllPointersForDevice(DeviceId deviceId);
+
+        // transfer touch between provided tokens, returns destination WindowHandle, deviceId,
+        // pointers, list of cancelled windows and pointers on successful transfer.
+        std::optional<
+                std::tuple<sp<gui::WindowInfoHandle>, DeviceId, std::vector<PointerProperties>,
+                           std::list<CancellationArgs>, std::list<PointerDownArgs>>>
+        transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
+                             const DispatcherWindowInfo& windowInfos,
+                             const ConnectionManager& connections);
+
+        base::Result<std::list<CancellationArgs>, status_t> pilferPointers(
+                const sp<IBinder>& token, const Connection& requestingConnection);
 
         void clear();
 
         std::unordered_map<ui::LogicalDisplayId, TouchState> mTouchStatesByDisplay;
 
     private:
+        std::optional<std::tuple<TouchState&, TouchedWindow&, ui::LogicalDisplayId>>
+        findTouchStateWindowAndDisplay(const sp<IBinder>& token);
+
+        std::pair<std::list<CancellationArgs>, std::list<PointerDownArgs>> transferWallpaperTouch(
+                const sp<gui::WindowInfoHandle> fromWindowHandle,
+                const sp<gui::WindowInfoHandle> toWindowHandle, TouchState& state,
+                DeviceId deviceId, const std::vector<PointerProperties>& pointers,
+                ftl::Flags<InputTarget::Flags> oldTargetFlags,
+                ftl::Flags<InputTarget::Flags> newTargetFlags,
+                const DispatcherWindowInfo& windowInfos, const ConnectionManager& connections);
+
         static std::list<CancellationArgs> eraseRemovedWindowsFromWindowInfo(
                 TouchState& state, ui::LogicalDisplayId displayId,
                 const DispatcherWindowInfo& windowInfos);
@@ -848,15 +879,6 @@ private:
     bool recentWindowsAreOwnedByLocked(gui::Pid pid, gui::Uid uid) REQUIRES(mLock);
 
     sp<InputReporterInterface> mReporter;
-
-    void transferWallpaperTouch(ftl::Flags<InputTarget::Flags> oldTargetFlags,
-                                ftl::Flags<InputTarget::Flags> newTargetFlags,
-                                const sp<android::gui::WindowInfoHandle> fromWindowHandle,
-                                const sp<android::gui::WindowInfoHandle> toWindowHandle,
-                                TouchState& state, DeviceId deviceId,
-                                const std::vector<PointerProperties>& pointers,
-                                const std::unique_ptr<trace::EventTrackerInterface>& traceTracker)
-            REQUIRES(mLock);
 
     /** Stores the value of the input flag for per device input latency metrics. */
     const bool mPerDeviceInputLatencyMetricsFlag =
