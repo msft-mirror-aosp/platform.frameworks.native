@@ -307,8 +307,11 @@ private:
         // Get the transform for display, returns Identity-transform if display is missing.
         ui::Transform getDisplayTransform(ui::LogicalDisplayId displayId) const;
 
-        // Get the raw transform to use for motion events going to the given window.
-        ui::Transform getRawTransform(const android::gui::WindowInfo&) const;
+        // Get the raw transform to use for motion events going to the given window. Optionally a
+        // pointer displayId may be supplied if pointer is on a different display from the window.
+        ui::Transform getRawTransform(
+                const android::gui::WindowInfo& windowInfo,
+                std::optional<ui::LogicalDisplayId> pointerDisplayId = std::nullopt) const;
 
         // Lookup for WindowInfoHandle from token and optionally a display-id. In cases where
         // display-id is not provided lookup is done for all displays.
@@ -379,6 +382,7 @@ private:
                                            ftl::Flags<InputTarget::Flags> targetFlags,
                                            std::bitset<MAX_POINTER_ID + 1> pointerIds,
                                            std::optional<nsecs_t> firstDownTimeInTarget,
+                                           std::optional<ui::LogicalDisplayId> pointerDisplayId,
                                            const ConnectionManager& connections,
                                            const DispatcherWindowInfo& windowInfos,
                                            std::function<void()> dump,

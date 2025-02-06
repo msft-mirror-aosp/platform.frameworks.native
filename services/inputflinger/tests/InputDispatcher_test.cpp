@@ -15207,7 +15207,17 @@ protected:
                                              "Window", DISPLAY_ID);
         mWindow->setFrame({0, 0, 100, 100});
 
-        mDispatcher->onWindowInfosChanged({{*mWindow->getInfo()}, {}, 0, 0});
+        gui::DisplayInfo displayInfo1;
+        displayInfo1.displayId = DISPLAY_ID;
+
+        ui::Transform transform(ui::Transform::ROT_270, /*logicalDisplayWidth=*/500,
+                                /*logicalDisplayHeight=*/500);
+        gui::DisplayInfo displayInfo2;
+        displayInfo2.displayId = SECOND_DISPLAY_ID;
+        displayInfo2.transform = transform;
+
+        mDispatcher->onWindowInfosChanged(
+                {{*mWindow->getInfo()}, {displayInfo1, displayInfo2}, 0, 0});
     }
 };
 
@@ -15250,8 +15260,9 @@ TEST_F(InputDispatcherConnectedDisplayTest, MultiDisplayMouseGesture) {
                                       .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
                                       .pointer(PointerBuilder(0, ToolType::MOUSE).x(70).y(70))
                                       .build());
+    // events should be delivered with the second displayId and in corrosponding coordinate space
     mWindow->consumeMotionEvent(AllOf(WithMotionAction(AMOTION_EVENT_ACTION_MOVE),
-                                      WithDisplayId(SECOND_DISPLAY_ID), WithRawCoords(70, 70)));
+                                      WithDisplayId(SECOND_DISPLAY_ID), WithRawCoords(70, 430)));
 
     // pointer-up
     mDispatcher->notifyMotion(
@@ -15262,7 +15273,7 @@ TEST_F(InputDispatcherConnectedDisplayTest, MultiDisplayMouseGesture) {
                     .pointer(PointerBuilder(0, ToolType::MOUSE).x(70).y(70))
                     .build());
     mWindow->consumeMotionEvent(AllOf(WithMotionAction(AMOTION_EVENT_ACTION_BUTTON_RELEASE),
-                                      WithDisplayId(SECOND_DISPLAY_ID), WithRawCoords(70, 70)));
+                                      WithDisplayId(SECOND_DISPLAY_ID), WithRawCoords(70, 430)));
 
     mDispatcher->notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_UP, AINPUT_SOURCE_MOUSE)
                                       .displayId(SECOND_DISPLAY_ID)
