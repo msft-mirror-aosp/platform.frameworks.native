@@ -626,7 +626,6 @@ private:
         std::unordered_map<int32_t /*lightId*/, RawLightInfo> lightInfos;
         std::optional<RawLayoutInfo> layoutInfo;
 
-        bool isChanged() const;
         bool operator==(const AssociatedDevice&) const = default;
         bool operator!=(const AssociatedDevice&) const = default;
         std::string dump() const;
