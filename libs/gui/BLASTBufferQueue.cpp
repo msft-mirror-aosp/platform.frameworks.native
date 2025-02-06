@@ -415,14 +415,12 @@ void BLASTBufferQueue::transactionCallback(nsecs_t /*latchTime*/, const sp<Fence
                                                     stat.frameEventStats.dequeueReadyTime);
                 }
                 auto currFrameNumber = stat.frameEventStats.frameNumber;
-                std::vector<ReleaseCallbackId> staleReleases;
-                for (const auto& [key, value]: mSubmitted) {
-                    if (currFrameNumber > key.framenumber) {
-                        staleReleases.push_back(key);
+                // Release stale buffers.
+                for (const auto& [key, _] : mSubmitted) {
+                    if (currFrameNumber <= key.framenumber) {
+                        continue; // not stale.
                     }
-                }
-                for (const auto& staleRelease : staleReleases) {
-                    releaseBufferCallbackLocked(staleRelease,
+                    releaseBufferCallbackLocked(key,
                                                 stat.previousReleaseFence
                                                         ? stat.previousReleaseFence
                                                         : Fence::NO_FENCE,
@@ -618,7 +616,7 @@ status_t BLASTBufferQueue::acquireNextBufferLocked(
     mNumAcquired++;
     mLastAcquiredFrameNumber = bufferItem.mFrameNumber;
     ReleaseCallbackId releaseCallbackId(buffer->getId(), mLastAcquiredFrameNumber);
-    mSubmitted[releaseCallbackId] = bufferItem;
+    mSubmitted.emplace_or_replace(releaseCallbackId, bufferItem);
 
     bool needsDisconnect = false;
     mBufferItemConsumer->getConnectionEvents(bufferItem.mFrameNumber, &needsDisconnect);
@@ -851,7 +849,7 @@ void BLASTBufferQueue::onFrameReplaced(const BufferItem& item) {
 
 void BLASTBufferQueue::onFrameDequeued(const uint64_t bufferId) {
     std::lock_guard _lock{mTimestampMutex};
-    mDequeueTimestamps[bufferId] = systemTime();
+    mDequeueTimestamps.emplace_or_replace(bufferId, systemTime());
 };
 
 void BLASTBufferQueue::onFrameCancelled(const uint64_t bufferId) {
