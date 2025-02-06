@@ -26,7 +26,6 @@ TEST(DisplayIdTest, createPhysicalIdFromEdid) {
     constexpr uint32_t modelHash = 42;
     const PhysicalDisplayId id = PhysicalDisplayId::fromEdid(port, manufacturerId, modelHash);
     EXPECT_EQ(port, id.getPort());
-    EXPECT_EQ(manufacturerId, id.getManufacturerId());
     EXPECT_FALSE(VirtualDisplayId::tryCast(id));
     EXPECT_FALSE(HalVirtualDisplayId::tryCast(id));
     EXPECT_FALSE(GpuVirtualDisplayId::tryCast(id));
@@ -34,7 +33,7 @@ TEST(DisplayIdTest, createPhysicalIdFromEdid) {
     EXPECT_TRUE(HalDisplayId::tryCast(id));
 
     EXPECT_EQ(id, DisplayId::fromValue(id.value));
-    EXPECT_EQ(id, DisplayId::fromValue<PhysicalDisplayId>(id.value));
+    EXPECT_EQ(id, PhysicalDisplayId::fromValue(id.value));
 }
 
 TEST(DisplayIdTest, createPhysicalIdFromPort) {
@@ -48,7 +47,7 @@ TEST(DisplayIdTest, createPhysicalIdFromPort) {
     EXPECT_TRUE(HalDisplayId::tryCast(id));
 
     EXPECT_EQ(id, DisplayId::fromValue(id.value));
-    EXPECT_EQ(id, DisplayId::fromValue<PhysicalDisplayId>(id.value));
+    EXPECT_EQ(id, PhysicalDisplayId::fromValue(id.value));
 }
 
 TEST(DisplayIdTest, createGpuVirtualId) {
@@ -60,7 +59,7 @@ TEST(DisplayIdTest, createGpuVirtualId) {
     EXPECT_FALSE(HalDisplayId::tryCast(id));
 
     EXPECT_EQ(id, DisplayId::fromValue(id.value));
-    EXPECT_EQ(id, DisplayId::fromValue<GpuVirtualDisplayId>(id.value));
+    EXPECT_EQ(id, GpuVirtualDisplayId::fromValue(id.value));
 }
 
 TEST(DisplayIdTest, createVirtualIdFromGpuVirtualId) {
@@ -75,21 +74,6 @@ TEST(DisplayIdTest, createVirtualIdFromGpuVirtualId) {
     EXPECT_EQ((id.isVirtual() && isGpuVirtualId), GpuVirtualDisplayId::tryCast(id).has_value());
 }
 
-TEST(DisplayIdTest, createGpuVirtualIdFromUniqueId) {
-    static const std::string kUniqueId("virtual:ui:DisplayId_test");
-    const auto idOpt = GpuVirtualDisplayId::fromUniqueId(kUniqueId);
-    ASSERT_TRUE(idOpt.has_value());
-    const GpuVirtualDisplayId id = idOpt.value();
-    EXPECT_TRUE(VirtualDisplayId::tryCast(id));
-    EXPECT_TRUE(GpuVirtualDisplayId::tryCast(id));
-    EXPECT_FALSE(HalVirtualDisplayId::tryCast(id));
-    EXPECT_FALSE(PhysicalDisplayId::tryCast(id));
-    EXPECT_FALSE(HalDisplayId::tryCast(id));
-
-    EXPECT_EQ(id, DisplayId::fromValue(id.value));
-    EXPECT_EQ(id, DisplayId::fromValue<GpuVirtualDisplayId>(id.value));
-}
-
 TEST(DisplayIdTest, createHalVirtualId) {
     const HalVirtualDisplayId id(42);
     EXPECT_TRUE(VirtualDisplayId::tryCast(id));
@@ -99,7 +83,7 @@ TEST(DisplayIdTest, createHalVirtualId) {
     EXPECT_TRUE(HalDisplayId::tryCast(id));
 
     EXPECT_EQ(id, DisplayId::fromValue(id.value));
-    EXPECT_EQ(id, DisplayId::fromValue<HalVirtualDisplayId>(id.value));
+    EXPECT_EQ(id, HalVirtualDisplayId::fromValue(id.value));
 }
 
 TEST(DisplayIdTest, createVirtualIdFromHalVirtualId) {

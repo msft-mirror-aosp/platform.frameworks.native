@@ -85,6 +85,7 @@ sp<IInputFlinger> getInputFlinger() {
 // We use the top 10 layers as a way to haphazardly place ourselves above anything else.
 static const int LAYER_BASE = INT32_MAX - 10;
 static constexpr std::chrono::nanoseconds DISPATCHING_TIMEOUT = 5s;
+static constexpr float EPSILON = MotionEvent::ROUNDING_PRECISION;
 
 class SynchronousWindowInfosReportedListener : public gui::BnWindowInfosReportedListener {
 public:
@@ -203,8 +204,8 @@ public:
         ASSERT_EQ(InputEventType::MOTION, ev->getType());
         MotionEvent* mev = static_cast<MotionEvent*>(ev);
         EXPECT_EQ(AMOTION_EVENT_ACTION_DOWN, mev->getAction());
-        EXPECT_EQ(x, mev->getX(0));
-        EXPECT_EQ(y, mev->getY(0));
+        EXPECT_NEAR(x, mev->getX(0), EPSILON);
+        EXPECT_NEAR(y, mev->getY(0), EPSILON);
         EXPECT_EQ(0, mev->getFlags() & VERIFIED_MOTION_EVENT_FLAGS);
 
         ev = consumeEvent();
@@ -1230,7 +1231,7 @@ public:
         consumer->setConsumerName(String8("Virtual disp consumer (MultiDisplayTests)"));
         consumer->setDefaultBufferSize(width, height);
 
-        class StubConsumerListener : public BnConsumerListener {
+        class StubConsumerListener : public IConsumerListener {
             virtual void onFrameAvailable(const BufferItem&) override {}
             virtual void onBuffersReleased() override {}
             virtual void onSidebandStreamChanged() override {}

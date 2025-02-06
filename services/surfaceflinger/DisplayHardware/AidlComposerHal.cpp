@@ -26,12 +26,15 @@
 #include <android/binder_manager.h>
 #include <common/FlagManager.h>
 #include <common/trace.h>
+#include <fmt/core.h>
 #include <log/log.h>
 
 #include <aidl/android/hardware/graphics/composer3/BnComposerCallback.h>
 
 #include <algorithm>
 #include <cinttypes>
+#include <string>
+#include <string_view>
 
 #include "HWC2.h"
 
@@ -229,25 +232,32 @@ private:
     HWC2::ComposerCallback& mCallback;
 };
 
-std::string AidlComposer::instance(const std::string& serviceName) {
-    return std::string(AidlIComposer::descriptor) + "/" + serviceName;
+std::string AidlComposer::ensureFullyQualifiedName(std::string_view serviceName) {
+    if (!serviceName.starts_with(AidlIComposer::descriptor)) {
+        return fmt::format("{}/{}", AidlIComposer::descriptor, serviceName);
+    } else {
+        return std::string{serviceName};
+    }
 }
 
-bool AidlComposer::isDeclared(const std::string& serviceName) {
-    return AServiceManager_isDeclared(instance(serviceName).c_str());
+bool AidlComposer::namesAnAidlComposerService(std::string_view serviceName) {
+    if (!serviceName.starts_with(AidlIComposer::descriptor)) {
+        return AServiceManager_isDeclared(ensureFullyQualifiedName(serviceName).c_str());
+    }
+    return true;
 }
 
 AidlComposer::AidlComposer(const std::string& serviceName) {
     // This only waits if the service is actually declared
-    mAidlComposer = AidlIComposer::fromBinder(
-            ndk::SpAIBinder(AServiceManager_waitForService(instance(serviceName).c_str())));
+    mAidlComposer = AidlIComposer::fromBinder(ndk::SpAIBinder(
+            AServiceManager_waitForService(ensureFullyQualifiedName(serviceName).c_str())));
     if (!mAidlComposer) {
         LOG_ALWAYS_FATAL("Failed to get AIDL composer service");
         return;
     }
 
     if (!mAidlComposer->createClient(&mAidlComposerClient).isOk()) {
-        LOG_ALWAYS_FATAL("Can't create AidlComposerClient, fallback to HIDL");
+        LOG_ALWAYS_FATAL("Can't create AidlComposerClient");
         return;
     }
 
@@ -347,7 +357,9 @@ void AidlComposer::registerCallback(HWC2::ComposerCallback& callback) {
     mAidlComposerCallback = ndk::SharedRefBase::make<AidlIComposerCallbackWrapper>(callback);
 
     ndk::SpAIBinder binder = mAidlComposerCallback->asBinder();
-    AIBinder_setMinSchedulerPolicy(binder.get(), SCHED_FIFO, 2);
+    if (!FlagManager::getInstance().disable_sched_fifo_composer_callback()) {
+        AIBinder_setMinSchedulerPolicy(binder.get(), SCHED_FIFO, 2);
+    }
 
     const auto status = mAidlComposerClient->registerCallback(mAidlComposerCallback);
     if (!status.isOk()) {
@@ -682,6 +694,36 @@ Error AidlComposer::getReleaseFences(Display display, std::vector<Layer>* outLay
         const int fenceOwner = fence.fence.get();
         *fence.fence.getR() = -1;
         outReleaseFences->emplace_back(fenceOwner);
+    }
+    return error;
+}
+
+Error AidlComposer::getLayerPresentFences(Display display, std::vector<Layer>* outLayers,
+                                          std::vector<int>* outFences,
+                                          std::vector<int64_t>* outLatenciesNanos) {
+    Error error = Error::NONE;
+    std::vector<PresentFence::LayerPresentFence> fences;
+    {
+        mMutex.lock_shared();
+        if (auto reader = getReader(display)) {
+            fences = reader->get().takeLayerPresentFences(translate<int64_t>(display));
+        } else {
+            error = Error::BAD_DISPLAY;
+        }
+        mMutex.unlock_shared();
+    }
+
+    outLayers->reserve(fences.size());
+    outFences->reserve(fences.size());
+    outLatenciesNanos->reserve(fences.size());
+
+    for (auto& fence : fences) {
+        outLayers->emplace_back(translate<Layer>(fence.layer));
+        // take ownership
+        const int fenceOwner = fence.bufferFence.get();
+        *fence.bufferFence.getR() = -1;
+        outFences->emplace_back(fenceOwner);
+        outLatenciesNanos->emplace_back(fence.bufferLatencyNanos);
     }
     return error;
 }

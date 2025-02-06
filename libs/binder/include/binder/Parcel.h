@@ -383,9 +383,6 @@ public:
     LIBBINDER_EXPORTED status_t
     writeUniqueFileDescriptorVector(const std::optional<std::vector<binder::unique_fd>>& val);
     LIBBINDER_EXPORTED status_t
-    writeUniqueFileDescriptorVector(const std::unique_ptr<std::vector<binder::unique_fd>>& val)
-            __attribute__((deprecated("use std::optional version instead")));
-    LIBBINDER_EXPORTED status_t
     writeUniqueFileDescriptorVector(const std::vector<binder::unique_fd>& val);
 
     // WARNING: deprecated and incompatible with AIDL. You should use Parcelable
@@ -629,9 +626,6 @@ public:
     // Retrieve a vector of smart file descriptors from the parcel.
     LIBBINDER_EXPORTED status_t
     readUniqueFileDescriptorVector(std::optional<std::vector<binder::unique_fd>>* val) const;
-    LIBBINDER_EXPORTED status_t
-    readUniqueFileDescriptorVector(std::unique_ptr<std::vector<binder::unique_fd>>* val) const
-            __attribute__((deprecated("use std::optional version instead")));
     LIBBINDER_EXPORTED status_t
     readUniqueFileDescriptorVector(std::vector<binder::unique_fd>* val) const;
 
@@ -1494,14 +1488,15 @@ public:
      * Note: for historical reasons, this does not include ashmem memory which
      * is referenced by this Parcel, but which this parcel doesn't own (e.g.
      * writeFileDescriptor is called without 'takeOwnership' true).
+     *
+     * WARNING: you should not use this, but rather, unparcel, and inspect
+     * each FD independently. This counts ashmem size, but there may be
+     * other resources used for non-ashmem FDs, such as other types of
+     * shared memory, files, etc..
      */
     LIBBINDER_EXPORTED size_t getOpenAshmemSize() const;
 
 private:
-    // TODO(b/202029388): Remove 'getBlobAshmemSize' once no prebuilts reference
-    // this
-    LIBBINDER_EXPORTED size_t getBlobAshmemSize() const;
-
     // Needed so that we can save object metadata to the disk
     friend class android::binder::debug::RecordedTransaction;
 };

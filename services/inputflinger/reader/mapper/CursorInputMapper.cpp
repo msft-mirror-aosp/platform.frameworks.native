@@ -419,7 +419,7 @@ int32_t CursorInputMapper::getScanCodeState(uint32_t sourceMask, int32_t scanCod
     }
 }
 
-std::optional<ui::LogicalDisplayId> CursorInputMapper::getAssociatedDisplayId() {
+std::optional<ui::LogicalDisplayId> CursorInputMapper::getAssociatedDisplayId() const {
     return mDisplayId;
 }
 
@@ -484,7 +484,7 @@ void CursorInputMapper::configureOnChangePointerSpeed(const InputReaderConfigura
         return;
     }
 
-    bool disableAllScaling = config.displaysWithMousePointerAccelerationDisabled.count(
+    bool disableAllScaling = config.displaysWithMouseScalingDisabled.count(
                                      mDisplayId.value_or(ui::LogicalDisplayId::INVALID)) != 0;
 
     mPointerVelocityControl.setAccelerationEnabled(!disableAllScaling);

@@ -299,8 +299,13 @@ status_t Parcel::flattenBinder(const sp<IBinder>& binder) {
             obj.handle = handle;
             obj.cookie = 0;
         } else {
+#if __linux__
             int policy = local->getMinSchedulerPolicy();
             int priority = local->getMinSchedulerPriority();
+#else
+            int policy = 0;
+            int priority = 0;
+#endif
 
             if (policy != 0 || priority != 0) {
                 // override value, since it is set explicitly
@@ -616,6 +621,7 @@ status_t Parcel::appendFrom(const Parcel* parcel, size_t offset, size_t len) {
         }
 #else
         LOG_ALWAYS_FATAL("Binder kernel driver disabled at build time");
+        (void)kernelFields;
         return INVALID_OPERATION;
 #endif // BINDER_WITH_KERNEL_IPC
     } else {
@@ -797,6 +803,7 @@ std::vector<int> Parcel::debugReadAllFileDescriptors() const {
         setDataPosition(initPosition);
 #else
         LOG_ALWAYS_FATAL("Binder kernel driver disabled at build time");
+        (void)kernelFields;
 #endif
     } else if (const auto* rpcFields = maybeRpcFields(); rpcFields && rpcFields->mFds) {
         for (const auto& fd : *rpcFields->mFds) {
@@ -839,9 +846,10 @@ status_t Parcel::hasBindersInRange(size_t offset, size_t len, bool* result) cons
         }
 #else
         LOG_ALWAYS_FATAL("Binder kernel driver disabled at build time");
+        (void)kernelFields;
         return INVALID_OPERATION;
 #endif // BINDER_WITH_KERNEL_IPC
-    } else if (const auto* rpcFields = maybeRpcFields()) {
+    } else if (maybeRpcFields()) {
         return INVALID_OPERATION;
     }
     return NO_ERROR;
@@ -879,6 +887,7 @@ status_t Parcel::hasFileDescriptorsInRange(size_t offset, size_t len, bool* resu
         }
 #else
         LOG_ALWAYS_FATAL("Binder kernel driver disabled at build time");
+        (void)kernelFields;
         return INVALID_OPERATION;
 #endif // BINDER_WITH_KERNEL_IPC
     } else if (const auto* rpcFields = maybeRpcFields()) {
@@ -971,6 +980,7 @@ status_t Parcel::writeInterfaceToken(const char16_t* str, size_t len) {
         writeInt32(kHeader);
 #else  // BINDER_WITH_KERNEL_IPC
         LOG_ALWAYS_FATAL("Binder kernel driver disabled at build time");
+        (void)kernelFields;
         return INVALID_OPERATION;
 #endif // BINDER_WITH_KERNEL_IPC
     }
@@ -1061,6 +1071,7 @@ bool Parcel::enforceInterface(const char16_t* interface,
 #else  // BINDER_WITH_KERNEL_IPC
         LOG_ALWAYS_FATAL("Binder kernel driver disabled at build time");
         (void)threadState;
+        (void)kernelFields;
         return false;
 #endif // BINDER_WITH_KERNEL_IPC
     }
@@ -1293,10 +1304,6 @@ status_t Parcel::writeUniqueFileDescriptorVector(const std::vector<unique_fd>& v
 status_t Parcel::writeUniqueFileDescriptorVector(const std::optional<std::vector<unique_fd>>& val) {
     return writeData(val);
 }
-status_t Parcel::writeUniqueFileDescriptorVector(
-        const std::unique_ptr<std::vector<unique_fd>>& val) {
-    return writeData(val);
-}
 
 status_t Parcel::writeStrongBinderVector(const std::vector<sp<IBinder>>& val) { return writeData(val); }
 status_t Parcel::writeStrongBinderVector(const std::optional<std::vector<sp<IBinder>>>& val) { return writeData(val); }
@@ -1350,10 +1357,6 @@ status_t Parcel::readUtf8VectorFromUtf16Vector(
 status_t Parcel::readUtf8VectorFromUtf16Vector(std::vector<std::string>* val) const { return readData(val); }
 
 status_t Parcel::readUniqueFileDescriptorVector(std::optional<std::vector<unique_fd>>* val) const {
-    return readData(val);
-}
-status_t Parcel::readUniqueFileDescriptorVector(
-        std::unique_ptr<std::vector<unique_fd>>* val) const {
     return readData(val);
 }
 status_t Parcel::readUniqueFileDescriptorVector(std::vector<unique_fd>* val) const {
@@ -2696,6 +2699,7 @@ void Parcel::closeFileDescriptors(size_t newObjectsSize) {
 #else  // BINDER_WITH_KERNEL_IPC
         (void)newObjectsSize;
         LOG_ALWAYS_FATAL("Binder kernel driver disabled at build time");
+        (void)kernelFields;
 #endif // BINDER_WITH_KERNEL_IPC
     } else if (auto* rpcFields = maybeRpcFields()) {
         rpcFields->mFds.reset();
@@ -3397,14 +3401,6 @@ void Parcel::scanForFds() const {
 }
 
 #ifdef BINDER_WITH_KERNEL_IPC
-size_t Parcel::getBlobAshmemSize() const
-{
-    // This used to return the size of all blobs that were written to ashmem, now we're returning
-    // the ashmem currently referenced by this Parcel, which should be equivalent.
-    // TODO(b/202029388): Remove method once ABI can be changed.
-    return getOpenAshmemSize();
-}
-
 size_t Parcel::getOpenAshmemSize() const
 {
     auto* kernelFields = maybeKernelFields();

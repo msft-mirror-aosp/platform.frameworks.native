@@ -42,6 +42,14 @@ public:
 
     void setUnitTestMode();
 
+    /// Debug sysprop flags ///
+    bool disable_sched_fifo_sf() const;
+    bool disable_sched_fifo_sf_binder() const;
+    bool disable_sched_fifo_sf_sched() const;
+    bool disable_sched_fifo_re() const;
+    bool disable_sched_fifo_composer() const;
+    bool disable_sched_fifo_composer_callback() const;
+
     /// Legacy server flags ///
     bool test_flag() const;
     bool use_adpf_cpu_hint() const;
@@ -53,6 +61,7 @@ public:
     bool adpf_use_fmq_channel() const;
     bool adpf_use_fmq_channel_fixed() const;
     bool graphite_renderengine_preview_rollout() const;
+    bool increase_missed_frame_jank_threshold() const;
     bool refresh_rate_overlay_on_external_display() const;
 
     /// Trunk stable readonly flags ///

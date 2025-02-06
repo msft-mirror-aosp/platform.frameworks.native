@@ -485,6 +485,18 @@ public:
         mLifecycleManager.applyTransactions(transactions);
     }
 
+    void setClientDrawnCornerRadius(uint32_t id, float clientDrawnCornerRadius) {
+        std::vector<QueuedTransactionState> transactions;
+        transactions.emplace_back();
+        transactions.back().states.push_back({});
+
+        transactions.back().states.front().state.what =
+                layer_state_t::eClientDrawnCornerRadiusChanged;
+        transactions.back().states.front().layerId = id;
+        transactions.back().states.front().state.clientDrawnCornerRadius = clientDrawnCornerRadius;
+        mLifecycleManager.applyTransactions(transactions);
+    }
+
     void setShadowRadius(uint32_t id, float shadowRadius) {
         std::vector<QueuedTransactionState> transactions;
         transactions.emplace_back();

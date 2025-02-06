@@ -42,7 +42,6 @@
 #include "FrontEnd/RequestedLayerState.h"
 #include "Layer.h"
 #include "NativeWindowSurface.h"
-#include "RenderArea.h"
 #include "Scheduler/RefreshRateSelector.h"
 #include "Scheduler/VSyncTracker.h"
 #include "Scheduler/VsyncController.h"
@@ -184,8 +183,8 @@ public:
     }
 
     void setupComposer(std::unique_ptr<Hwc2::Composer> composer) {
-        mFlinger->mCompositionEngine->setHwComposer(
-                std::make_unique<impl::HWComposer>(std::move(composer)));
+        mFlinger->mHWComposer = std::make_unique<impl::HWComposer>(std::move(composer));
+        mFlinger->mCompositionEngine->setHwComposer(mFlinger->mHWComposer.get());
         mFlinger->mDisplayModeController.setHwComposer(
                 &mFlinger->mCompositionEngine->getHwComposer());
     }
@@ -461,11 +460,11 @@ public:
         return mFlinger->setPowerModeInternal(display, mode);
     }
 
-    auto renderScreenImpl(const sp<DisplayDevice> display,
-                          std::unique_ptr<const RenderArea> renderArea,
+    auto renderScreenImpl(const sp<DisplayDevice> display, const Rect sourceCrop,
+                          ui::Dataspace dataspace,
                           SurfaceFlinger::GetLayerSnapshotsFunction getLayerSnapshotsFn,
                           const std::shared_ptr<renderengine::ExternalTexture>& buffer,
-                          bool regionSampling) {
+                          bool regionSampling, bool isSecure, bool seamlessTransition) {
         Mutex::Autolock lock(mFlinger->mStateLock);
         ftl::FakeGuard guard(kMainThreadContext);
 
@@ -473,7 +472,16 @@ public:
         auto displayState = std::optional{display->getCompositionDisplay()->getState()};
         auto layers = getLayerSnapshotsFn();
 
-        return mFlinger->renderScreenImpl(renderArea.get(), buffer, regionSampling,
+        SurfaceFlinger::ScreenshotArgs screenshotArgs;
+        screenshotArgs.captureTypeVariant = display;
+        screenshotArgs.displayId = std::nullopt;
+        screenshotArgs.sourceCrop = sourceCrop;
+        screenshotArgs.reqSize = sourceCrop.getSize();
+        screenshotArgs.dataspace = dataspace;
+        screenshotArgs.isSecure = isSecure;
+        screenshotArgs.seamlessTransition = seamlessTransition;
+
+        return mFlinger->renderScreenImpl(screenshotArgs, buffer, regionSampling,
                                           false /* grayscale */, false /* isProtected */,
                                           captureResults, displayState, layers);
     }
@@ -771,7 +779,8 @@ public:
         mutableCurrentState().displays.clear();
         mutableDrawingState().displays.clear();
         mFlinger->mScheduler.reset();
-        mFlinger->mCompositionEngine->setHwComposer(std::unique_ptr<HWComposer>());
+        mFlinger->mHWComposer = std::unique_ptr<HWComposer>();
+        mFlinger->mCompositionEngine->setHwComposer(mFlinger->mHWComposer.get());
         mFlinger->mRenderEngine = std::unique_ptr<renderengine::RenderEngine>();
         mFlinger->mCompositionEngine->setRenderEngine(mFlinger->mRenderEngine.get());
         mFlinger->mTransactionTracing.reset();

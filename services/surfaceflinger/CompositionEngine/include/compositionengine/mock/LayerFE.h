@@ -59,6 +59,10 @@ public:
     MOCK_CONST_METHOD0(getMetadata, gui::LayerMetadata*());
     MOCK_CONST_METHOD0(getRelativeMetadata, gui::LayerMetadata*());
     MOCK_METHOD0(onPictureProfileCommitted, void());
+    MOCK_METHOD(void, setLastHwcState,
+                (const HwcLayerDebugState&), (override));
+    MOCK_METHOD(const HwcLayerDebugState&, getLastHwcState,
+                (), (const, override));
 };
 
 } // namespace android::compositionengine::mock

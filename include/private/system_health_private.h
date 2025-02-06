@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 The Android Open Source Project
+ * Copyright (C) 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
-#include "RenderArea.h"
+#ifndef ANDROID_PRIVATE_NATIVE_SYSTEM_HEALTH_H
+#define ANDROID_PRIVATE_NATIVE_SYSTEM_HEALTH_H
 
-namespace android {
+#include <stdint.h>
 
-float RenderArea::getCaptureFillValue(CaptureFill captureFill) {
-    switch(captureFill) {
-        case CaptureFill::CLEAR:
-            return 0.0f;
-        case CaptureFill::OPAQUE:
-        default:
-            return 1.0f;
-    }
-}
+__BEGIN_DECLS
 
-} // namespace android
+/**
+ * For testing only.
+ */
+void ASystemHealth_setIHintManagerForTesting(void* iManager);
+
+__END_DECLS
+
+#endif // ANDROID_PRIVATE_NATIVE_SYSTEM_HEALTH_H
+

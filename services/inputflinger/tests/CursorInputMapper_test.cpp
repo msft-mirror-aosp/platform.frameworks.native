@@ -141,9 +141,9 @@ namespace vd_flags = android::companion::virtualdevice::flags;
  */
 class CursorInputMapperUnitTestBase : public InputMapperUnitTest {
 protected:
-    void SetUp() override { SetUpWithBus(BUS_USB); }
-    void SetUpWithBus(int bus) override {
-        InputMapperUnitTest::SetUpWithBus(bus);
+    void SetUp() override { SetUp(BUS_USB, /*isExternal=*/false); }
+    void SetUp(int bus, bool isExternal) override {
+        InputMapperUnitTest::SetUp(bus, isExternal);
 
         // Current scan code state - all keys are UP by default
         setScanCodeState(KeyState::UP,
@@ -1078,7 +1078,7 @@ TEST_F(CursorInputMapperUnitTest, ConfigureAccelerationWithAssociatedViewport) {
     ASSERT_GT(coords.getAxisValue(AMOTION_EVENT_AXIS_RELATIVE_Y), 20.f);
 
     // Disable acceleration for the display, and verify that acceleration is no longer applied.
-    mReaderConfiguration.displaysWithMousePointerAccelerationDisabled.emplace(DISPLAY_ID);
+    mReaderConfiguration.displaysWithMouseScalingDisabled.emplace(DISPLAY_ID);
     args += mMapper->reconfigure(ARBITRARY_TIME, mReaderConfiguration,
                                  InputReaderConfiguration::Change::POINTER_SPEED);
     args.clear();
@@ -1097,7 +1097,7 @@ TEST_F(CursorInputMapperUnitTest, ConfigureAccelerationOnDisplayChange) {
     DisplayViewport primaryViewport = createPrimaryViewport(ui::Rotation::Rotation0);
     mReaderConfiguration.setDisplayViewports({primaryViewport});
     // Disable acceleration for the display.
-    mReaderConfiguration.displaysWithMousePointerAccelerationDisabled.emplace(DISPLAY_ID);
+    mReaderConfiguration.displaysWithMouseScalingDisabled.emplace(DISPLAY_ID);
 
     // Don't associate the device with the display yet.
     EXPECT_CALL((*mDevice), getAssociatedViewport).WillRepeatedly(Return(std::nullopt));
@@ -1142,7 +1142,9 @@ constexpr nsecs_t MAX_BLUETOOTH_SMOOTHING_DELTA = ms2ns(32);
 
 class BluetoothCursorInputMapperUnitTest : public CursorInputMapperUnitTestBase {
 protected:
-    void SetUp() override { SetUpWithBus(BUS_BLUETOOTH); }
+    void SetUp() override {
+        CursorInputMapperUnitTestBase::SetUp(BUS_BLUETOOTH, /*isExternal=*/true);
+    }
 };
 
 TEST_F(BluetoothCursorInputMapperUnitTest, TimestampSmoothening) {

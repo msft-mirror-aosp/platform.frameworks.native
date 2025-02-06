@@ -60,6 +60,10 @@ public:
     LayerFE::ReleaseFencePromiseStatus getReleaseFencePromiseStatus() override;
     void onPictureProfileCommitted() override;
 
+    // Used for debugging purposes, e.g. perfetto tracing, dumpsys.
+    void setLastHwcState(const HwcLayerDebugState &state) override;
+    const HwcLayerDebugState &getLastHwcState() const override;
+
     std::unique_ptr<surfaceflinger::frontend::LayerSnapshot> mSnapshot;
 
 private:
@@ -90,6 +94,7 @@ private:
     std::string mName;
     std::promise<FenceResult> mReleaseFence;
     ReleaseFencePromiseStatus mReleaseFencePromiseStatus = ReleaseFencePromiseStatus::UNINITIALIZED;
+    HwcLayerDebugState mLastHwcState;
 };
 
 } // namespace android

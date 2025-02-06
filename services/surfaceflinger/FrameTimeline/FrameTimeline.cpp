@@ -611,7 +611,11 @@ void SurfaceFrame::classifyJankLocked(int32_t displayFrameJankType, const Fps& r
         mFrameReadyMetadata = FrameReadyMetadata::OnTimeFinish;
     }
 
-    if (std::abs(presentDelta) > mJankClassificationThresholds.presentThreshold) {
+    const nsecs_t presentThreshold =
+            FlagManager::getInstance().increase_missed_frame_jank_threshold()
+            ? mJankClassificationThresholds.presentThresholdExtended
+            : mJankClassificationThresholds.presentThresholdLegacy;
+    if (std::abs(presentDelta) > presentThreshold) {
         mFramePresentMetadata = presentDelta > 0 ? FramePresentMetadata::LatePresent
                                                  : FramePresentMetadata::EarlyPresent;
         // Jank that is missing by less than the render rate period is classified as partial jank,
@@ -629,9 +633,8 @@ void SurfaceFrame::classifyJankLocked(int32_t displayFrameJankType, const Fps& r
     } else if (mFramePresentMetadata == FramePresentMetadata::EarlyPresent) {
         if (mFrameReadyMetadata == FrameReadyMetadata::OnTimeFinish) {
             // Finish on time, Present early
-            if (deltaToVsync < mJankClassificationThresholds.presentThreshold ||
-                deltaToVsync >= refreshRate.getPeriodNsecs() -
-                                mJankClassificationThresholds.presentThreshold) {
+            if (deltaToVsync < presentThreshold ||
+                deltaToVsync >= refreshRate.getPeriodNsecs() - presentThreshold) {
                 // Delta factor of vsync
                 mJankType = JankType::SurfaceFlingerScheduling;
             } else {
@@ -651,7 +654,7 @@ void SurfaceFrame::classifyJankLocked(int32_t displayFrameJankType, const Fps& r
             // We try to do this by moving the deadline. Since the queue could be stuffed by more
             // than one buffer, we take the last latch time as reference and give one vsync
             // worth of time for the frame to be ready.
-            nsecs_t adjustedDeadline = mLastLatchTime + refreshRate.getPeriodNsecs();
+            nsecs_t adjustedDeadline = mLastLatchTime + displayFrameRenderRate.getPeriodNsecs();
             if (adjustedDeadline > mActuals.endTime) {
                 mFrameReadyMetadata = FrameReadyMetadata::OnTimeFinish;
             } else {
@@ -667,9 +670,8 @@ void SurfaceFrame::classifyJankLocked(int32_t displayFrameJankType, const Fps& r
                 if (!(mJankType & JankType::BufferStuffing)) {
                     // In a stuffed state, if the app finishes on time and there is no display frame
                     // jank, only buffer stuffing is the root cause of the jank.
-                    if (deltaToVsync < mJankClassificationThresholds.presentThreshold ||
-                        deltaToVsync >= refreshRate.getPeriodNsecs() -
-                                        mJankClassificationThresholds.presentThreshold) {
+                    if (deltaToVsync < presentThreshold ||
+                        deltaToVsync >= refreshRate.getPeriodNsecs() - presentThreshold) {
                         // Delta factor of vsync
                         mJankType |= JankType::SurfaceFlingerScheduling;
                     } else {
@@ -1091,7 +1093,11 @@ void FrameTimeline::DisplayFrame::classifyJank(nsecs_t& deadlineDelta, nsecs_t& 
             ? std::abs(presentDelta) % mRefreshRate.getPeriodNsecs()
             : 0;
 
-    if (std::abs(presentDelta) > mJankClassificationThresholds.presentThreshold) {
+    nsecs_t presentThreshold = FlagManager::getInstance().increase_missed_frame_jank_threshold()
+            ? mJankClassificationThresholds.presentThresholdExtended
+            : mJankClassificationThresholds.presentThresholdLegacy;
+
+    if (std::abs(presentDelta) > presentThreshold) {
         mFramePresentMetadata = presentDelta > 0 ? FramePresentMetadata::LatePresent
                                                  : FramePresentMetadata::EarlyPresent;
         // Jank that is missing by less than the render rate period is classified as partial jank,
@@ -1122,9 +1128,8 @@ void FrameTimeline::DisplayFrame::classifyJank(nsecs_t& deadlineDelta, nsecs_t& 
         if (mFramePresentMetadata == FramePresentMetadata::EarlyPresent) {
             if (mFrameReadyMetadata == FrameReadyMetadata::OnTimeFinish) {
                 // Finish on time, Present early
-                if (deltaToVsync < mJankClassificationThresholds.presentThreshold ||
-                    deltaToVsync >= (mRefreshRate.getPeriodNsecs() -
-                                     mJankClassificationThresholds.presentThreshold)) {
+                if (deltaToVsync < presentThreshold ||
+                    deltaToVsync >= (mRefreshRate.getPeriodNsecs() - presentThreshold)) {
                     // Delta is a factor of vsync if its within the presentTheshold on either side
                     // of the vsyncPeriod. Example: 0-2ms and 9-11ms are both within the threshold
                     // of the vsyncPeriod if the threshold was 2ms and the vsyncPeriod was 11ms.
@@ -1142,7 +1147,7 @@ void FrameTimeline::DisplayFrame::classifyJank(nsecs_t& deadlineDelta, nsecs_t& 
             }
         } else if (mFramePresentMetadata == FramePresentMetadata::LatePresent) {
             if (std::abs(mSurfaceFlingerPredictions.presentTime - previousPresentTime) <=
-                        mJankClassificationThresholds.presentThreshold ||
+                        presentThreshold ||
                 previousPresentTime > mSurfaceFlingerPredictions.presentTime) {
                 // The previous frame was either presented in the current frame's expected vsync or
                 // it was presented even later than the current frame's expected vsync.
@@ -1151,9 +1156,8 @@ void FrameTimeline::DisplayFrame::classifyJank(nsecs_t& deadlineDelta, nsecs_t& 
             if (mFrameReadyMetadata == FrameReadyMetadata::OnTimeFinish &&
                 !(mJankType & JankType::SurfaceFlingerStuffing)) {
                 // Finish on time, Present late
-                if (deltaToVsync < mJankClassificationThresholds.presentThreshold ||
-                    deltaToVsync >= (mRefreshRate.getPeriodNsecs() -
-                                     mJankClassificationThresholds.presentThreshold)) {
+                if (deltaToVsync < presentThreshold ||
+                    deltaToVsync >= (mRefreshRate.getPeriodNsecs() - presentThreshold)) {
                     // Delta is a factor of vsync if its within the presentTheshold on either side
                     // of the vsyncPeriod. Example: 0-2ms and 9-11ms are both within the threshold
                     // of the vsyncPeriod if the threshold was 2ms and the vsyncPeriod was 11ms.
@@ -1165,8 +1169,7 @@ void FrameTimeline::DisplayFrame::classifyJank(nsecs_t& deadlineDelta, nsecs_t& 
             } else if (mFrameReadyMetadata == FrameReadyMetadata::LateFinish) {
                 if (!(mJankType & JankType::SurfaceFlingerStuffing) ||
                     mSurfaceFlingerActuals.presentTime - previousPresentTime >
-                            mRefreshRate.getPeriodNsecs() +
-                                    mJankClassificationThresholds.presentThreshold) {
+                            mRefreshRate.getPeriodNsecs() + presentThreshold) {
                     // Classify CPU vs GPU if SF wasn't stuffed or if SF was stuffed but this frame
                     // was presented more than a vsync late.
                     if (mGpuFence != FenceTime::NO_FENCE) {

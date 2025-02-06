@@ -101,6 +101,7 @@ bitflags! {
 
 /// A rust enum representation of a MotionEvent action.
 #[repr(u32)]
+#[derive(Eq, PartialEq)]
 pub enum MotionAction {
     /// ACTION_DOWN
     Down = input_bindgen::AMOTION_EVENT_ACTION_DOWN,
@@ -194,6 +195,27 @@ impl MotionAction {
 }
 
 bitflags! {
+    /// MotionEvent buttons.
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub struct MotionButton: u32 {
+        /// Primary button (e.g. the left mouse button)
+        const Primary = input_bindgen::AMOTION_EVENT_BUTTON_PRIMARY;
+        /// Secondary button (e.g. the right mouse button)
+        const Secondary = input_bindgen::AMOTION_EVENT_BUTTON_SECONDARY;
+        /// Tertiary button (e.g. the middle mouse button)
+        const Tertiary = input_bindgen::AMOTION_EVENT_BUTTON_TERTIARY;
+        /// Back button
+        const Back = input_bindgen::AMOTION_EVENT_BUTTON_BACK;
+        /// Forward button
+        const Forward = input_bindgen::AMOTION_EVENT_BUTTON_FORWARD;
+        /// Primary stylus button
+        const StylusPrimary = input_bindgen::AMOTION_EVENT_BUTTON_STYLUS_PRIMARY;
+        /// Secondary stylus button
+        const StylusSecondary = input_bindgen::AMOTION_EVENT_BUTTON_STYLUS_SECONDARY;
+    }
+}
+
+bitflags! {
     /// MotionEvent flags.
     /// The source of truth for the flag definitions are the MotionEventFlag AIDL enum.
     /// The flag values are redefined here as a bitflags API.
@@ -219,6 +241,9 @@ bitflags! {
                 MotionEventFlag::PRIVATE_FLAG_SUPPORTS_DIRECTIONAL_ORIENTATION.0 as u32;
         /// FLAG_IS_ACCESSIBILITY_EVENT
         const IS_ACCESSIBILITY_EVENT = MotionEventFlag::IS_ACCESSIBILITY_EVENT.0 as u32;
+        /// FLAG_INJECTED_FROM_ACCESSIBILITY_TOOL
+        const INJECTED_FROM_ACCESSIBILITY_TOOL =
+                MotionEventFlag::INJECTED_FROM_ACCESSIBILITY_TOOL.0 as u32;
         /// FLAG_TAINTED
         const TAINTED = MotionEventFlag::TAINTED.0 as u32;
         /// FLAG_TARGET_ACCESSIBILITY_FOCUS
