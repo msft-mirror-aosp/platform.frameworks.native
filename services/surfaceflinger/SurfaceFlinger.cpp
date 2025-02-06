@@ -3459,13 +3459,7 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
     mTimeStats->setPresentFenceGlobal(pacesetterPresentFenceTime);
 
     for (auto&& [id, presentFence] : presentFences) {
-        ftl::FakeGuard guard(mStateLock);
-        const bool isInternalDisplay =
-                mPhysicalDisplays.get(id).transform(&PhysicalDisplay::isInternal).value_or(false);
-
-        if (isInternalDisplay) {
-            mScheduler->addPresentFence(id, std::move(presentFence));
-        }
+        mScheduler->addPresentFence(id, std::move(presentFence));
     }
 
     const bool hasPacesetterDisplay =
