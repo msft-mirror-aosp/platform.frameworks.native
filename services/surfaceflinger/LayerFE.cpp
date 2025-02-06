@@ -428,13 +428,12 @@ LayerFE::ReleaseFencePromiseStatus LayerFE::getReleaseFencePromiseStatus() {
     return mReleaseFencePromiseStatus;
 }
 
-void LayerFE::setHwcCompositionType(
-        aidl::android::hardware::graphics::composer3::Composition type) {
-    mLastHwcCompositionType = type;
+void LayerFE::setLastHwcState(const LayerFE::HwcLayerDebugState &state) {
+    mLastHwcState = state;
 }
 
-aidl::android::hardware::graphics::composer3::Composition LayerFE::getHwcCompositionType() const {
-    return mLastHwcCompositionType;
-}
+const LayerFE::HwcLayerDebugState& LayerFE::getLastHwcState() const {
+    return mLastHwcState;
+};
 
 } // namespace android
