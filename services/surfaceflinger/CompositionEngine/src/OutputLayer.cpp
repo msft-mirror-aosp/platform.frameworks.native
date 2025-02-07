@@ -619,7 +619,7 @@ void OutputLayer::writeLutToHWC(HWC2::Layer* hwcLayer,
                                           lutProperties[i].samplingKey)}});
         }
 
-        luts.pfd = ndk::ScopedFileDescriptor(dup(lutFileDescriptor.get()));
+        luts.pfd.set(dup(lutFileDescriptor.get()));
         luts.offsets = lutOffsets;
         luts.lutProperties = std::move(aidlProperties);
     }
@@ -1006,7 +1006,7 @@ void OutputLayer::applyDeviceLayerRequest(hal::LayerRequest request) {
 }
 
 void OutputLayer::applyDeviceLayerLut(
-        ndk::ScopedFileDescriptor lutFileDescriptor,
+        ::android::base::unique_fd lutFd,
         std::vector<std::pair<int, LutProperties>> lutOffsetsAndProperties) {
     auto& state = editState();
     LOG_FATAL_IF(!state.hwc);
@@ -1025,9 +1025,9 @@ void OutputLayer::applyDeviceLayerLut(
             samplingKeys.emplace_back(static_cast<int32_t>(properties.samplingKeys[0]));
         }
     }
-    hwcState.luts = std::make_shared<gui::DisplayLuts>(base::unique_fd(lutFileDescriptor.release()),
-                                                       std::move(offsets), std::move(dimensions),
-                                                       std::move(sizes), std::move(samplingKeys));
+    hwcState.luts = std::make_shared<gui::DisplayLuts>(std::move(lutFd), std::move(offsets),
+                                                       std::move(dimensions), std::move(sizes),
+                                                       std::move(samplingKeys));
 }
 
 bool OutputLayer::needsFiltering() const {
