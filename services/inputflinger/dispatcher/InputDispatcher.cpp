@@ -4072,13 +4072,17 @@ void InputDispatcher::synthesizeCancelationEventsForAllConnectionsLocked(
     // Generate cancellations for touched windows first. This is to avoid generating cancellations
     // through a non-touched window if there are more than one window for an input channel.
     if (cancelPointers) {
-        for (const auto& [displayId, touchState] : mTouchStates.mTouchStatesByDisplay) {
-            if (options.displayId.has_value() && options.displayId != displayId) {
-                continue;
-            }
-            for (const auto& touchedWindow : touchState.windows) {
-                synthesizeCancelationEventsForWindowLocked(touchedWindow.windowHandle, options);
-            }
+        if (options.displayId.has_value()) {
+            mTouchStates.forAllTouchedWindowsOnDisplay(
+                    options.displayId.value(), [&](const sp<gui::WindowInfoHandle>& windowHandle) {
+                        base::ScopedLockAssertion assumeLocked(mLock);
+                        synthesizeCancelationEventsForWindowLocked(windowHandle, options);
+                    });
+        } else {
+            mTouchStates.forAllTouchedWindows([&](const sp<gui::WindowInfoHandle>& windowHandle) {
+                base::ScopedLockAssertion assumeLocked(mLock);
+                synthesizeCancelationEventsForWindowLocked(windowHandle, options);
+            });
         }
     }
     // Follow up by generating cancellations for all windows, because we don't explicitly track
@@ -4276,13 +4280,13 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
               connection->getInputChannelName().c_str(), downEvents.size());
     }
 
-    const auto [_, touchedWindowState, displayId] =
-            findTouchStateWindowAndDisplay(connection->getToken(),
-                                           mTouchStates.mTouchStatesByDisplay);
-    if (touchedWindowState == nullptr) {
+    auto touchedWindowHandleAndDisplay =
+            mTouchStates.findTouchedWindowHandleAndDisplay(connection->getToken());
+    if (!touchedWindowHandleAndDisplay.has_value()) {
         LOG(FATAL) << __func__ << ": Touch state is out of sync: No touched window for token";
     }
-    const auto& windowHandle = touchedWindowState->windowHandle;
+
+    const auto [windowHandle, displayId] = touchedWindowHandleAndDisplay.value();
 
     const bool wasEmpty = connection->outboundQueue.empty();
     for (std::unique_ptr<EventEntry>& downEventEntry : downEvents) {
@@ -5796,34 +5800,6 @@ bool InputDispatcher::recentWindowsAreOwnedByLocked(gui::Pid pid, gui::Uid uid) 
 void InputDispatcher::setMaximumObscuringOpacityForTouch(float opacity) {
     std::scoped_lock lock(mLock);
     mWindowInfos.setMaximumObscuringOpacityForTouch(opacity);
-}
-
-std::tuple<const TouchState*, const TouchedWindow*, ui::LogicalDisplayId>
-InputDispatcher::findTouchStateWindowAndDisplay(
-        const sp<IBinder>& token,
-        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
-    for (auto& [displayId, state] : touchStatesByDisplay) {
-        for (const TouchedWindow& w : state.windows) {
-            if (w.windowHandle->getToken() == token) {
-                return std::make_tuple(&state, &w, displayId);
-            }
-        }
-    }
-    return std::make_tuple(nullptr, nullptr, ui::LogicalDisplayId::DEFAULT);
-}
-
-std::tuple<TouchState*, TouchedWindow*, ui::LogicalDisplayId>
-InputDispatcher::findTouchStateWindowAndDisplay(
-        const sp<IBinder>& token,
-        std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) {
-    auto [constTouchState, constTouchedWindow, displayId] = InputDispatcher::
-            findTouchStateWindowAndDisplay(token,
-                                           const_cast<const std::unordered_map<ui::LogicalDisplayId,
-                                                                               TouchState>&>(
-                                                   touchStatesByDisplay));
-
-    return std::make_tuple(const_cast<TouchState*>(constTouchState),
-                           const_cast<TouchedWindow*>(constTouchedWindow), displayId);
 }
 
 bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
@@ -7490,6 +7466,40 @@ bool InputDispatcher::DispatcherTouchState::isPointerInWindow(const sp<android::
         }
     }
     return false;
+}
+
+std::optional<std::tuple<const sp<gui::WindowInfoHandle>&, ui::LogicalDisplayId>>
+InputDispatcher::DispatcherTouchState::findTouchedWindowHandleAndDisplay(
+        const sp<android::IBinder>& token) const {
+    for (const auto& [displayId, state] : mTouchStatesByDisplay) {
+        for (const TouchedWindow& w : state.windows) {
+            if (w.windowHandle->getToken() == token) {
+                return std::make_tuple(std::ref(w.windowHandle), displayId);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+void InputDispatcher::DispatcherTouchState::forAllTouchedWindows(
+        std::function<void(const sp<gui::WindowInfoHandle>&)> f) const {
+    for (const auto& [_, state] : mTouchStatesByDisplay) {
+        for (const TouchedWindow& window : state.windows) {
+            f(window.windowHandle);
+        }
+    }
+}
+
+void InputDispatcher::DispatcherTouchState::forAllTouchedWindowsOnDisplay(
+        ui::LogicalDisplayId displayId,
+        std::function<void(const sp<gui::WindowInfoHandle>&)> f) const {
+    const auto touchStateIt = mTouchStatesByDisplay.find(displayId);
+    if (touchStateIt == mTouchStatesByDisplay.end()) {
+        return;
+    }
+    for (const TouchedWindow& window : touchStateIt->second.windows) {
+        f(window.windowHandle);
+    }
 }
 
 std::string InputDispatcher::DispatcherTouchState::dump() const {

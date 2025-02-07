@@ -1163,8 +1163,8 @@ status_t SurfaceFlinger::getStaticDisplayInfo(int64_t displayId, ui::StaticDispl
     }
 
     Mutex::Autolock lock(mStateLock);
-    const auto id = DisplayId::fromValue<PhysicalDisplayId>(static_cast<uint64_t>(displayId));
-    const auto displayOpt = mPhysicalDisplays.get(*id).and_then(getDisplayDeviceAndSnapshot());
+    const PhysicalDisplayId id = PhysicalDisplayId::fromValue(static_cast<uint64_t>(displayId));
+    const auto displayOpt = mPhysicalDisplays.get(id).and_then(getDisplayDeviceAndSnapshot());
 
     if (!displayOpt) {
         return NAME_NOT_FOUND;
@@ -1286,9 +1286,9 @@ status_t SurfaceFlinger::getDynamicDisplayInfoFromId(int64_t physicalDisplayId,
 
     Mutex::Autolock lock(mStateLock);
 
-    const auto id_ =
-            DisplayId::fromValue<PhysicalDisplayId>(static_cast<uint64_t>(physicalDisplayId));
-    const auto displayOpt = mPhysicalDisplays.get(*id_).and_then(getDisplayDeviceAndSnapshot());
+    const PhysicalDisplayId id =
+            PhysicalDisplayId::fromValue(static_cast<uint64_t>(physicalDisplayId));
+    const auto displayOpt = mPhysicalDisplays.get(id).and_then(getDisplayDeviceAndSnapshot());
 
     if (!displayOpt) {
         return NAME_NOT_FOUND;
@@ -2977,6 +2977,8 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     int index = 0;
     ftl::StaticVector<char, WorkloadTracer::COMPOSITION_SUMMARY_SIZE> compositionSummary;
     auto lastLayerStack = ui::INVALID_LAYER_STACK;
+
+    uint64_t prevOverrideBufferId = 0;
     for (auto& [layer, layerFE] : layers) {
         CompositionResult compositionResult{layerFE->stealCompositionResult()};
         if (lastLayerStack != layerFE->mSnapshot->outputFilter.layerStack) {
@@ -2986,8 +2988,37 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
             }
             lastLayerStack = layerFE->mSnapshot->outputFilter.layerStack;
         }
+
+        // If there are N layers in a cached set they should all share the same buffer id.
+        // The first layer in the cached set will be not skipped and layers 1..N-1 will be skipped.
+        // We expect all layers in the cached set to be marked as composited by HWC.
+        // Here is a made up example of how it is visualized
+        //
+        //      [b:rrc][s:cc]
+        //
+        // This should be interpreted to mean that there are 2 cached sets.
+        // So there are only 2 non skipped layers -- b and s.
+        // The layers rrc and cc are flattened into layers b and s respectively.
+        const LayerFE::HwcLayerDebugState &hwcState = layerFE->getLastHwcState();
+        if (hwcState.overrideBufferId != prevOverrideBufferId) {
+            // End the existing run.
+            if (prevOverrideBufferId) {
+                compositionSummary.push_back(']');
+            }
+            // Start a new run.
+            if (hwcState.overrideBufferId) {
+                compositionSummary.push_back('[');
+            }
+        }
+
         compositionSummary.push_back(
-                layerFE->mSnapshot->classifyCompositionForDebug(layerFE->getHwcCompositionType()));
+                layerFE->mSnapshot->classifyCompositionForDebug(hwcState));
+
+        if (hwcState.overrideBufferId && !hwcState.wasSkipped) {
+                compositionSummary.push_back(':');
+        }
+        prevOverrideBufferId = hwcState.overrideBufferId;
+
         if (layerFE->mSnapshot->hasEffect()) {
             compositedWorkload |= adpf::Workload::EFFECTS;
         }
@@ -2998,6 +3029,10 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         if (com_android_graphics_libgui_flags_apply_picture_profiles()) {
             mActivePictureTracker.onLayerComposed(*layer, *layerFE, compositionResult);
         }
+    }
+    // End the last run.
+    if (prevOverrideBufferId) {
+        compositionSummary.push_back(']');
     }
 
     // Concisely describe the layers composited this frame using single chars. GPU composited layers
@@ -6731,8 +6766,9 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                         return getDefaultDisplayDevice()->getDisplayToken().promote();
                     }
 
-                    if (const auto id = DisplayId::fromValue<PhysicalDisplayId>(value)) {
-                        return getPhysicalDisplayToken(*id);
+                    if (const auto token =
+                                getPhysicalDisplayToken(PhysicalDisplayId::fromValue(value))) {
+                        return token;
                     }
 
                     ALOGE("Invalid physical display ID");
@@ -6830,10 +6866,10 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
             case 1040: {
                 auto future = mScheduler->schedule([&] {
                     n = data.readInt32();
-                    std::optional<PhysicalDisplayId> inputId = std::nullopt;
+                    PhysicalDisplayId inputId;
                     if (uint64_t inputDisplayId; data.readUint64(&inputDisplayId) == NO_ERROR) {
-                        inputId = DisplayId::fromValue<PhysicalDisplayId>(inputDisplayId);
-                        if (!inputId || getPhysicalDisplayToken(*inputId)) {
+                        inputId = PhysicalDisplayId::fromValue(inputDisplayId);
+                        if (!getPhysicalDisplayToken(inputId)) {
                             ALOGE("No display with id: %" PRIu64, inputDisplayId);
                             return NAME_NOT_FOUND;
                         }
@@ -6842,7 +6878,7 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                         Mutex::Autolock lock(mStateLock);
                         mLayerCachingEnabled = n != 0;
                         for (const auto& [_, display] : mDisplays) {
-                            if (!inputId || *inputId == display->getPhysicalId()) {
+                            if (inputId == display->getPhysicalId()) {
                                 display->enableLayerCaching(mLayerCachingEnabled);
                             }
                         }
@@ -6925,11 +6961,10 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                         int64_t arg1 = data.readInt64();
                         int64_t arg2 = data.readInt64();
                         // Enable mirroring for one display
-                        const auto display1id = DisplayId::fromValue(arg1);
                         auto mirrorRoot = SurfaceComposerClient::getDefault()->mirrorDisplay(
-                                display1id.value());
-                        auto id2 = DisplayId::fromValue<PhysicalDisplayId>(arg2);
-                        const auto token2 = getPhysicalDisplayToken(*id2);
+                                DisplayId::fromValue(arg1));
+                        const auto token2 =
+                                getPhysicalDisplayToken(PhysicalDisplayId::fromValue(arg2));
                         ui::LayerStack layerStack;
                         {
                             Mutex::Autolock lock(mStateLock);
@@ -8714,8 +8749,8 @@ binder::Status SurfaceComposerAIDL::getPhysicalDisplayToken(int64_t displayId,
     if (status != OK) {
         return binderStatusFromStatusT(status);
     }
-    const auto id = DisplayId::fromValue<PhysicalDisplayId>(static_cast<uint64_t>(displayId));
-    *outDisplay = mFlinger->getPhysicalDisplayToken(*id);
+    const PhysicalDisplayId id = PhysicalDisplayId::fromValue(static_cast<uint64_t>(displayId));
+    *outDisplay = mFlinger->getPhysicalDisplayToken(id);
     return binder::Status::ok();
 }
 
