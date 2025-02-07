@@ -20,6 +20,7 @@
 #include <optional>
 #include <queue>
 
+#include <ftl/small_map.h>
 #include <gui/BufferItem.h>
 #include <gui/BufferItemConsumer.h>
 #include <gui/IGraphicBufferConsumer.h>
@@ -35,6 +36,10 @@
 #include <com_android_graphics_libgui_flags.h>
 
 namespace android {
+
+// Sizes determined empirically to avoid allocations during common activity.
+constexpr size_t kSubmittedBuffersMapSizeHint = 8;
+constexpr size_t kDequeueTimestampsMapSizeHint = 32;
 
 class BLASTBufferQueue;
 class BufferItemConsumer;
@@ -206,7 +211,7 @@ private:
 
     // Keep a reference to the submitted buffers so we can release when surfaceflinger drops the
     // buffer or the buffer has been presented and a new buffer is ready to be presented.
-    std::unordered_map<ReleaseCallbackId, BufferItem, ReleaseBufferCallbackIdHash> mSubmitted
+    ftl::SmallMap<ReleaseCallbackId, BufferItem, kSubmittedBuffersMapSizeHint> mSubmitted
             GUARDED_BY(mMutex);
 
     // Keep a queue of the released buffers instead of immediately releasing
@@ -291,8 +296,8 @@ private:
     std::mutex mTimestampMutex;
     // Tracks buffer dequeue times by the client. This info is sent to SurfaceFlinger which uses
     // it for debugging purposes.
-    std::unordered_map<uint64_t /* bufferId */, nsecs_t> mDequeueTimestamps
-            GUARDED_BY(mTimestampMutex);
+    ftl::SmallMap<uint64_t /* bufferId */, nsecs_t, kDequeueTimestampsMapSizeHint>
+            mDequeueTimestamps GUARDED_BY(mTimestampMutex);
 
     // Keep track of SurfaceControls that have submitted a transaction and BBQ is waiting on a
     // callback for them.
