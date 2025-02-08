@@ -798,20 +798,6 @@ bool shouldSplitTouch(int32_t source) {
     return !isFromSource(source, AINPUT_SOURCE_MOUSE);
 }
 
-/**
- * Return true if stylus is currently down anywhere on the specified display, and false otherwise.
- */
-bool isStylusActiveInDisplay(ui::LogicalDisplayId displayId,
-                             const std::unordered_map<ui::LogicalDisplayId /*displayId*/,
-                                                      TouchState>& touchStatesByDisplay) {
-    const auto it = touchStatesByDisplay.find(displayId);
-    if (it == touchStatesByDisplay.end()) {
-        return false;
-    }
-    const TouchState& state = it->second;
-    return state.hasActiveStylus();
-}
-
 Result<void> validateWindowInfosUpdate(const gui::WindowInfosUpdate& update) {
     std::unordered_set<int32_t> windowIds;
     for (const WindowInfo& info : update.windowInfos) {
@@ -1350,9 +1336,8 @@ bool InputDispatcher::shouldPruneInboundQueueLocked(const MotionEntry& motionEnt
 
         // Alternatively, maybe there's a spy window that could handle this event.
         const std::vector<sp<WindowInfoHandle>> touchedSpies =
-                mWindowInfos.findTouchedSpyWindowsAt(displayId, x, y, isStylus,
-                                                     motionEntry.deviceId,
-                                                     mTouchStates.mTouchStatesByDisplay);
+                findTouchedSpyWindowsAt(displayId, x, y, isStylus, motionEntry.deviceId,
+                                        mWindowInfos);
         for (const auto& windowHandle : touchedSpies) {
             const std::shared_ptr<Connection> connection =
                     mConnectionManager.getConnection(windowHandle->getToken());
@@ -1510,16 +1495,16 @@ std::vector<InputTarget> InputDispatcher::DispatcherTouchState::findOutsideTarge
     return outsideTargets;
 }
 
-std::vector<sp<WindowInfoHandle>> InputDispatcher::DispatcherWindowInfo::findTouchedSpyWindowsAt(
+std::vector<sp<WindowInfoHandle>> InputDispatcher::findTouchedSpyWindowsAt(
         ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId,
-        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay) const {
+        const DispatcherWindowInfo& windowInfos) {
     // Traverse windows from front to back and gather the touched spy windows.
     std::vector<sp<WindowInfoHandle>> spyWindows;
-    const auto& windowHandles = getWindowHandlesForDisplay(displayId);
+    const ui::Transform displayTransform = windowInfos.getDisplayTransform(displayId);
+    const auto& windowHandles = windowInfos.getWindowHandlesForDisplay(displayId);
     for (const sp<WindowInfoHandle>& windowHandle : windowHandles) {
         const WindowInfo& info = *windowHandle->getInfo();
-        if (!windowAcceptsTouchAt(info, displayId, x, y, isStylus,
-                                  getDisplayTransform(displayId))) {
+        if (!windowAcceptsTouchAt(info, displayId, x, y, isStylus, displayTransform)) {
             // Skip if the pointer is outside of the window.
             continue;
         }
@@ -2480,8 +2465,7 @@ InputDispatcher::DispatcherTouchState::findTouchedWindowTargets(
         }
 
         std::vector<sp<WindowInfoHandle>> newTouchedWindows =
-                windowInfos.findTouchedSpyWindowsAt(displayId, x, y, isStylus, entry.deviceId,
-                                                    mTouchStatesByDisplay);
+                findTouchedSpyWindowsAt(displayId, x, y, isStylus, entry.deviceId, windowInfos);
         if (newTouchedWindowHandle != nullptr) {
             // Process the foreground window first so that it is the first to receive the event.
             newTouchedWindows.insert(newTouchedWindows.begin(), newTouchedWindowHandle);
@@ -2494,8 +2478,7 @@ InputDispatcher::DispatcherTouchState::findTouchedWindowTargets(
         }
 
         for (const sp<WindowInfoHandle>& windowHandle : newTouchedWindows) {
-            if (!canWindowReceiveMotion(windowHandle, entry, connections, windowInfos,
-                                        mTouchStatesByDisplay)) {
+            if (!canWindowReceiveMotion(windowHandle, entry, connections, windowInfos)) {
                 continue;
             }
 
@@ -2618,8 +2601,7 @@ InputDispatcher::DispatcherTouchState::findTouchedWindowTargets(
 
             // Do not slide events to the window which can not receive motion event
             if (newTouchedWindowHandle != nullptr &&
-                !canWindowReceiveMotion(newTouchedWindowHandle, entry, connections, windowInfos,
-                                        mTouchStatesByDisplay)) {
+                !canWindowReceiveMotion(newTouchedWindowHandle, entry, connections, windowInfos)) {
                 newTouchedWindowHandle = nullptr;
             }
 
@@ -5277,11 +5259,10 @@ std::string InputDispatcher::DispatcherWindowInfo::dumpDisplayAndWindowInfo() co
     return dump;
 }
 
-bool InputDispatcher::canWindowReceiveMotion(
+bool InputDispatcher::DispatcherTouchState::canWindowReceiveMotion(
         const sp<android::gui::WindowInfoHandle>& window,
         const android::inputdispatcher::MotionEntry& motionEntry,
-        const ConnectionManager& connections, const DispatcherWindowInfo& windowInfos,
-        const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStates) {
+        const ConnectionManager& connections, const DispatcherWindowInfo& windowInfos) const {
     const WindowInfo& info = *window->getInfo();
 
     // Skip spy window targets that are not valid for targeted injection.
@@ -5335,7 +5316,7 @@ bool InputDispatcher::canWindowReceiveMotion(
 
     // Ignore touches if stylus is down anywhere on screen
     if (info.inputConfig.test(WindowInfo::InputConfig::GLOBAL_STYLUS_BLOCKS_TOUCH) &&
-        isStylusActiveInDisplay(info.displayId, touchStates)) {
+        isStylusActiveInDisplay(info.displayId)) {
         LOG(INFO) << "Dropping touch from " << window->getName() << " because stylus is active";
         return false;
     }
@@ -7537,6 +7518,16 @@ InputDispatcher::DispatcherTouchState::findTouchStateWindowAndDisplay(
         }
     }
     return std::nullopt;
+}
+
+bool InputDispatcher::DispatcherTouchState::isStylusActiveInDisplay(
+        ui::LogicalDisplayId displayId) const {
+    const auto it = mTouchStatesByDisplay.find(displayId);
+    if (it == mTouchStatesByDisplay.end()) {
+        return false;
+    }
+    const TouchState& state = it->second;
+    return state.hasActiveStylus();
 }
 
 } // namespace android::inputdispatcher

@@ -319,11 +319,6 @@ private:
                 ui::LogicalDisplayId displayId, float x, float y, bool isStylus = false,
                 const sp<android::gui::WindowInfoHandle> ignoreWindow = nullptr) const;
 
-        std::vector<sp<android::gui::WindowInfoHandle>> findTouchedSpyWindowsAt(
-                ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId,
-                const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStatesByDisplay)
-                const;
-
         TouchOcclusionInfo computeTouchOcclusionInfo(
                 const sp<android::gui::WindowInfoHandle>& windowHandle, float x, float y) const;
 
@@ -425,9 +420,9 @@ private:
 
         void clear();
 
+    private:
         std::unordered_map<ui::LogicalDisplayId, TouchState> mTouchStatesByDisplay;
 
-    private:
         std::optional<std::tuple<TouchState&, TouchedWindow&, ui::LogicalDisplayId>>
         findTouchStateWindowAndDisplay(const sp<IBinder>& token);
 
@@ -438,6 +433,15 @@ private:
                 ftl::Flags<InputTarget::Flags> oldTargetFlags,
                 ftl::Flags<InputTarget::Flags> newTargetFlags,
                 const DispatcherWindowInfo& windowInfos, const ConnectionManager& connections);
+
+        bool canWindowReceiveMotion(const sp<android::gui::WindowInfoHandle>& window,
+                                    const MotionEntry& motionEntry,
+                                    const ConnectionManager& connections,
+                                    const DispatcherWindowInfo& windowInfos) const;
+
+        // Return true if stylus is currently down anywhere on the specified display,
+        // and false otherwise.
+        bool isStylusActiveInDisplay(ui::LogicalDisplayId displayId) const;
 
         static std::list<CancellationArgs> eraseRemovedWindowsFromWindowInfo(
                 TouchState& state, ui::LogicalDisplayId displayId,
@@ -593,11 +597,6 @@ private:
 
     sp<android::gui::WindowInfoHandle> getFocusedWindowHandleLocked(
             ui::LogicalDisplayId displayId) const REQUIRES(mLock);
-
-    static bool canWindowReceiveMotion(
-            const sp<android::gui::WindowInfoHandle>& window, const MotionEntry& motionEntry,
-            const ConnectionManager& connections, const DispatcherWindowInfo& windowInfos,
-            const std::unordered_map<ui::LogicalDisplayId, TouchState>& touchStates);
 
     // Returns all the input targets (with their respective input channels) from the window handles
     // passed as argument.
@@ -767,6 +766,10 @@ private:
 
     std::string getApplicationWindowLabel(const InputApplicationHandle* applicationHandle,
                                           const sp<android::gui::WindowInfoHandle>& windowHandle);
+
+    static std::vector<sp<android::gui::WindowInfoHandle>> findTouchedSpyWindowsAt(
+            ui::LogicalDisplayId displayId, float x, float y, bool isStylus, DeviceId deviceId,
+            const DispatcherWindowInfo& windowInfos);
 
     static bool shouldDropInput(const EventEntry& entry,
                                 const sp<android::gui::WindowInfoHandle>& windowHandle,
