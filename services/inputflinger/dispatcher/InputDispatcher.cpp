@@ -5806,7 +5806,7 @@ bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const s
             return false;
         }
 
-        const auto [toWindowHandle, deviceId, pointers, cancellations, pointerDowns] =
+        const auto& [toWindowHandle, deviceId, pointers, cancellations, pointerDowns] =
                 result.value();
 
         for (const auto& cancellationArgs : cancellations) {
@@ -6252,14 +6252,14 @@ status_t InputDispatcher::pilferPointersLocked(const sp<IBinder>& token) {
         return BAD_VALUE;
     }
 
-    ScopedSyntheticEventTracer traceContext(mTracer);
-    CancelationOptions options(CancelationOptions::Mode::CANCEL_POINTER_EVENTS,
-                               "input channel stole pointer stream", traceContext.getTracker());
     const auto result = mTouchStates.pilferPointers(token, *requestingConnection);
     if (!result.ok()) {
         return result.error().code();
     }
 
+    ScopedSyntheticEventTracer traceContext(mTracer);
+    CancelationOptions options(CancelationOptions::Mode::CANCEL_POINTER_EVENTS,
+                               "input channel stole pointer stream", traceContext.getTracker());
     const auto cancellations = *result;
     for (const auto& cancellationArgs : cancellations) {
         LOG_ALWAYS_FATAL_IF(cancellationArgs.mode !=
