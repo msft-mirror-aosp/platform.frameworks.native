@@ -23,6 +23,7 @@
 #if defined(__ANDROID__)
 #include <gui/SurfaceComposerClient.h>
 #endif
+#include <input/InputFlags.h>
 #include <input/Keyboard.h>
 #include <input/PrintTools.h>
 #include <unordered_set>
@@ -328,7 +329,7 @@ void PointerChoreographer::processPointerDeviceMotionEventLocked(NotifyMotionArg
             filterPointerMotionForAccessibilityLocked(pc.getPosition(), vec2{deltaX, deltaY},
                                                       newArgs.displayId);
     vec2 unconsumedDelta = pc.move(filteredDelta.x, filteredDelta.y);
-    if (com::android::input::flags::connected_displays_cursor() &&
+    if (InputFlags::connectedDisplaysCursorEnabled() &&
         (std::abs(unconsumedDelta.x) > 0 || std::abs(unconsumedDelta.y) > 0)) {
         handleUnconsumedDeltaLocked(pc, unconsumedDelta);
         // pointer may have moved to a different viewport
