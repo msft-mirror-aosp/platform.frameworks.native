@@ -260,6 +260,7 @@ struct DisplayDeviceState {
     struct Physical {
         PhysicalDisplayId id;
         hardware::graphics::composer::hal::HWDisplayId hwcDisplayId;
+        uint8_t port;
         DisplayModePtr activeMode;
 
         bool operator==(const Physical& other) const {
