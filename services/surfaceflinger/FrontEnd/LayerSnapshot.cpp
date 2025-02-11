@@ -544,7 +544,7 @@ char LayerSnapshot::classifyCompositionForDebug(
         case Composition::INVALID:
             return 'i';
         case Composition::SOLID_COLOR:
-            return 'c';
+            return 'e';
         case Composition::CURSOR:
             return 'u';
         case Composition::SIDEBAND:
@@ -552,7 +552,7 @@ char LayerSnapshot::classifyCompositionForDebug(
         case Composition::DISPLAY_DECORATION:
             return 'a';
         case Composition::REFRESH_RATE_INDICATOR:
-            return 'r';
+            return 'f';
         case Composition::CLIENT:
         case Composition::DEVICE:
             break;
