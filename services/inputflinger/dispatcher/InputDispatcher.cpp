@@ -1141,7 +1141,7 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t& nextWakeupTime) {
 
     // If dispatching is frozen, do not process timeouts or try to deliver any new events.
     if (mDispatchFrozen) {
-        LOG_IF(DEBUG, DEBUG_FOCUS) << "Dispatch frozen.  Waiting some more.";
+        LOG_IF(INFO, DEBUG_FOCUS) << "Dispatch frozen.  Waiting some more.";
         return;
     }
 
@@ -1519,8 +1519,7 @@ void InputDispatcher::dropInboundEventLocked(const EventEntry& entry, DropReason
     const char* reason;
     switch (dropReason) {
         case DropReason::POLICY:
-            LOG_IF(DEBUG, debugInboundEventDetails())
-                    << "Dropped event because policy consumed it.";
+            LOG_IF(INFO, debugInboundEventDetails()) << "Dropped event because policy consumed it.";
             reason = "inbound event was dropped because the policy consumed it";
             break;
         case DropReason::DISABLED:
@@ -1634,7 +1633,7 @@ void InputDispatcher::releasePendingEventLocked() {
 void InputDispatcher::releaseInboundEventLocked(std::shared_ptr<const EventEntry> entry) {
     const std::shared_ptr<InjectionState>& injectionState = entry->injectionState;
     if (injectionState && injectionState->injectionResult == InputEventInjectionResult::PENDING) {
-        LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE) << "Injected inbound event was dropped.";
+        LOG_IF(INFO, DEBUG_DISPATCH_CYCLE) << "Injected inbound event was dropped.";
         setInjectionResult(*entry, InputEventInjectionResult::FAILED);
     }
     if (entry == mNextUnblockedEvent) {
@@ -1674,7 +1673,7 @@ std::shared_ptr<KeyEntry> InputDispatcher::synthesizeKeyRepeatLocked(nsecs_t cur
 
 bool InputDispatcher::dispatchDeviceResetLocked(nsecs_t currentTime,
                                                 const DeviceResetEntry& entry) {
-    LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+    LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
             << "dispatchDeviceReset - eventTime=" << entry.eventTime
             << ", deviceId=" << entry.deviceId;
 
@@ -1868,7 +1867,7 @@ bool InputDispatcher::dispatchKeyLocked(nsecs_t currentTime, std::shared_ptr<con
         } else if (entry->action == AKEY_EVENT_ACTION_UP && mKeyRepeatState.lastKeyEntry &&
                    mKeyRepeatState.lastKeyEntry->deviceId != entry->deviceId) {
             // The key on device 'deviceId' is still down, do not stop key repeat
-            LOG_IF(DEBUG, debugInboundEventDetails())
+            LOG_IF(INFO, debugInboundEventDetails())
                     << "deviceId=" << entry->deviceId << " got KEY_UP as stale";
         } else if (!entry->syntheticRepeat) {
             resetKeyRepeatLocked();
@@ -1966,7 +1965,7 @@ bool InputDispatcher::dispatchKeyLocked(nsecs_t currentTime, std::shared_ptr<con
 }
 
 void InputDispatcher::logOutboundKeyDetails(const char* prefix, const KeyEntry& entry) {
-    LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+    LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
             << prefix << "eventTime=" << entry.eventTime << ", deviceId=" << entry.deviceId
             << ", source=0x" << std::hex << entry.source
             << ", displayId=" << entry.displayId.toString() << ", policyFlags=0x"
@@ -1979,7 +1978,7 @@ void InputDispatcher::logOutboundKeyDetails(const char* prefix, const KeyEntry& 
 void InputDispatcher::dispatchSensorLocked(nsecs_t currentTime,
                                            const std::shared_ptr<const SensorEntry>& entry,
                                            DropReason* dropReason, nsecs_t& nextWakeupTime) {
-    LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+    LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
             << "notifySensorEvent eventTime=" << entry->eventTime
             << ", hwTimestamp=" << entry->hwTimestamp << ", deviceId=" << entry->deviceId
             << ", source=0x" << std::hex << entry->source << std::dec
@@ -1997,7 +1996,7 @@ void InputDispatcher::dispatchSensorLocked(nsecs_t currentTime,
 }
 
 bool InputDispatcher::flushSensor(int deviceId, InputDeviceSensorType sensorType) {
-    LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+    LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
             << "flushSensor deviceId=" << deviceId
             << ", sensorType=" << ftl::enum_string(sensorType).c_str();
     { // acquire lock
@@ -2169,7 +2168,7 @@ void InputDispatcher::dispatchEventLocked(nsecs_t currentTime,
                                           std::shared_ptr<const EventEntry> eventEntry,
                                           const std::vector<InputTarget>& inputTargets) {
     ATRACE_CALL();
-    LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE) << "dispatchEventToCurrentInputTargets";
+    LOG_IF(INFO, DEBUG_DISPATCH_CYCLE) << "dispatchEventToCurrentInputTargets";
 
     processInteractionsLocked(*eventEntry, inputTargets);
 
@@ -2212,7 +2211,7 @@ void InputDispatcher::cancelEventsForAnrLocked(const std::shared_ptr<Connection>
 }
 
 void InputDispatcher::resetNoFocusedWindowTimeoutLocked() {
-    LOG_IF(DEBUG, DEBUG_FOCUS) << "Resetting ANR timeouts.";
+    LOG_IF(INFO, DEBUG_FOCUS) << "Resetting ANR timeouts.";
 
     // Reset input target wait timeout.
     mNoFocusedWindowTimeoutTime = std::nullopt;
@@ -3229,7 +3228,7 @@ void InputDispatcher::pokeUserActivityLocked(const EventEntry& eventEntry) {
                 return;
             }
             if (windowDisablingUserActivityInfo != nullptr) {
-                LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE)
+                LOG_IF(INFO, DEBUG_DISPATCH_CYCLE)
                         << "Not poking user activity: disabled by window '"
                         << windowDisablingUserActivityInfo->name << "'.";
                 return;
@@ -3245,7 +3244,7 @@ void InputDispatcher::pokeUserActivityLocked(const EventEntry& eventEntry) {
             // the apps, like system shortcuts
             if (windowDisablingUserActivityInfo != nullptr &&
                 keyEntry.interceptKeyResult != KeyEntry::InterceptKeyResult::SKIP) {
-                LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE)
+                LOG_IF(INFO, DEBUG_DISPATCH_CYCLE)
                         << "Not poking user activity: disabled by window '"
                         << windowDisablingUserActivityInfo->name << "'.";
                 return;
@@ -3275,7 +3274,7 @@ void InputDispatcher::prepareDispatchCycleLocked(nsecs_t currentTime,
     ATRACE_NAME_IF(ATRACE_ENABLED(),
                    StringPrintf("prepareDispatchCycleLocked(inputChannel=%s, id=0x%" PRIx32 ")",
                                 connection->getInputChannelName().c_str(), eventEntry->id));
-    LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE)
+    LOG_IF(INFO, DEBUG_DISPATCH_CYCLE)
             << "channel '" << connection->getInputChannelName()
             << "' ~ prepareDispatchCycle - flags=" << inputTarget.flags.string()
             << ", globalScaleFactor=" << inputTarget.globalScaleFactor
@@ -3285,9 +3284,9 @@ void InputDispatcher::prepareDispatchCycleLocked(nsecs_t currentTime,
     // Skip this event if the connection status is not normal.
     // We don't want to enqueue additional outbound events if the connection is broken.
     if (connection->status != Connection::Status::NORMAL) {
-        LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE) << "channel '" << connection->getInputChannelName()
-                                            << "' ~ Dropping event because the channel status is "
-                                            << ftl::enum_string(connection->status);
+        LOG_IF(INFO, DEBUG_DISPATCH_CYCLE) << "channel '" << connection->getInputChannelName()
+                                           << "' ~ Dropping event because the channel status is "
+                                           << ftl::enum_string(connection->status);
         return;
     }
 
@@ -3406,7 +3405,7 @@ void InputDispatcher::enqueueDispatchEntryLocked(const std::shared_ptr<Connectio
                 if (resolvedAction == AMOTION_EVENT_ACTION_HOVER_MOVE &&
                     !connection->inputState.isHovering(motionEntry.deviceId, motionEntry.source,
                                                        motionEntry.displayId)) {
-                    LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE)
+                    LOG_IF(INFO, DEBUG_DISPATCH_CYCLE)
                             << "channel '" << connection->getInputChannelName().c_str()
                             << "' ~ enqueueDispatchEntryLocked: filling in missing hover enter "
                                "event";
@@ -3703,7 +3702,7 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
     ATRACE_NAME_IF(ATRACE_ENABLED(),
                    StringPrintf("startDispatchCycleLocked(inputChannel=%s)",
                                 connection->getInputChannelName().c_str()));
-    LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE)
+    LOG_IF(INFO, DEBUG_DISPATCH_CYCLE)
             << "channel '" << connection->getInputChannelName() << "' ~ startDispatchCycle";
 
     while (connection->status == Connection::Status::NORMAL && !connection->outboundQueue.empty()) {
@@ -3815,7 +3814,7 @@ void InputDispatcher::startDispatchCycleLocked(nsecs_t currentTime,
                 } else {
                     // Pipe is full and we are waiting for the app to finish process some events
                     // before sending more events to it.
-                    LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE)
+                    LOG_IF(INFO, DEBUG_DISPATCH_CYCLE)
                             << "channel '" << connection->getInputChannelName()
                             << "' ~ Could not publish event because the pipe is full, waiting for "
                                "the application to catch up";
@@ -3884,7 +3883,7 @@ const std::array<uint8_t, 32> InputDispatcher::getSignature(
 void InputDispatcher::finishDispatchCycleLocked(nsecs_t currentTime,
                                                 const std::shared_ptr<Connection>& connection,
                                                 uint32_t seq, bool handled, nsecs_t consumeTime) {
-    LOG_IF(DEBUG, DEBUG_DISPATCH_CYCLE)
+    LOG_IF(INFO, DEBUG_DISPATCH_CYCLE)
             << "channel '" << connection->getInputChannelName()
             << "' ~ finishDispatchCycle - seq=" << seq << ", handled=" << toString(handled);
 
@@ -4108,7 +4107,7 @@ void InputDispatcher::synthesizeCancelationEventsForConnectionLocked(
         return;
     }
 
-    LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+    LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
             << "channel '" << connection->getInputChannelName() << "' ~ Synthesized "
             << cancelationEvents.size()
             << " cancelation events to bring channel back in sync with reality: " << options.reason
@@ -4229,7 +4228,7 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
         return;
     }
 
-    LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+    LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
             << "channel '" << connection->getInputChannelName() << "' ~ Synthesized "
             << downEvents.size() << " down events to ensure consistent event stream.";
 
@@ -4371,7 +4370,7 @@ void InputDispatcher::notifyInputDevicesChanged(const NotifyInputDevicesChangedA
 }
 
 void InputDispatcher::notifyKey(const NotifyKeyArgs& args) {
-    LOG_IF(DEBUG, debugInboundEventDetails())
+    LOG_IF(INFO, debugInboundEventDetails())
             << "notifyKey - id=" << args.id << ", eventTime=" << args.eventTime
             << ", deviceId=" << args.deviceId
             << ", source=" << inputEventSourceToString(args.source)
@@ -4589,7 +4588,7 @@ void InputDispatcher::notifyMotion(const NotifyMotionArgs& args) {
 }
 
 void InputDispatcher::notifySensor(const NotifySensorArgs& args) {
-    LOG_IF(DEBUG, debugInboundEventDetails())
+    LOG_IF(INFO, debugInboundEventDetails())
             << "notifySensor - id=" << args.id << " eventTime=" << args.eventTime
             << ", deviceId=" << args.deviceId << ", source=0x" << std::hex << args.source
             << std::dec << ", sensorType=" << ftl::enum_string(args.sensorType);
@@ -4614,7 +4613,7 @@ void InputDispatcher::notifySensor(const NotifySensorArgs& args) {
 }
 
 void InputDispatcher::notifyVibratorState(const NotifyVibratorStateArgs& args) {
-    LOG_IF(DEBUG, debugInboundEventDetails())
+    LOG_IF(INFO, debugInboundEventDetails())
             << "notifyVibratorState - eventTime=" << args.eventTime << ", device=" << args.deviceId
             << ", isOn=" << args.isOn;
     mPolicy.notifyVibratorState(args.deviceId, args.isOn);
@@ -4625,7 +4624,7 @@ bool InputDispatcher::shouldSendMotionToInputFilterLocked(const NotifyMotionArgs
 }
 
 void InputDispatcher::notifySwitch(const NotifySwitchArgs& args) {
-    LOG_IF(DEBUG, debugInboundEventDetails())
+    LOG_IF(INFO, debugInboundEventDetails())
             << "notifySwitch - eventTime=" << args.eventTime << ", policyFlags=0x" << std::hex
             << args.policyFlags << ", switchValues=0x" << std::setfill('0') << std::setw(8)
             << args.switchValues << ", switchMask=0x" << std::setw(8) << args.switchMask;
@@ -4637,7 +4636,7 @@ void InputDispatcher::notifySwitch(const NotifySwitchArgs& args) {
 
 void InputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs& args) {
     // TODO(b/308677868) Remove device reset from the InputListener interface
-    LOG_IF(DEBUG, debugInboundEventDetails())
+    LOG_IF(INFO, debugInboundEventDetails())
             << "notifyDeviceReset - eventTime=" << args.eventTime << ", deviceId=" << args.deviceId;
 
     bool needWake = false;
@@ -4659,7 +4658,7 @@ void InputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs& args) {
 }
 
 void InputDispatcher::notifyPointerCaptureChanged(const NotifyPointerCaptureChangedArgs& args) {
-    LOG_IF(DEBUG, debugInboundEventDetails())
+    LOG_IF(INFO, debugInboundEventDetails())
             << "notifyPointerCaptureChanged - eventTime=%" << args.eventTime
             << ", enabled=" << toString(args.request.isEnable());
 
@@ -4927,8 +4926,8 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
 
                 nsecs_t remainingTimeout = endTime - now();
                 if (remainingTimeout <= 0) {
-                    LOG_IF(DEBUG, DEBUG_INJECTION) << "injectInputEvent - Timed out waiting for "
-                                                      "injection result to become available.";
+                    LOG_IF(INFO, DEBUG_INJECTION) << "injectInputEvent - Timed out waiting for "
+                                                     "injection result to become available.";
                     injectionResult = InputEventInjectionResult::TIMED_OUT;
                     break;
                 }
@@ -4939,12 +4938,12 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
             if (injectionResult == InputEventInjectionResult::SUCCEEDED &&
                 syncMode == InputEventInjectionSync::WAIT_FOR_FINISHED) {
                 while (injectionState->pendingForegroundDispatches != 0) {
-                    LOG_IF(DEBUG, DEBUG_INJECTION) << "injectInputEvent - Waiting for "
-                                                   << injectionState->pendingForegroundDispatches
-                                                   << " pending foreground dispatches.";
+                    LOG_IF(INFO, DEBUG_INJECTION) << "injectInputEvent - Waiting for "
+                                                  << injectionState->pendingForegroundDispatches
+                                                  << " pending foreground dispatches.";
                     nsecs_t remainingTimeout = endTime - now();
                     if (remainingTimeout <= 0) {
-                        LOG_IF(DEBUG, DEBUG_INJECTION)
+                        LOG_IF(INFO, DEBUG_INJECTION)
                                 << "injectInputEvent - Timed out waiting for pending foreground "
                                    "dispatches to finish.";
                         injectionResult = InputEventInjectionResult::TIMED_OUT;
@@ -5432,7 +5431,7 @@ void InputDispatcher::setInputWindowsLocked(
     // which might not happen until the next GC.
     for (const sp<WindowInfoHandle>& oldWindowHandle : oldWindowHandles) {
         if (!mWindowInfos.isWindowPresent(oldWindowHandle)) {
-            LOG_IF(DEBUG, DEBUG_FOCUS) << "Window went away: " << oldWindowHandle->getName();
+            LOG_IF(INFO, DEBUG_FOCUS) << "Window went away: " << oldWindowHandle->getName();
             oldWindowHandle->releaseChannel();
         }
     }
@@ -5511,9 +5510,9 @@ InputDispatcher::DispatcherTouchState::updateHoveringStateFromWindowInfo(
 void InputDispatcher::setFocusedApplication(
         ui::LogicalDisplayId displayId,
         const std::shared_ptr<InputApplicationHandle>& inputApplicationHandle) {
-    LOG_IF(DEBUG, DEBUG_FOCUS) << "setFocusedApplication displayId=" << displayId.toString() << " "
-                               << (inputApplicationHandle ? inputApplicationHandle->getName()
-                                                          : "<nullptr>");
+    LOG_IF(INFO, DEBUG_FOCUS) << "setFocusedApplication displayId=" << displayId.toString() << " "
+                              << (inputApplicationHandle ? inputApplicationHandle->getName()
+                                                         : "<nullptr>");
     { // acquire lock
         std::scoped_lock _l(mLock);
         setFocusedApplicationLocked(displayId, inputApplicationHandle);
@@ -5563,7 +5562,7 @@ void InputDispatcher::setMinTimeBetweenUserActivityPokes(std::chrono::millisecon
  * display. The display-specified events won't be affected.
  */
 void InputDispatcher::setFocusedDisplay(ui::LogicalDisplayId displayId) {
-    LOG_IF(DEBUG, DEBUG_FOCUS) << "setFocusedDisplay displayId=" << displayId.toString();
+    LOG_IF(INFO, DEBUG_FOCUS) << "setFocusedDisplay displayId=" << displayId.toString();
     { // acquire lock
         std::scoped_lock _l(mLock);
         ScopedSyntheticEventTracer traceContext(mTracer);
@@ -5617,8 +5616,8 @@ void InputDispatcher::setFocusedDisplay(ui::LogicalDisplayId displayId) {
 }
 
 void InputDispatcher::setInputDispatchMode(bool enabled, bool frozen) {
-    LOG_IF(DEBUG, DEBUG_FOCUS) << "setInputDispatchMode: enabled=" << enabled
-                               << ", frozen=" << frozen;
+    LOG_IF(INFO, DEBUG_FOCUS) << "setInputDispatchMode: enabled=" << enabled
+                              << ", frozen=" << frozen;
 
     bool changed;
     { // acquire lock
@@ -5648,7 +5647,7 @@ void InputDispatcher::setInputDispatchMode(bool enabled, bool frozen) {
 }
 
 void InputDispatcher::setInputFilterEnabled(bool enabled) {
-    LOG_IF(DEBUG, DEBUG_FOCUS) << "setInputFilterEnabled: enabled=" << enabled;
+    LOG_IF(INFO, DEBUG_FOCUS) << "setInputFilterEnabled: enabled=" << enabled;
 
     { // acquire lock
         std::scoped_lock _l(mLock);
@@ -5670,7 +5669,7 @@ bool InputDispatcher::setInTouchMode(bool inTouchMode, gui::Pid pid, gui::Uid ui
     bool needWake = false;
     {
         std::scoped_lock lock(mLock);
-        LOG_IF(DEBUG, DEBUG_TOUCH_MODE)
+        LOG_IF(INFO, DEBUG_TOUCH_MODE)
                 << "Request to change touch mode to " << toString(inTouchMode)
                 << " (calling pid=" << pid.toString() << ", uid=" << uid.toString()
                 << ", hasPermission=" << toString(hasPermission)
@@ -5732,7 +5731,7 @@ void InputDispatcher::setMaximumObscuringOpacityForTouch(float opacity) {
 bool InputDispatcher::transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
                                            bool isDragDrop) {
     if (fromToken == toToken) {
-        LOG_IF(DEBUG, DEBUG_FOCUS) << "Trivial transfer to same window.";
+        LOG_IF(INFO, DEBUG_FOCUS) << "Trivial transfer to same window.";
         return true;
     }
 
@@ -5815,8 +5814,8 @@ InputDispatcher::DispatcherTouchState::transferTouchGesture(const sp<android::IB
         return std::nullopt;
     }
 
-    LOG_IF(DEBUG, DEBUG_FOCUS) << __func__ << ": fromWindowHandle=" << fromWindowHandle->getName()
-                               << ", toWindowHandle=" << toWindowHandle->getName();
+    LOG_IF(INFO, DEBUG_FOCUS) << __func__ << ": fromWindowHandle=" << fromWindowHandle->getName()
+                              << ", toWindowHandle=" << toWindowHandle->getName();
 
     // Erase old window.
     ftl::Flags<InputTarget::Flags> oldTargetFlags = touchedWindow.targetFlags;
@@ -5919,7 +5918,7 @@ bool InputDispatcher::transferTouchOnDisplay(const sp<IBinder>& destChannelToken
 }
 
 void InputDispatcher::resetAndDropEverythingLocked(const char* reason) {
-    LOG_IF(DEBUG, DEBUG_FOCUS) << "Resetting and dropping all events (" << reason << ").";
+    LOG_IF(INFO, DEBUG_FOCUS) << "Resetting and dropping all events (" << reason << ").";
 
     ScopedSyntheticEventTracer traceContext(mTracer);
     CancelationOptions options(CancelationOptions::Mode::CANCEL_ALL_EVENTS, reason,
@@ -6074,7 +6073,7 @@ private:
 };
 
 Result<std::unique_ptr<InputChannel>> InputDispatcher::createInputChannel(const std::string& name) {
-    LOG_IF(DEBUG, DEBUG_CHANNEL_CREATION) << "channel '" << name << "' ~ createInputChannel";
+    LOG_IF(INFO, DEBUG_CHANNEL_CREATION) << "channel '" << name << "' ~ createInputChannel";
 
     std::unique_ptr<InputChannel> serverChannel;
     std::unique_ptr<InputChannel> clientChannel;
@@ -6625,7 +6624,7 @@ std::unique_ptr<const KeyEntry> InputDispatcher::afterKeyEventLockedInterruptabl
         // then cancel the associated fallback key, if any.
         if (fallbackKeyCode) {
             // Dispatch the unhandled key to the policy with the cancel flag.
-            LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+            LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
                     << "Unhandled key event: Asking policy to cancel fallback action.  keyCode="
                     << keyEntry.keyCode << ", action=" << keyEntry.action
                     << ", repeatCount=" << keyEntry.repeatCount << ", policyFlags=0x" << std::hex
@@ -6666,7 +6665,7 @@ std::unique_ptr<const KeyEntry> InputDispatcher::afterKeyEventLockedInterruptabl
         // Then ask the policy what to do with it.
         bool initialDown = keyEntry.action == AKEY_EVENT_ACTION_DOWN && keyEntry.repeatCount == 0;
         if (!fallbackKeyCode && !initialDown) {
-            LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+            LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
                     << "Unhandled key event: Skipping unhandled key event processing since this is "
                        "not an initial down.  keyCode="
                     << originalKeyCode << ", action=" << keyEntry.action
@@ -6676,7 +6675,7 @@ std::unique_ptr<const KeyEntry> InputDispatcher::afterKeyEventLockedInterruptabl
         }
 
         // Dispatch the unhandled key to the policy.
-        LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+        LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
                 << "Unhandled key event: Asking policy to perform fallback action.  keyCode="
                 << keyEntry.keyCode << ", action=" << keyEntry.action
                 << ", repeatCount=" << keyEntry.repeatCount << ", policyFlags=0x" << std::hex
@@ -6778,13 +6777,13 @@ std::unique_ptr<const KeyEntry> InputDispatcher::afterKeyEventLockedInterruptabl
                 newEntry->traceTracker =
                         mTracer->traceDerivedEvent(*newEntry, *keyEntry.traceTracker);
             }
-            LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS)
+            LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS)
                     << "Unhandled key event: Dispatching fallback key.  originalKeyCode="
                     << originalKeyCode << ", fallbackKeyCode=" << *fallbackKeyCode
                     << ", fallbackMetaState=0x" << std::hex << keyEntry.metaState;
             return newEntry;
         } else {
-            LOG_IF(DEBUG, DEBUG_OUTBOUND_EVENT_DETAILS) << "Unhandled key event: No fallback key.";
+            LOG_IF(INFO, DEBUG_OUTBOUND_EVENT_DETAILS) << "Unhandled key event: No fallback key.";
 
             // Report the key as unhandled, since there is no fallback key.
             mReporter->reportUnhandledKey(keyEntry.id);
@@ -6925,7 +6924,7 @@ void InputDispatcher::disablePointerCaptureForcedLocked() {
         return;
     }
 
-    LOG_IF(DEBUG, DEBUG_FOCUS) << "Disabling Pointer Capture because the window lost focus.";
+    LOG_IF(INFO, DEBUG_FOCUS) << "Disabling Pointer Capture because the window lost focus.";
 
     if (mCurrentPointerCaptureRequest.isEnable()) {
         setPointerCaptureLocked(nullptr);
