@@ -7196,14 +7196,13 @@ status_t SurfaceFlinger::setSchedAttr(bool enabled) {
 
 namespace {
 
-ui::Dataspace pickBestDataspace(ui::Dataspace requestedDataspace,
-                                const compositionengine::impl::OutputCompositionState& state,
+ui::Dataspace pickBestDataspace(ui::Dataspace requestedDataspace, ui::ColorMode colorMode,
                                 bool capturingHdrLayers, bool hintForSeamlessTransition) {
     if (requestedDataspace != ui::Dataspace::UNKNOWN) {
         return requestedDataspace;
     }
 
-    const auto dataspaceForColorMode = ui::pickDataspaceFor(state.colorMode);
+    const auto dataspaceForColorMode = ui::pickDataspaceFor(colorMode);
 
     // TODO: Enable once HDR screenshots are ready.
     if constexpr (/* DISABLES CODE */ (false)) {
@@ -7515,11 +7514,11 @@ bool SurfaceFlinger::layersHasProtectedLayer(
     return protectedLayerFound;
 }
 
-// Getting layer snapshots and display should take place on main thread.
-// Accessing display requires mStateLock, and contention for this lock
-// is reduced when grabbed from the main thread, thus also reducing
-// risk of deadlocks.
-std::optional<SurfaceFlinger::OutputCompositionState> SurfaceFlinger::getSnapshotsFromMainThread(
+// Getting layer snapshots and accessing display state should take place on
+// main thread. Accessing display requires mStateLock, and contention for
+// this lock is reduced when grabbed from the main thread, thus also reducing
+// risk of deadlocks. Returns false if no display is found.
+bool SurfaceFlinger::getSnapshotsFromMainThread(
         ScreenshotArgs& args, GetLayerSnapshotsFunction getLayerSnapshotsFn,
         std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) {
     return mScheduler
@@ -7559,8 +7558,8 @@ void SurfaceFlinger::captureScreenCommon(ScreenshotArgs& args,
     }
 
     std::vector<std::pair<Layer*, sp<LayerFE>>> layers;
-    auto displayState = getSnapshotsFromMainThread(args, getLayerSnapshotsFn, layers);
-    if (!displayState) {
+    bool hasDisplayState = getSnapshotsFromMainThread(args, getLayerSnapshotsFn, layers);
+    if (!hasDisplayState) {
         ALOGD("Display state not found");
         invokeScreenCaptureError(NO_MEMORY, captureListener);
     }
@@ -7637,12 +7636,13 @@ void SurfaceFlinger::captureScreenCommon(ScreenshotArgs& args,
 
     auto futureFence =
             captureScreenshot(args, texture, false /* regionSampling */, grayscale, isProtected,
-                              captureListener, displayState, layers, hdrTexture, gainmapTexture);
+                              captureListener, layers, hdrTexture, gainmapTexture);
     futureFence.get();
 }
 
-std::optional<SurfaceFlinger::OutputCompositionState> SurfaceFlinger::getDisplayStateOnMainThread(
-        ScreenshotArgs& args) {
+// Returns true if display is found and args was populated with display state
+// data. Otherwise, returns false.
+bool SurfaceFlinger::getDisplayStateOnMainThread(ScreenshotArgs& args) {
     sp<const DisplayDevice> display = nullptr;
     {
         Mutex::Autolock lock(mStateLock);
@@ -7677,49 +7677,49 @@ std::optional<SurfaceFlinger::OutputCompositionState> SurfaceFlinger::getDisplay
         }
 
         if (display != nullptr) {
-            return std::optional{display->getCompositionDisplay()->getState()};
+            const auto& state = display->getCompositionDisplay()->getState();
+            args.displayBrightnessNits = state.displayBrightnessNits;
+            args.sdrWhitePointNits = state.sdrWhitePointNits;
+            args.renderIntent = state.renderIntent;
+            args.colorMode = state.colorMode;
+            return true;
         }
     }
-    return std::nullopt;
+    return false;
 }
 
 ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
-        const ScreenshotArgs& args, const std::shared_ptr<renderengine::ExternalTexture>& buffer,
+        ScreenshotArgs& args, const std::shared_ptr<renderengine::ExternalTexture>& buffer,
         bool regionSampling, bool grayscale, bool isProtected,
         const sp<IScreenCaptureListener>& captureListener,
-        const std::optional<OutputCompositionState>& displayState,
         const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers,
         const std::shared_ptr<renderengine::ExternalTexture>& hdrBuffer,
         const std::shared_ptr<renderengine::ExternalTexture>& gainmapBuffer) {
     SFTRACE_CALL();
 
     ScreenCaptureResults captureResults;
-
-    float displayBrightnessNits = displayState.value().displayBrightnessNits;
-    float sdrWhitePointNits = displayState.value().sdrWhitePointNits;
-
     ftl::SharedFuture<FenceResult> renderFuture;
+
+    float hdrSdrRatio = args.displayBrightnessNits / args.sdrWhitePointNits;
 
     if (hdrBuffer && gainmapBuffer) {
         ftl::SharedFuture<FenceResult> hdrRenderFuture =
                 renderScreenImpl(args, hdrBuffer, regionSampling, grayscale, isProtected,
-                                 captureResults, displayState, layers);
+                                 captureResults, layers);
         captureResults.buffer = buffer->getBuffer();
         captureResults.optionalGainMap = gainmapBuffer->getBuffer();
 
         renderFuture =
                 ftl::Future(std::move(hdrRenderFuture))
-                        .then([&, displayBrightnessNits, sdrWhitePointNits,
-                               dataspace = captureResults.capturedDataspace, buffer, hdrBuffer,
-                               gainmapBuffer](FenceResult fenceResult) -> FenceResult {
+                        .then([&, hdrSdrRatio, dataspace = captureResults.capturedDataspace, buffer,
+                               hdrBuffer, gainmapBuffer](FenceResult fenceResult) -> FenceResult {
                             if (!fenceResult.ok()) {
                                 return fenceResult;
                             }
 
                             return getRenderEngine()
                                     .tonemapAndDrawGainmap(hdrBuffer, fenceResult.value()->get(),
-                                                           displayBrightnessNits /
-                                                                   sdrWhitePointNits,
+                                                           hdrSdrRatio,
                                                            static_cast<ui::Dataspace>(dataspace),
                                                            buffer, gainmapBuffer)
                                     .get();
@@ -7727,17 +7727,16 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
                         .share();
     } else {
         renderFuture = renderScreenImpl(args, buffer, regionSampling, grayscale, isProtected,
-                                        captureResults, displayState, layers);
+                                        captureResults, layers);
     }
 
     if (captureListener) {
         // Defer blocking on renderFuture back to the Binder thread.
         return ftl::Future(std::move(renderFuture))
                 .then([captureListener, captureResults = std::move(captureResults),
-                       displayBrightnessNits,
-                       sdrWhitePointNits](FenceResult fenceResult) mutable -> FenceResult {
+                       hdrSdrRatio](FenceResult fenceResult) mutable -> FenceResult {
                     captureResults.fenceResult = std::move(fenceResult);
-                    captureResults.hdrSdrRatio = displayBrightnessNits / sdrWhitePointNits;
+                    captureResults.hdrSdrRatio = hdrSdrRatio;
                     captureListener->onScreenCaptureCompleted(captureResults);
                     return base::unexpected(NO_ERROR);
                 })
@@ -7747,9 +7746,8 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::captureScreenshot(
 }
 
 ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
-        const ScreenshotArgs& args, const std::shared_ptr<renderengine::ExternalTexture>& buffer,
+        ScreenshotArgs& args, const std::shared_ptr<renderengine::ExternalTexture>& buffer,
         bool regionSampling, bool grayscale, bool isProtected, ScreenCaptureResults& captureResults,
-        const std::optional<OutputCompositionState>& displayState,
         const std::vector<std::pair<Layer*, sp<LayerFE>>>& layers) {
     SFTRACE_CALL();
 
@@ -7763,49 +7761,37 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
                 layerFE->mSnapshot->geomLayerTransform.inverse();
     }
 
-    auto capturedBuffer = buffer;
-
-    auto renderIntent = RenderIntent::TONE_MAP_COLORIMETRIC;
-    auto sdrWhitePointNits = DisplayDevice::sDefaultMaxLumiance;
-    auto displayBrightnessNits = DisplayDevice::sDefaultMaxLumiance;
-
-    captureResults.capturedDataspace = args.dataspace;
-
     const bool enableLocalTonemapping =
             FlagManager::getInstance().local_tonemap_screenshots() && !args.seamlessTransition;
 
-    if (displayState) {
-        const auto& state = displayState.value();
-        captureResults.capturedDataspace =
-                pickBestDataspace(args.dataspace, state, captureResults.capturedHdrLayers,
-                                  args.seamlessTransition);
-        sdrWhitePointNits = state.sdrWhitePointNits;
+    captureResults.capturedDataspace =
+            pickBestDataspace(args.dataspace, args.colorMode, captureResults.capturedHdrLayers,
+                              args.seamlessTransition);
 
-        if (!captureResults.capturedHdrLayers) {
-            displayBrightnessNits = sdrWhitePointNits;
-        } else {
-            displayBrightnessNits = state.displayBrightnessNits;
-            if (!enableLocalTonemapping) {
-                // Only clamp the display brightness if this is not a seamless transition.
-                // Otherwise for seamless transitions it's important to match the current
-                // display state as the buffer will be shown under these same conditions, and we
-                // want to avoid any flickers
-                if (sdrWhitePointNits > 1.0f && !args.seamlessTransition) {
-                    // Restrict the amount of HDR "headroom" in the screenshot to avoid
-                    // over-dimming the SDR portion. 2.0 chosen by experimentation
-                    constexpr float kMaxScreenshotHeadroom = 2.0f;
-                    displayBrightnessNits = std::min(sdrWhitePointNits * kMaxScreenshotHeadroom,
-                                                     displayBrightnessNits);
-                }
-            }
-        }
-
-        // Screenshots leaving the device should be colorimetric
-        if (args.dataspace == ui::Dataspace::UNKNOWN && args.seamlessTransition) {
-            renderIntent = state.renderIntent;
-        }
+    // Only clamp the display brightness if this is not a seamless transition.
+    // Otherwise for seamless transitions it's important to match the current
+    // display state as the buffer will be shown under these same conditions, and we
+    // want to avoid any flickers.
+    if (captureResults.capturedHdrLayers && !enableLocalTonemapping &&
+        args.sdrWhitePointNits > 1.0f && !args.seamlessTransition) {
+        // Restrict the amount of HDR "headroom" in the screenshot to avoid
+        // over-dimming the SDR portion. 2.0 chosen by experimentation
+        constexpr float kMaxScreenshotHeadroom = 2.0f;
+        // TODO: Aim to update displayBrightnessNits earlier in screenshot
+        // path so ScreenshotArgs can be passed as const
+        args.displayBrightnessNits = std::min(args.sdrWhitePointNits * kMaxScreenshotHeadroom,
+                                              args.displayBrightnessNits);
+    } else {
+        args.displayBrightnessNits = args.sdrWhitePointNits;
     }
 
+    auto renderIntent = RenderIntent::TONE_MAP_COLORIMETRIC;
+    // Screenshots leaving the device should be colorimetric
+    if (args.dataspace == ui::Dataspace::UNKNOWN && args.seamlessTransition) {
+        renderIntent = args.renderIntent;
+    }
+
+    auto capturedBuffer = buffer;
     captureResults.buffer = capturedBuffer->getBuffer();
 
     ui::LayerStack layerStack{ui::DEFAULT_LAYER_STACK};
@@ -7815,8 +7801,7 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
     }
 
     auto present = [this, buffer = capturedBuffer, dataspace = captureResults.capturedDataspace,
-                    sdrWhitePointNits, displayBrightnessNits, grayscale, isProtected, layers,
-                    layerStack, regionSampling, args, renderIntent,
+                    grayscale, isProtected, layers, layerStack, regionSampling, args, renderIntent,
                     enableLocalTonemapping]() -> FenceResult {
         std::unique_ptr<compositionengine::CompositionEngine> compositionEngine =
                 mFactory.createCompositionEngine();
@@ -7842,9 +7827,10 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
         if (enableLocalTonemapping) {
             // Boost the whole scene so that SDR white is at 1.0 while still communicating the hdr
             // sdr ratio via display brightness / sdrWhite nits.
-            targetBrightness = sdrWhitePointNits / displayBrightnessNits;
+            targetBrightness = args.sdrWhitePointNits / args.displayBrightnessNits;
         } else if (dataspace == ui::Dataspace::BT2020_HLG) {
-            const float maxBrightnessNits = displayBrightnessNits / sdrWhitePointNits * 203;
+            const float maxBrightnessNits =
+                    args.displayBrightnessNits / args.sdrWhitePointNits * 203;
             // With a low dimming ratio, don't fit the entire curve. Otherwise mixed content
             // will appear way too bright.
             if (maxBrightnessNits < 1000.f) {
@@ -7870,8 +7856,8 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
                                         .buffer = std::move(buffer),
                                         .displayId = args.displayId,
                                         .reqBufferSize = args.reqSize,
-                                        .sdrWhitePointNits = sdrWhitePointNits,
-                                        .displayBrightnessNits = displayBrightnessNits,
+                                        .sdrWhitePointNits = args.sdrWhitePointNits,
+                                        .displayBrightnessNits = args.displayBrightnessNits,
                                         .targetBrightness = targetBrightness,
                                         .layerAlpha = layerAlpha,
                                         .regionSampling = regionSampling,
