@@ -4235,13 +4235,8 @@ void InputDispatcher::synthesizePointerDownEventsForConnectionLocked(
             << "channel '" << connection->getInputChannelName() << "' ~ Synthesized "
             << downEvents.size() << " down events to ensure consistent event stream.";
 
-    auto touchedWindowHandleAndDisplay =
-            mTouchStates.findTouchedWindowHandleAndDisplay(connection->getToken());
-    if (!touchedWindowHandleAndDisplay.has_value()) {
-        LOG(FATAL) << __func__ << ": Touch state is out of sync: No touched window for token";
-    }
-
-    const auto [windowHandle, displayId] = touchedWindowHandleAndDisplay.value();
+    const auto [windowHandle, displayId] =
+            mTouchStates.findExistingTouchedWindowHandleAndDisplay(connection->getToken());
 
     const bool wasEmpty = connection->outboundQueue.empty();
     for (std::unique_ptr<EventEntry>& downEventEntry : downEvents) {
@@ -7397,8 +7392,8 @@ bool InputDispatcher::DispatcherTouchState::isPointerInWindow(const sp<android::
     return false;
 }
 
-std::optional<std::tuple<const sp<gui::WindowInfoHandle>&, ui::LogicalDisplayId>>
-InputDispatcher::DispatcherTouchState::findTouchedWindowHandleAndDisplay(
+std::tuple<const sp<gui::WindowInfoHandle>&, ui::LogicalDisplayId>
+InputDispatcher::DispatcherTouchState::findExistingTouchedWindowHandleAndDisplay(
         const sp<android::IBinder>& token) const {
     for (const auto& [displayId, state] : mTouchStatesByDisplay) {
         for (const TouchedWindow& w : state.windows) {
@@ -7407,7 +7402,7 @@ InputDispatcher::DispatcherTouchState::findTouchedWindowHandleAndDisplay(
             }
         }
     }
-    return std::nullopt;
+    LOG_ALWAYS_FATAL("%s : Touch state is out of sync: No touched window for token", __func__);
 }
 
 void InputDispatcher::DispatcherTouchState::forAllTouchedWindows(
