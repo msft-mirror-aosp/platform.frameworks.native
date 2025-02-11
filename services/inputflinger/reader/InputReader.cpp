@@ -62,6 +62,28 @@ bool isSubDevice(const InputDeviceIdentifier& identifier1,
             identifier1.location == identifier2.location);
 }
 
+/**
+ * Determines if the device classes passed for two devices represent incompatible combinations
+ * that should not be merged into into a single InputDevice.
+ */
+
+bool isCompatibleSubDevice(ftl::Flags<InputDeviceClass> classes1,
+                           ftl::Flags<InputDeviceClass> classes2) {
+    if (!com::android::input::flags::prevent_merging_input_pointer_devices()) {
+        return true;
+    }
+
+    const ftl::Flags<InputDeviceClass> pointerFlags =
+            ftl::Flags<InputDeviceClass>{InputDeviceClass::TOUCH, InputDeviceClass::TOUCH_MT,
+                                         InputDeviceClass::CURSOR, InputDeviceClass::TOUCHPAD};
+
+    // Do not merge devices that both have any type of pointer event.
+    if (classes1.any(pointerFlags) && classes2.any(pointerFlags)) return false;
+
+    // Safe to merge
+    return true;
+}
+
 bool isStylusPointerGestureStart(const NotifyMotionArgs& motionArgs) {
     const auto actionMasked = MotionEvent::getActionMasked(motionArgs.action);
     if (actionMasked != AMOTION_EVENT_ACTION_HOVER_ENTER &&
@@ -271,7 +293,8 @@ void InputReader::addDeviceLocked(nsecs_t when, int32_t eventHubId) {
     }
 
     InputDeviceIdentifier identifier = mEventHub->getDeviceIdentifier(eventHubId);
-    std::shared_ptr<InputDevice> device = createDeviceLocked(when, eventHubId, identifier);
+    ftl::Flags<InputDeviceClass> classes = mEventHub->getDeviceClasses(eventHubId);
+    std::shared_ptr<InputDevice> device = createDeviceLocked(when, eventHubId, identifier, classes);
 
     mPendingArgs += device->configure(when, mConfig, /*changes=*/{});
     mPendingArgs += device->reset(when);
@@ -354,12 +377,16 @@ void InputReader::removeDeviceLocked(nsecs_t when, int32_t eventHubId) {
 }
 
 std::shared_ptr<InputDevice> InputReader::createDeviceLocked(
-        nsecs_t when, int32_t eventHubId, const InputDeviceIdentifier& identifier) {
-    auto deviceIt = std::find_if(mDevices.begin(), mDevices.end(), [identifier](auto& devicePair) {
-        const InputDeviceIdentifier identifier2 =
-                devicePair.second->getDeviceInfo().getIdentifier();
-        return isSubDevice(identifier, identifier2);
-    });
+        nsecs_t when, int32_t eventHubId, const InputDeviceIdentifier& identifier,
+        ftl::Flags<InputDeviceClass> classes) {
+    auto deviceIt =
+            std::find_if(mDevices.begin(), mDevices.end(), [identifier, classes](auto& devicePair) {
+                const InputDeviceIdentifier identifier2 =
+                        devicePair.second->getDeviceInfo().getIdentifier();
+                const ftl::Flags<InputDeviceClass> classes2 = devicePair.second->getClasses();
+                return isSubDevice(identifier, identifier2) &&
+                        isCompatibleSubDevice(classes, classes2);
+            });
 
     std::shared_ptr<InputDevice> device;
     if (deviceIt != mDevices.end()) {

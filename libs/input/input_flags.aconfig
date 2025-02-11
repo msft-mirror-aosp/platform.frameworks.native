@@ -255,3 +255,12 @@ flag {
   bug: "277261245"
 }
 
+flag {
+  name: "prevent_merging_input_pointer_devices"
+  namespace: "desktop_input"
+  description: "Prevent merging input sub-devices that provide pointer input streams"
+  bug: "389689566"
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+}
