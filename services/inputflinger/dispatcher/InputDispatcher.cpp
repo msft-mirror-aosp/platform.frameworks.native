@@ -7202,6 +7202,12 @@ void InputDispatcher::setInputMethodConnectionIsActive(bool isActive) {
     }
 }
 
+void InputDispatcher::setDisplayTopology(
+        const android::DisplayTopologyGraph& displayTopologyGraph) {
+    std::scoped_lock _l(mLock);
+    mWindowInfos.setDisplayTopology(displayTopologyGraph);
+}
+
 InputDispatcher::ConnectionManager::ConnectionManager(const sp<android::Looper>& looper)
       : mLooper(looper) {}
 
@@ -7335,6 +7341,11 @@ void InputDispatcher::DispatcherWindowInfo::setMaximumObscuringOpacityForTouch(f
         LOG_ALWAYS_FATAL("Maximum obscuring opacity for touch should be >= 0 and <= 1");
     }
     mMaximumObscuringOpacityForTouch = opacity;
+}
+
+void InputDispatcher::DispatcherWindowInfo::setDisplayTopology(
+        const DisplayTopologyGraph& displayTopologyGraph) {
+    mTopology = displayTopologyGraph;
 }
 
 ftl::Flags<InputTarget::Flags> InputDispatcher::DispatcherTouchState::getTargetFlags(
