@@ -15,6 +15,7 @@
  */
 
 #include "DebugConfig.h"
+#include "input/Input.h"
 #include "input/InputDevice.h"
 #include "input/InputFlags.h"
 
@@ -24,17 +25,6 @@
 #include "InputDispatcher.h"
 
 namespace android::inputdispatcher {
-
-namespace {
-
-bool isMouseOrTouchpad(uint32_t sources) {
-    // Check if this is a mouse or touchpad, but not a drawing tablet.
-    return isFromSource(sources, AINPUT_SOURCE_MOUSE_RELATIVE) ||
-            (isFromSource(sources, AINPUT_SOURCE_MOUSE) &&
-             !isFromSource(sources, AINPUT_SOURCE_STYLUS));
-}
-
-} // namespace
 
 InputState::InputState(const IdGenerator& idGenerator) : mIdGenerator(idGenerator) {}
 

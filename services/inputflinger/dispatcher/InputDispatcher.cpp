@@ -920,13 +920,6 @@ std::string dumpWindowForTouchOcclusion(const WindowInfo& info, bool isTouchedWi
                         binderToString(info.applicationInfo.token).c_str());
 }
 
-bool isMouseOrTouchpad(uint32_t sources) {
-    // Check if this is a mouse or touchpad, but not a drawing tablet.
-    return isFromSource(sources, AINPUT_SOURCE_MOUSE_RELATIVE) ||
-            (isFromSource(sources, AINPUT_SOURCE_MOUSE) &&
-             !isFromSource(sources, AINPUT_SOURCE_STYLUS));
-}
-
 } // namespace
 
 // --- InputDispatcher ---
