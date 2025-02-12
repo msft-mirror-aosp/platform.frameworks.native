@@ -174,9 +174,8 @@ void InputReader::loopOnce() {
         if (mNextTimeout != LLONG_MAX) {
             nsecs_t now = systemTime(SYSTEM_TIME_MONOTONIC);
             if (now >= mNextTimeout) {
-                if (debugRawEvents()) {
-                    ALOGD("Timeout expired, latency=%0.3fms", (now - mNextTimeout) * 0.000001f);
-                }
+                ALOGD_IF(debugRawEvents(), "Timeout expired, latency=%0.3fms",
+                         (now - mNextTimeout) * 0.000001f);
                 mNextTimeout = LLONG_MAX;
                 mPendingArgs += timeoutExpiredLocked(now);
             }
@@ -241,9 +240,7 @@ std::list<NotifyArgs> InputReader::processEventsLocked(const RawEvent* rawEvents
                 }
                 batchSize += 1;
             }
-            if (debugRawEvents()) {
-                ALOGD("BatchSize: %zu Count: %zu", batchSize, count);
-            }
+            ALOGD_IF(debugRawEvents(), "BatchSize: %zu Count: %zu", batchSize, count);
             out += processEventsForDeviceLocked(deviceId, rawEvent, batchSize);
         } else {
             switch (rawEvent->type) {
