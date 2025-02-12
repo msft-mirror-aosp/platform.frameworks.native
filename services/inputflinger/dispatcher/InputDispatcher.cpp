@@ -971,6 +971,9 @@ InputDispatcher::~InputDispatcher() {
     resetKeyRepeatLocked();
     releasePendingEventLocked();
     drainInboundQueueLocked();
+#if defined(__ANDROID__)
+    SurfaceComposerClient::getDefault()->removeWindowInfosListener(mWindowInfoListener);
+#endif
     mCommandQueue.clear();
 }
 
