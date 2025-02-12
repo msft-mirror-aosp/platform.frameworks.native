@@ -3753,6 +3753,7 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
     if (const auto displayOpt = mPhysicalDisplays.get(displayId)) {
         const auto& display = displayOpt->get();
         const auto& snapshot = display.snapshot();
+        const uint8_t port = snapshot.port();
 
         std::optional<DeviceProductInfo> deviceProductInfo;
         if (getHwComposer().updatesDeviceProductInfoOnHotplugReconnect()) {
@@ -3764,14 +3765,14 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
         // Use the cached port via snapshot because we are updating an existing
         // display on reconnect.
         const auto it =
-                mPhysicalDisplays.try_replace(displayId, display.token(), displayId,
-                                              snapshot.port(), snapshot.connectionType(),
-                                              std::move(displayModes), std::move(colorModes),
-                                              std::move(deviceProductInfo));
+                mPhysicalDisplays.try_replace(displayId, display.token(), displayId, port,
+                                              snapshot.connectionType(), std::move(displayModes),
+                                              std::move(colorModes), std::move(deviceProductInfo));
 
         auto& state = mCurrentState.displays.editValueFor(it->second.token());
         state.sequenceId = DisplayDeviceState{}.sequenceId; // Generate new sequenceId.
         state.physical->activeMode = std::move(activeMode);
+        state.physical->port = port;
         ALOGI("Reconnecting %s", displayString);
         return activeModeId;
     }
@@ -3787,6 +3788,7 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
     DisplayDeviceState state;
     state.physical = {.id = displayId,
                       .hwcDisplayId = hwcDisplayId,
+                      .port = info.port,
                       .activeMode = std::move(activeMode)};
     if (mIsHdcpViaNegVsync) {
         state.isSecure = connectionType == ui::DisplayConnectionType::Internal;
@@ -4102,7 +4104,7 @@ void SurfaceFlinger::processDisplayChanged(const wp<IBinder>& displayToken,
 
         if (const auto& physical = currentState.physical) {
             getHwComposer().allocatePhysicalDisplay(physical->hwcDisplayId, physical->id,
-                                                    /*physicalSize=*/std::nullopt);
+                                                    physical->port, /*physicalSize=*/std::nullopt);
         }
 
         processDisplayAdded(displayToken, currentState);
