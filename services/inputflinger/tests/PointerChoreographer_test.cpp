@@ -1008,6 +1008,34 @@ TEST_F(PointerChoreographerTest, ShowTouchesOverridesUnspecifiedStylusIcon) {
     pc->assertPointerIconSet(PointerIconStyle::TYPE_SPOT_HOVER);
 }
 
+TEST_F(PointerChoreographerTest, StylusHoverEnterFadesMouseOnDisplay) {
+    // Make sure there are PointerControllers for a mouse and a stylus.
+    mChoreographer.setStylusPointerIconEnabled(true);
+    mChoreographer.setDefaultMouseDisplayId(DISPLAY_ID);
+    mChoreographer.notifyInputDevicesChanged(
+            {/*id=*/0,
+             {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE, ui::LogicalDisplayId::INVALID),
+              generateTestDeviceInfo(SECOND_DEVICE_ID, AINPUT_SOURCE_STYLUS, DISPLAY_ID)}});
+    mChoreographer.setDisplayViewports(createViewports({DISPLAY_ID}));
+    mChoreographer.notifyMotion(
+            MotionArgsBuilder(AMOTION_EVENT_ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                    .pointer(MOUSE_POINTER)
+                    .deviceId(DEVICE_ID)
+                    .displayId(ui::LogicalDisplayId::INVALID)
+                    .build());
+    auto mousePc = assertPointerControllerCreated(ControllerType::MOUSE);
+    ASSERT_TRUE(mousePc->isPointerShown());
+
+    // Start hovering with a stylus. This should fade the mouse cursor.
+    mChoreographer.notifyMotion(
+            MotionArgsBuilder(AMOTION_EVENT_ACTION_HOVER_ENTER, AINPUT_SOURCE_STYLUS)
+                    .pointer(STYLUS_POINTER)
+                    .deviceId(SECOND_DEVICE_ID)
+                    .displayId(DISPLAY_ID)
+                    .build());
+    ASSERT_FALSE(mousePc->isPointerShown());
+}
+
 using StylusFixtureParam =
         std::tuple</*name*/ std::string_view, /*source*/ uint32_t, ControllerType>;
 
