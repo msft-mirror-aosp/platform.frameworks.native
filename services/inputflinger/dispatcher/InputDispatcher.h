@@ -396,9 +396,9 @@ private:
         bool isPointerInWindow(const sp<android::IBinder>& token, ui::LogicalDisplayId displayId,
                                DeviceId deviceId, int32_t pointerId) const;
 
-        // Find touched windowHandle and display by token.
-        std::optional<std::tuple<const sp<gui::WindowInfoHandle>&, ui::LogicalDisplayId>>
-        findTouchedWindowHandleAndDisplay(const sp<IBinder>& token) const;
+        // Find an existing touched windowHandle and display by token.
+        std::tuple<const sp<gui::WindowInfoHandle>&, ui::LogicalDisplayId>
+        findExistingTouchedWindowHandleAndDisplay(const sp<IBinder>& token) const;
 
         void forAllTouchedWindows(std::function<void(const sp<gui::WindowInfoHandle>&)> f) const;
 
