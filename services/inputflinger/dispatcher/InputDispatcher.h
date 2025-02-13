@@ -380,21 +380,20 @@ private:
             const ftl::Flags<InputTarget::Flags> targetFlags;
         };
 
-        static void addPointerWindowTarget(const sp<android::gui::WindowInfoHandle>& windowHandle,
-                                           InputTarget::DispatchMode dispatchMode,
-                                           ftl::Flags<InputTarget::Flags> targetFlags,
-                                           std::bitset<MAX_POINTER_ID + 1> pointerIds,
-                                           std::optional<nsecs_t> firstDownTimeInTarget,
-                                           std::optional<ui::LogicalDisplayId> pointerDisplayId,
-                                           const ConnectionManager& connections,
-                                           const DispatcherWindowInfo& windowInfos,
-                                           std::function<void()> dump,
-                                           std::vector<InputTarget>& inputTargets);
+        DispatcherTouchState(const DispatcherWindowInfo& windowInfos,
+                             const ConnectionManager& connections);
+
+        void addPointerWindowTarget(const sp<android::gui::WindowInfoHandle>& windowHandle,
+                                    InputTarget::DispatchMode dispatchMode,
+                                    ftl::Flags<InputTarget::Flags> targetFlags,
+                                    std::bitset<MAX_POINTER_ID + 1> pointerIds,
+                                    std::optional<nsecs_t> firstDownTimeInTarget,
+                                    std::optional<ui::LogicalDisplayId> pointerDisplayId,
+                                    std::function<void()> dump,
+                                    std::vector<InputTarget>& inputTargets);
 
         base::Result<std::vector<InputTarget>, android::os::InputEventInjectionResult>
         findTouchedWindowTargets(nsecs_t currentTime, const MotionEntry& entry,
-                                 const ConnectionManager& connections,
-                                 const DispatcherWindowInfo& windowInfos,
                                  const sp<android::gui::WindowInfoHandle> dragWindow,
                                  std::function<void(const MotionEntry&)> addDragEvent,
                                  std::function<void()> dump);
@@ -421,8 +420,7 @@ private:
 
         // Updates the touchState for display from WindowInfo,
         // returns list of CancellationArgs for every cancelled touch
-        std::list<CancellationArgs> updateFromWindowInfo(ui::LogicalDisplayId displayId,
-                                                         const DispatcherWindowInfo& windowInfos);
+        std::list<CancellationArgs> updateFromWindowInfo(ui::LogicalDisplayId displayId);
 
         void removeAllPointersForDevice(DeviceId deviceId);
 
@@ -431,9 +429,7 @@ private:
         std::optional<
                 std::tuple<sp<gui::WindowInfoHandle>, DeviceId, std::vector<PointerProperties>,
                            std::list<CancellationArgs>, std::list<PointerDownArgs>>>
-        transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
-                             const DispatcherWindowInfo& windowInfos,
-                             const ConnectionManager& connections);
+        transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken);
 
         base::Result<std::list<CancellationArgs>, status_t> pilferPointers(
                 const sp<IBinder>& token, const Connection& requestingConnection);
@@ -474,40 +470,31 @@ private:
                 const sp<gui::WindowInfoHandle> toWindowHandle, TouchState& state,
                 DeviceId deviceId, const std::vector<PointerProperties>& pointers,
                 ftl::Flags<InputTarget::Flags> oldTargetFlags,
-                ftl::Flags<InputTarget::Flags> newTargetFlags,
-                const DispatcherWindowInfo& windowInfos, const ConnectionManager& connections);
+                ftl::Flags<InputTarget::Flags> newTargetFlags);
 
-        void saveTouchStateForMotionEntry(const MotionEntry& entry, TouchState&& touchState,
-                                          const DispatcherWindowInfo& windowInfos);
+        void saveTouchStateForMotionEntry(const MotionEntry& entry, TouchState&& touchState);
 
-        void eraseTouchStateForMotionEntry(const MotionEntry& entry,
-                                           const DispatcherWindowInfo& windowInfos);
+        void eraseTouchStateForMotionEntry(const MotionEntry& entry);
 
         const TouchState* getTouchStateForMotionEntry(
-                const android::inputdispatcher::MotionEntry& entry,
-                const DispatcherWindowInfo& windowInfos) const;
+                const android::inputdispatcher::MotionEntry& entry) const;
 
         bool canWindowReceiveMotion(const sp<gui::WindowInfoHandle>& window,
-                                    const MotionEntry& motionEntry,
-                                    const ConnectionManager& connections,
-                                    const DispatcherWindowInfo& windowInfos) const;
+                                    const MotionEntry& motionEntry) const;
 
         // Return true if stylus is currently down anywhere on the specified display,
         // and false otherwise.
         bool isStylusActiveInDisplay(ui::LogicalDisplayId displayId) const;
 
-        static std::list<CancellationArgs> eraseRemovedWindowsFromWindowInfo(
-                TouchState& state, ui::LogicalDisplayId displayId,
-                const DispatcherWindowInfo& windowInfos);
+        std::list<CancellationArgs> eraseRemovedWindowsFromWindowInfo(
+                TouchState& state, ui::LogicalDisplayId displayId);
 
-        static std::list<CancellationArgs> updateHoveringStateFromWindowInfo(
-                TouchState& state, ui::LogicalDisplayId displayId,
-                const DispatcherWindowInfo& windowInfos);
+        std::list<CancellationArgs> updateHoveringStateFromWindowInfo(
+                TouchState& state, ui::LogicalDisplayId displayId);
 
-        static std::vector<InputTarget> findOutsideTargets(
-                ui::LogicalDisplayId displayId, const sp<gui::WindowInfoHandle>& touchedWindow,
-                int32_t pointerId, const ConnectionManager& connections,
-                const DispatcherWindowInfo& windowInfos, std::function<void()> dump);
+        std::vector<InputTarget> findOutsideTargets(ui::LogicalDisplayId displayId,
+                                                    const sp<gui::WindowInfoHandle>& touchedWindow,
+                                                    int32_t pointerId, std::function<void()> dump);
 
         /**
          * Slip the wallpaper touch if necessary.
@@ -522,18 +509,18 @@ private:
          * @param targets the current targets to add the walpaper ones to
          * @param eventTime the new downTime for the wallpaper target
          */
-        static void slipWallpaperTouch(ftl::Flags<InputTarget::Flags> targetFlags,
-                                       const sp<android::gui::WindowInfoHandle>& oldWindowHandle,
-                                       const sp<android::gui::WindowInfoHandle>& newWindowHandle,
-                                       TouchState& state, const MotionEntry& entry,
-                                       std::vector<InputTarget>& targets,
-                                       const ConnectionManager& connections,
-                                       const DispatcherWindowInfo& windowInfos,
-                                       std::function<void()> dump);
+        void slipWallpaperTouch(ftl::Flags<InputTarget::Flags> targetFlags,
+                                const sp<android::gui::WindowInfoHandle>& oldWindowHandle,
+                                const sp<android::gui::WindowInfoHandle>& newWindowHandle,
+                                TouchState& state, const MotionEntry& entry,
+                                std::vector<InputTarget>& targets, std::function<void()> dump);
 
-        static ftl::Flags<InputTarget::Flags> getTargetFlags(
+        ftl::Flags<InputTarget::Flags> getTargetFlags(
                 const sp<android::gui::WindowInfoHandle>& targetWindow, vec2 targetPosition,
-                bool isSplit, const DispatcherWindowInfo& windowInfos);
+                bool isSplit);
+
+        const DispatcherWindowInfo& mWindowInfos;
+        const ConnectionManager& mConnectionManager;
     };
 
     DispatcherTouchState mTouchStates GUARDED_BY(mLock);
