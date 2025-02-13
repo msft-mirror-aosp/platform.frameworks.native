@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "Cache.h"
+
+#define ATRACE_TAG ATRACE_TAG_GRAPHICS
+
 #include "AutoBackendTexture.h"
 #include "SkiaRenderEngine.h"
 #include "android-base/unique_fd.h"
@@ -28,6 +31,7 @@
 #include "utils/Timers.h"
 
 #include <com_android_graphics_libgui_flags.h>
+#include <common/trace.h>
 
 namespace android::renderengine::skia {
 
@@ -659,6 +663,7 @@ static void drawEdgeExtensionLayers(SkiaRenderEngine* renderengine, const Displa
 // in external/skia/src/gpu/gl/builders/GrGLShaderStringBuilder.cpp
 //    gPrintSKSL = true
 void Cache::primeShaderCache(SkiaRenderEngine* renderengine, PrimeCacheConfig config) {
+    SFTRACE_CALL();
     const int previousCount = renderengine->reportShadersCompiled();
     if (previousCount) {
         ALOGD("%d Shaders already compiled before Cache::primeShaderCache ran\n", previousCount);
@@ -724,24 +729,29 @@ void Cache::primeShaderCache(SkiaRenderEngine* renderengine, PrimeCacheConfig co
                                                impl::ExternalTexture::Usage::WRITEABLE);
 
         if (config.cacheHolePunchLayer) {
+            SFTRACE_NAME("cacheHolePunchLayer");
             drawHolePunchLayer(renderengine, display, dstTexture);
         }
 
         if (config.cacheSolidLayers) {
+            SFTRACE_NAME("cacheSolidLayers");
             drawSolidLayers(renderengine, display, dstTexture);
             drawSolidLayers(renderengine, p3Display, dstTexture);
         }
 
         if (config.cacheSolidDimmedLayers) {
+            SFTRACE_NAME("cacheSolidDimmedLayers");
             drawSolidDimmedLayers(renderengine, display, dstTexture);
         }
 
         if (config.cacheShadowLayers) {
+            SFTRACE_NAME("cacheShadowLayers");
             drawShadowLayers(renderengine, display, srcTexture);
             drawShadowLayers(renderengine, p3Display, srcTexture);
         }
 
         if (renderengine->supportsBackgroundBlur()) {
+            SFTRACE_NAME("supportsBackgroundBlur");
             drawBlurLayers(renderengine, display, dstTexture);
         }
 
@@ -776,32 +786,38 @@ void Cache::primeShaderCache(SkiaRenderEngine* renderengine, PrimeCacheConfig co
 
         for (auto texture : textures) {
             if (config.cacheImageLayers) {
+                SFTRACE_NAME("cacheImageLayers");
                 drawImageLayers(renderengine, display, dstTexture, texture);
             }
 
             if (config.cacheImageDimmedLayers) {
+                SFTRACE_NAME("cacheImageDimmedLayers");
                 drawImageDimmedLayers(renderengine, display, dstTexture, texture);
                 drawImageDimmedLayers(renderengine, p3Display, dstTexture, texture);
                 drawImageDimmedLayers(renderengine, bt2020Display, dstTexture, texture);
             }
 
             if (config.cacheClippedLayers) {
+                SFTRACE_NAME("cacheClippedLayers");
                 // Draw layers for b/185569240.
                 drawClippedLayers(renderengine, display, dstTexture, texture);
             }
 
             if (com::android::graphics::libgui::flags::edge_extension_shader() &&
                 config.cacheEdgeExtension) {
+                SFTRACE_NAME("cacheEdgeExtension");
                 drawEdgeExtensionLayers(renderengine, display, dstTexture, texture);
                 drawEdgeExtensionLayers(renderengine, p3Display, dstTexture, texture);
             }
         }
 
         if (config.cachePIPImageLayers) {
+            SFTRACE_NAME("cachePIPImageLayers");
             drawPIPImageLayer(renderengine, display, dstTexture, externalTexture);
         }
 
         if (config.cacheTransparentImageDimmedLayers) {
+            SFTRACE_NAME("cacheTransparentImageDimmedLayers");
             drawTransparentImageDimmedLayers(renderengine, bt2020Display, dstTexture,
                                              externalTexture);
             drawTransparentImageDimmedLayers(renderengine, display, dstTexture, externalTexture);
@@ -811,10 +827,12 @@ void Cache::primeShaderCache(SkiaRenderEngine* renderengine, PrimeCacheConfig co
         }
 
         if (config.cacheClippedDimmedImageLayers) {
+            SFTRACE_NAME("cacheClippedDimmedImageLayers");
             drawClippedDimmedImageLayers(renderengine, bt2020Display, dstTexture, externalTexture);
         }
 
         if (config.cacheUltraHDR) {
+            SFTRACE_NAME("cacheUltraHDR");
             drawBT2020ClippedImageLayers(renderengine, bt2020Display, dstTexture, externalTexture);
 
             drawBT2020ImageLayers(renderengine, bt2020Display, dstTexture, externalTexture);
@@ -833,7 +851,10 @@ void Cache::primeShaderCache(SkiaRenderEngine* renderengine, PrimeCacheConfig co
         };
         auto layers = std::vector<LayerSettings>{layer};
         // call get() to make it synchronous
-        renderengine->drawLayers(display, layers, dstTexture, base::unique_fd()).get();
+        {
+            SFTRACE_NAME("finalLayer");
+            renderengine->drawLayers(display, layers, dstTexture, base::unique_fd()).get();
+        }
 
         const nsecs_t timeAfter = systemTime();
         const float compileTimeMs = static_cast<float>(timeAfter - timeBefore) / 1.0E6;
