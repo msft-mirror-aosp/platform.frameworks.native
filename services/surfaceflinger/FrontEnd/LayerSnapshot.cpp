@@ -305,7 +305,11 @@ std::ostream& operator<<(std::ostream& out, const LayerSnapshot& obj) {
             out << rootId << ",";
         }
     }
-    out << "] " << obj.name << "\n    " << (obj.isVisible ? "visible" : "invisible")
+    out << "] ";
+    if (obj.isSecure) {
+        out << "(Secure) ";
+    }
+    out << obj.name << "\n    " << (obj.isVisible ? "visible" : "invisible")
         << " reason=" << obj.getIsVisibleReason();
 
     if (!obj.geomLayerBounds.isEmpty()) {
