@@ -225,7 +225,11 @@ bool HWComposer::allocateVirtualDisplay(HalVirtualDisplayId displayId, ui::Size 
 }
 
 void HWComposer::allocatePhysicalDisplay(hal::HWDisplayId hwcDisplayId, PhysicalDisplayId displayId,
-                                         std::optional<ui::Size> physicalSize) {
+                                         uint8_t port, std::optional<ui::Size> physicalSize) {
+    LOG_ALWAYS_FATAL_IF(!mActivePorts.try_emplace(port).second,
+                        "Cannot attach display %" PRIu64 " to an already active port %" PRIu8 ".",
+                        hwcDisplayId, port);
+
     mPhysicalDisplayIdMap[hwcDisplayId] = displayId;
 
     if (!mPrimaryHwcDisplayId) {
@@ -239,6 +243,7 @@ void HWComposer::allocatePhysicalDisplay(hal::HWDisplayId hwcDisplayId, Physical
     newDisplay->setConnected(true);
     newDisplay->setPhysicalSizeInMm(physicalSize);
     displayData.hwcDisplay = std::move(newDisplay);
+    displayData.port = port;
 }
 
 int32_t HWComposer::getAttribute(hal::HWDisplayId hwcDisplayId, hal::HWConfigId configId,
@@ -758,6 +763,9 @@ void HWComposer::disconnectDisplay(HalDisplayId displayId) {
     const auto hwcDisplayId = displayData.hwcDisplay->getId();
 
     mPhysicalDisplayIdMap.erase(hwcDisplayId);
+    if (const auto port = displayData.port) {
+        mActivePorts.erase(port.value());
+    }
     mDisplayData.erase(displayId);
 
     // Reset the primary display ID if we're disconnecting it.
@@ -1123,8 +1131,15 @@ std::optional<hal::HWDisplayId> HWComposer::fromPhysicalDisplayId(
     return {};
 }
 
-bool HWComposer::shouldIgnoreHotplugConnect(hal::HWDisplayId hwcDisplayId,
+bool HWComposer::shouldIgnoreHotplugConnect(hal::HWDisplayId hwcDisplayId, uint8_t port,
                                             bool hasDisplayIdentificationData) const {
+    if (mActivePorts.contains(port)) {
+        ALOGE("Ignoring connection of display %" PRIu64 ". Port %" PRIu8
+              " is already in active use.",
+              hwcDisplayId, port);
+        return true;
+    }
+
     if (mHasMultiDisplaySupport && !hasDisplayIdentificationData) {
         ALOGE("Ignoring connection of display %" PRIu64 " without identification data",
               hwcDisplayId);
@@ -1170,7 +1185,7 @@ std::optional<DisplayIdentificationInfo> HWComposer::onHotplugConnect(
                   mHasMultiDisplaySupport ? "generalized" : "legacy");
         }
 
-        if (shouldIgnoreHotplugConnect(hwcDisplayId, hasDisplayIdentificationData)) {
+        if (shouldIgnoreHotplugConnect(hwcDisplayId, port, hasDisplayIdentificationData)) {
             return {};
         }
 
@@ -1202,7 +1217,7 @@ std::optional<DisplayIdentificationInfo> HWComposer::onHotplugConnect(
         if (info->preferredDetailedTimingDescriptor) {
             size = info->preferredDetailedTimingDescriptor->physicalSizeInMm;
         }
-        allocatePhysicalDisplay(hwcDisplayId, info->id, size);
+        allocatePhysicalDisplay(hwcDisplayId, info->id, info->port, size);
     }
     return info;
 }
