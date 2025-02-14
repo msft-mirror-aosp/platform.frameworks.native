@@ -19,6 +19,7 @@
 #include <android-base/logging.h>
 #include <android/configuration.h>
 #include <com_android_input_flags.h>
+#include <algorithm>
 #if defined(__ANDROID__)
 #include <gui/SurfaceComposerClient.h>
 #endif
@@ -165,6 +166,7 @@ PointerChoreographer::PointerChoreographer(
         mNotifiedPointerDisplayId(ui::LogicalDisplayId::INVALID),
         mShowTouchesEnabled(false),
         mStylusPointerIconEnabled(false),
+        mPointerMotionFilterEnabled(false),
         mCurrentFocusedDisplay(ui::LogicalDisplayId::DEFAULT),
         mIsWindowInfoListenerRegistered(false),
         mWindowInfoListener(sp<PointerChoreographerDisplayInfoListener>::make(this)),
@@ -322,8 +324,10 @@ void PointerChoreographer::processPointerDeviceMotionEventLocked(NotifyMotionArg
                                                                  PointerControllerInterface& pc) {
     const float deltaX = newArgs.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_RELATIVE_X);
     const float deltaY = newArgs.pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_RELATIVE_Y);
-
-    vec2 unconsumedDelta = pc.move(deltaX, deltaY);
+    vec2 filteredDelta =
+            filterPointerMotionForAccessibilityLocked(pc.getPosition(), vec2{deltaX, deltaY},
+                                                      newArgs.displayId);
+    vec2 unconsumedDelta = pc.move(filteredDelta.x, filteredDelta.y);
     if (com::android::input::flags::connected_displays_cursor() &&
         (std::abs(unconsumedDelta.x) > 0 || std::abs(unconsumedDelta.y) > 0)) {
         handleUnconsumedDeltaLocked(pc, unconsumedDelta);
@@ -638,6 +642,8 @@ void PointerChoreographer::dump(std::string& dump) {
                          mShowTouchesEnabled ? "true" : "false");
     dump += StringPrintf(INDENT "Stylus PointerIcon Enabled: %s\n",
                          mStylusPointerIconEnabled ? "true" : "false");
+    dump += StringPrintf(INDENT "Accessibility Pointer Motion Filter Enabled: %s\n",
+                         mPointerMotionFilterEnabled ? "true" : "false");
 
     dump += INDENT "MousePointerControllers:\n";
     for (const auto& [displayId, mousePointerController] : mMousePointersByDisplay) {
@@ -973,6 +979,11 @@ void PointerChoreographer::setFocusedDisplay(ui::LogicalDisplayId displayId) {
     mCurrentFocusedDisplay = displayId;
 }
 
+void PointerChoreographer::setAccessibilityPointerMotionFilterEnabled(bool enabled) {
+    std::scoped_lock _l(getLock());
+    mPointerMotionFilterEnabled = enabled;
+}
+
 PointerChoreographer::ControllerConstructor PointerChoreographer::getMouseControllerConstructor(
         ui::LogicalDisplayId displayId) {
     std::function<std::shared_ptr<PointerControllerInterface>()> ctor =
@@ -1044,6 +1055,21 @@ PointerChoreographer::findDestinationDisplayLocked(const ui::LogicalDisplayId so
         }
     }
     return std::nullopt;
+}
+
+vec2 PointerChoreographer::filterPointerMotionForAccessibilityLocked(
+        const vec2& current, const vec2& delta, const ui::LogicalDisplayId& displayId) {
+    if (!mPointerMotionFilterEnabled) {
+        return delta;
+    }
+    std::optional<vec2> filterResult =
+            mPolicy.filterPointerMotionForAccessibility(current, delta, displayId);
+    if (!filterResult.has_value()) {
+        // Disable filter when there's any error.
+        mPointerMotionFilterEnabled = false;
+        return delta;
+    }
+    return *filterResult;
 }
 
 // --- PointerChoreographer::PointerChoreographerDisplayInfoListener ---
