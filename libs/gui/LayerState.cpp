@@ -691,7 +691,7 @@ void layer_state_t::merge(const layer_state_t& other) {
     }
     if (other.what & eInputInfoChanged) {
         what |= eInputInfoChanged;
-        windowInfoHandle = new WindowInfoHandle(*other.windowInfoHandle);
+        windowInfoHandle = sp<WindowInfoHandle>::make(*other.windowInfoHandle);
     }
     if (other.what & eBackgroundColorChanged) {
         what |= eBackgroundColorChanged;
@@ -1009,13 +1009,13 @@ status_t BufferData::readFromParcel(const Parcel* input) {
     bool tmpBool = false;
     SAFE_PARCEL(input->readBool, &tmpBool);
     if (tmpBool) {
-        buffer = new GraphicBuffer();
+        buffer = sp<GraphicBuffer>::make();
         SAFE_PARCEL(input->read, *buffer);
     }
 
     SAFE_PARCEL(input->readBool, &tmpBool);
     if (tmpBool) {
-        acquireFence = new Fence();
+        acquireFence = sp<Fence>::make();
         SAFE_PARCEL(input->read, *acquireFence);
     }
 
