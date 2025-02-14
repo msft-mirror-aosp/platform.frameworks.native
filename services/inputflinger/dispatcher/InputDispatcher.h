@@ -336,6 +336,10 @@ private:
 
         bool isTouchTrusted(const TouchOcclusionInfo& occlusionInfo) const;
 
+        // Returns topology's primary display if the display belongs to it, otherwise the
+        // same displayId.
+        ui::LogicalDisplayId getPrimaryDisplayId(ui::LogicalDisplayId displayId) const;
+
         std::string dumpDisplayAndWindowInfo() const;
 
     private:
@@ -466,12 +470,15 @@ private:
                 ftl::Flags<InputTarget::Flags> newTargetFlags,
                 const DispatcherWindowInfo& windowInfos, const ConnectionManager& connections);
 
-        void saveTouchStateForMotionEntry(const MotionEntry& entry, TouchState&& touchState);
+        void saveTouchStateForMotionEntry(const MotionEntry& entry, TouchState&& touchState,
+                                          const DispatcherWindowInfo& windowInfos);
 
-        void eraseTouchStateForMotionEntry(const MotionEntry& entry);
+        void eraseTouchStateForMotionEntry(const MotionEntry& entry,
+                                           const DispatcherWindowInfo& windowInfos);
 
         const TouchState* getTouchStateForMotionEntry(
-                const android::inputdispatcher::MotionEntry& entry) const;
+                const android::inputdispatcher::MotionEntry& entry,
+                const DispatcherWindowInfo& windowInfos) const;
 
         bool canWindowReceiveMotion(const sp<gui::WindowInfoHandle>& window,
                                     const MotionEntry& motionEntry,
