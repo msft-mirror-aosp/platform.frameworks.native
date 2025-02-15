@@ -15185,4 +15185,102 @@ TEST_P(TransferOrDontTransferFixture, MouseAndTouchTransferSimultaneousMultiDevi
 
 INSTANTIATE_TEST_SUITE_P(WithAndWithoutTransfer, TransferOrDontTransferFixture, testing::Bool());
 
+class InputDispatcherConnectedDisplayTest : public InputDispatcherTest {
+    constexpr static int DENSITY_MEDIUM = 160;
+
+    const DisplayTopologyGraph
+            mTopology{.primaryDisplayId = DISPLAY_ID,
+                      .graph = {{DISPLAY_ID,
+                                 {{SECOND_DISPLAY_ID, DisplayTopologyPosition::TOP, 0.0f}}},
+                                {SECOND_DISPLAY_ID,
+                                 {{DISPLAY_ID, DisplayTopologyPosition::BOTTOM, 0.0f}}}},
+                      .displaysDensity = {{DISPLAY_ID, DENSITY_MEDIUM},
+                                          {SECOND_DISPLAY_ID, DENSITY_MEDIUM}}};
+
+protected:
+    sp<FakeWindowHandle> mWindow;
+
+    void SetUp() override {
+        InputDispatcherTest::SetUp();
+        mDispatcher->setDisplayTopology(mTopology);
+        mWindow = sp<FakeWindowHandle>::make(std::make_shared<FakeApplicationHandle>(), mDispatcher,
+                                             "Window", DISPLAY_ID);
+        mWindow->setFrame({0, 0, 100, 100});
+
+        gui::DisplayInfo displayInfo1;
+        displayInfo1.displayId = DISPLAY_ID;
+
+        ui::Transform transform(ui::Transform::ROT_270, /*logicalDisplayWidth=*/500,
+                                /*logicalDisplayHeight=*/500);
+        gui::DisplayInfo displayInfo2;
+        displayInfo2.displayId = SECOND_DISPLAY_ID;
+        displayInfo2.transform = transform;
+
+        mDispatcher->onWindowInfosChanged(
+                {{*mWindow->getInfo()}, {displayInfo1, displayInfo2}, 0, 0});
+    }
+};
+
+TEST_F(InputDispatcherConnectedDisplayTest, MultiDisplayMouseGesture) {
+    SCOPED_FLAG_OVERRIDE(connected_displays_cursor, true);
+
+    // pointer-down
+    mDispatcher->notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_DOWN, AINPUT_SOURCE_MOUSE)
+                                      .displayId(DISPLAY_ID)
+                                      .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
+                                      .pointer(PointerBuilder(0, ToolType::MOUSE).x(60).y(60))
+                                      .build());
+    mWindow->consumeMotionEvent(
+            AllOf(WithMotionAction(ACTION_DOWN), WithDisplayId(DISPLAY_ID), WithRawCoords(60, 60)));
+
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(AMOTION_EVENT_ACTION_BUTTON_PRESS, AINPUT_SOURCE_MOUSE)
+                    .displayId(DISPLAY_ID)
+                    .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
+                    .actionButton(AMOTION_EVENT_BUTTON_PRIMARY)
+                    .pointer(PointerBuilder(0, ToolType::MOUSE).x(60).y(60))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(AMOTION_EVENT_ACTION_BUTTON_PRESS),
+                                      WithDisplayId(DISPLAY_ID), WithRawCoords(60, 60)));
+
+    // pointer-move
+    mDispatcher->notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_MOVE, AINPUT_SOURCE_MOUSE)
+                                      .displayId(DISPLAY_ID)
+                                      .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
+                                      .pointer(PointerBuilder(0, ToolType::MOUSE).x(60).y(60))
+                                      .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(AMOTION_EVENT_ACTION_MOVE),
+                                      WithDisplayId(DISPLAY_ID), WithRawCoords(60, 60)));
+
+    // pointer-move with different display
+    // TODO (b/383092013): by default windows will not be topology aware and receive events as it
+    // was in the same display. This behaviour has not been implemented yet.
+    mDispatcher->notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_MOVE, AINPUT_SOURCE_MOUSE)
+                                      .displayId(SECOND_DISPLAY_ID)
+                                      .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
+                                      .pointer(PointerBuilder(0, ToolType::MOUSE).x(70).y(70))
+                                      .build());
+    // events should be delivered with the second displayId and in corrosponding coordinate space
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(AMOTION_EVENT_ACTION_MOVE),
+                                      WithDisplayId(SECOND_DISPLAY_ID), WithRawCoords(70, 430)));
+
+    // pointer-up
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(AMOTION_EVENT_ACTION_BUTTON_RELEASE, AINPUT_SOURCE_MOUSE)
+                    .displayId(SECOND_DISPLAY_ID)
+                    .buttonState(0)
+                    .actionButton(AMOTION_EVENT_BUTTON_PRIMARY)
+                    .pointer(PointerBuilder(0, ToolType::MOUSE).x(70).y(70))
+                    .build());
+    mWindow->consumeMotionEvent(AllOf(WithMotionAction(AMOTION_EVENT_ACTION_BUTTON_RELEASE),
+                                      WithDisplayId(SECOND_DISPLAY_ID), WithRawCoords(70, 430)));
+
+    mDispatcher->notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_UP, AINPUT_SOURCE_MOUSE)
+                                      .displayId(SECOND_DISPLAY_ID)
+                                      .buttonState(0)
+                                      .pointer(PointerBuilder(0, ToolType::MOUSE).x(70).y(70))
+                                      .build());
+    mWindow->consumeMotionUp(SECOND_DISPLAY_ID);
+}
+
 } // namespace android::inputdispatcher

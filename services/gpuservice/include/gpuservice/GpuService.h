@@ -86,6 +86,8 @@ private:
 
     status_t doDump(int fd, const Vector<String16>& args, bool asProto);
 
+    status_t cmdFeatureOverrides(int out, int /*err*/);
+
     /*
      * Attributes
      */
