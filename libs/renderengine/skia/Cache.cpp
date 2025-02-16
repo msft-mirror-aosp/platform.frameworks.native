@@ -337,17 +337,17 @@ static void drawImageDimmedLayers(SkiaRenderEngine* renderengine, const DisplayS
     LayerSettings layer{
             .geometry =
                     Geometry{
+                            .boundaries = rect,
                             // The position transform doesn't matter when the reduced shader mode
                             // in in effect. A matrix transform stage is always included.
                             .positionTransform = mat4(),
-                            .boundaries = rect,
-                            .roundedCornersCrop = rect,
                             .roundedCornersRadius = {0.f, 0.f},
+                            .roundedCornersCrop = rect,
                     },
             .source = PixelSource{.buffer = Buffer{.buffer = srcTexture,
-                                                   .maxLuminanceNits = 1000.f,
                                                    .usePremultipliedAlpha = true,
-                                                   .isOpaque = true}},
+                                                   .isOpaque = true,
+                                                   .maxLuminanceNits = 1000.f}},
             .alpha = 1.f,
             .sourceDataspace = kDestDataSpace,
     };
@@ -370,16 +370,16 @@ static void drawTransparentImageDimmedLayers(SkiaRenderEngine* renderengine,
     LayerSettings layer{
             .geometry =
                     Geometry{
-                            .positionTransform = mat4(),
                             .boundaries = rect,
+                            .positionTransform = mat4(),
                             .roundedCornersCrop = rect,
                     },
             .source = PixelSource{.buffer =
                                           Buffer{
                                                   .buffer = srcTexture,
-                                                  .maxLuminanceNits = 1000.f,
                                                   .usePremultipliedAlpha = true,
                                                   .isOpaque = false,
+                                                  .maxLuminanceNits = 1000.f,
                                           }},
             .sourceDataspace = kDestDataSpace,
     };
@@ -421,17 +421,17 @@ static void drawClippedDimmedImageLayers(SkiaRenderEngine* renderengine,
     LayerSettings layer{
             .geometry =
                     Geometry{
-                            .positionTransform = mat4(),
                             .boundaries = boundary,
-                            .roundedCornersCrop = rect,
+                            .positionTransform = mat4(),
                             .roundedCornersRadius = {27.f, 27.f},
+                            .roundedCornersCrop = rect,
                     },
             .source = PixelSource{.buffer =
                                           Buffer{
                                                   .buffer = srcTexture,
-                                                  .maxLuminanceNits = 1000.f,
                                                   .usePremultipliedAlpha = true,
                                                   .isOpaque = false,
+                                                  .maxLuminanceNits = 1000.f,
                                           }},
             .alpha = 1.f,
             .sourceDataspace = kDestDataSpace,
@@ -489,17 +489,17 @@ static void drawBT2020ImageLayers(SkiaRenderEngine* renderengine, const DisplayS
     LayerSettings layer{
             .geometry =
                     Geometry{
+                            .boundaries = rect,
                             // The position transform doesn't matter when the reduced shader mode
                             // in in effect. A matrix transform stage is always included.
                             .positionTransform = mat4(),
-                            .boundaries = rect,
-                            .roundedCornersCrop = rect,
                             .roundedCornersRadius = {0.f, 0.f},
+                            .roundedCornersCrop = rect,
                     },
             .source = PixelSource{.buffer = Buffer{.buffer = srcTexture,
-                                                   .maxLuminanceNits = 1000.f,
                                                    .usePremultipliedAlpha = true,
-                                                   .isOpaque = true}},
+                                                   .isOpaque = true,
+                                                   .maxLuminanceNits = 1000.f}},
             .alpha = 1.f,
             .sourceDataspace = kBT2020DataSpace,
     };
@@ -527,17 +527,17 @@ static void drawBT2020ClippedImageLayers(SkiaRenderEngine* renderengine,
     LayerSettings layer{
             .geometry =
                     Geometry{
-                            .positionTransform = kScaleAsymmetric,
                             .boundaries = boundary,
-                            .roundedCornersCrop = rect,
+                            .positionTransform = kScaleAsymmetric,
                             .roundedCornersRadius = {64.1f, 64.1f},
+                            .roundedCornersCrop = rect,
                     },
             .source = PixelSource{.buffer =
                                           Buffer{
                                                   .buffer = srcTexture,
-                                                  .maxLuminanceNits = 1000.f,
                                                   .usePremultipliedAlpha = true,
                                                   .isOpaque = true,
+                                                  .maxLuminanceNits = 1000.f,
                                           }},
             .alpha = 0.5f,
             .sourceDataspace = kBT2020DataSpace,
@@ -556,17 +556,17 @@ static void drawExtendedHDRImageLayers(SkiaRenderEngine* renderengine,
     LayerSettings layer{
             .geometry =
                     Geometry{
+                            .boundaries = rect,
                             // The position transform doesn't matter when the reduced shader mode
                             // in in effect. A matrix transform stage is always included.
                             .positionTransform = mat4(),
-                            .boundaries = rect,
-                            .roundedCornersCrop = rect,
                             .roundedCornersRadius = {50.f, 50.f},
+                            .roundedCornersCrop = rect,
                     },
             .source = PixelSource{.buffer = Buffer{.buffer = srcTexture,
-                                                   .maxLuminanceNits = 1000.f,
                                                    .usePremultipliedAlpha = true,
-                                                   .isOpaque = true}},
+                                                   .isOpaque = true,
+                                                   .maxLuminanceNits = 1000.f}},
             .alpha = 0.5f,
             .sourceDataspace = kExtendedHdrDataSpce,
     };
@@ -594,17 +594,17 @@ static void drawP3ImageLayers(SkiaRenderEngine* renderengine, const DisplaySetti
     LayerSettings layer{
             .geometry =
                     Geometry{
+                            .boundaries = rect,
                             // The position transform doesn't matter when the reduced shader mode
                             // in in effect. A matrix transform stage is always included.
                             .positionTransform = mat4(),
-                            .boundaries = rect,
-                            .roundedCornersCrop = rect,
                             .roundedCornersRadius = {50.f, 50.f},
+                            .roundedCornersCrop = rect,
                     },
             .source = PixelSource{.buffer = Buffer{.buffer = srcTexture,
-                                                   .maxLuminanceNits = 1000.f,
                                                    .usePremultipliedAlpha = true,
-                                                   .isOpaque = false}},
+                                                   .isOpaque = false,
+                                                   .maxLuminanceNits = 1000.f}},
             .alpha = 0.5f,
             .sourceDataspace = kOtherDataSpace,
     };
