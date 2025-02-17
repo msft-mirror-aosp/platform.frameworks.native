@@ -132,7 +132,7 @@ PointerChoreographer::PointerChoreographer(
         }),
         mNextListener(listener),
         mPolicy(policy),
-        mDefaultMouseDisplayId(ui::LogicalDisplayId::DEFAULT),
+        mCurrentMouseDisplayId(ui::LogicalDisplayId::INVALID),
         mNotifiedPointerDisplayId(ui::LogicalDisplayId::INVALID),
         mShowTouchesEnabled(false),
         mStylusPointerIconEnabled(false),
@@ -361,7 +361,7 @@ void PointerChoreographer::handleUnconsumedDeltaLocked(PointerControllerInterfac
         LOG(FATAL) << "A cursor already exists on destination display"
                    << destinationViewport.displayId;
     }
-    mDefaultMouseDisplayId = destinationViewport.displayId;
+    mCurrentMouseDisplayId = destinationViewport.displayId;
     auto pcNode = mMousePointersByDisplay.extract(sourceDisplayId);
     pcNode.key() = destinationViewport.displayId;
     mMousePointersByDisplay.insert(std::move(pcNode));
@@ -609,9 +609,9 @@ void PointerChoreographer::setDisplayTopology(const DisplayTopologyGraph& displa
 
         // make primary display default mouse display, if it was not set or
         // the existing display was removed
-        if (mDefaultMouseDisplayId == ui::LogicalDisplayId::INVALID ||
-            mTopology.graph.find(mDefaultMouseDisplayId) == mTopology.graph.end()) {
-            mDefaultMouseDisplayId = mTopology.primaryDisplayId;
+        if (mCurrentMouseDisplayId == ui::LogicalDisplayId::INVALID ||
+            mTopology.graph.find(mCurrentMouseDisplayId) == mTopology.graph.end()) {
+            mCurrentMouseDisplayId = mTopology.primaryDisplayId;
             pointerDisplayChange = updatePointerControllersLocked();
         }
     } // release lock
@@ -665,7 +665,19 @@ const DisplayViewport* PointerChoreographer::findViewportByIdLocked(
 
 ui::LogicalDisplayId PointerChoreographer::getTargetMouseDisplayLocked(
         ui::LogicalDisplayId associatedDisplayId) const {
-    return associatedDisplayId.isValid() ? associatedDisplayId : mDefaultMouseDisplayId;
+    if (!InputFlags::connectedDisplaysCursorAndAssociatedDisplayCursorBugfixEnabled()) {
+        if (associatedDisplayId.isValid()) {
+            return associatedDisplayId;
+        }
+        return mCurrentMouseDisplayId.isValid() ? mCurrentMouseDisplayId
+                                                : ui::LogicalDisplayId::DEFAULT;
+    }
+    // Associated display is not included in the topology, return this associated display.
+    if (associatedDisplayId.isValid() &&
+        mTopology.graph.find(associatedDisplayId) == mTopology.graph.end()) {
+        return associatedDisplayId;
+    }
+    return mCurrentMouseDisplayId.isValid() ? mCurrentMouseDisplayId : mTopology.primaryDisplayId;
 }
 
 std::pair<ui::LogicalDisplayId, PointerControllerInterface&>
@@ -774,7 +786,7 @@ PointerChoreographer::PointerDisplayChange
 PointerChoreographer::calculatePointerDisplayChangeToNotify() {
     ui::LogicalDisplayId displayIdToNotify = ui::LogicalDisplayId::INVALID;
     vec2 cursorPosition = {0, 0};
-    if (const auto it = mMousePointersByDisplay.find(mDefaultMouseDisplayId);
+    if (const auto it = mMousePointersByDisplay.find(mCurrentMouseDisplayId);
         it != mMousePointersByDisplay.end()) {
         const auto& pointerController = it->second;
         // Use the displayId from the pointerController, because it accurately reflects whether
@@ -800,7 +812,7 @@ void PointerChoreographer::setDefaultMouseDisplayId(ui::LogicalDisplayId display
     { // acquire lock
         std::scoped_lock _l(getLock());
 
-        mDefaultMouseDisplayId = displayId;
+        mCurrentMouseDisplayId = displayId;
         pointerDisplayChange = updatePointerControllersLocked();
     } // release lock
 
