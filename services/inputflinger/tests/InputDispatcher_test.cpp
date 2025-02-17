@@ -12374,6 +12374,11 @@ protected:
     sp<FakeWindowHandle> mSecondWindow;
     sp<FakeWindowHandle> mDragWindow;
     sp<FakeWindowHandle> mSpyWindow;
+
+    std::vector<gui::DisplayInfo> mDisplayInfos;
+
+    std::shared_ptr<FakeApplicationHandle> mSecondApplication;
+    sp<FakeWindowHandle> mWindowOnSecondDisplay;
     // Mouse would force no-split, set the id as non-zero to verify if drag state could track it.
     static constexpr int32_t MOUSE_POINTER_ID = 1;
 
@@ -12394,10 +12399,17 @@ protected:
         mSpyWindow->setTrustedOverlay(true);
         mSpyWindow->setFrame(Rect(0, 0, 200, 100));
 
+        mSecondApplication = std::make_shared<FakeApplicationHandle>();
+        mWindowOnSecondDisplay =
+                sp<FakeWindowHandle>::make(mSecondApplication, mDispatcher,
+                                           "TestWindowOnSecondDisplay", SECOND_DISPLAY_ID);
+        mWindowOnSecondDisplay->setFrame({0, 0, 100, 100});
+
         mDispatcher->setFocusedApplication(ui::LogicalDisplayId::DEFAULT, mApp);
         mDispatcher->onWindowInfosChanged(
-                {{*mSpyWindow->getInfo(), *mWindow->getInfo(), *mSecondWindow->getInfo()},
-                 {},
+                {{*mSpyWindow->getInfo(), *mWindow->getInfo(), *mSecondWindow->getInfo(),
+                  *mWindowOnSecondDisplay->getInfo()},
+                 mDisplayInfos,
                  0,
                  0});
     }
@@ -12482,11 +12494,12 @@ protected:
         mDragWindow = sp<FakeWindowHandle>::make(mApp, mDispatcher, "DragWindow",
                                                  ui::LogicalDisplayId::DEFAULT);
         mDragWindow->setTouchableRegion(Region{{0, 0, 0, 0}});
-        mDispatcher->onWindowInfosChanged({{*mDragWindow->getInfo(), *mSpyWindow->getInfo(),
-                                            *mWindow->getInfo(), *mSecondWindow->getInfo()},
-                                           {},
-                                           0,
-                                           0});
+        mDispatcher->onWindowInfosChanged(
+                {{*mDragWindow->getInfo(), *mSpyWindow->getInfo(), *mWindow->getInfo(),
+                  *mSecondWindow->getInfo(), *mWindowOnSecondDisplay->getInfo()},
+                 mDisplayInfos,
+                 0,
+                 0});
 
         // Transfer touch focus to the drag window
         bool transferred =
@@ -12498,6 +12511,13 @@ protected:
                                            AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE);
         }
         return transferred;
+    }
+
+    void addDisplay(ui::LogicalDisplayId displayId, ui::Transform transform) {
+        gui::DisplayInfo displayInfo;
+        displayInfo.displayId = displayId;
+        displayInfo.transform = transform;
+        mDisplayInfos.push_back(displayInfo);
     }
 };
 
@@ -15185,7 +15205,7 @@ TEST_P(TransferOrDontTransferFixture, MouseAndTouchTransferSimultaneousMultiDevi
 
 INSTANTIATE_TEST_SUITE_P(WithAndWithoutTransfer, TransferOrDontTransferFixture, testing::Bool());
 
-class InputDispatcherConnectedDisplayTest : public InputDispatcherTest {
+class InputDispatcherConnectedDisplayTest : public InputDispatcherDragTests {
     constexpr static int DENSITY_MEDIUM = 160;
 
     const DisplayTopologyGraph
@@ -15198,26 +15218,15 @@ class InputDispatcherConnectedDisplayTest : public InputDispatcherTest {
                                           {SECOND_DISPLAY_ID, DENSITY_MEDIUM}}};
 
 protected:
-    sp<FakeWindowHandle> mWindow;
-
     void SetUp() override {
-        InputDispatcherTest::SetUp();
+        addDisplay(DISPLAY_ID, ui::Transform());
+        addDisplay(SECOND_DISPLAY_ID,
+                   ui::Transform(ui::Transform::ROT_270, /*logicalDisplayWidth=*/
+                                 500, /*logicalDisplayHeight=*/500));
+
+        InputDispatcherDragTests::SetUp();
+
         mDispatcher->setDisplayTopology(mTopology);
-        mWindow = sp<FakeWindowHandle>::make(std::make_shared<FakeApplicationHandle>(), mDispatcher,
-                                             "Window", DISPLAY_ID);
-        mWindow->setFrame({0, 0, 100, 100});
-
-        gui::DisplayInfo displayInfo1;
-        displayInfo1.displayId = DISPLAY_ID;
-
-        ui::Transform transform(ui::Transform::ROT_270, /*logicalDisplayWidth=*/500,
-                                /*logicalDisplayHeight=*/500);
-        gui::DisplayInfo displayInfo2;
-        displayInfo2.displayId = SECOND_DISPLAY_ID;
-        displayInfo2.transform = transform;
-
-        mDispatcher->onWindowInfosChanged(
-                {{*mWindow->getInfo()}, {displayInfo1, displayInfo2}, 0, 0});
     }
 };
 
@@ -15281,6 +15290,60 @@ TEST_F(InputDispatcherConnectedDisplayTest, MultiDisplayMouseGesture) {
                                       .pointer(PointerBuilder(0, ToolType::MOUSE).x(70).y(70))
                                       .build());
     mWindow->consumeMotionUp(SECOND_DISPLAY_ID);
+}
+
+TEST_F(InputDispatcherConnectedDisplayTest, MultiDisplayMouseDragAndDrop) {
+    SCOPED_FLAG_OVERRIDE(connected_displays_cursor, true);
+
+    startDrag(true, AINPUT_SOURCE_MOUSE);
+    // Move on window.
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(AMOTION_EVENT_ACTION_MOVE, AINPUT_SOURCE_MOUSE)
+                    .displayId(DISPLAY_ID)
+                    .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
+                    .pointer(PointerBuilder(MOUSE_POINTER_ID, ToolType::MOUSE).x(50).y(50))
+                    .build());
+    mDragWindow->consumeMotionMove(DISPLAY_ID, AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE);
+    mWindow->consumeDragEvent(false, 50, 50);
+    mSecondWindow->assertNoEvents();
+    mWindowOnSecondDisplay->assertNoEvents();
+
+    // Move to another window.
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(AMOTION_EVENT_ACTION_MOVE, AINPUT_SOURCE_MOUSE)
+                    .displayId(DISPLAY_ID)
+                    .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
+                    .pointer(PointerBuilder(MOUSE_POINTER_ID, ToolType::MOUSE).x(150).y(50))
+                    .build());
+    mDragWindow->consumeMotionMove(DISPLAY_ID, AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE);
+    mWindow->consumeDragEvent(true, 150, 50);
+    mSecondWindow->consumeDragEvent(false, 50, 50);
+    mWindowOnSecondDisplay->assertNoEvents();
+
+    // Move to window on the second display
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(AMOTION_EVENT_ACTION_MOVE, AINPUT_SOURCE_MOUSE)
+                    .displayId(SECOND_DISPLAY_ID)
+                    .buttonState(AMOTION_EVENT_BUTTON_PRIMARY)
+                    .pointer(PointerBuilder(MOUSE_POINTER_ID, ToolType::MOUSE).x(50).y(50))
+                    .build());
+    mDragWindow->consumeMotionMove(SECOND_DISPLAY_ID, AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE);
+    mWindow->assertNoEvents();
+    mSecondWindow->consumeDragEvent(true, -50, 50);
+    mWindowOnSecondDisplay->consumeDragEvent(false, 50, 50);
+
+    // drop on the second display
+    mDispatcher->notifyMotion(
+            MotionArgsBuilder(AMOTION_EVENT_ACTION_UP, AINPUT_SOURCE_MOUSE)
+                    .displayId(SECOND_DISPLAY_ID)
+                    .buttonState(0)
+                    .pointer(PointerBuilder(MOUSE_POINTER_ID, ToolType::MOUSE).x(50).y(50))
+                    .build());
+    mDragWindow->consumeMotionUp(SECOND_DISPLAY_ID, AMOTION_EVENT_FLAG_NO_FOCUS_CHANGE);
+    mFakePolicy->assertDropTargetEquals(*mDispatcher, mWindowOnSecondDisplay->getToken());
+    mWindow->assertNoEvents();
+    mSecondWindow->assertNoEvents();
+    mWindowOnSecondDisplay->assertNoEvents();
 }
 
 } // namespace android::inputdispatcher
