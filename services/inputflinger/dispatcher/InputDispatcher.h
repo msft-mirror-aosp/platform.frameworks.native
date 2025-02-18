@@ -319,6 +319,11 @@ private:
                 const sp<IBinder>& windowHandleToken,
                 std::optional<ui::LogicalDisplayId> displayId = {}) const;
 
+        // Lookup for WindowInfoHandle from token and a display-id. Lookup is done for all connected
+        // displays in the topology of the queried display.
+        sp<android::gui::WindowInfoHandle> findWindowHandleOnConnectedDisplays(
+                const sp<IBinder>& windowHandleToken, ui::LogicalDisplayId displayId) const;
+
         bool isWindowPresent(const sp<android::gui::WindowInfoHandle>& windowHandle) const;
 
         // Returns the touched window at the given location, excluding the ignoreWindow if provided.
@@ -349,6 +354,12 @@ private:
         std::string dumpDisplayAndWindowInfo() const;
 
     private:
+        std::vector<ui::LogicalDisplayId> getConnectedDisplays(
+                ui::LogicalDisplayId displayId) const;
+
+        sp<android::gui::WindowInfoHandle> findWindowHandleOnDisplay(
+                const sp<IBinder>& windowHandleToken, ui::LogicalDisplayId displayId) const;
+
         std::unordered_map<ui::LogicalDisplayId /*displayId*/,
                            std::vector<sp<android::gui::WindowInfoHandle>>>
                 mWindowHandlesByDisplay;

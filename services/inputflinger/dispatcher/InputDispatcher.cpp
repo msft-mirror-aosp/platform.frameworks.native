@@ -5067,8 +5067,19 @@ sp<WindowInfoHandle> InputDispatcher::DispatcherWindowInfo::findWindowHandle(
     }
 
     // Only look through the requested display.
-    for (const sp<WindowInfoHandle>& windowHandle : getWindowHandlesForDisplay(*displayId)) {
-        if (windowHandle->getToken() == windowHandleToken) {
+    return findWindowHandleOnDisplay(windowHandleToken, *displayId);
+}
+
+sp<WindowInfoHandle> InputDispatcher::DispatcherWindowInfo::findWindowHandleOnConnectedDisplays(
+        const sp<IBinder>& windowHandleToken, ui::LogicalDisplayId displayId) const {
+    if (windowHandleToken == nullptr) {
+        return nullptr;
+    }
+
+    sp<WindowInfoHandle> windowHandle;
+    for (ui::LogicalDisplayId connectedDisplayId : getConnectedDisplays(displayId)) {
+        windowHandle = findWindowHandleOnDisplay(windowHandleToken, connectedDisplayId);
+        if (windowHandle != nullptr) {
             return windowHandle;
         }
     }
@@ -5212,6 +5223,29 @@ std::string InputDispatcher::DispatcherWindowInfo::dumpDisplayAndWindowInfo() co
         dump += "Displays: <none>\n";
     }
     return dump;
+}
+
+std::vector<ui::LogicalDisplayId> InputDispatcher::DispatcherWindowInfo::getConnectedDisplays(
+        ui::LogicalDisplayId displayId) const {
+    if (!mTopology.graph.contains(displayId)) {
+        return {displayId};
+    }
+
+    std::vector<ui::LogicalDisplayId> connectedDisplays;
+    for (auto it : mTopology.graph) {
+        connectedDisplays.push_back(it.first);
+    }
+    return connectedDisplays;
+}
+
+sp<WindowInfoHandle> InputDispatcher::DispatcherWindowInfo::findWindowHandleOnDisplay(
+        const sp<IBinder>& windowHandleToken, ui::LogicalDisplayId displayId) const {
+    for (const sp<WindowInfoHandle>& windowHandle : getWindowHandlesForDisplay(displayId)) {
+        if (windowHandle->getToken() == windowHandleToken) {
+            return windowHandle;
+        }
+    }
+    return nullptr;
 }
 
 bool InputDispatcher::DispatcherTouchState::canWindowReceiveMotion(
@@ -5806,7 +5840,10 @@ InputDispatcher::DispatcherTouchState::transferTouchGesture(const sp<android::IB
     const DeviceId deviceId = *deviceIds.begin();
 
     const sp<WindowInfoHandle> fromWindowHandle = touchedWindow.windowHandle;
-    const sp<WindowInfoHandle> toWindowHandle = mWindowInfos.findWindowHandle(toToken, displayId);
+    // TouchState displayId may not be same as window displayId, we need to lookup for toToken on
+    // all connected displays.
+    const sp<WindowInfoHandle> toWindowHandle =
+            mWindowInfos.findWindowHandleOnConnectedDisplays(toToken, displayId);
     if (!toWindowHandle) {
         ALOGW("Cannot transfer touch because the transfer target window was not found.");
         return std::nullopt;
