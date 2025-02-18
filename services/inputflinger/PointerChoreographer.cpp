@@ -602,15 +602,21 @@ void PointerChoreographer::notifyPointerCaptureChanged(
 }
 
 void PointerChoreographer::setDisplayTopology(const DisplayTopologyGraph& displayTopologyGraph) {
-    std::scoped_lock _l(getLock());
-    mTopology = displayTopologyGraph;
+    PointerDisplayChange pointerDisplayChange;
+    { // acquire lock
+        std::scoped_lock _l(getLock());
+        mTopology = displayTopologyGraph;
 
-    // make primary display default mouse display, if it was not set
-    // or the existing display was removed
-    if (mDefaultMouseDisplayId == ui::LogicalDisplayId::INVALID ||
-        mTopology.graph.find(mDefaultMouseDisplayId) != mTopology.graph.end()) {
-        mDefaultMouseDisplayId = mTopology.primaryDisplayId;
-    }
+        // make primary display default mouse display, if it was not set or
+        // the existing display was removed
+        if (mDefaultMouseDisplayId == ui::LogicalDisplayId::INVALID ||
+            mTopology.graph.find(mDefaultMouseDisplayId) == mTopology.graph.end()) {
+            mDefaultMouseDisplayId = mTopology.primaryDisplayId;
+            pointerDisplayChange = updatePointerControllersLocked();
+        }
+    } // release lock
+
+    notifyPointerDisplayChange(pointerDisplayChange, mPolicy);
 }
 
 void PointerChoreographer::dump(std::string& dump) {
@@ -785,6 +791,10 @@ PointerChoreographer::calculatePointerDisplayChangeToNotify() {
 }
 
 void PointerChoreographer::setDefaultMouseDisplayId(ui::LogicalDisplayId displayId) {
+    if (InputFlags::connectedDisplaysCursorEnabled()) {
+        // In connected displays scenario, default mouse display will only be updated from topology.
+        return;
+    }
     PointerDisplayChange pointerDisplayChange;
 
     { // acquire lock
