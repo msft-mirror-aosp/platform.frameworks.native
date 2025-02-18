@@ -362,7 +362,7 @@ aidl::android::hardware::graphics::composer3::Composition Layer::getCompositionT
 // transaction
 // ----------------------------------------------------------------------------
 
-void Layer::commitTransaction() {
+void Layer::commitTransaction() REQUIRES(mFlinger->mStateLock) {
     // Set the present state for all bufferlessSurfaceFramesTX to Presented. The
     // bufferSurfaceFrameTX will be presented in latchBuffer.
     for (auto& [token, surfaceFrame] : mDrawingState.bufferlessSurfaceFramesTX) {
@@ -394,7 +394,8 @@ bool Layer::isLayerFocusedBasedOnPriority(int32_t priority) {
 };
 
 void Layer::setFrameTimelineVsyncForBufferTransaction(const FrameTimelineInfo& info,
-                                                      nsecs_t postTime, gui::GameMode gameMode) {
+                                                      nsecs_t postTime, gui::GameMode gameMode)
+        REQUIRES(mFlinger->mStateLock) {
     mDrawingState.postTime = postTime;
 
     // Check if one of the bufferlessSurfaceFramesTX contains the same vsyncId. This can happen if
@@ -458,7 +459,7 @@ void Layer::addSurfaceFrameDroppedForBuffer(
 
 void Layer::addSurfaceFramePresentedForBuffer(
         std::shared_ptr<frametimeline::SurfaceFrame>& surfaceFrame, nsecs_t acquireFenceTime,
-        nsecs_t currentLatchTime) {
+        nsecs_t currentLatchTime) REQUIRES(mFlinger->mStateLock) {
     surfaceFrame->setAcquireFenceTime(acquireFenceTime);
     surfaceFrame->setPresentState(PresentState::Presented, mLastLatchTime);
     mFlinger->mFrameTimeline->addSurfaceFrame(surfaceFrame);
@@ -466,7 +467,8 @@ void Layer::addSurfaceFramePresentedForBuffer(
 }
 
 std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForTransaction(
-        const FrameTimelineInfo& info, nsecs_t postTime, gui::GameMode gameMode) {
+        const FrameTimelineInfo& info, nsecs_t postTime, gui::GameMode gameMode)
+        REQUIRES(mFlinger->mStateLock) {
     auto surfaceFrame =
             mFlinger->mFrameTimeline->createSurfaceFrameForToken(info, mOwnerPid, mOwnerUid,
                                                                  getSequence(), mName,
@@ -488,7 +490,7 @@ std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForTransac
 
 std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForBuffer(
         const FrameTimelineInfo& info, nsecs_t queueTime, std::string debugName,
-        gui::GameMode gameMode) {
+        gui::GameMode gameMode) REQUIRES(mFlinger->mStateLock) {
     auto surfaceFrame =
             mFlinger->mFrameTimeline->createSurfaceFrameForToken(info, mOwnerPid, mOwnerUid,
                                                                  getSequence(), mName, debugName,
@@ -506,7 +508,8 @@ std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForBuffer(
 }
 
 void Layer::setFrameTimelineVsyncForSkippedFrames(const FrameTimelineInfo& info, nsecs_t postTime,
-                                                  std::string debugName, gui::GameMode gameMode) {
+                                                  std::string debugName, gui::GameMode gameMode)
+        REQUIRES(mFlinger->mStateLock) {
     if (info.skippedFrameVsyncId == FrameTimelineInfo::INVALID_VSYNC_ID) {
         return;
     }
@@ -842,7 +845,7 @@ bool Layer::setTransformToDisplayInverse(bool transformToDisplayInverse) {
     return true;
 }
 
-void Layer::releasePreviousBuffer() {
+void Layer::releasePreviousBuffer() REQUIRES(mFlinger->mStateLock) {
     mReleasePreviousBuffer = true;
     if (!mBufferInfo.mBuffer ||
         (!mDrawingState.buffer->hasSameBuffer(*mBufferInfo.mBuffer) ||
@@ -884,7 +887,8 @@ void Layer::resetDrawingStateBufferInfo() {
 
 bool Layer::setBuffer(std::shared_ptr<renderengine::ExternalTexture>& buffer,
                       const BufferData& bufferData, nsecs_t postTime, nsecs_t desiredPresentTime,
-                      bool isAutoTimestamp, const FrameTimelineInfo& info, gui::GameMode gameMode) {
+                      bool isAutoTimestamp, const FrameTimelineInfo& info, gui::GameMode gameMode)
+        REQUIRES(mFlinger->mStateLock) {
     SFTRACE_FORMAT("setBuffer %s - hasBuffer=%s", getDebugName(), (buffer ? "true" : "false"));
 
     const bool frameNumberChanged =
@@ -1074,7 +1078,8 @@ bool Layer::setDesiredHdrHeadroom(float desiredRatio) {
 }
 
 bool Layer::setSidebandStream(const sp<NativeHandle>& sidebandStream, const FrameTimelineInfo& info,
-                              nsecs_t postTime, gui::GameMode gameMode) {
+                              nsecs_t postTime, gui::GameMode gameMode)
+        REQUIRES(mFlinger->mStateLock) {
     if (mDrawingState.sidebandStream == sidebandStream) return false;
 
     if (mDrawingState.sidebandStream != nullptr && sidebandStream == nullptr) {
@@ -1207,7 +1212,7 @@ bool Layer::latchSidebandStream(bool& recomputeVisibleRegions) {
     return false;
 }
 
-void Layer::updateTexImage(nsecs_t latchTime, bool bgColorOnly) {
+void Layer::updateTexImage(nsecs_t latchTime, bool bgColorOnly) REQUIRES(mFlinger->mStateLock) {
     const State& s(getDrawingState());
 
     if (!s.buffer) {
@@ -1457,7 +1462,8 @@ void Layer::onCompositionPresented(const DisplayDevice* display,
     mBufferInfo.mFrameLatencyNeeded = false;
 }
 
-bool Layer::latchBufferImpl(bool& recomputeVisibleRegions, nsecs_t latchTime, bool bgColorOnly) {
+bool Layer::latchBufferImpl(bool& recomputeVisibleRegions, nsecs_t latchTime, bool bgColorOnly)
+        REQUIRES(mFlinger->mStateLock) {
     SFTRACE_FORMAT_INSTANT("latchBuffer %s - %" PRIu64, getDebugName(),
                            getDrawingState().frameNumber);
 
