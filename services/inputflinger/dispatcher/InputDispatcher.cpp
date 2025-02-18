@@ -32,6 +32,7 @@
 #include <gui/SurfaceComposerClient.h>
 #endif
 #include <input/InputDevice.h>
+#include <input/InputFlags.h>
 #include <input/PrintTools.h>
 #include <input/TraceTools.h>
 #include <openssl/mem.h>
@@ -2808,8 +2809,9 @@ void InputDispatcher::finishDragAndDrop(ui::LogicalDisplayId displayId, float x,
 }
 
 void InputDispatcher::addDragEventLocked(const MotionEntry& entry) {
-    if (!mDragState || mDragState->dragWindow->getInfo()->displayId != entry.displayId ||
-        mDragState->deviceId != entry.deviceId) {
+    if (!mDragState || mDragState->deviceId != entry.deviceId ||
+        !mWindowInfos.areDisplaysConnected(mDragState->dragWindow->getInfo()->displayId,
+                                           entry.displayId)) {
         return;
     }
 
@@ -5198,6 +5200,12 @@ ui::LogicalDisplayId InputDispatcher::DispatcherWindowInfo::getPrimaryDisplayId(
     return displayId;
 }
 
+bool InputDispatcher::DispatcherWindowInfo::areDisplaysConnected(
+        ui::LogicalDisplayId display1, ui::LogicalDisplayId display2) const {
+    return display1 == display2 ||
+            (mTopology.graph.contains(display1) && mTopology.graph.contains(display2));
+}
+
 std::string InputDispatcher::DispatcherWindowInfo::dumpDisplayAndWindowInfo() const {
     std::string dump;
     if (!mWindowHandlesByDisplay.empty()) {
@@ -7499,8 +7507,7 @@ void InputDispatcher::DispatcherTouchState::saveTouchStateForMotionEntry(
         return;
     }
 
-    if (com::android::input::flags::connected_displays_cursor() &&
-        isMouseOrTouchpad(entry.source)) {
+    if (InputFlags::connectedDisplaysCursorEnabled() && isMouseOrTouchpad(entry.source)) {
         mCursorStateByDisplay[windowInfos.getPrimaryDisplayId(entry.displayId)] =
                 std::move(touchState);
     } else {
@@ -7511,8 +7518,7 @@ void InputDispatcher::DispatcherTouchState::saveTouchStateForMotionEntry(
 void InputDispatcher::DispatcherTouchState::eraseTouchStateForMotionEntry(
         const android::inputdispatcher::MotionEntry& entry,
         const DispatcherWindowInfo& windowInfos) {
-    if (com::android::input::flags::connected_displays_cursor() &&
-        isMouseOrTouchpad(entry.source)) {
+    if (InputFlags::connectedDisplaysCursorEnabled() && isMouseOrTouchpad(entry.source)) {
         mCursorStateByDisplay.erase(windowInfos.getPrimaryDisplayId(entry.displayId));
     } else {
         mTouchStatesByDisplay.erase(entry.displayId);
@@ -7522,8 +7528,7 @@ void InputDispatcher::DispatcherTouchState::eraseTouchStateForMotionEntry(
 const TouchState* InputDispatcher::DispatcherTouchState::getTouchStateForMotionEntry(
         const android::inputdispatcher::MotionEntry& entry,
         const DispatcherWindowInfo& windowInfos) const {
-    if (com::android::input::flags::connected_displays_cursor() &&
-        isMouseOrTouchpad(entry.source)) {
+    if (InputFlags::connectedDisplaysCursorEnabled() && isMouseOrTouchpad(entry.source)) {
         auto touchStateIt =
                 mCursorStateByDisplay.find(windowInfos.getPrimaryDisplayId(entry.displayId));
         if (touchStateIt != mCursorStateByDisplay.end()) {
