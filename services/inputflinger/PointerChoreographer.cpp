@@ -476,6 +476,14 @@ void PointerChoreographer::processStylusHoverEventLocked(const NotifyMotionArgs&
                      << args.dump();
     }
 
+    // Fade the mouse pointer on the display if there is one when the stylus starts hovering.
+    if (args.action == AMOTION_EVENT_ACTION_HOVER_ENTER) {
+        if (const auto it = mMousePointersByDisplay.find(args.displayId);
+            it != mMousePointersByDisplay.end()) {
+            it->second->fade(PointerControllerInterface::Transition::GRADUAL);
+        }
+    }
+
     // Get the stylus pointer controller for the device, or create one if it doesn't exist.
     auto [it, controllerAdded] =
             mStylusPointersByDevice.try_emplace(args.deviceId,
