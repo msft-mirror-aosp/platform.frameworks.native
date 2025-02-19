@@ -36,37 +36,6 @@ namespace android {
 
 namespace {
 
-bool isFromMouse(const NotifyMotionArgs& args) {
-    return isFromSource(args.source, AINPUT_SOURCE_MOUSE) &&
-            args.pointerProperties[0].toolType == ToolType::MOUSE;
-}
-
-bool isFromTouchpad(const NotifyMotionArgs& args) {
-    return isFromSource(args.source, AINPUT_SOURCE_MOUSE) &&
-            args.pointerProperties[0].toolType == ToolType::FINGER;
-}
-
-bool isFromDrawingTablet(const NotifyMotionArgs& args) {
-    return isFromSource(args.source, AINPUT_SOURCE_MOUSE | AINPUT_SOURCE_STYLUS) &&
-            isStylusToolType(args.pointerProperties[0].toolType);
-}
-
-bool isHoverAction(int32_t action) {
-    return action == AMOTION_EVENT_ACTION_HOVER_ENTER ||
-            action == AMOTION_EVENT_ACTION_HOVER_MOVE || action == AMOTION_EVENT_ACTION_HOVER_EXIT;
-}
-
-bool isStylusHoverEvent(const NotifyMotionArgs& args) {
-    return isStylusEvent(args.source, args.pointerProperties) && isHoverAction(args.action);
-}
-
-bool isMouseOrTouchpad(uint32_t sources) {
-    // Check if this is a mouse or touchpad, but not a drawing tablet.
-    return isFromSource(sources, AINPUT_SOURCE_MOUSE_RELATIVE) ||
-            (isFromSource(sources, AINPUT_SOURCE_MOUSE) &&
-             !isFromSource(sources, AINPUT_SOURCE_STYLUS));
-}
-
 inline void notifyPointerDisplayChange(std::optional<std::tuple<ui::LogicalDisplayId, vec2>> change,
                                        PointerChoreographerPolicyInterface& policy) {
     if (!change) {
@@ -239,15 +208,16 @@ NotifyMotionArgs PointerChoreographer::processMotion(const NotifyMotionArgs& arg
     PointerDisplayChange pointerDisplayChange;
     { // acquire lock
         std::scoped_lock _l(getLock());
-        if (isFromMouse(args)) {
+        if (isFromMouse(args.source, args.pointerProperties[0].toolType)) {
             newArgs = processMouseEventLocked(args);
             pointerDisplayChange = calculatePointerDisplayChangeToNotify();
-        } else if (isFromTouchpad(args)) {
+        } else if (isFromTouchpad(args.source, args.pointerProperties[0].toolType)) {
             newArgs = processTouchpadEventLocked(args);
             pointerDisplayChange = calculatePointerDisplayChangeToNotify();
-        } else if (isFromDrawingTablet(args)) {
+        } else if (isFromDrawingTablet(args.source, args.pointerProperties[0].toolType)) {
             processDrawingTabletEventLocked(args);
-        } else if (mStylusPointerIconEnabled && isStylusHoverEvent(args)) {
+        } else if (mStylusPointerIconEnabled &&
+                   isStylusHoverEvent(args.source, args.pointerProperties, args.action)) {
             processStylusHoverEventLocked(args);
         } else if (isFromSource(args.source, AINPUT_SOURCE_TOUCHSCREEN)) {
             processTouchscreenAndStylusEventLocked(args);
@@ -504,6 +474,14 @@ void PointerChoreographer::processStylusHoverEventLocked(const NotifyMotionArgs&
     if (args.getPointerCount() != 1) {
         LOG(WARNING) << "Only stylus hover events with a single pointer are currently supported: "
                      << args.dump();
+    }
+
+    // Fade the mouse pointer on the display if there is one when the stylus starts hovering.
+    if (args.action == AMOTION_EVENT_ACTION_HOVER_ENTER) {
+        if (const auto it = mMousePointersByDisplay.find(args.displayId);
+            it != mMousePointersByDisplay.end()) {
+            it->second->fade(PointerControllerInterface::Transition::GRADUAL);
+        }
     }
 
     // Get the stylus pointer controller for the device, or create one if it doesn't exist.
