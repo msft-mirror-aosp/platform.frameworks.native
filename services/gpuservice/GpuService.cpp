@@ -146,6 +146,15 @@ void GpuService::toggleAngleAsSystemDriver(bool enabled) {
     }
 }
 
+FeatureOverrides GpuService::getFeatureOverrides() {
+    if (!graphicsenv_flags::feature_overrides()) {
+        FeatureOverrides featureOverrides;
+        return featureOverrides;
+    }
+
+    return mFeatureOverrideParser.getFeatureOverrides();
+}
+
 void GpuService::setUpdatableDriverPath(const std::string& driverPath) {
     IPCThreadState* ipc = IPCThreadState::self();
     const int pid = ipc->getCallingPid();

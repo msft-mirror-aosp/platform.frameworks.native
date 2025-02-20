@@ -20,6 +20,7 @@
 #include <binder/IInterface.h>
 #include <cutils/compiler.h>
 #include <feature_override/FeatureOverrideParser.h>
+#include <graphicsenv/FeatureOverrides.h>
 #include <graphicsenv/GpuStatsInfo.h>
 #include <graphicsenv/IGpuService.h>
 #include <serviceutils/PriorityDumper.h>
@@ -64,6 +65,7 @@ private:
                         const uint64_t* values, const uint32_t valueCount) override;
     void setUpdatableDriverPath(const std::string& driverPath) override;
     std::string getUpdatableDriverPath() override;
+    FeatureOverrides getFeatureOverrides() override;
     void toggleAngleAsSystemDriver(bool enabled) override;
     void addVulkanEngineName(const std::string& appPackageName, const uint64_t driverVersionCode,
                              const char *engineName) override;
