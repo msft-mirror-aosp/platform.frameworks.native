@@ -637,7 +637,8 @@ status_t BLASTBufferQueue::acquireNextBufferLocked(
                            bufferItem.mScalingMode, crop);
 
     auto releaseBufferCallback = makeReleaseBufferCallbackThunk();
-    sp<Fence> fence = bufferItem.mFence ? new Fence(bufferItem.mFence->dup()) : Fence::NO_FENCE;
+    sp<Fence> fence =
+            bufferItem.mFence ? sp<Fence>::make(bufferItem.mFence->dup()) : Fence::NO_FENCE;
 
     nsecs_t dequeueTime = -1;
     {
@@ -1014,7 +1015,7 @@ sp<Surface> BLASTBufferQueue::getSurface(bool includeSurfaceControlHandle) {
     if (includeSurfaceControlHandle && mSurfaceControl) {
         scHandle = mSurfaceControl->getHandle();
     }
-    return new BBQSurface(mProducer, true, scHandle, this);
+    return sp<BBQSurface>::make(mProducer, true, scHandle, this);
 }
 
 void BLASTBufferQueue::mergeWithNextTransaction(SurfaceComposerClient::Transaction* t,

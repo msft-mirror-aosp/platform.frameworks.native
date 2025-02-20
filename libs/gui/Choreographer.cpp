@@ -20,6 +20,7 @@
 #include <gui/Choreographer.h>
 #include <gui/TraceUtils.h>
 #include <jni.h>
+#include <utils/Looper.h>
 
 #undef LOG_TAG
 #define LOG_TAG "AChoreographer"
