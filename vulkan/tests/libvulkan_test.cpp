@@ -15,6 +15,7 @@
  */
 
 #include <android/log.h>
+#include <driver.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <media/NdkImageReader.h>
@@ -28,6 +29,8 @@
 #define VK_CHECK(result) ASSERT_EQ(VK_SUCCESS, result)
 
 namespace android {
+
+namespace libvulkantest {
 
 class AImageReaderVulkanSwapchainTest : public ::testing::Test {
    public:
@@ -271,17 +274,20 @@ class AImageReaderVulkanSwapchainTest : public ::testing::Test {
 
         VkResult res =
             vkCreateSwapchainKHR(mDevice, &swapchainInfo, nullptr, &mSwapchain);
-        VK_CHECK(res);
-        LOGI("Swapchain created successfully");
+        if (res == VK_SUCCESS) {
+            LOGI("Swapchain created successfully");
 
-        uint32_t swapchainImageCount = 0;
-        vkGetSwapchainImagesKHR(mDevice, mSwapchain, &swapchainImageCount,
-                                nullptr);
-        std::vector<VkImage> swapchainImages(swapchainImageCount);
-        vkGetSwapchainImagesKHR(mDevice, mSwapchain, &swapchainImageCount,
-                                swapchainImages.data());
+            uint32_t swapchainImageCount = 0;
+            vkGetSwapchainImagesKHR(mDevice, mSwapchain, &swapchainImageCount,
+                                    nullptr);
+            std::vector<VkImage> swapchainImages(swapchainImageCount);
+            vkGetSwapchainImagesKHR(mDevice, mSwapchain, &swapchainImageCount,
+                                    swapchainImages.data());
 
-        LOGI("Swapchain has %u images", swapchainImageCount);
+            LOGI("Swapchain has %u images", swapchainImageCount);
+        } else {
+            LOGI("Swapchain creation failed");
+        }
     }
 
     // Image available callback (AImageReader)
@@ -356,5 +362,80 @@ TEST_F(AImageReaderVulkanSwapchainTest, TestHelperMethods) {
     ASSERT_NE(mSwapchain, (VkSwapchainKHR)VK_NULL_HANDLE);
     cleanUpSwapchainForTest();
 }
+
+// Passing state in these tests requires global state. Wrap each test in an
+// anonymous namespace to prevent conflicting names.
+namespace {
+
+VKAPI_ATTR VkResult VKAPI_CALL hookedGetPhysicalDeviceImageFormatProperties2KHR(
+    VkPhysicalDevice,
+    const VkPhysicalDeviceImageFormatInfo2*,
+    VkImageFormatProperties2*) {
+    return VK_ERROR_SURFACE_LOST_KHR;
+}
+
+static PFN_vkGetSwapchainGrallocUsage2ANDROID
+    pfnNextGetSwapchainGrallocUsage2ANDROID = nullptr;
+
+static bool g_grallocCalled = false;
+
+VKAPI_ATTR VkResult VKAPI_CALL hookGetSwapchainGrallocUsage2ANDROID(
+    VkDevice device,
+    VkFormat format,
+    VkImageUsageFlags imageUsage,
+    VkSwapchainImageUsageFlagsANDROID swapchainImageUsage,
+    uint64_t* grallocConsumerUsage,
+    uint64_t* grallocProducerUsage) {
+    g_grallocCalled = true;
+    if (pfnNextGetSwapchainGrallocUsage2ANDROID) {
+        return pfnNextGetSwapchainGrallocUsage2ANDROID(
+            device, format, imageUsage, swapchainImageUsage,
+            grallocConsumerUsage, grallocProducerUsage);
+    }
+
+    return VK_ERROR_INITIALIZATION_FAILED;
+}
+
+TEST_F(AImageReaderVulkanSwapchainTest, getProducerUsageFallbackTest1) {
+    // BUG: 379230826
+    // Verify that getProducerUsage falls back to
+    // GetSwapchainGrallocUsage*ANDROID if GPDIFP2 fails
+    std::vector<const char*> instanceLayers = {};
+    std::vector<const char*> deviceLayers = {};
+    createVulkanInstance(instanceLayers);
+
+    createAImageReader(640, 480, AIMAGE_FORMAT_PRIVATE, 3);
+    getANativeWindowFromReader();
+    createVulkanSurface();
+    pickPhysicalDeviceAndQueueFamily();
+
+    createDeviceAndGetQueue(deviceLayers);
+    auto& pdev = vulkan::driver::GetData(mDevice).driver_physical_device;
+    auto& pdevDispatchTable = vulkan::driver::GetData(pdev).driver;
+    auto& deviceDispatchTable = vulkan::driver::GetData(mDevice).driver;
+
+    ASSERT_NE(deviceDispatchTable.GetSwapchainGrallocUsage2ANDROID, nullptr);
+
+    pdevDispatchTable.GetPhysicalDeviceImageFormatProperties2 =
+        hookedGetPhysicalDeviceImageFormatProperties2KHR;
+    deviceDispatchTable.GetSwapchainGrallocUsage2ANDROID =
+        hookGetSwapchainGrallocUsage2ANDROID;
+
+    ASSERT_FALSE(g_grallocCalled);
+
+    createSwapchain();
+
+    ASSERT_TRUE(g_grallocCalled);
+
+    ASSERT_NE(mVkInstance, (VkInstance)VK_NULL_HANDLE);
+    ASSERT_NE(mPhysicalDev, (VkPhysicalDevice)VK_NULL_HANDLE);
+    ASSERT_NE(mDevice, (VkDevice)VK_NULL_HANDLE);
+    ASSERT_NE(mSurface, (VkSurfaceKHR)VK_NULL_HANDLE);
+    cleanUpSwapchainForTest();
+}
+
+}  // namespace
+
+}  // namespace libvulkantest
 
 }  // namespace android
