@@ -2364,10 +2364,6 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setStret
     return *this;
 }
 
-bool SurfaceComposerClient::flagEdgeExtensionEffectUseShader() {
-    return com::android::graphics::libgui::flags::edge_extension_shader();
-}
-
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setEdgeExtensionEffect(
         const sp<SurfaceControl>& sc, const gui::EdgeExtensionParameters& effect) {
     layer_state_t* s = getLayerState(sc);
