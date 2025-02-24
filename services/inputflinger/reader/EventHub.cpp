@@ -246,7 +246,7 @@ static nsecs_t processEventTimestamp(const struct input_event& event) {
 /**
  * Returns the sysfs root path of the input device.
  */
-static std::optional<std::filesystem::path> getSysfsRootPath(const char* devicePath) {
+static std::optional<std::filesystem::path> getSysfsRootForEvdevDevicePath(const char* devicePath) {
     std::error_code errorCode;
 
     // Stat the device path to get the major and minor number of the character file
@@ -1619,7 +1619,7 @@ void EventHub::assignDescriptorLocked(InputDeviceIdentifier& identifier) {
 std::shared_ptr<const EventHub::AssociatedDevice> EventHub::obtainAssociatedDeviceLocked(
         const std::filesystem::path& devicePath, const std::shared_ptr<PropertyMap>& config) const {
     const std::optional<std::filesystem::path> sysfsRootPathOpt =
-            getSysfsRootPath(devicePath.c_str());
+            getSysfsRootForEvdevDevicePath(devicePath.c_str());
     if (!sysfsRootPathOpt) {
         return nullptr;
     }
@@ -2666,6 +2666,18 @@ status_t EventHub::disableDevice(int32_t deviceId) {
     return device->disable();
 }
 
+std::filesystem::path EventHub::getSysfsRootPath(int32_t deviceId) const {
+    std::scoped_lock _l(mLock);
+    Device* device = getDeviceLocked(deviceId);
+    if (device == nullptr) {
+        ALOGE("Invalid device id=%" PRId32 " provided to %s", deviceId, __func__);
+        return {};
+    }
+
+    return device->associatedDevice ? device->associatedDevice->sysfsRootPath
+                                    : std::filesystem::path{};
+}
+
 // TODO(b/274755573): Shift to uevent handling on native side and remove this method
 // Currently using Java UEventObserver to trigger this which uses UEvent infrastructure that uses a
 // NETLINK socket to observe UEvents. We can create similar infrastructure on Eventhub side to
@@ -2710,6 +2722,10 @@ void EventHub::handleSysfsNodeChangeNotificationsLocked() {
         auto reloadedDevice = AssociatedDevice(dev.associatedDevice->sysfsRootPath,
                                                dev.associatedDevice->baseDevConfig);
         const bool changed = *dev.associatedDevice != reloadedDevice;
+        if (changed) {
+            ALOGI("sysfsNodeChanged: Identified change in sysfs nodes for device: %s",
+                  dev.identifier.name.c_str());
+        }
         testedDevices.emplace(dev.associatedDevice, changed);
         return changed;
     };
