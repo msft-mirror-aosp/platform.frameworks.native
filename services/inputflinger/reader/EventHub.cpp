@@ -2694,32 +2694,25 @@ void EventHub::sysfsNodeChanged(const std::string& sysfsNodePath) {
         return changed;
     };
 
-    std::set<Device*> devicesToClose;
-    std::set<std::string /*path*/> devicesToOpen;
+    std::set<Device*> devicesToReopen;
 
-    // Check in opening devices. If its associated device changed,
-    // the device should be removed from mOpeningDevices and needs to be opened again.
-    std::erase_if(mOpeningDevices, [&](const auto& dev) {
+    // Check in opening devices.
+    for (const auto& dev : mOpeningDevices) {
         if (isAssociatedDeviceChanged(*dev)) {
-            devicesToOpen.emplace(dev->path);
-            return true;
+            devicesToReopen.emplace(dev.get());
         }
-        return false;
-    });
+    }
 
-    // Check in already added device. If its associated device changed,
-    // the device needs to be re-opened.
+    // Check in already added devices.
     for (const auto& [id, dev] : mDevices) {
         if (isAssociatedDeviceChanged(*dev)) {
-            devicesToOpen.emplace(dev->path);
-            devicesToClose.emplace(dev.get());
+            devicesToReopen.emplace(dev.get());
         }
     }
 
-    for (auto* device : devicesToClose) {
-        closeDeviceLocked(*device);
-    }
-    for (const auto& path : devicesToOpen) {
+    for (auto* device : devicesToReopen) {
+        const auto path = device->path;
+        closeDeviceLocked(*device); // The Device object is deleted by this function.
         openDeviceLocked(path);
     }
 }
@@ -2817,9 +2810,23 @@ void EventHub::closeDeviceLocked(Device& device) {
     releaseControllerNumberLocked(device.controllerNumber);
     device.controllerNumber = 0;
     device.close();
-    mClosingDevices.push_back(std::move(mDevices[device.id]));
 
-    mDevices.erase(device.id);
+    // Try to remove this device from mDevices.
+    if (auto it = mDevices.find(device.id); it != mDevices.end()) {
+        mClosingDevices.push_back(std::move(mDevices[device.id]));
+        mDevices.erase(device.id);
+        return;
+    }
+
+    // Try to remove this device from mOpeningDevices.
+    if (auto it = std::find_if(mOpeningDevices.begin(), mOpeningDevices.end(),
+                               [&device](auto& d) { return d->id == device.id; });
+        it != mOpeningDevices.end()) {
+        mOpeningDevices.erase(it);
+        return;
+    }
+
+    LOG_ALWAYS_FATAL("%s: Device with id %d was not found!", __func__, device.id);
 }
 
 base::Result<void> EventHub::readNotifyLocked() {
