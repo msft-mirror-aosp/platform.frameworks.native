@@ -1546,6 +1546,14 @@ TEST_F(LayerSnapshotTest, setShadowRadius) {
     EXPECT_EQ(getSnapshot(1)->shadowSettings.length, SHADOW_RADIUS);
 }
 
+TEST_F(LayerSnapshotTest, setBorderSettings) {
+    gui::BorderSettings settings;
+    settings.strokeWidth = 5;
+    setBorderSettings(1, settings);
+    UPDATE_AND_VERIFY(mSnapshotBuilder, STARTING_ZORDER);
+    EXPECT_EQ(getSnapshot(1)->borderSettings.strokeWidth, settings.strokeWidth);
+}
+
 TEST_F(LayerSnapshotTest, setTrustedOverlayForNonVisibleInput) {
     hideLayer(1);
     setTrustedOverlay(1, gui::TrustedOverlay::ENABLED);

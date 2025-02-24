@@ -83,12 +83,13 @@ private:
             compositionengine::LayerFE::LayerSettings&,
             compositionengine::LayerFE::ClientCompositionTargetSettings&) const;
 
-    bool hasEffect() const { return fillsColor() || drawShadows() || hasBlur(); }
+    bool hasEffect() const { return fillsColor() || drawShadows() || hasBlur() || hasOutline(); }
     bool hasBufferOrSidebandStream() const;
 
     bool fillsColor() const;
     bool hasBlur() const;
     bool drawShadows() const;
+    bool hasOutline() const;
 
     const sp<GraphicBuffer> getBuffer() const;
 

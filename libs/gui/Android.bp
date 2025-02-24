@@ -93,6 +93,7 @@ filegroup {
         "android/gui/StalledTransactionInfo.aidl",
         "android/**/TouchOcclusionMode.aidl",
         "android/gui/TrustedOverlay.aidl",
+        "android/gui/BorderSettings.aidl",
     ],
 }
 
