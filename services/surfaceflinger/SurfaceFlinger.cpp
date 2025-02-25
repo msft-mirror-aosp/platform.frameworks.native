@@ -4320,20 +4320,19 @@ void SurfaceFlinger::updateInputFlinger(VsyncId vsyncId, TimePoint frameTime) {
                                                                 std::move(displayInfos),
                                                                 ftl::to_underlying(vsyncId),
                                                                 frameTime.ns()},
-                                         std::move(
-                                                 inputWindowCommands.windowInfosReportedListeners),
+                                         std::move(inputWindowCommands.releaseListeners()),
                                          /* forceImmediateCall= */ visibleWindowsChanged ||
-                                                 !inputWindowCommands.focusRequests.empty());
+                                                 !inputWindowCommands.getFocusRequests().empty());
         } else {
             // If there are listeners but no changes to input windows, call the listeners
             // immediately.
-            for (const auto& listener : inputWindowCommands.windowInfosReportedListeners) {
+            for (const auto& listener : inputWindowCommands.getListeners()) {
                 if (IInterface::asBinder(listener)->isBinderAlive()) {
                     listener->onWindowInfosReported();
                 }
             }
         }
-        for (const auto& focusRequest : inputWindowCommands.focusRequests) {
+        for (const auto& focusRequest : inputWindowCommands.getFocusRequests()) {
             inputFlinger->setFocusedWindow(focusRequest);
         }
     }});
@@ -5060,16 +5059,16 @@ status_t SurfaceFlinger::setTransactionState(
             mBufferCountTracker.increment(resolvedState.layerId);
         }
         if (resolvedState.state.what & layer_state_t::eReparent) {
-            resolvedState.parentId =
-                    getLayerIdFromSurfaceControl(resolvedState.state.parentSurfaceControlForChild);
+            resolvedState.parentId = getLayerIdFromSurfaceControl(
+                    resolvedState.state.getParentSurfaceControlForChild());
         }
         if (resolvedState.state.what & layer_state_t::eRelativeLayerChanged) {
-            resolvedState.relativeParentId =
-                    getLayerIdFromSurfaceControl(resolvedState.state.relativeLayerSurfaceControl);
+            resolvedState.relativeParentId = getLayerIdFromSurfaceControl(
+                    resolvedState.state.getRelativeLayerSurfaceControl());
         }
         if (resolvedState.state.what & layer_state_t::eInputInfoChanged) {
             wp<IBinder>& touchableRegionCropHandle =
-                    resolvedState.state.windowInfoHandle->editInfo()->touchableRegionCropHandle;
+                    resolvedState.state.editWindowInfo()->touchableRegionCropHandle;
             resolvedState.touchCropId =
                     LayerHandle::getLayerId(touchableRegionCropHandle.promote());
         }

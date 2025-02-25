@@ -288,7 +288,7 @@ public:
                                         bool leaveState);
 
     inline bool hasTrustedPresentationListener() {
-        return mTrustedPresentationListener.callbackInterface != nullptr;
+        return mTrustedPresentationListener.getCallback() != nullptr;
     }
 
     // Sets the masked bits.
