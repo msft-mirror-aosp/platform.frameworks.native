@@ -3072,6 +3072,90 @@ TEST_F(PointerChoreographerDisplayTopologyDefaultMouseDisplayTests,
     ASSERT_TRUE(pc->isPointerShown());
 }
 
+TEST_F(PointerChoreographerDisplayTopologyDefaultMouseDisplayTests,
+       UsePrimaryDisplayIfAssociatedDisplayIsInTopology) {
+    SCOPED_FLAG_OVERRIDE(connected_displays_cursor, true);
+    SCOPED_FLAG_OVERRIDE(connected_displays_associated_display_cursor_bugfix, true);
+
+    // Add two displays
+    mChoreographer.setDisplayViewports(
+            {createViewport(FIRST_DISPLAY_ID), createViewport(SECOND_DISPLAY_ID)});
+    setDisplayTopologyWithDisplays(/*primaryDisplayId=*/SECOND_DISPLAY_ID,
+                                   /*adjacentDisplays=*/{FIRST_DISPLAY_ID});
+
+    mChoreographer.notifyInputDevicesChanged(
+            {/*id=*/0, {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE, FIRST_DISPLAY_ID)}});
+
+    auto pc = assertPointerControllerCreated(ControllerType::MOUSE);
+    pc->assertViewportSet(SECOND_DISPLAY_ID);
+    ASSERT_TRUE(pc->isPointerShown());
+}
+
+TEST_F(PointerChoreographerDisplayTopologyDefaultMouseDisplayTests,
+       AllowCrossingDisplayEvenWithAssociatedDisplaySet) {
+    SCOPED_FLAG_OVERRIDE(connected_displays_cursor, true);
+    SCOPED_FLAG_OVERRIDE(connected_displays_associated_display_cursor_bugfix, true);
+
+    // Add two displays
+    mChoreographer.setDisplayViewports(
+            {createViewport(FIRST_DISPLAY_ID), createViewport(SECOND_DISPLAY_ID)});
+    setDisplayTopologyWithDisplays(/*primaryDisplayId=*/FIRST_DISPLAY_ID,
+                                   /*adjacentDisplays=*/{SECOND_DISPLAY_ID});
+
+    mChoreographer.notifyInputDevicesChanged(
+            {/*id=*/0,
+             {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE, SECOND_DISPLAY_ID)}});
+
+    auto pc = assertPointerControllerCreated(ControllerType::MOUSE);
+    pc->assertViewportSet(FIRST_DISPLAY_ID);
+    ASSERT_TRUE(pc->isPointerShown());
+
+    // Move cursor to the secondary display
+    auto pointerBuilder = PointerBuilder(/*id=*/0, ToolType::MOUSE)
+                                  .axis(AMOTION_EVENT_AXIS_RELATIVE_X, /*x=*/100)
+                                  .axis(AMOTION_EVENT_AXIS_RELATIVE_Y, /*y=*/0);
+    mChoreographer.notifyMotion(
+            MotionArgsBuilder(AMOTION_EVENT_ACTION_HOVER_MOVE, AINPUT_SOURCE_MOUSE)
+                    .pointer(pointerBuilder)
+                    .deviceId(DEVICE_ID)
+                    .displayId(ui::LogicalDisplayId::INVALID)
+                    .build());
+
+    assertPointerControllerNotCreated();
+    pc->assertViewportSet(SECOND_DISPLAY_ID);
+    ASSERT_TRUE(pc->isPointerShown());
+}
+
+TEST_F(PointerChoreographerDisplayTopologyDefaultMouseDisplayTests,
+       AddAssociatedDisplayCursorOutsideOfDisplayTopology) {
+    SCOPED_FLAG_OVERRIDE(connected_displays_cursor, true);
+    SCOPED_FLAG_OVERRIDE(connected_displays_associated_display_cursor_bugfix, true);
+
+    // Add three displays, with only first and second display in DisplayTopolgoy
+    mChoreographer.setDisplayViewports({createViewport(FIRST_DISPLAY_ID),
+                                        createViewport(SECOND_DISPLAY_ID),
+                                        createViewport(THIRD_DISPLAY_ID)});
+    setDisplayTopologyWithDisplays(/*primaryDisplayId=*/FIRST_DISPLAY_ID,
+                                   /*adjacentDisplays=*/{SECOND_DISPLAY_ID});
+
+    mChoreographer.notifyInputDevicesChanged(
+            {/*id=*/0,
+             {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE,
+                                     ui::LogicalDisplayId::INVALID)}});
+
+    auto pc = assertPointerControllerCreated(ControllerType::MOUSE);
+    pc->assertViewportSet(FIRST_DISPLAY_ID);
+    ASSERT_TRUE(pc->isPointerShown());
+
+    // Adds a new mouse associated with third display
+    mChoreographer.notifyInputDevicesChanged(
+            {/*id=*/1, {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE, THIRD_DISPLAY_ID)}});
+
+    pc = assertPointerControllerCreated(ControllerType::MOUSE);
+    pc->assertViewportSet(THIRD_DISPLAY_ID);
+    ASSERT_TRUE(pc->isPointerShown());
+}
+
 class PointerChoreographerWindowInfoListenerTest : public testing::Test {};
 
 TEST_F_WITH_FLAGS(
