@@ -58,6 +58,7 @@ class AImageReaderVulkanSwapchainTest : public ::testing::Test {
         const char* extensions[] = {
             VK_KHR_SURFACE_EXTENSION_NAME,
             VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
+            VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
             VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
         };
 
@@ -431,6 +432,83 @@ TEST_F(AImageReaderVulkanSwapchainTest, getProducerUsageFallbackTest1) {
     ASSERT_NE(mPhysicalDev, (VkPhysicalDevice)VK_NULL_HANDLE);
     ASSERT_NE(mDevice, (VkDevice)VK_NULL_HANDLE);
     ASSERT_NE(mSurface, (VkSurfaceKHR)VK_NULL_HANDLE);
+    cleanUpSwapchainForTest();
+}
+
+}  // namespace
+
+// Passing state in these tests requires global state. Wrap each test in an
+// anonymous namespace to prevent conflicting names.
+namespace {
+
+static bool g_returnNotSupportedOnce = true;
+
+VKAPI_ATTR VkResult VKAPI_CALL
+Hook_GetPhysicalDeviceImageFormatProperties2_NotSupportedOnce(
+    VkPhysicalDevice /*physicalDevice*/,
+    const VkPhysicalDeviceImageFormatInfo2* /*pImageFormatInfo*/,
+    VkImageFormatProperties2* /*pImageFormatProperties*/) {
+    if (g_returnNotSupportedOnce) {
+        g_returnNotSupportedOnce = false;
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
+    return VK_SUCCESS;
+}
+
+TEST_F(AImageReaderVulkanSwapchainTest, SurfaceFormats2KHR_IgnoreNotSupported) {
+    // BUG: 357903074
+    // Verify that vkGetPhysicalDeviceSurfaceFormats2KHR properly
+    // ignores VK_ERROR_FORMAT_NOT_SUPPORTED and continues enumerating formats.
+    std::vector<const char*> instanceLayers;
+    createVulkanInstance(instanceLayers);
+    createAImageReader(640, 480, AIMAGE_FORMAT_PRIVATE, 3);
+    getANativeWindowFromReader();
+    createVulkanSurface();
+    pickPhysicalDeviceAndQueueFamily();
+
+    auto& pdevDispatchTable = vulkan::driver::GetData(mPhysicalDev).driver;
+    pdevDispatchTable.GetPhysicalDeviceImageFormatProperties2 =
+        Hook_GetPhysicalDeviceImageFormatProperties2_NotSupportedOnce;
+
+    PFN_vkGetPhysicalDeviceSurfaceFormats2KHR
+        pfnGetPhysicalDeviceSurfaceFormats2KHR =
+            reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceFormats2KHR>(
+                vkGetInstanceProcAddr(mVkInstance,
+                                      "vkGetPhysicalDeviceSurfaceFormats2KHR"));
+    ASSERT_NE(nullptr, pfnGetPhysicalDeviceSurfaceFormats2KHR)
+        << "Could not get pointer to vkGetPhysicalDeviceSurfaceFormats2KHR";
+
+    VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo2{};
+    surfaceInfo2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
+    surfaceInfo2.pNext = nullptr;
+    surfaceInfo2.surface = mSurface;
+
+    uint32_t formatCount = 0;
+    VkResult res = pfnGetPhysicalDeviceSurfaceFormats2KHR(
+        mPhysicalDev, &surfaceInfo2, &formatCount, nullptr);
+
+    // If the loader never tries a second format, it might fail or 0-out the
+    // formatCount. The patch ensures it continues to the next format rather
+    // than bailing out on the first NOT_SUPPORTED.
+    ASSERT_EQ(VK_SUCCESS, res)
+        << "vkGetPhysicalDeviceSurfaceFormats2KHR failed unexpectedly";
+    ASSERT_GT(formatCount, 0U)
+        << "No surface formats found; the loader may have bailed early.";
+
+    std::vector<VkSurfaceFormat2KHR> formats(formatCount);
+    for (auto& f : formats) {
+        f.sType = VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR;
+        f.pNext = nullptr;
+    }
+    res = pfnGetPhysicalDeviceSurfaceFormats2KHR(mPhysicalDev, &surfaceInfo2,
+                                                 &formatCount, formats.data());
+    ASSERT_EQ(VK_SUCCESS, res) << "Failed to retrieve surface formats";
+
+    LOGI(
+        "SurfaceFormats2KHR_IgnoreNotSupported test: found %u formats after "
+        "ignoring NOT_SUPPORTED",
+        formatCount);
+
     cleanUpSwapchainForTest();
 }
 
