@@ -100,7 +100,7 @@ sp<Choreographer> Choreographer::getForThread() {
             return nullptr;
         }
     }
-    return gChoreographer.get();
+    return gChoreographer;
 }
 
 Choreographer::Choreographer(const sp<Looper>& looper, const sp<IBinder>& layerHandle)
