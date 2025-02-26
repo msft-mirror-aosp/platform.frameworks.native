@@ -1236,6 +1236,16 @@ void SkiaRenderEngine::drawLayersInternal(
     LOG_ALWAYS_FATAL_IF(activeSurface != dstSurface);
     auto drawFence = sp<Fence>::make(flushAndSubmit(context, dstSurface));
     trace(drawFence);
+    FenceTimePtr fenceTime = FenceTime::makeValid(drawFence);
+    for (const auto& layer : layers) {
+        if (FlagManager::getInstance().monitor_buffer_fences()) {
+            if (layer.source.buffer.buffer) {
+                layer.source.buffer.buffer->getBuffer()
+                        ->getDependencyMonitor()
+                        .addAccessCompletion(fenceTime, "RE");
+            }
+        }
+    }
     resultPromise->set_value(std::move(drawFence));
 }
 

@@ -129,6 +129,7 @@ void FlagManager::dump(std::string& result) const {
     DUMP_ACONFIG_FLAG(correct_virtual_display_power_state);
     DUMP_ACONFIG_FLAG(graphite_renderengine_preview_rollout);
     DUMP_ACONFIG_FLAG(increase_missed_frame_jank_threshold);
+    DUMP_ACONFIG_FLAG(monitor_buffer_fences);
     DUMP_ACONFIG_FLAG(refresh_rate_overlay_on_external_display);
     DUMP_ACONFIG_FLAG(vsync_predictor_recovery);
 
@@ -303,6 +304,7 @@ FLAG_MANAGER_ACONFIG_FLAG(adpf_gpu_sf, "")
 FLAG_MANAGER_ACONFIG_FLAG(adpf_native_session_manager, "");
 FLAG_MANAGER_ACONFIG_FLAG(graphite_renderengine_preview_rollout, "");
 FLAG_MANAGER_ACONFIG_FLAG(increase_missed_frame_jank_threshold, "");
+FLAG_MANAGER_ACONFIG_FLAG(monitor_buffer_fences, "");
 FLAG_MANAGER_ACONFIG_FLAG(vsync_predictor_recovery, "");
 
 /// Trunk stable server (R/W) flags from outside SurfaceFlinger ///
