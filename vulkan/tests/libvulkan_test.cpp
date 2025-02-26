@@ -165,7 +165,8 @@ class AImageReaderVulkanSwapchainTest : public ::testing::Test {
             << "No physical device found that supports present to the surface!";
     }
 
-    void createDeviceAndGetQueue(std::vector<const char*>& layers) {
+    void createDeviceAndGetQueue(std::vector<const char*>& layers,
+                                 std::vector<const char*> inExtensions = {}) {
         ASSERT_NE((void*)VK_NULL_HANDLE, mPhysicalDev);
         ASSERT_NE(UINT32_MAX, mPresentQueueFamily);
 
@@ -183,12 +184,14 @@ class AImageReaderVulkanSwapchainTest : public ::testing::Test {
         deviceInfo.enabledLayerCount = layers.size();
         deviceInfo.ppEnabledLayerNames = layers.data();
 
-        const char* extensions[] = {
+        std::vector<const char*> extensions = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
-        deviceInfo.enabledExtensionCount =
-            sizeof(extensions) / sizeof(extensions[0]);
-        deviceInfo.ppEnabledExtensionNames = extensions;
+        for (auto extension : inExtensions) {
+            extensions.push_back(extension);
+        }
+        deviceInfo.enabledExtensionCount = extensions.size();
+        deviceInfo.ppEnabledExtensionNames = extensions.data();
 
         VkResult res =
             vkCreateDevice(mPhysicalDev, &deviceInfo, nullptr, &mDevice);
@@ -508,6 +511,91 @@ TEST_F(AImageReaderVulkanSwapchainTest, SurfaceFormats2KHR_IgnoreNotSupported) {
         "SurfaceFormats2KHR_IgnoreNotSupported test: found %u formats after "
         "ignoring NOT_SUPPORTED",
         formatCount);
+
+    cleanUpSwapchainForTest();
+}
+
+}  // namespace
+
+namespace {
+
+TEST_F(AImageReaderVulkanSwapchainTest, MutableFormatSwapchainTest) {
+    // Test swapchain with mutable format extension
+    std::vector<const char*> instanceLayers;
+    std::vector<const char*> deviceLayers;
+    std::vector<const char*> deviceExtensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE2_EXTENSION_NAME,
+        VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME};
+
+    createVulkanInstance(instanceLayers);
+    createAImageReader(640, 480, AIMAGE_FORMAT_PRIVATE, 3);
+    getANativeWindowFromReader();
+    createVulkanSurface();
+    pickPhysicalDeviceAndQueueFamily();
+    createDeviceAndGetQueue(deviceLayers, deviceExtensions);
+
+    ASSERT_NE((VkDevice)VK_NULL_HANDLE, mDevice);
+    ASSERT_NE((VkSurfaceKHR)VK_NULL_HANDLE, mSurface);
+
+    VkSurfaceCapabilitiesKHR surfaceCaps{};
+    VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysicalDev, mSurface,
+                                                       &surfaceCaps));
+
+    uint32_t formatCount = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(mPhysicalDev, mSurface, &formatCount,
+                                         nullptr);
+    ASSERT_GT(formatCount, 0U);
+    std::vector<VkSurfaceFormatKHR> formats(formatCount);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(mPhysicalDev, mSurface, &formatCount,
+                                         formats.data());
+
+    VkFormat viewFormats[2] = {formats[0].format, formats[0].format};
+    if (formatCount > 1) {
+        viewFormats[1] = formats[1].format;
+    }
+
+    VkImageFormatListCreateInfoKHR formatList{};
+    formatList.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO_KHR;
+    formatList.viewFormatCount = 2;
+    formatList.pViewFormats = viewFormats;
+
+    VkSwapchainCreateInfoKHR swapchainInfo{};
+    swapchainInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    swapchainInfo.pNext = &formatList;
+    swapchainInfo.surface = mSurface;
+    swapchainInfo.minImageCount = surfaceCaps.minImageCount + 1;
+    swapchainInfo.imageFormat = formats[0].format;
+    swapchainInfo.imageColorSpace = formats[0].colorSpace;
+    swapchainInfo.imageExtent = surfaceCaps.currentExtent;
+    swapchainInfo.imageArrayLayers = 1;
+    swapchainInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    swapchainInfo.preTransform = surfaceCaps.currentTransform;
+    swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    swapchainInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    swapchainInfo.clipped = VK_TRUE;
+
+    swapchainInfo.flags = VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
+
+    uint32_t queueFamilyIndices[] = {mPresentQueueFamily};
+    swapchainInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    swapchainInfo.queueFamilyIndexCount = 1;
+    swapchainInfo.pQueueFamilyIndices = queueFamilyIndices;
+
+    VkResult res =
+        vkCreateSwapchainKHR(mDevice, &swapchainInfo, nullptr, &mSwapchain);
+    if (res == VK_SUCCESS) {
+        LOGI("Mutable format swapchain created successfully");
+
+        uint32_t imageCount = 0;
+        vkGetSwapchainImagesKHR(mDevice, mSwapchain, &imageCount, nullptr);
+        ASSERT_GT(imageCount, 0U);
+    } else {
+        LOGI(
+            "Mutable format swapchain creation failed (extension may not be "
+            "supported)");
+    }
 
     cleanUpSwapchainForTest();
 }
