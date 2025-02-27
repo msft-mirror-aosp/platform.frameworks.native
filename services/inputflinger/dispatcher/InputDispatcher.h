@@ -684,8 +684,8 @@ private:
     void updateLastAnrStateLocked(const std::string& windowLabel, const std::string& reason)
             REQUIRES(mLock);
     bool afterKeyEventLockedInterruptable(const std::shared_ptr<Connection>& connection,
-                                          DispatchEntry* dispatchEntry, KeyEntry& keyEntry,
-                                          bool handled) REQUIRES(mLock);
+                                          DispatchEntry* dispatchEntry, bool handled)
+            REQUIRES(mLock);
     bool afterMotionEventLockedInterruptable(const std::shared_ptr<Connection>& connection,
                                              DispatchEntry* dispatchEntry, MotionEntry& motionEntry,
                                              bool handled) REQUIRES(mLock);
