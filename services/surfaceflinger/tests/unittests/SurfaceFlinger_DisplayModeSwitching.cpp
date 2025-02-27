@@ -361,8 +361,6 @@ TEST_F(DisplayModeSwitchingTest, changeResolutionWithoutRefreshRequired) {
 }
 
 TEST_F(DisplayModeSwitchingTest, innerXorOuterDisplay) {
-    SET_FLAG_FOR_TEST(flags::connected_display, true);
-
     const auto [innerDisplay, outerDisplay] = injectOuterDisplay();
 
     EXPECT_TRUE(innerDisplay->isPoweredOn());
@@ -427,8 +425,6 @@ TEST_F(DisplayModeSwitchingTest, innerXorOuterDisplay) {
 }
 
 TEST_F(DisplayModeSwitchingTest, innerAndOuterDisplay) {
-    SET_FLAG_FOR_TEST(flags::connected_display, true);
-
     const auto [innerDisplay, outerDisplay] = injectOuterDisplay();
 
     EXPECT_TRUE(innerDisplay->isPoweredOn());
@@ -497,8 +493,6 @@ TEST_F(DisplayModeSwitchingTest, powerOffDuringModeSet) {
 }
 
 TEST_F(DisplayModeSwitchingTest, powerOffDuringConcurrentModeSet) {
-    SET_FLAG_FOR_TEST(flags::connected_display, true);
-
     const auto [innerDisplay, outerDisplay] = injectOuterDisplay();
 
     EXPECT_TRUE(innerDisplay->isPoweredOn());

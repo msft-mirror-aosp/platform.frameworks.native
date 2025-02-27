@@ -2286,8 +2286,7 @@ void SurfaceFlinger::scheduleSample() {
 
 void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t timestamp,
                                         std::optional<hal::VsyncPeriodNanos> vsyncPeriod) {
-    if (FlagManager::getInstance().connected_display() && timestamp < 0 &&
-        vsyncPeriod.has_value()) {
+    if (timestamp < 0 && vsyncPeriod.has_value()) {
         if (mIsHdcpViaNegVsync && vsyncPeriod.value() == ~1) {
             const int32_t value = static_cast<int32_t>(-timestamp);
             // one byte is good enough to encode android.hardware.drm.HdcpLevel
@@ -3552,9 +3551,8 @@ std::pair<DisplayModes, DisplayModePtr> SurfaceFlinger::loadDisplayModes(
     std::vector<HWComposer::HWCDisplayMode> hwcModes;
     std::optional<hal::HWConfigId> activeModeHwcIdOpt;
 
-    const bool isExternalDisplay = FlagManager::getInstance().connected_display() &&
-            getHwComposer().getDisplayConnectionType(displayId) ==
-                    ui::DisplayConnectionType::External;
+    const bool isExternalDisplay = getHwComposer().getDisplayConnectionType(displayId) ==
+            ui::DisplayConnectionType::External;
 
     int attempt = 0;
     constexpr int kMaxAttempts = 3;
@@ -4049,8 +4047,7 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
     // For an external display, loadDisplayModes already attempted to select the same mode
     // as DM, but SF still needs to be updated to match.
     // TODO (b/318534874): Let DM decide the initial mode.
-    if (const auto& physical = state.physical;
-        mScheduler && physical && FlagManager::getInstance().connected_display()) {
+    if (const auto& physical = state.physical; mScheduler && physical) {
         const bool isInternalDisplay = mPhysicalDisplays.get(physical->id)
                                                .transform(&PhysicalDisplay::isInternal)
                                                .value_or(false);
@@ -8359,10 +8356,6 @@ status_t SurfaceFlinger::getStalledTransactionInfo(
 
 void SurfaceFlinger::updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t connectedLevel,
                                       int32_t maxLevel) {
-    if (!FlagManager::getInstance().connected_display()) {
-        return;
-    }
-
     Mutex::Autolock lock(mStateLock);
 
     const auto idOpt = getHwComposer().toPhysicalDisplayId(hwcDisplayId);
