@@ -346,7 +346,7 @@ TEST_F(KeyboardInputMapperUnitTest, Process_SendsReadTime) {
     ASSERT_EQ(12, expectSingleKeyArg(argsList).readTime);
 
     // Key up
-    argsList = process(ARBITRARY_TIME, /*readTime=*/15, EV_KEY, KEY_HOME, 1);
+    argsList = process(ARBITRARY_TIME, /*readTime=*/15, EV_KEY, KEY_HOME, 0);
     ASSERT_EQ(15, expectSingleKeyArg(argsList).readTime);
 }
 
