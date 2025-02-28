@@ -1185,6 +1185,7 @@ status_t SurfaceFlinger::getStaticDisplayInfo(int64_t displayId, ui::StaticDispl
     const auto& snapshot = snapshotRef.get();
 
     info->connectionType = snapshot.connectionType();
+    info->port = snapshot.port();
     info->deviceProductInfo = snapshot.deviceProductInfo();
 
     if (mEmulatedDisplayDensity) {
@@ -8879,6 +8880,7 @@ binder::Status SurfaceComposerAIDL::getStaticDisplayInfo(int64_t displayId,
     if (status == NO_ERROR) {
         // convert ui::StaticDisplayInfo to gui::StaticDisplayInfo
         outInfo->connectionType = static_cast<gui::DisplayConnectionType>(info.connectionType);
+        outInfo->port = info.port;
         outInfo->density = info.density;
         outInfo->secure = info.secure;
         outInfo->installOrientation = static_cast<gui::Rotation>(info.installOrientation);

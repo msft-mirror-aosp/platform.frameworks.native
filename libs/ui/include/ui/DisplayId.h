@@ -83,8 +83,6 @@ struct PhysicalDisplayId : DisplayId {
         return PhysicalDisplayId(value);
     }
 
-    constexpr uint8_t getPort() const { return static_cast<uint8_t>(value); }
-
 private:
     // Flag indicating that the ID is stable across reboots.
     static constexpr uint64_t FLAG_STABLE = 1ULL << 62;

@@ -2766,6 +2766,7 @@ status_t SurfaceComposerClient::getStaticDisplayInfo(int64_t displayId,
     if (status.isOk()) {
         // convert gui::StaticDisplayInfo to ui::StaticDisplayInfo
         outInfo->connectionType = static_cast<ui::DisplayConnectionType>(ginfo.connectionType);
+        outInfo->port = ginfo.port;
         outInfo->density = ginfo.density;
         outInfo->secure = ginfo.secure;
         outInfo->installOrientation = static_cast<ui::Rotation>(ginfo.installOrientation);
