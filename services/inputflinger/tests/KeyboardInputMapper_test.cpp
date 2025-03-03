@@ -182,8 +182,8 @@ protected:
         return argsList;
     }
 
-    void testDPadKeyRotation(int32_t originalEvdevCode, int32_t originalKeyCode,
-                             int32_t rotatedKeyCode, ui::LogicalDisplayId displayId = DISPLAY_ID) {
+    void testDPadKeyRotation(int32_t originalEvdevCode, int32_t rotatedKeyCode,
+                             ui::LogicalDisplayId displayId = DISPLAY_ID) {
         std::list<NotifyArgs> argsList = processKeyAndSync(ARBITRARY_TIME, originalEvdevCode, 1);
         NotifyKeyArgs args = expectSingleKeyArg(argsList);
         ASSERT_EQ(AKEY_EVENT_ACTION_DOWN, args.action);
@@ -392,11 +392,10 @@ TEST_F(KeyboardInputMapperUnitTest, Process_WhenNotOrientationAware_ShouldNotRot
     addKeyByEvdevCode(KEY_LEFT, AKEYCODE_DPAD_LEFT);
 
     setDisplayOrientation(ui::Rotation::Rotation90);
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_UP, AKEYCODE_DPAD_UP));
-    ASSERT_NO_FATAL_FAILURE(
-            testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_RIGHT, AKEYCODE_DPAD_RIGHT));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_DOWN, AKEYCODE_DPAD_DOWN));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_LEFT, AKEYCODE_DPAD_LEFT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_UP));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_RIGHT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_DOWN));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_LEFT));
 }
 
 TEST_F(KeyboardInputMapperUnitTest, Process_WhenOrientationAware_ShouldRotateDPad) {
@@ -410,31 +409,28 @@ TEST_F(KeyboardInputMapperUnitTest, Process_WhenOrientationAware_ShouldRotateDPa
                                                      AINPUT_SOURCE_KEYBOARD);
     setDisplayOrientation(ui::ROTATION_0);
 
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_UP, AKEYCODE_DPAD_UP));
-    ASSERT_NO_FATAL_FAILURE(
-            testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_RIGHT, AKEYCODE_DPAD_RIGHT));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_DOWN, AKEYCODE_DPAD_DOWN));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_LEFT, AKEYCODE_DPAD_LEFT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_UP));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_RIGHT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_DOWN));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_LEFT));
 
     setDisplayOrientation(ui::ROTATION_90);
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_UP, AKEYCODE_DPAD_LEFT));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_RIGHT, AKEYCODE_DPAD_UP));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_DOWN, AKEYCODE_DPAD_RIGHT));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_LEFT, AKEYCODE_DPAD_DOWN));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_LEFT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_UP));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_RIGHT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_DOWN));
 
     setDisplayOrientation(ui::ROTATION_180);
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_UP, AKEYCODE_DPAD_DOWN));
-    ASSERT_NO_FATAL_FAILURE(
-            testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_RIGHT, AKEYCODE_DPAD_LEFT));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_DOWN, AKEYCODE_DPAD_UP));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_LEFT, AKEYCODE_DPAD_RIGHT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_DOWN));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_LEFT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_UP));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_RIGHT));
 
     setDisplayOrientation(ui::ROTATION_270);
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_UP, AKEYCODE_DPAD_RIGHT));
-    ASSERT_NO_FATAL_FAILURE(
-            testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_RIGHT, AKEYCODE_DPAD_DOWN));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_DOWN, AKEYCODE_DPAD_LEFT));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_LEFT, AKEYCODE_DPAD_UP));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_UP, AKEYCODE_DPAD_RIGHT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_RIGHT, AKEYCODE_DPAD_DOWN));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_DOWN, AKEYCODE_DPAD_LEFT));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(KEY_LEFT, AKEYCODE_DPAD_UP));
 
     // Special case: if orientation changes while key is down, we still emit the same keycode
     // in the key up as we did in the key down.
@@ -736,7 +732,7 @@ protected:
     const std::string UNIQUE_ID = "local:0";
 
     void testDPadKeyRotation(KeyboardInputMapper& mapper, int32_t originalEvdevCode,
-                             int32_t originalKeyCode, int32_t rotatedKeyCode,
+                             int32_t rotatedKeyCode,
                              ui::LogicalDisplayId displayId = ui::LogicalDisplayId::INVALID);
 
     void processKeyAndSync(InputMapper& mapper, nsecs_t when, nsecs_t readTime, int32_t code,
@@ -747,8 +743,7 @@ protected:
 };
 
 void KeyboardInputMapperTest::testDPadKeyRotation(KeyboardInputMapper& mapper,
-                                                  int32_t originalEvdevCode,
-                                                  int32_t originalKeyCode, int32_t rotatedKeyCode,
+                                                  int32_t originalEvdevCode, int32_t rotatedKeyCode,
                                                   ui::LogicalDisplayId displayId) {
     NotifyKeyArgs args;
 
@@ -830,23 +825,19 @@ TEST_F(KeyboardInputMapperTest, Configure_AssignsDisplayPort) {
     ASSERT_TRUE(device2->isEnabled());
 
     // Test pad key events
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper, KEY_UP, AKEYCODE_DPAD_UP, DISPLAY_ID));
     ASSERT_NO_FATAL_FAILURE(
-            testDPadKeyRotation(mapper, KEY_UP, AKEYCODE_DPAD_UP, AKEYCODE_DPAD_UP, DISPLAY_ID));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper, KEY_RIGHT, AKEYCODE_DPAD_RIGHT,
-                                                AKEYCODE_DPAD_RIGHT, DISPLAY_ID));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper, KEY_DOWN, AKEYCODE_DPAD_DOWN,
-                                                AKEYCODE_DPAD_DOWN, DISPLAY_ID));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper, KEY_LEFT, AKEYCODE_DPAD_LEFT,
-                                                AKEYCODE_DPAD_LEFT, DISPLAY_ID));
+            testDPadKeyRotation(mapper, KEY_RIGHT, AKEYCODE_DPAD_RIGHT, DISPLAY_ID));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper, KEY_DOWN, AKEYCODE_DPAD_DOWN, DISPLAY_ID));
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper, KEY_LEFT, AKEYCODE_DPAD_LEFT, DISPLAY_ID));
 
+    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper2, KEY_UP, AKEYCODE_DPAD_UP, newDisplayId));
     ASSERT_NO_FATAL_FAILURE(
-            testDPadKeyRotation(mapper2, KEY_UP, AKEYCODE_DPAD_UP, AKEYCODE_DPAD_UP, newDisplayId));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper2, KEY_RIGHT, AKEYCODE_DPAD_RIGHT,
-                                                AKEYCODE_DPAD_RIGHT, newDisplayId));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper2, KEY_DOWN, AKEYCODE_DPAD_DOWN,
-                                                AKEYCODE_DPAD_DOWN, newDisplayId));
-    ASSERT_NO_FATAL_FAILURE(testDPadKeyRotation(mapper2, KEY_LEFT, AKEYCODE_DPAD_LEFT,
-                                                AKEYCODE_DPAD_LEFT, newDisplayId));
+            testDPadKeyRotation(mapper2, KEY_RIGHT, AKEYCODE_DPAD_RIGHT, newDisplayId));
+    ASSERT_NO_FATAL_FAILURE(
+            testDPadKeyRotation(mapper2, KEY_DOWN, AKEYCODE_DPAD_DOWN, newDisplayId));
+    ASSERT_NO_FATAL_FAILURE(
+            testDPadKeyRotation(mapper2, KEY_LEFT, AKEYCODE_DPAD_LEFT, newDisplayId));
 }
 
 TEST_F(KeyboardInputMapperTest, Process_LockedKeysShouldToggleAfterReattach) {
