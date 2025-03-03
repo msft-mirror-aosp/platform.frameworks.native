@@ -583,7 +583,7 @@ public:
     }
 
     sp<DisplayDevice> createVirtualDisplayDevice(const sp<IBinder> displayToken,
-                                                 VirtualDisplayId displayId,
+                                                 GpuVirtualDisplayId displayId,
                                                  float requestedRefreshRate) {
         constexpr ui::Size kResolution = {1080, 1920};
         auto compositionDisplay = compositionengine::impl::
@@ -983,8 +983,8 @@ public:
         sp<IBinder> token() const { return mDisplayToken; }
 
         auto physicalDisplay() const {
-            return ftl::Optional(mCreationArgs.compositionDisplay->getDisplayId())
-                    .and_then(&PhysicalDisplayId::tryCast)
+            return mCreationArgs.compositionDisplay->getDisplayIdVariant()
+                    .and_then(asPhysicalDisplayId)
                     .and_then(display::getPhysicalDisplay(mFlinger.physicalDisplays()));
         }
 
@@ -1082,7 +1082,9 @@ public:
             DisplayDeviceState state;
             state.isSecure = mCreationArgs.isSecure;
 
-            if (const auto physicalId = PhysicalDisplayId::tryCast(*displayId)) {
+            if (const auto physicalId =
+                        mCreationArgs.compositionDisplay->getDisplayIdVariant().and_then(
+                                asPhysicalDisplayId)) {
                 LOG_ALWAYS_FATAL_IF(!mConnectionType);
                 LOG_ALWAYS_FATAL_IF(!mHwcDisplayId);
 

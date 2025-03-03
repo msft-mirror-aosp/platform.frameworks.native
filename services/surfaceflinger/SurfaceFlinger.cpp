@@ -659,13 +659,15 @@ void SurfaceFlinger::enableHalVirtualDisplays(bool enable) {
     }
 }
 
-VirtualDisplayId SurfaceFlinger::acquireVirtualDisplay(ui::Size resolution, ui::PixelFormat format,
-                                                       const std::string& uniqueId) {
+void SurfaceFlinger::acquireVirtualDisplay(ui::Size resolution, ui::PixelFormat format,
+                                           const std::string& uniqueId,
+                                           compositionengine::DisplayCreationArgsBuilder& builder) {
     if (auto& generator = mVirtualDisplayIdGenerators.hal) {
         if (const auto id = generator->generateId()) {
             if (getHwComposer().allocateVirtualDisplay(*id, resolution, &format)) {
                 acquireVirtualDisplaySnapshot(*id, uniqueId);
-                return *id;
+                builder.setId(*id);
+                return;
             }
 
             generator->releaseId(*id);
@@ -679,7 +681,7 @@ VirtualDisplayId SurfaceFlinger::acquireVirtualDisplay(ui::Size resolution, ui::
     const auto id = mVirtualDisplayIdGenerators.gpu.generateId();
     LOG_ALWAYS_FATAL_IF(!id, "Failed to generate ID for GPU virtual display");
     acquireVirtualDisplaySnapshot(*id, uniqueId);
-    return *id;
+    builder.setId(*id);
 }
 
 void SurfaceFlinger::releaseVirtualDisplay(VirtualDisplayId displayId) {
@@ -4008,7 +4010,7 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
     if (const auto& physical = state.physical) {
         builder.setId(physical->id);
     } else {
-        builder.setId(acquireVirtualDisplay(resolution, pixelFormat, state.uniqueId));
+        acquireVirtualDisplay(resolution, pixelFormat, state.uniqueId, builder);
     }
 
     builder.setPixels(resolution);

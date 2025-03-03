@@ -294,12 +294,23 @@ struct CompositionEngineOffloadTest : public testing::Test {
     void SetUp() override {
         EXPECT_CALL(*mDisplay1, getDisplayId)
                 .WillRepeatedly(Return(std::make_optional<DisplayId>(kDisplayId1)));
+        EXPECT_CALL(*mDisplay1, getDisplayIdVariant).WillRepeatedly(Return(kDisplayId1));
+
         EXPECT_CALL(*mDisplay2, getDisplayId)
                 .WillRepeatedly(Return(std::make_optional<DisplayId>(kDisplayId2)));
+        EXPECT_CALL(*mDisplay2, getDisplayIdVariant).WillRepeatedly(Return(kDisplayId2));
+
         EXPECT_CALL(*mVirtualDisplay, getDisplayId)
                 .WillRepeatedly(Return(std::make_optional<DisplayId>(kGpuVirtualDisplayId)));
+        const DisplayIdVariant gpuVariant =
+                GpuVirtualDisplayId::fromValue(kGpuVirtualDisplayId.value);
+        EXPECT_CALL(*mVirtualDisplay, getDisplayIdVariant).WillRepeatedly(Return(gpuVariant));
+
         EXPECT_CALL(*mHalVirtualDisplay, getDisplayId)
                 .WillRepeatedly(Return(std::make_optional<DisplayId>(kHalVirtualDisplayId)));
+        const DisplayIdVariant halVariant =
+                HalVirtualDisplayId::fromValue(kHalVirtualDisplayId.value);
+        EXPECT_CALL(*mHalVirtualDisplay, getDisplayIdVariant).WillRepeatedly(Return(halVariant));
 
         // Most tests will depend on the outputs being enabled.
         for (auto& state : mOutputStates) {

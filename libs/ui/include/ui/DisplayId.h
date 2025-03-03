@@ -20,6 +20,7 @@
 #include <ostream>
 #include <string>
 
+#include <ftl/match.h>
 #include <ftl/optional.h>
 
 namespace android {
@@ -186,6 +187,34 @@ private:
     using DisplayId::DisplayId;
     explicit constexpr HalDisplayId(DisplayId other) : DisplayId(other) {}
 };
+
+using DisplayIdVariant = std::variant<PhysicalDisplayId, GpuVirtualDisplayId, HalVirtualDisplayId>;
+
+template <typename DisplayIdType>
+inline auto asDisplayIdOfType(DisplayIdVariant variant) -> ftl::Optional<DisplayIdType> {
+    return ftl::match(
+            variant,
+            [](DisplayIdType id) -> ftl::Optional<DisplayIdType> { return ftl::Optional(id); },
+            [](auto) -> ftl::Optional<DisplayIdType> { return std::nullopt; });
+}
+
+template <typename Variant>
+inline auto asHalDisplayId(Variant variant) -> ftl::Optional<HalDisplayId> {
+    return ftl::match(
+            variant,
+            [](GpuVirtualDisplayId) -> ftl::Optional<HalDisplayId> { return std::nullopt; },
+            [](auto id) -> ftl::Optional<HalDisplayId> {
+                return ftl::Optional(static_cast<HalDisplayId>(id));
+            });
+}
+
+inline auto asPhysicalDisplayId(DisplayIdVariant variant) -> ftl::Optional<PhysicalDisplayId> {
+    return asDisplayIdOfType<PhysicalDisplayId>(variant);
+}
+
+inline auto asDisplayId(DisplayIdVariant variant) -> DisplayId {
+    return ftl::match(variant, [](auto id) -> DisplayId { return static_cast<DisplayId>(id); });
+}
 
 static_assert(sizeof(DisplayId) == sizeof(uint64_t));
 static_assert(sizeof(HalDisplayId) == sizeof(uint64_t));

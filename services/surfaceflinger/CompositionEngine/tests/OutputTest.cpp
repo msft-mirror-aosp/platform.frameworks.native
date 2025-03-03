@@ -148,20 +148,23 @@ struct OutputTest : public testing::Test {
         virtual void injectOutputLayerForTest(std::unique_ptr<compositionengine::OutputLayer>) = 0;
 
         virtual ftl::Optional<DisplayId> getDisplayId() const override { return mId; }
+        virtual ftl::Optional<DisplayIdVariant> getDisplayIdVariant() const override {
+            return DisplayIdVariant(mId);
+        }
 
         virtual bool hasPictureProcessing() const override { return mHasPictureProcessing; }
         virtual int32_t getMaxLayerPictureProfiles() const override {
             return mMaxLayerPictureProfiles;
         }
 
-        void setDisplayIdForTest(DisplayId value) { mId = value; }
+        void setDisplayIdForTest(PhysicalDisplayId value) { mId = value; }
 
         void setHasPictureProcessingForTest(bool value) { mHasPictureProcessing = value; }
 
         void setMaxLayerPictureProfilesForTest(int32_t value) { mMaxLayerPictureProfiles = value; }
 
     private:
-        ftl::Optional<DisplayId> mId;
+        PhysicalDisplayId mId;
         bool mHasPictureProcessing;
         int32_t mMaxLayerPictureProfiles;
     };

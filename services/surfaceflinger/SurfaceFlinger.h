@@ -160,6 +160,7 @@ class DisplaySurface;
 class OutputLayer;
 
 struct CompositionRefreshArgs;
+class DisplayCreationArgsBuilder;
 } // namespace compositionengine
 
 namespace renderengine {
@@ -1125,8 +1126,8 @@ private:
     void enableHalVirtualDisplays(bool);
 
     // Virtual display lifecycle for ID generation and HAL allocation.
-    VirtualDisplayId acquireVirtualDisplay(ui::Size, ui::PixelFormat, const std::string& uniqueId)
-            REQUIRES(mStateLock);
+    void acquireVirtualDisplay(ui::Size, ui::PixelFormat, const std::string& uniqueId,
+                               compositionengine::DisplayCreationArgsBuilder&) REQUIRES(mStateLock);
     template <typename ID>
     void acquireVirtualDisplaySnapshot(ID displayId, const std::string& uniqueId) {
         std::lock_guard lock(mVirtualDisplaysMutex);
