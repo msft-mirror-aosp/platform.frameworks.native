@@ -876,7 +876,7 @@ private:
         std::variant<int32_t, wp<const DisplayDevice>> captureTypeVariant;
 
         // Display ID of the display the result will be on
-        std::optional<DisplayId> displayId{std::nullopt};
+        ftl::Optional<DisplayIdVariant> displayIdVariant{std::nullopt};
 
         // If true, transform is inverted from the parent layer snapshot
         bool childrenOnly{false};

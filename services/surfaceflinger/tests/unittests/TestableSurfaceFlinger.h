@@ -481,7 +481,7 @@ public:
 
         SurfaceFlinger::ScreenshotArgs screenshotArgs;
         screenshotArgs.captureTypeVariant = display;
-        screenshotArgs.displayId = std::nullopt;
+        screenshotArgs.displayIdVariant = std::nullopt;
         screenshotArgs.sourceCrop = sourceCrop;
         screenshotArgs.reqSize = sourceCrop.getSize();
         screenshotArgs.dataspace = dataspace;

@@ -23,6 +23,8 @@
 #include <android-base/thread_annotations.h>
 #include <android/native_window.h>
 #include <binder/IBinder.h>
+#include <compositionengine/Display.h>
+#include <compositionengine/DisplaySurface.h>
 #include <gui/LayerState.h>
 #include <math/mat4.h>
 #include <renderengine/RenderEngine.h>
@@ -60,11 +62,6 @@ class SurfaceFlinger;
 
 struct CompositionInfo;
 struct DisplayDeviceCreationArgs;
-
-namespace compositionengine {
-class Display;
-class DisplaySurface;
-} // namespace compositionengine
 
 namespace display {
 class DisplaySnapshot;
@@ -122,6 +119,12 @@ public:
     bool receivesInput() const { return mFlags & eReceivesInput; }
 
     DisplayId getId() const;
+
+    DisplayIdVariant getDisplayIdVariant() const {
+        const auto idVariant = mCompositionDisplay->getDisplayIdVariant();
+        LOG_FATAL_IF(!idVariant);
+        return *idVariant;
+    }
 
     // Shorthand to upcast the ID of a display whose type is known as a precondition.
     PhysicalDisplayId getPhysicalId() const {

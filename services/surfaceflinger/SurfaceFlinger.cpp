@@ -7340,7 +7340,7 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
     }
 
     wp<const DisplayDevice> displayWeak;
-    DisplayId displayId;
+    ftl::Optional<DisplayIdVariant> displayIdVariantOpt;
     ui::LayerStack layerStack;
     ui::Size reqSize(args.width, args.height);
     std::unordered_set<uint32_t> excludeLayerIds;
@@ -7356,7 +7356,7 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
             return;
         }
         displayWeak = display;
-        displayId = display->getId();
+        displayIdVariantOpt = display->getDisplayIdVariant();
         layerStack = display->getLayerStack();
         displayIsSecure = display->isSecure();
 
@@ -7384,7 +7384,7 @@ void SurfaceFlinger::captureDisplay(const DisplayCaptureArgs& args,
 
     ScreenshotArgs screenshotArgs;
     screenshotArgs.captureTypeVariant = displayWeak;
-    screenshotArgs.displayId = displayId;
+    screenshotArgs.displayIdVariant = displayIdVariantOpt;
     screenshotArgs.sourceCrop = gui::aidl_utils::fromARect(captureArgs.sourceCrop);
     if (screenshotArgs.sourceCrop.isEmpty()) {
         screenshotArgs.sourceCrop = layerStackSpaceRect;
@@ -7403,6 +7403,7 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
                                     const sp<IScreenCaptureListener>& captureListener) {
     ui::LayerStack layerStack;
     wp<const DisplayDevice> displayWeak;
+    ftl::Optional<DisplayIdVariant> displayIdVariantOpt;
     ui::Size size;
     Rect layerStackSpaceRect;
     bool displayIsSecure;
@@ -7418,6 +7419,7 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
         }
 
         displayWeak = display;
+        displayIdVariantOpt = display->getDisplayIdVariant();
         layerStack = display->getLayerStack();
         layerStackSpaceRect = display->getLayerStackSpaceRect();
         size = display->getLayerStackSpaceRect().getSize();
@@ -7452,7 +7454,7 @@ void SurfaceFlinger::captureDisplay(DisplayId displayId, const CaptureArgs& args
 
     ScreenshotArgs screenshotArgs;
     screenshotArgs.captureTypeVariant = displayWeak;
-    screenshotArgs.displayId = displayId;
+    screenshotArgs.displayIdVariant = displayIdVariantOpt;
     screenshotArgs.sourceCrop = layerStackSpaceRect;
     screenshotArgs.reqSize = size;
     screenshotArgs.dataspace = static_cast<ui::Dataspace>(args.dataspace);
@@ -7944,7 +7946,7 @@ ftl::SharedFuture<FenceResult> SurfaceFlinger::renderScreenImpl(
                                         .layerStack = layerStack,
                                         .sourceCrop = args.sourceCrop,
                                         .buffer = std::move(buffer),
-                                        .displayId = args.displayId,
+                                        .displayIdVariant = args.displayIdVariant,
                                         .reqBufferSize = args.reqSize,
                                         .sdrWhitePointNits = args.sdrWhitePointNits,
                                         .displayBrightnessNits = args.displayBrightnessNits,
