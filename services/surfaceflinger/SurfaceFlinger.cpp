@@ -659,15 +659,15 @@ void SurfaceFlinger::enableHalVirtualDisplays(bool enable) {
     }
 }
 
-void SurfaceFlinger::acquireVirtualDisplay(ui::Size resolution, ui::PixelFormat format,
-                                           const std::string& uniqueId,
-                                           compositionengine::DisplayCreationArgsBuilder& builder) {
+std::optional<VirtualDisplayIdVariant> SurfaceFlinger::acquireVirtualDisplay(
+        ui::Size resolution, ui::PixelFormat format, const std::string& uniqueId,
+        compositionengine::DisplayCreationArgsBuilder& builder) {
     if (auto& generator = mVirtualDisplayIdGenerators.hal) {
         if (const auto id = generator->generateId()) {
             if (getHwComposer().allocateVirtualDisplay(*id, resolution, &format)) {
                 acquireVirtualDisplaySnapshot(*id, uniqueId);
                 builder.setId(*id);
-                return;
+                return *id;
             }
 
             generator->releaseId(*id);
@@ -682,6 +682,7 @@ void SurfaceFlinger::acquireVirtualDisplay(ui::Size resolution, ui::PixelFormat 
     LOG_ALWAYS_FATAL_IF(!id, "Failed to generate ID for GPU virtual display");
     acquireVirtualDisplaySnapshot(*id, uniqueId);
     builder.setId(*id);
+    return *id;
 }
 
 void SurfaceFlinger::releaseVirtualDisplay(VirtualDisplayId displayId) {
@@ -4007,10 +4008,12 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
     }
 
     compositionengine::DisplayCreationArgsBuilder builder;
+    std::optional<VirtualDisplayIdVariant> virtualDisplayIdVariantOpt;
     if (const auto& physical = state.physical) {
         builder.setId(physical->id);
     } else {
-        acquireVirtualDisplay(resolution, pixelFormat, state.uniqueId, builder);
+        virtualDisplayIdVariantOpt =
+                acquireVirtualDisplay(resolution, pixelFormat, state.uniqueId, builder);
     }
 
     builder.setPixels(resolution);
@@ -4030,10 +4033,10 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
     getFactory().createBufferQueue(&bqProducer, &bqConsumer, /*consumerIsSurfaceFlinger =*/false);
 
     if (state.isVirtual()) {
-        const auto displayId = VirtualDisplayId::tryCast(compositionDisplay->getId());
-        LOG_FATAL_IF(!displayId);
-        auto surface = sp<VirtualDisplaySurface>::make(getHwComposer(), *displayId, state.surface,
-                                                       bqProducer, bqConsumer, state.displayName);
+        LOG_FATAL_IF(!virtualDisplayIdVariantOpt);
+        auto surface = sp<VirtualDisplaySurface>::make(getHwComposer(), *virtualDisplayIdVariantOpt,
+                                                       state.surface, bqProducer, bqConsumer,
+                                                       state.displayName);
         displaySurface = surface;
         producer = std::move(surface);
     } else {

@@ -189,6 +189,7 @@ private:
 };
 
 using DisplayIdVariant = std::variant<PhysicalDisplayId, GpuVirtualDisplayId, HalVirtualDisplayId>;
+using VirtualDisplayIdVariant = std::variant<GpuVirtualDisplayId, HalVirtualDisplayId>;
 
 template <typename DisplayIdType>
 inline auto asDisplayIdOfType(DisplayIdVariant variant) -> ftl::Optional<DisplayIdType> {
