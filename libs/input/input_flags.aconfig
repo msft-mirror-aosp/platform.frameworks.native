@@ -155,13 +155,6 @@ flag {
 }
 
 flag {
-  name: "include_relative_axis_values_for_captured_touchpads"
-  namespace: "input"
-  description: "Include AXIS_RELATIVE_X and AXIS_RELATIVE_Y values when reporting touches from captured touchpads."
-  bug: "330522990"
-}
-
-flag {
   name: "enable_per_device_input_latency_metrics"
   namespace: "input"
   description: "Capture input latency metrics on a per device granular level using histograms."
