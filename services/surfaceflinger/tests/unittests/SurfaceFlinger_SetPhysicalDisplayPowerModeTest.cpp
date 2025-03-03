@@ -338,8 +338,7 @@ void SetPhysicalDisplayPowerModeTest::transitionDisplayCommon() {
     Case::Doze::setupComposerCallExpectations(this);
     auto display =
             Case::injectDisplayWithInitialPowerMode(this, Case::Transition::INITIAL_POWER_MODE);
-    auto displayId = display->getId();
-    if (auto physicalDisplayId = PhysicalDisplayId::tryCast(displayId)) {
+    if (auto physicalDisplayId = asPhysicalDisplayId(display->getDisplayIdVariant())) {
         Case::setInitialHwVsyncEnabled(this, *physicalDisplayId,
                                        PowerModeInitialVSyncEnabled<
                                                Case::Transition::INITIAL_POWER_MODE>::value);
@@ -393,9 +392,9 @@ TEST_F(SetPhysicalDisplayPowerModeTest, setPhysicalDisplayPowerModeDoesNothingIf
     // Preconditions
 
     // Insert display data so that the HWC thinks it created the virtual display.
-    const auto displayId = Case::Display::DISPLAY_ID::get();
-    ASSERT_TRUE(HalVirtualDisplayId::tryCast(displayId));
-    mFlinger.mutableHwcDisplayData().try_emplace(displayId);
+    const auto displayId = asHalDisplayId(Case::Display::DISPLAY_ID::get());
+    ASSERT_TRUE(displayId);
+    ASSERT_TRUE(mFlinger.mutableHwcDisplayData().try_emplace(*displayId).second);
 
     // A virtual display device is set up
     Case::Display::injectHwcDisplay(this);

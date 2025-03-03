@@ -685,19 +685,19 @@ std::optional<VirtualDisplayIdVariant> SurfaceFlinger::acquireVirtualDisplay(
     return *id;
 }
 
-void SurfaceFlinger::releaseVirtualDisplay(VirtualDisplayId displayId) {
-    if (const auto id = HalVirtualDisplayId::tryCast(displayId)) {
-        if (auto& generator = mVirtualDisplayIdGenerators.hal) {
-            generator->releaseId(*id);
-            releaseVirtualDisplaySnapshot(*id);
-        }
-        return;
-    }
-
-    const auto id = GpuVirtualDisplayId::tryCast(displayId);
-    LOG_ALWAYS_FATAL_IF(!id);
-    mVirtualDisplayIdGenerators.gpu.releaseId(*id);
-    releaseVirtualDisplaySnapshot(*id);
+void SurfaceFlinger::releaseVirtualDisplay(VirtualDisplayIdVariant displayId) {
+    ftl::match(
+            displayId,
+            [this](HalVirtualDisplayId halVirtualDisplayId) {
+                if (auto& generator = mVirtualDisplayIdGenerators.hal) {
+                    generator->releaseId(halVirtualDisplayId);
+                    releaseVirtualDisplaySnapshot(halVirtualDisplayId);
+                }
+            },
+            [this](GpuVirtualDisplayId gpuVirtualDisplayId) {
+                mVirtualDisplayIdGenerators.gpu.releaseId(gpuVirtualDisplayId);
+                releaseVirtualDisplaySnapshot(gpuVirtualDisplayId);
+            });
 }
 
 void SurfaceFlinger::releaseVirtualDisplaySnapshot(VirtualDisplayId displayId) {
@@ -2866,9 +2866,9 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     // output. Layer stacks are not tracked in Display when we iterate through
     // frameTargeters. Cross-referencing layer stacks allows us to filter out displays
     // by ID with duplicate layer stacks before adding them to CompositionEngine output.
-    ui::DisplayMap<DisplayId, ui::LayerStack> physicalDisplayLayerStacks;
+    ui::DisplayMap<PhysicalDisplayId, ui::LayerStack> physicalDisplayLayerStacks;
     for (auto& [_, display] : displays) {
-        const auto id = PhysicalDisplayId::tryCast(display->getId());
+        const auto id = asPhysicalDisplayId(display->getDisplayIdVariant());
         if (id && frameTargeters.contains(*id)) {
             physicalDisplayLayerStacks.try_emplace(*id, display->getLayerStack());
         }
@@ -3134,7 +3134,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     for (const auto& [_, display] : displays) {
         const auto& state = display->getCompositionDisplay()->getState();
         CompositionCoverageFlags& flags =
-                mCompositionCoverage.try_emplace(display->getId()).first->second;
+                mCompositionCoverage.try_emplace(display->getDisplayIdVariant()).first->second;
 
         if (state.usesDeviceComposition) {
             flags |= CompositionCoverage::Hwc;
@@ -3188,8 +3188,8 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     CompositeResultsPerDisplay resultsPerDisplay;
 
     // Filter out virtual displays.
-    for (const auto& [id, coverage] : mCompositionCoverage) {
-        if (const auto idOpt = PhysicalDisplayId::tryCast(id)) {
+    for (const auto& [idVar, coverage] : mCompositionCoverage) {
+        if (const auto idOpt = asPhysicalDisplayId(idVar)) {
             resultsPerDisplay.try_emplace(*idOpt, CompositeResult{coverage});
         }
     }
@@ -3227,16 +3227,12 @@ bool SurfaceFlinger::isHdrLayer(const frontend::LayerSnapshot& snapshot) const {
     return false;
 }
 
-ui::Rotation SurfaceFlinger::getPhysicalDisplayOrientation(DisplayId displayId,
+ui::Rotation SurfaceFlinger::getPhysicalDisplayOrientation(PhysicalDisplayId displayId,
                                                            bool isPrimary) const {
-    const auto id = PhysicalDisplayId::tryCast(displayId);
-    if (!id) {
-        return ui::ROTATION_0;
-    }
     if (!mIgnoreHwcPhysicalDisplayOrientation &&
         getHwComposer().getComposer()->isSupported(
                 Hwc2::Composer::OptionalFeature::PhysicalDisplayOrientation)) {
-        switch (getHwComposer().getPhysicalDisplayOrientation(*id)) {
+        switch (getHwComposer().getPhysicalDisplayOrientation(displayId)) {
             case Hwc2::AidlTransform::ROT_90:
                 return ui::ROTATION_90;
             case Hwc2::AidlTransform::ROT_180:
@@ -3884,13 +3880,17 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     creationArgs.hasWideColorGamut = false;
     creationArgs.supportedPerFrameMetadata = 0;
 
-    if (const auto physicalIdOpt = PhysicalDisplayId::tryCast(compositionDisplay->getId())) {
+    if (const auto physicalIdOpt =
+                compositionDisplay->getDisplayIdVariant().and_then(asPhysicalDisplayId)) {
         const auto physicalId = *physicalIdOpt;
 
         creationArgs.isPrimary = physicalId == getPrimaryDisplayIdLocked();
         creationArgs.refreshRateSelector =
                 FTL_FAKE_GUARD(kMainThreadContext,
                                mDisplayModeController.selectorPtrFor(physicalId));
+        creationArgs.physicalOrientation =
+                getPhysicalDisplayOrientation(physicalId, creationArgs.isPrimary);
+        ALOGV("Display Orientation: %s", toCString(creationArgs.physicalOrientation));
 
         mPhysicalDisplays.get(physicalId)
                 .transform(&PhysicalDisplay::snapshotRef)
@@ -3903,7 +3903,8 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
                 }));
     }
 
-    if (const auto id = HalDisplayId::tryCast(compositionDisplay->getId())) {
+    if (const auto id = compositionDisplay->getDisplayIdVariant().and_then(
+                asHalDisplayId<DisplayIdVariant>)) {
         getHwComposer().getHdrCapabilities(*id, &creationArgs.hdrCapabilities);
         creationArgs.supportedPerFrameMetadata = getHwComposer().getSupportedPerFrameMetadata(*id);
     }
@@ -3918,10 +3919,6 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     if (state.isVirtual()) {
         nativeWindow->setSwapInterval(nativeWindow.get(), 0);
     }
-
-    creationArgs.physicalOrientation =
-            getPhysicalDisplayOrientation(compositionDisplay->getId(), creationArgs.isPrimary);
-    ALOGV("Display Orientation: %s", toCString(creationArgs.physicalOrientation));
 
     if (FlagManager::getInstance().correct_virtual_display_power_state()) {
         creationArgs.initialPowerMode = state.initialPowerMode;
@@ -3952,7 +3949,8 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
                                              mode.getPeakFps());
     }
 
-    display->setLayerFilter(makeLayerFilterForDisplay(display->getId(), state.layerStack));
+    display->setLayerFilter(
+            makeLayerFilterForDisplay(display->getDisplayIdVariant(), state.layerStack));
     display->setProjection(state.orientation, state.layerStackSpaceRect,
                            state.orientedDisplaySpaceRect);
     display->setDisplayName(state.displayName);
@@ -4044,18 +4042,17 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
                  "adding a supported display, but rendering "
                  "surface is provided (%p), ignoring it",
                  state.surface.get());
-        const auto displayId = PhysicalDisplayId::tryCast(compositionDisplay->getId());
-        LOG_FATAL_IF(!displayId);
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_CONSUMER_BASE_OWNS_BQ)
         const auto frameBufferSurface =
-                sp<FramebufferSurface>::make(getHwComposer(), *displayId, bqProducer, bqConsumer,
+                sp<FramebufferSurface>::make(getHwComposer(), state.physical->id, bqProducer,
+                                             bqConsumer,
                                              state.physical->activeMode->getResolution(),
                                              ui::Size(maxGraphicsWidth, maxGraphicsHeight));
         displaySurface = frameBufferSurface;
         producer = frameBufferSurface->getSurface()->getIGraphicBufferProducer();
 #else
         displaySurface =
-                sp<FramebufferSurface>::make(getHwComposer(), *displayId, bqConsumer,
+                sp<FramebufferSurface>::make(getHwComposer(), state.physical->id, bqConsumer,
                                              state.physical->activeMode->getResolution(),
                                              ui::Size(maxGraphicsWidth, maxGraphicsHeight));
         producer = bqProducer;
@@ -4108,8 +4105,8 @@ void SurfaceFlinger::processDisplayRemoved(const wp<IBinder>& displayToken) {
     if (display) {
         display->disconnect();
 
-        if (display->isVirtual()) {
-            releaseVirtualDisplay(display->getVirtualId());
+        if (const auto virtualDisplayIdVariant = display->getVirtualDisplayIdVariant()) {
+            releaseVirtualDisplay(*virtualDisplayIdVariant);
         } else {
             mScheduler->unregisterDisplay(display->getPhysicalId(), mActiveDisplayId);
         }
@@ -4148,8 +4145,8 @@ void SurfaceFlinger::processDisplayChanged(const wp<IBinder>& displayToken,
     if (currentBinder != drawingBinder || currentState.sequenceId != drawingState.sequenceId) {
         if (const auto display = getDisplayDeviceLocked(displayToken)) {
             display->disconnect();
-            if (display->isVirtual()) {
-                releaseVirtualDisplay(display->getVirtualId());
+            if (const auto virtualDisplayIdVariant = display->getVirtualDisplayIdVariant()) {
+                releaseVirtualDisplay(*virtualDisplayIdVariant);
             }
 
             if (display->isRefreshable()) {
@@ -4181,8 +4178,8 @@ void SurfaceFlinger::processDisplayChanged(const wp<IBinder>& displayToken,
 
     if (const auto display = getDisplayDeviceLocked(displayToken)) {
         if (currentState.layerStack != drawingState.layerStack) {
-            display->setLayerFilter(
-                    makeLayerFilterForDisplay(display->getId(), currentState.layerStack));
+            display->setLayerFilter(makeLayerFilterForDisplay(display->getDisplayIdVariant(),
+                                                              currentState.layerStack));
         }
         if (currentState.flags != drawingState.flags) {
             display->setFlags(currentState.flags);
@@ -4424,7 +4421,7 @@ void SurfaceFlinger::buildWindowInfos(std::vector<WindowInfo>& outWindowInfos,
 void SurfaceFlinger::updateCursorAsync() {
     compositionengine::CompositionRefreshArgs refreshArgs;
     for (const auto& [_, display] : FTL_FAKE_GUARD(mStateLock, mDisplays)) {
-        if (HalDisplayId::tryCast(display->getId())) {
+        if (asHalDisplayId(display->getDisplayIdVariant())) {
             refreshArgs.outputs.push_back(display->getCompositionDisplay());
         }
     }
@@ -6046,17 +6043,15 @@ void SurfaceFlinger::dumpDisplays(std::string& result) const {
 
     for (const auto& [token, display] : mDisplays) {
         if (display->isVirtual()) {
-            const auto displayId = display->getId();
+            const VirtualDisplayId virtualId = display->getVirtualId();
             utils::Dumper::Section section(dumper,
-                                           ftl::Concat("Virtual Display ", displayId.value).str());
+                                           ftl::Concat("Virtual Display ", virtualId.value).str());
             display->dump(dumper);
 
-            if (const auto virtualIdOpt = VirtualDisplayId::tryCast(displayId)) {
-                std::lock_guard lock(mVirtualDisplaysMutex);
-                const auto virtualSnapshotIt = mVirtualDisplays.find(virtualIdOpt.value());
-                if (virtualSnapshotIt != mVirtualDisplays.end()) {
-                    virtualSnapshotIt->second.dump(dumper);
-                }
+            std::lock_guard lock(mVirtualDisplaysMutex);
+            const auto virtualSnapshotIt = mVirtualDisplays.find(virtualId);
+            if (virtualSnapshotIt != mVirtualDisplays.end()) {
+                virtualSnapshotIt->second.dump(dumper);
             }
         }
     }
@@ -6064,7 +6059,7 @@ void SurfaceFlinger::dumpDisplays(std::string& result) const {
 
 void SurfaceFlinger::dumpDisplayIdentificationData(std::string& result) const {
     for (const auto& [token, display] : mDisplays) {
-        const auto displayId = PhysicalDisplayId::tryCast(display->getId());
+        const auto displayId = asPhysicalDisplayId(display->getDisplayIdVariant());
         if (!displayId) {
             continue;
         }
@@ -6273,7 +6268,7 @@ perfetto::protos::LayersProto SurfaceFlinger::dumpProtoFromMainThread(uint32_t t
 
 void SurfaceFlinger::dumpHwcLayersMinidump(std::string& result) const {
     for (const auto& [token, display] : mDisplays) {
-        const auto displayId = HalDisplayId::tryCast(display->getId());
+        const auto displayId = asHalDisplayId(display->getDisplayIdVariant());
         if (!displayId) {
             continue;
         }
@@ -8346,8 +8341,8 @@ sp<DisplayDevice> SurfaceFlinger::getActivatableDisplay() const {
     // TODO(b/255635821): Choose the pacesetter display, considering both internal and external
     // displays. For now, pick the other internal display, assuming a dual-display foldable.
     return findDisplay([this](const DisplayDevice& display) REQUIRES(mStateLock) {
-        const auto idOpt = PhysicalDisplayId::tryCast(display.getId());
-        return idOpt && *idOpt != mActiveDisplayId && display.isPoweredOn() &&
+        const auto idOpt = asPhysicalDisplayId(display.getDisplayIdVariant());
+        return idOpt.has_value() && *idOpt != mActiveDisplayId && display.isPoweredOn() &&
                 mPhysicalDisplays.get(*idOpt)
                         .transform(&PhysicalDisplay::isInternal)
                         .value_or(false);

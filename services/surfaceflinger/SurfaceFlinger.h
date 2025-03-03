@@ -1030,10 +1030,10 @@ private:
     // region of all screens presenting this layer stack.
     void invalidateLayerStack(const ui::LayerFilter& layerFilter, const Region& dirty);
 
-    ui::LayerFilter makeLayerFilterForDisplay(DisplayId displayId, ui::LayerStack layerStack)
+    ui::LayerFilter makeLayerFilterForDisplay(DisplayIdVariant displayId, ui::LayerStack layerStack)
             REQUIRES(mStateLock) {
         return {layerStack,
-                PhysicalDisplayId::tryCast(displayId)
+                asPhysicalDisplayId(displayId)
                         .and_then(display::getPhysicalDisplay(mPhysicalDisplays))
                         .transform(&display::PhysicalDisplay::isInternal)
                         .value_or(false)};
@@ -1140,7 +1140,7 @@ private:
         }
     }
 
-    void releaseVirtualDisplay(VirtualDisplayId);
+    void releaseVirtualDisplay(VirtualDisplayIdVariant displayId);
     void releaseVirtualDisplaySnapshot(VirtualDisplayId displayId);
 
     // Returns a display other than `mActiveDisplayId` that can be activated, if any.
@@ -1225,7 +1225,7 @@ private:
 
     bool isHdrLayer(const frontend::LayerSnapshot& snapshot) const;
 
-    ui::Rotation getPhysicalDisplayOrientation(DisplayId, bool isPrimary) const
+    ui::Rotation getPhysicalDisplayOrientation(PhysicalDisplayId, bool isPrimary) const
             REQUIRES(mStateLock);
     void traverseLegacyLayers(const LayerVector::Visitor& visitor) const
             REQUIRES(kMainThreadContext);
