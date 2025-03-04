@@ -129,9 +129,6 @@ protected:
                                             mInjectedInitialWindowInfos};
 
     void SetUp() override {
-        // flag overrides
-        input_flags::hide_pointer_indicators_for_secure_windows(true);
-
         ON_CALL(mMockPolicy, createPointerController).WillByDefault([this](ControllerType type) {
             std::shared_ptr<FakePointerController> pc = std::make_shared<FakePointerController>();
             EXPECT_FALSE(pc->isPointerShown());
@@ -2098,10 +2095,7 @@ TEST_P(SkipPointerScreenshotForPrivacySensitiveDisplaysTestFixture,
     pc->assertSkipScreenshotFlagNotChanged();
 }
 
-TEST_F_WITH_FLAGS(
-        PointerChoreographerTest, HidesPointerScreenshotForExistingPrivacySensitiveWindows,
-        REQUIRES_FLAGS_ENABLED(ACONFIG_FLAG(com::android::input::flags,
-                                            hide_pointer_indicators_for_secure_windows))) {
+TEST_F(PointerChoreographerTest, HidesPointerScreenshotForExistingPrivacySensitiveWindows) {
     mChoreographer.setDisplayViewports(createViewports({DISPLAY_ID}));
 
     // Add a first mouse device
@@ -3158,11 +3152,8 @@ TEST_F(PointerChoreographerDisplayTopologyDefaultMouseDisplayTests,
 
 class PointerChoreographerWindowInfoListenerTest : public testing::Test {};
 
-TEST_F_WITH_FLAGS(
-        PointerChoreographerWindowInfoListenerTest,
-        doesNotCrashIfListenerCalledAfterPointerChoreographerDestroyed,
-        REQUIRES_FLAGS_ENABLED(ACONFIG_FLAG(com::android::input::flags,
-                                            hide_pointer_indicators_for_secure_windows))) {
+TEST_F(PointerChoreographerWindowInfoListenerTest,
+       doesNotCrashIfListenerCalledAfterPointerChoreographerDestroyed) {
     sp<android::gui::WindowInfosListener> registeredListener;
     sp<android::gui::WindowInfosListener> localListenerCopy;
     {
