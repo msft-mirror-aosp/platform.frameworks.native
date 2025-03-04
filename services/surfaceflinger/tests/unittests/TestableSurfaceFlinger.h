@@ -716,6 +716,7 @@ public:
     }
 
     auto& mutableMinAcquiredBuffers() { return SurfaceFlinger::minAcquiredBuffers; }
+    auto& mutableMaxAcquiredBuffers() { return SurfaceFlinger::maxAcquiredBuffersOpt; }
     auto& mutableLayerSnapshotBuilder() NO_THREAD_SAFETY_ANALYSIS {
         return mFlinger->mLayerSnapshotBuilder;
     }
