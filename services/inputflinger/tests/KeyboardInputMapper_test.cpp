@@ -691,32 +691,163 @@ TEST_F(KeyboardInputMapperUnitTest, Process_GestureEventToSetFlagKeepTouchMode) 
               expectSingleKeyArg(argsList).flags);
 }
 
-TEST_F_WITH_FLAGS(KeyboardInputMapperUnitTest, WakeBehavior_AlphabeticKeyboard,
-                  REQUIRES_FLAGS_ENABLED(ACONFIG_FLAG(com::android::input::flags,
-                                                      enable_alphabetic_keyboard_wake))) {
-    // For internal alphabetic devices, keys will trigger wake on key down.
+// --- KeyboardInputMapperUnitTest_WakeFlagOverride ---
+
+class KeyboardInputMapperUnitTest_WakeFlagOverride : public KeyboardInputMapperUnitTest {
+protected:
+    virtual void SetUp() override {
+        SetUp(/*wakeFlag=*/com::android::input::flags::enable_alphabetic_keyboard_wake());
+    }
+
+    void SetUp(bool wakeFlag) {
+        mWakeFlagInitialValue = com::android::input::flags::enable_alphabetic_keyboard_wake();
+        com::android::input::flags::enable_alphabetic_keyboard_wake(wakeFlag);
+        KeyboardInputMapperUnitTest::SetUp();
+    }
+
+    void TearDown() override {
+        com::android::input::flags::enable_alphabetic_keyboard_wake(mWakeFlagInitialValue);
+        KeyboardInputMapperUnitTest::TearDown();
+    }
+
+    bool mWakeFlagInitialValue;
+};
+
+// --- KeyboardInputMapperUnitTest_NonAlphabeticKeyboard_WakeFlagEnabled ---
+
+class KeyboardInputMapperUnitTest_NonAlphabeticKeyboard_WakeFlagEnabled
+      : public KeyboardInputMapperUnitTest_WakeFlagOverride {
+protected:
+    void SetUp() override {
+        KeyboardInputMapperUnitTest_WakeFlagOverride::SetUp(/*wakeFlag=*/true);
+    }
+};
+
+TEST_F(KeyboardInputMapperUnitTest_NonAlphabeticKeyboard_WakeFlagEnabled,
+       NonAlphabeticDevice_WakeBehavior) {
+    // For internal non-alphabetic devices keys will not trigger wake.
 
     addKeyByEvdevCode(KEY_A, AKEYCODE_A);
     addKeyByEvdevCode(KEY_HOME, AKEYCODE_HOME);
     addKeyByEvdevCode(KEY_PLAYPAUSE, AKEYCODE_MEDIA_PLAY_PAUSE);
 
     std::list<NotifyArgs> argsList = processKeyAndSync(ARBITRARY_TIME, KEY_A, 1);
-    ASSERT_EQ(POLICY_FLAG_WAKE, expectSingleKeyArg(argsList).policyFlags);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
 
     argsList = processKeyAndSync(ARBITRARY_TIME + 1, KEY_A, 0);
-    ASSERT_EQ(uint32_t(0), expectSingleKeyArg(argsList).policyFlags);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
 
     argsList = processKeyAndSync(ARBITRARY_TIME, KEY_HOME, 1);
-    ASSERT_EQ(POLICY_FLAG_WAKE, expectSingleKeyArg(argsList).policyFlags);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
 
     argsList = processKeyAndSync(ARBITRARY_TIME + 1, KEY_HOME, 0);
-    ASSERT_EQ(uint32_t(0), expectSingleKeyArg(argsList).policyFlags);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
 
     argsList = processKeyAndSync(ARBITRARY_TIME, KEY_PLAYPAUSE, 1);
-    ASSERT_EQ(POLICY_FLAG_WAKE, expectSingleKeyArg(argsList).policyFlags);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
 
     argsList = processKeyAndSync(ARBITRARY_TIME + 1, KEY_PLAYPAUSE, 0);
-    ASSERT_EQ(uint32_t(0), expectSingleKeyArg(argsList).policyFlags);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+}
+
+// --- KeyboardInputMapperUnitTest_AlphabeticKeyboard_WakeFlagEnabled ---
+
+class KeyboardInputMapperUnitTest_AlphabeticKeyboard_WakeFlagEnabled
+      : public KeyboardInputMapperUnitTest_WakeFlagOverride {
+protected:
+    void SetUp() override {
+        KeyboardInputMapperUnitTest_WakeFlagOverride::SetUp(/*wakeFlag=*/true);
+
+        ON_CALL((*mDevice), getKeyboardType).WillByDefault(Return(KeyboardType::ALPHABETIC));
+    }
+};
+
+TEST_F(KeyboardInputMapperUnitTest_AlphabeticKeyboard_WakeFlagEnabled, WakeBehavior) {
+    // For internal alphabetic devices, keys will trigger wake on key down when
+    // flag is enabled.
+    addKeyByEvdevCode(KEY_A, AKEYCODE_A);
+    addKeyByEvdevCode(KEY_HOME, AKEYCODE_HOME);
+    addKeyByEvdevCode(KEY_PLAYPAUSE, AKEYCODE_MEDIA_PLAY_PAUSE);
+
+    std::list<NotifyArgs> argsList = processKeyAndSync(ARBITRARY_TIME, KEY_A, 1);
+    EXPECT_THAT(argsList,
+                ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(POLICY_FLAG_WAKE))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME + 1, KEY_A, 0);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME, KEY_HOME, 1);
+    EXPECT_THAT(argsList,
+                ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(POLICY_FLAG_WAKE))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME + 1, KEY_HOME, 0);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME, KEY_PLAYPAUSE, 1);
+    EXPECT_THAT(argsList,
+                ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(POLICY_FLAG_WAKE))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME + 1, KEY_PLAYPAUSE, 0);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+}
+
+TEST_F(KeyboardInputMapperUnitTest_AlphabeticKeyboard_WakeFlagEnabled, WakeBehavior_UnknownKey) {
+    // For internal alphabetic devices, unknown keys will trigger wake on key down when
+    // flag is enabled.
+
+    const int32_t USAGE_UNKNOWN = 0x07ffff;
+    EXPECT_CALL(mMockEventHub, mapKey(EVENTHUB_ID, KEY_UNKNOWN, USAGE_UNKNOWN, _, _, _, _))
+            .WillRepeatedly(Return(NAME_NOT_FOUND));
+
+    // Key down with unknown scan code or usage code.
+    std::list<NotifyArgs> argsList = process(ARBITRARY_TIME, EV_MSC, MSC_SCAN, USAGE_UNKNOWN);
+    argsList += process(ARBITRARY_TIME, EV_KEY, KEY_UNKNOWN, 1);
+    EXPECT_THAT(argsList,
+                ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(POLICY_FLAG_WAKE))));
+
+    // Key up with unknown scan code or usage code.
+    argsList = process(ARBITRARY_TIME, EV_MSC, MSC_SCAN, USAGE_UNKNOWN);
+    argsList += process(ARBITRARY_TIME + 1, EV_KEY, KEY_UNKNOWN, 0);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+}
+
+// --- KeyboardInputMapperUnitTest_AlphabeticDevice_AlphabeticKeyboardWakeDisabled ---
+
+class KeyboardInputMapperUnitTest_AlphabeticKeyboard_WakeFlagDisabled
+      : public KeyboardInputMapperUnitTest_WakeFlagOverride {
+protected:
+    void SetUp() override {
+        KeyboardInputMapperUnitTest_WakeFlagOverride::SetUp(/*wakeFlag=*/false);
+
+        ON_CALL((*mDevice), getKeyboardType).WillByDefault(Return(KeyboardType::ALPHABETIC));
+    }
+};
+
+TEST_F(KeyboardInputMapperUnitTest_AlphabeticKeyboard_WakeFlagDisabled, WakeBehavior) {
+    // For internal alphabetic devices, keys will not trigger wake when flag is
+    // disabled.
+
+    addKeyByEvdevCode(KEY_A, AKEYCODE_A);
+    addKeyByEvdevCode(KEY_HOME, AKEYCODE_HOME);
+    addKeyByEvdevCode(KEY_PLAYPAUSE, AKEYCODE_MEDIA_PLAY_PAUSE);
+
+    std::list<NotifyArgs> argsList = processKeyAndSync(ARBITRARY_TIME, KEY_A, 1);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME + 1, KEY_A, 0);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME, KEY_HOME, 1);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME + 1, KEY_HOME, 0);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME, KEY_PLAYPAUSE, 1);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
+
+    argsList = processKeyAndSync(ARBITRARY_TIME + 1, KEY_PLAYPAUSE, 0);
+    EXPECT_THAT(argsList, ElementsAre(VariantWith<NotifyKeyArgs>(WithPolicyFlags(0U))));
 }
 
 // --- KeyboardInputMapperTest ---
