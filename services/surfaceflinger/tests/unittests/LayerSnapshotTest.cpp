@@ -1642,8 +1642,8 @@ TEST_F(LayerSnapshotTest, NonVisibleLayerWithInput) {
     transactions.back().states.push_back({});
     transactions.back().states.front().state.what = layer_state_t::eInputInfoChanged;
     transactions.back().states.front().layerId = 3;
-    transactions.back().states.front().state.windowInfoHandle = sp<gui::WindowInfoHandle>::make();
-    auto inputInfo = transactions.back().states.front().state.windowInfoHandle->editInfo();
+    auto inputInfo = transactions.back().states.front().state.editWindowInfo();
+    *inputInfo = {};
     inputInfo->token = sp<BBinder>::make();
     mLifecycleManager.applyTransactions(transactions);
 
@@ -1671,8 +1671,8 @@ TEST_F(LayerSnapshotTest, NonVisibleLayerWithInputShouldNotBeIncluded) {
     transactions.back().states.push_back({});
     transactions.back().states.front().state.what = layer_state_t::eInputInfoChanged;
     transactions.back().states.front().layerId = 3;
-    transactions.back().states.front().state.windowInfoHandle = sp<gui::WindowInfoHandle>::make();
-    auto inputInfo = transactions.back().states.front().state.windowInfoHandle->editInfo();
+    auto inputInfo = transactions.back().states.front().state.editWindowInfo();
+    *inputInfo = {};
     inputInfo->token = sp<BBinder>::make();
     hideLayer(3);
     mLifecycleManager.applyTransactions(transactions);

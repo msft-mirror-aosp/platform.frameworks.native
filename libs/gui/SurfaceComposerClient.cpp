@@ -1523,11 +1523,7 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setRelat
         mStatus = BAD_INDEX;
         return *this;
     }
-    s->what |= layer_state_t::eRelativeLayerChanged;
-    s->what &= ~layer_state_t::eLayerChanged;
-    s->relativeLayerSurfaceControl = relativeTo;
-    s->z = z;
-
+    s->updateRelativeLayer(relativeTo, z);
     registerSurfaceControlForCallback(sc);
     return *this;
 }
@@ -1557,9 +1553,7 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setTrans
         mStatus = BAD_INDEX;
         return *this;
     }
-    s->what |= layer_state_t::eTransparentRegionChanged;
-    s->transparentRegion = transparentRegion;
-
+    s->updateTransparentRegion(transparentRegion);
     registerSurfaceControlForCallback(sc);
     return *this;
 }
@@ -1721,9 +1715,7 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::reparent
     if (SurfaceControl::isSameSurface(sc, newParent)) {
         return *this;
     }
-    s->what |= layer_state_t::eReparent;
-    s->parentSurfaceControlForChild = newParent ? newParent->getParentingLayer() : nullptr;
-
+    s->updateParentLayer(newParent);
     registerSurfaceControlForCallback(sc);
     return *this;
 }
@@ -2009,9 +2001,7 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setSurfa
         mStatus = BAD_INDEX;
         return *this;
     }
-    s->what |= layer_state_t::eSurfaceDamageRegionChanged;
-    s->surfaceDamageRegion = surfaceDamageRegion;
-
+    s->updateSurfaceDamageRegion(surfaceDamageRegion);
     registerSurfaceControlForCallback(sc);
     return *this;
 }
@@ -2130,21 +2120,20 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setInput
         mStatus = BAD_INDEX;
         return *this;
     }
-    s->windowInfoHandle = std::move(info);
-    s->what |= layer_state_t::eInputInfoChanged;
+    s->updateInputWindowInfo(std::move(info));
     return *this;
 }
 
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setFocusedWindow(
         const FocusRequest& request) {
-    mInputWindowCommands.focusRequests.push_back(request);
+    mInputWindowCommands.addFocusRequest(request);
     return *this;
 }
 
 SurfaceComposerClient::Transaction&
 SurfaceComposerClient::Transaction::addWindowInfosReportedListener(
         sp<gui::IWindowInfosReportedListener> windowInfosReportedListener) {
-    mInputWindowCommands.windowInfosReportedListeners.insert(windowInfosReportedListener);
+    mInputWindowCommands.addWindowInfosReportedListener(windowInfosReportedListener);
     return *this;
 }
 
@@ -2568,8 +2557,9 @@ SurfaceComposerClient::Transaction::setTrustedPresentationCallback(
     }
     s->what |= layer_state_t::eTrustedPresentationInfoChanged;
     s->trustedPresentationThresholds = thresholds;
-    s->trustedPresentationListener.callbackInterface = TransactionCompletedListener::getIInstance();
-    s->trustedPresentationListener.callbackId = sc->getLayerId();
+    s->trustedPresentationListener.configure(
+            {.callbackInterface = TransactionCompletedListener::getIInstance(),
+             .callbackId = sc->getLayerId()});
 
     return *this;
 }
@@ -2585,8 +2575,7 @@ SurfaceComposerClient::Transaction::clearTrustedPresentationCallback(const sp<Su
     }
     s->what |= layer_state_t::eTrustedPresentationInfoChanged;
     s->trustedPresentationThresholds = TrustedPresentationThresholds();
-    s->trustedPresentationListener.callbackInterface = nullptr;
-    s->trustedPresentationListener.callbackId = -1;
+    s->trustedPresentationListener.clear();
 
     return *this;
 }
