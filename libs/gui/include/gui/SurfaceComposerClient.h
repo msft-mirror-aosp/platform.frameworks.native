@@ -345,8 +345,6 @@ public:
     static std::optional<aidl::android::hardware::graphics::common::DisplayDecorationSupport>
     getDisplayDecorationSupport(const sp<IBinder>& displayToken);
 
-    static bool flagEdgeExtensionEffectUseShader();
-
     /**
      * Returns how many picture profiles are supported by the display.
      *
