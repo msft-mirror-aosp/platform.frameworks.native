@@ -687,10 +687,11 @@ public:
         return binder::Status::ok();
     }
 
-    binder::Status createVirtualDisplay(const std::string& /*displayName*/, bool /*isSecure*/,
-                                        const std::string& /*uniqueId*/,
-                                        float /*requestedRefreshRate*/,
-                                        sp<IBinder>* /*outDisplay*/) override {
+    binder::Status createVirtualDisplay(
+            const std::string& /*displayName*/, bool /*isSecure*/,
+            gui::ISurfaceComposer::OptimizationPolicy /*optimizationPolicy*/,
+            const std::string& /*uniqueId*/, float /*requestedRefreshRate*/,
+            sp<IBinder>* /*outDisplay*/) override {
         return binder::Status::ok();
     }
 

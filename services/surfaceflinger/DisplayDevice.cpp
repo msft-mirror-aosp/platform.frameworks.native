@@ -51,6 +51,17 @@ namespace android {
 
 namespace hal = hardware::graphics::composer::hal;
 
+namespace gui {
+inline std::string_view to_string(ISurfaceComposer::OptimizationPolicy optimizationPolicy) {
+    switch (optimizationPolicy) {
+        case ISurfaceComposer::OptimizationPolicy::optimizeForPower:
+            return "optimizeForPower";
+        case ISurfaceComposer::OptimizationPolicy::optimizeForPerformance:
+            return "optimizeForPerformance";
+    }
+}
+} // namespace gui
+
 DisplayDeviceCreationArgs::DisplayDeviceCreationArgs(
         const sp<SurfaceFlinger>& flinger, HWComposer& hwComposer, const wp<IBinder>& displayToken,
         std::shared_ptr<compositionengine::Display> compositionDisplay)
@@ -283,6 +294,7 @@ void DisplayDevice::dump(utils::Dumper& dumper) const {
 
     dumper.dump("name"sv, '"' + mDisplayName + '"');
     dumper.dump("powerMode"sv, mPowerMode);
+    dumper.dump("optimizationPolicy"sv, mOptimizationPolicy);
 
     if (mRefreshRateSelector) {
         mRefreshRateSelector->dump(dumper);
@@ -303,6 +315,15 @@ bool DisplayDevice::isSecure() const {
 
 void DisplayDevice::setSecure(bool secure) {
     mCompositionDisplay->setSecure(secure);
+}
+
+gui::ISurfaceComposer::OptimizationPolicy DisplayDevice::getOptimizationPolicy() const {
+    return mOptimizationPolicy;
+}
+
+void DisplayDevice::setOptimizationPolicy(
+        gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy) {
+    mOptimizationPolicy = optimizationPolicy;
 }
 
 const Rect DisplayDevice::getBounds() const {

@@ -529,6 +529,7 @@ private:
 
     // ISurfaceComposer implementation:
     sp<IBinder> createVirtualDisplay(const std::string& displayName, bool isSecure,
+                                     gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy,
                                      const std::string& uniqueId,
                                      float requestedRefreshRate = 0.0f);
     status_t destroyVirtualDisplay(const sp<IBinder>& displayToken);
@@ -1563,9 +1564,11 @@ public:
             const sp<IBinder>& layerHandle,
             sp<gui::IDisplayEventConnection>* outConnection) override;
     binder::Status createConnection(sp<gui::ISurfaceComposerClient>* outClient) override;
-    binder::Status createVirtualDisplay(const std::string& displayName, bool isSecure,
-                                        const std::string& uniqueId, float requestedRefreshRate,
-                                        sp<IBinder>* outDisplay) override;
+    binder::Status createVirtualDisplay(
+            const std::string& displayName, bool isSecure,
+            gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy,
+            const std::string& uniqueId, float requestedRefreshRate,
+            sp<IBinder>* outDisplay) override;
     binder::Status destroyVirtualDisplay(const sp<IBinder>& displayToken) override;
     binder::Status getPhysicalDisplayIds(std::vector<int64_t>* outDisplayIds) override;
     binder::Status getPhysicalDisplayToken(int64_t displayId, sp<IBinder>* outDisplay) override;
