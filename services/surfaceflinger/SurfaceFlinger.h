@@ -211,11 +211,9 @@ public:
     SurfaceFlinger(surfaceflinger::Factory&, SkipInitializationTag) ANDROID_API;
     explicit SurfaceFlinger(surfaceflinger::Factory&) ANDROID_API;
 
-    // set main thread scheduling policy
-    static status_t setSchedFifo(bool enabled) ANDROID_API;
-
-    // set main thread scheduling attributes
-    static status_t setSchedAttr(bool enabled);
+    // Set scheduling policy and attributes of main thread.
+    static void setSchedFifo(bool enabled, const char* whence);
+    static void setSchedAttr(bool enabled, const char* whence);
 
     static char const* getServiceName() ANDROID_API { return "SurfaceFlinger"; }
 

@@ -1009,9 +1009,8 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
     mPowerAdvisor->init();
 
     if (base::GetBoolProperty("service.sf.prime_shader_cache"s, true)) {
-        if (setSchedFifo(false) != NO_ERROR) {
-            ALOGW("Can't set SCHED_OTHER for primeCache");
-        }
+        constexpr const char* kWhence = "primeCache";
+        setSchedFifo(false, kWhence);
 
         mRenderEnginePrimeCacheFuture.callOnce([this] {
             renderengine::PrimeCacheConfig config;
@@ -1047,9 +1046,7 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
             return getRenderEngine().primeCache(config);
         });
 
-        if (setSchedFifo(true) != NO_ERROR) {
-            ALOGW("Can't set SCHED_FIFO after primeCache");
-        }
+        setSchedFifo(true, kWhence);
     }
 
     // Avoid blocking the main thread on `init` to set properties.
@@ -2286,8 +2283,7 @@ void SurfaceFlinger::scheduleSample() {
 
 void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t timestamp,
                                         std::optional<hal::VsyncPeriodNanos> vsyncPeriod) {
-    if (FlagManager::getInstance().connected_display() && timestamp < 0 &&
-        vsyncPeriod.has_value()) {
+    if (timestamp < 0 && vsyncPeriod.has_value()) {
         if (mIsHdcpViaNegVsync && vsyncPeriod.value() == ~1) {
             const int32_t value = static_cast<int32_t>(-timestamp);
             // one byte is good enough to encode android.hardware.drm.HdcpLevel
@@ -3564,9 +3560,8 @@ std::pair<DisplayModes, DisplayModePtr> SurfaceFlinger::loadDisplayModes(
     std::vector<HWComposer::HWCDisplayMode> hwcModes;
     std::optional<hal::HWConfigId> activeModeHwcIdOpt;
 
-    const bool isExternalDisplay = FlagManager::getInstance().connected_display() &&
-            getHwComposer().getDisplayConnectionType(displayId) ==
-                    ui::DisplayConnectionType::External;
+    const bool isExternalDisplay = getHwComposer().getDisplayConnectionType(displayId) ==
+            ui::DisplayConnectionType::External;
 
     int attempt = 0;
     constexpr int kMaxAttempts = 3;
@@ -4066,8 +4061,7 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
     // For an external display, loadDisplayModes already attempted to select the same mode
     // as DM, but SF still needs to be updated to match.
     // TODO (b/318534874): Let DM decide the initial mode.
-    if (const auto& physical = state.physical;
-        mScheduler && physical && FlagManager::getInstance().connected_display()) {
+    if (const auto& physical = state.physical; mScheduler && physical) {
         const bool isInternalDisplay = mPhysicalDisplays.get(physical->id)
                                                .transform(&PhysicalDisplay::isInternal)
                                                .value_or(false);
@@ -5710,16 +5704,11 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
         }
 
         if (displayId == mActiveDisplayId) {
-            // TODO(b/281692563): Merge the syscalls. For now, keep uclamp in a separate syscall and
-            // set it before SCHED_FIFO due to b/190237315.
-            if (setSchedAttr(true) != NO_ERROR) {
-                ALOGW("Failed to set uclamp.min after powering on active display: %s",
-                      strerror(errno));
-            }
-            if (setSchedFifo(true) != NO_ERROR) {
-                ALOGW("Failed to set SCHED_FIFO after powering on active display: %s",
-                      strerror(errno));
-            }
+            // TODO: b/281692563 - Merge the syscalls. For now, keep uclamp in a separate syscall
+            // and set it before SCHED_FIFO due to b/190237315.
+            constexpr const char* kWhence = "setPowerMode(ON)";
+            setSchedAttr(true, kWhence);
+            setSchedFifo(true, kWhence);
         }
 
         getHwComposer().setPowerMode(displayId, mode);
@@ -5746,14 +5735,9 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
             if (const auto display = getActivatableDisplay()) {
                 onActiveDisplayChangedLocked(activeDisplay.get(), *display);
             } else {
-                if (setSchedFifo(false) != NO_ERROR) {
-                    ALOGW("Failed to set SCHED_OTHER after powering off active display: %s",
-                          strerror(errno));
-                }
-                if (setSchedAttr(false) != NO_ERROR) {
-                    ALOGW("Failed set uclamp.min after powering off active display: %s",
-                          strerror(errno));
-                }
+                constexpr const char* kWhence = "setPowerMode(OFF)";
+                setSchedFifo(false, kWhence);
+                setSchedAttr(false, kWhence);
 
                 if (currentModeNotDozeSuspend) {
                     if (!FlagManager::getInstance().multithreaded_present()) {
@@ -7216,7 +7200,7 @@ static status_t validateScreenshotPermissions(const CaptureArgs& captureArgs) {
     return PERMISSION_DENIED;
 }
 
-status_t SurfaceFlinger::setSchedFifo(bool enabled) {
+void SurfaceFlinger::setSchedFifo(bool enabled, const char* whence) {
     static constexpr int kFifoPriority = 2;
     static constexpr int kOtherPriority = 0;
 
@@ -7231,19 +7215,19 @@ status_t SurfaceFlinger::setSchedFifo(bool enabled) {
     }
 
     if (sched_setscheduler(0, sched_policy, &param) != 0) {
-        return -errno;
+        const char* kPolicy[] = {"SCHED_OTHER", "SCHED_FIFO"};
+        ALOGW("%s: Failed to set %s: %s", whence, kPolicy[sched_policy == SCHED_FIFO],
+              strerror(errno));
     }
-
-    return NO_ERROR;
 }
 
-status_t SurfaceFlinger::setSchedAttr(bool enabled) {
+void SurfaceFlinger::setSchedAttr(bool enabled, const char* whence) {
     static const unsigned int kUclampMin =
             base::GetUintProperty<unsigned int>("ro.surface_flinger.uclamp.min"s, 0U);
 
     if (!kUclampMin) {
         // uclamp.min set to 0 (default), skip setting
-        return NO_ERROR;
+        return;
     }
 
     sched_attr attr = {};
@@ -7254,10 +7238,9 @@ status_t SurfaceFlinger::setSchedAttr(bool enabled) {
     attr.sched_util_max = 1024;
 
     if (syscall(__NR_sched_setattr, 0, &attr, 0)) {
-        return -errno;
+        const char* kAction[] = {"disable", "enable"};
+        ALOGW("%s: Failed to %s uclamp.min: %s", whence, kAction[enabled], strerror(errno));
     }
-
-    return NO_ERROR;
 }
 
 namespace {
@@ -8377,10 +8360,6 @@ status_t SurfaceFlinger::getStalledTransactionInfo(
 
 void SurfaceFlinger::updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t connectedLevel,
                                       int32_t maxLevel) {
-    if (!FlagManager::getInstance().connected_display()) {
-        return;
-    }
-
     Mutex::Autolock lock(mStateLock);
 
     const auto idOpt = getHwComposer().toPhysicalDisplayId(hwcDisplayId);
