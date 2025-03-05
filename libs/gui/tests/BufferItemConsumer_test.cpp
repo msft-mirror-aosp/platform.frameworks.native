@@ -24,6 +24,7 @@
 #include <gui/Surface.h>
 #include <ui/BufferQueueDefs.h>
 #include <ui/GraphicBuffer.h>
+#include <utils/Errors.h>
 
 #include <unordered_set>
 
@@ -233,6 +234,15 @@ TEST_F(BufferItemConsumerTest, TriggerBufferFreed_DeleteBufferItemConsumer) {
     // Sleep to give some time for callbacks to happen.
     usleep(kFrameSleepUs);
     ASSERT_EQ(1, GetFreedBufferCount());
+}
+
+TEST_F(BufferItemConsumerTest, ResizeAcquireCount) {
+    EXPECT_EQ(OK, mBIC->setMaxAcquiredBufferCount(kMaxLockedBuffers + 1));
+    EXPECT_EQ(OK, mBIC->setMaxAcquiredBufferCount(kMaxLockedBuffers + 2));
+    EXPECT_EQ(OK, mBIC->setMaxAcquiredBufferCount(kMaxLockedBuffers - 1));
+    EXPECT_EQ(OK, mBIC->setMaxAcquiredBufferCount(kMaxLockedBuffers - 2));
+    EXPECT_EQ(OK, mBIC->setMaxAcquiredBufferCount(kMaxLockedBuffers + 1));
+    EXPECT_EQ(OK, mBIC->setMaxAcquiredBufferCount(kMaxLockedBuffers - 1));
 }
 
 #if COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_PLATFORM_API_IMPROVEMENTS)
