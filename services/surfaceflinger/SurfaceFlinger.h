@@ -238,6 +238,11 @@ public:
     // ISurfaceComposer.getMaxAcquiredBufferCount().
     static int64_t minAcquiredBuffers;
 
+    // Controls the maximum acquired buffers SurfaceFlinger will suggest via
+    // ISurfaceComposer.getMaxAcquiredBufferCount().
+    // Value is set through ro.surface_flinger.max_acquired_buffers.
+    static std::optional<int64_t> maxAcquiredBuffersOpt;
+
     // Controls the maximum width and height in pixels that the graphics pipeline can support for
     // GPU fallback composition. For example, 8k devices with 4k GPUs, or 4k devices with 2k GPUs.
     static uint32_t maxGraphicsWidth;
