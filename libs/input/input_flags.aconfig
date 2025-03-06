@@ -120,13 +120,6 @@ flag {
 }
 
 flag {
-  name: "hide_pointer_indicators_for_secure_windows"
-  namespace: "input"
-  description: "Hide touch and pointer indicators if a secure window is present on display"
-  bug: "325252005"
-}
-
-flag {
   name: "enable_keyboard_classifier"
   namespace: "input"
   description: "Keyboard classifier that classifies all keyboards into alphabetic or non-alphabetic"
