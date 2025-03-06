@@ -139,7 +139,6 @@ void FlagManager::dump(std::string& result) const {
     DUMP_ACONFIG_FLAG(begone_bright_hlg);
     DUMP_ACONFIG_FLAG(cache_when_source_crop_layer_only_moved);
     DUMP_ACONFIG_FLAG(commit_not_composited);
-    DUMP_ACONFIG_FLAG(connected_display);
     DUMP_ACONFIG_FLAG(connected_display_hdr);
     DUMP_ACONFIG_FLAG(correct_dpi_with_display_size);
     DUMP_ACONFIG_FLAG(deprecate_frame_tracker);
@@ -252,7 +251,6 @@ FLAG_MANAGER_LEGACY_SERVER_FLAG(use_skia_tracing, PROPERTY_SKIA_ATRACE_ENABLED,
 /// Trunk stable readonly flags ///
 FLAG_MANAGER_ACONFIG_FLAG(adpf_fmq_sf, "")
 FLAG_MANAGER_ACONFIG_FLAG(arr_setframerate_gte_enum, "debug.sf.arr_setframerate_gte_enum")
-FLAG_MANAGER_ACONFIG_FLAG(connected_display, "")
 FLAG_MANAGER_ACONFIG_FLAG(enable_small_area_detection, "")
 FLAG_MANAGER_ACONFIG_FLAG(stable_edid_ids, "debug.sf.stable_edid_ids")
 FLAG_MANAGER_ACONFIG_FLAG(frame_rate_category_mrr, "debug.sf.frame_rate_category_mrr")

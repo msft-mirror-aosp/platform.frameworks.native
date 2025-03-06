@@ -1009,9 +1009,8 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
     mPowerAdvisor->init();
 
     if (base::GetBoolProperty("service.sf.prime_shader_cache"s, true)) {
-        if (setSchedFifo(false) != NO_ERROR) {
-            ALOGW("Can't set SCHED_OTHER for primeCache");
-        }
+        constexpr const char* kWhence = "primeCache";
+        setSchedFifo(false, kWhence);
 
         mRenderEnginePrimeCacheFuture.callOnce([this] {
             renderengine::PrimeCacheConfig config;
@@ -1047,9 +1046,7 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
             return getRenderEngine().primeCache(config);
         });
 
-        if (setSchedFifo(true) != NO_ERROR) {
-            ALOGW("Can't set SCHED_FIFO after primeCache");
-        }
+        setSchedFifo(true, kWhence);
     }
 
     // Avoid blocking the main thread on `init` to set properties.
@@ -2286,8 +2283,7 @@ void SurfaceFlinger::scheduleSample() {
 
 void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t timestamp,
                                         std::optional<hal::VsyncPeriodNanos> vsyncPeriod) {
-    if (FlagManager::getInstance().connected_display() && timestamp < 0 &&
-        vsyncPeriod.has_value()) {
+    if (timestamp < 0 && vsyncPeriod.has_value()) {
         if (mIsHdcpViaNegVsync && vsyncPeriod.value() == ~1) {
             const int32_t value = static_cast<int32_t>(-timestamp);
             // one byte is good enough to encode android.hardware.drm.HdcpLevel
@@ -2339,9 +2335,19 @@ void SurfaceFlinger::onComposerHalHotplugEvent(hal::HWDisplayId hwcDisplayId,
         return;
     }
 
-    if (event == DisplayHotplugEvent::ERROR_LINK_UNSTABLE &&
-        !FlagManager::getInstance().display_config_error_hal()) {
-        return;
+    if (event == DisplayHotplugEvent::ERROR_LINK_UNSTABLE) {
+        if (!FlagManager::getInstance().display_config_error_hal()) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mHotplugMutex);
+            mPendingHotplugEvents.push_back(
+                    HotplugEvent{hwcDisplayId, HWComposer::HotplugEvent::LinkUnstable});
+        }
+        if (mScheduler) {
+            mScheduler->scheduleConfigure();
+        }
+        // do not return to also report the error.
     }
 
     // TODO(b/311403559): use enum type instead of int
@@ -3554,9 +3560,8 @@ std::pair<DisplayModes, DisplayModePtr> SurfaceFlinger::loadDisplayModes(
     std::vector<HWComposer::HWCDisplayMode> hwcModes;
     std::optional<hal::HWConfigId> activeModeHwcIdOpt;
 
-    const bool isExternalDisplay = FlagManager::getInstance().connected_display() &&
-            getHwComposer().getDisplayConnectionType(displayId) ==
-                    ui::DisplayConnectionType::External;
+    const bool isExternalDisplay = getHwComposer().getDisplayConnectionType(displayId) ==
+            ui::DisplayConnectionType::External;
 
     int attempt = 0;
     constexpr int kMaxAttempts = 3;
@@ -3719,11 +3724,12 @@ bool SurfaceFlinger::configureLocked() {
             const auto displayId = info->id;
             const ftl::Concat displayString("display ", displayId.value, "(HAL ID ", hwcDisplayId,
                                             ')');
-
-            if (event == HWComposer::HotplugEvent::Connected) {
+            // TODO: b/393126541 - replace if with switch as all cases are handled.
+            if (event == HWComposer::HotplugEvent::Connected ||
+                event == HWComposer::HotplugEvent::LinkUnstable) {
                 const auto activeModeIdOpt =
                         processHotplugConnect(displayId, hwcDisplayId, std::move(*info),
-                                              displayString.c_str());
+                                              displayString.c_str(), event);
                 if (!activeModeIdOpt) {
                     mScheduler->dispatchHotplugError(
                             static_cast<int32_t>(DisplayHotplugEvent::ERROR_UNKNOWN));
@@ -3749,7 +3755,7 @@ bool SurfaceFlinger::configureLocked() {
                 LOG_ALWAYS_FATAL_IF(!snapshotOpt);
 
                 mDisplayModeController.registerDisplay(*snapshotOpt, *activeModeIdOpt, config);
-            } else {
+            } else { // event == HWComposer::HotplugEvent::Disconnected
                 // Unregister before destroying the DisplaySnapshot below.
                 mDisplayModeController.unregisterDisplay(displayId);
 
@@ -3764,7 +3770,8 @@ bool SurfaceFlinger::configureLocked() {
 std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDisplayId displayId,
                                                                    hal::HWDisplayId hwcDisplayId,
                                                                    DisplayIdentificationInfo&& info,
-                                                                   const char* displayString) {
+                                                                   const char* displayString,
+                                                                   HWComposer::HotplugEvent event) {
     auto [displayModes, activeMode] = loadDisplayModes(displayId);
     if (!activeMode) {
         ALOGE("Failed to hotplug %s", displayString);
@@ -3799,6 +3806,9 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
         state.physical->port = port;
         ALOGI("Reconnecting %s", displayString);
         return activeModeId;
+    } else if (event == HWComposer::HotplugEvent::LinkUnstable) {
+        ALOGE("Failed to reconnect unknown %s", displayString);
+        return std::nullopt;
     }
 
     const sp<IBinder> token = sp<BBinder>::make();
@@ -4051,8 +4061,7 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
     // For an external display, loadDisplayModes already attempted to select the same mode
     // as DM, but SF still needs to be updated to match.
     // TODO (b/318534874): Let DM decide the initial mode.
-    if (const auto& physical = state.physical;
-        mScheduler && physical && FlagManager::getInstance().connected_display()) {
+    if (const auto& physical = state.physical; mScheduler && physical) {
         const bool isInternalDisplay = mPhysicalDisplays.get(physical->id)
                                                .transform(&PhysicalDisplay::isInternal)
                                                .value_or(false);
@@ -4320,20 +4329,19 @@ void SurfaceFlinger::updateInputFlinger(VsyncId vsyncId, TimePoint frameTime) {
                                                                 std::move(displayInfos),
                                                                 ftl::to_underlying(vsyncId),
                                                                 frameTime.ns()},
-                                         std::move(
-                                                 inputWindowCommands.windowInfosReportedListeners),
+                                         std::move(inputWindowCommands.releaseListeners()),
                                          /* forceImmediateCall= */ visibleWindowsChanged ||
-                                                 !inputWindowCommands.focusRequests.empty());
+                                                 !inputWindowCommands.getFocusRequests().empty());
         } else {
             // If there are listeners but no changes to input windows, call the listeners
             // immediately.
-            for (const auto& listener : inputWindowCommands.windowInfosReportedListeners) {
+            for (const auto& listener : inputWindowCommands.getListeners()) {
                 if (IInterface::asBinder(listener)->isBinderAlive()) {
                     listener->onWindowInfosReported();
                 }
             }
         }
-        for (const auto& focusRequest : inputWindowCommands.focusRequests) {
+        for (const auto& focusRequest : inputWindowCommands.getFocusRequests()) {
             inputFlinger->setFocusedWindow(focusRequest);
         }
     }});
@@ -5060,16 +5068,16 @@ status_t SurfaceFlinger::setTransactionState(
             mBufferCountTracker.increment(resolvedState.layerId);
         }
         if (resolvedState.state.what & layer_state_t::eReparent) {
-            resolvedState.parentId =
-                    getLayerIdFromSurfaceControl(resolvedState.state.parentSurfaceControlForChild);
+            resolvedState.parentId = getLayerIdFromSurfaceControl(
+                    resolvedState.state.getParentSurfaceControlForChild());
         }
         if (resolvedState.state.what & layer_state_t::eRelativeLayerChanged) {
-            resolvedState.relativeParentId =
-                    getLayerIdFromSurfaceControl(resolvedState.state.relativeLayerSurfaceControl);
+            resolvedState.relativeParentId = getLayerIdFromSurfaceControl(
+                    resolvedState.state.getRelativeLayerSurfaceControl());
         }
         if (resolvedState.state.what & layer_state_t::eInputInfoChanged) {
             wp<IBinder>& touchableRegionCropHandle =
-                    resolvedState.state.windowInfoHandle->editInfo()->touchableRegionCropHandle;
+                    resolvedState.state.editWindowInfo()->touchableRegionCropHandle;
             resolvedState.touchCropId =
                     LayerHandle::getLayerId(touchableRegionCropHandle.promote());
         }
@@ -5695,16 +5703,11 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
         }
 
         if (displayId == mActiveDisplayId) {
-            // TODO(b/281692563): Merge the syscalls. For now, keep uclamp in a separate syscall and
-            // set it before SCHED_FIFO due to b/190237315.
-            if (setSchedAttr(true) != NO_ERROR) {
-                ALOGW("Failed to set uclamp.min after powering on active display: %s",
-                      strerror(errno));
-            }
-            if (setSchedFifo(true) != NO_ERROR) {
-                ALOGW("Failed to set SCHED_FIFO after powering on active display: %s",
-                      strerror(errno));
-            }
+            // TODO: b/281692563 - Merge the syscalls. For now, keep uclamp in a separate syscall
+            // and set it before SCHED_FIFO due to b/190237315.
+            constexpr const char* kWhence = "setPowerMode(ON)";
+            setSchedAttr(true, kWhence);
+            setSchedFifo(true, kWhence);
         }
 
         getHwComposer().setPowerMode(displayId, mode);
@@ -5731,14 +5734,9 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
             if (const auto display = getActivatableDisplay()) {
                 onActiveDisplayChangedLocked(activeDisplay.get(), *display);
             } else {
-                if (setSchedFifo(false) != NO_ERROR) {
-                    ALOGW("Failed to set SCHED_OTHER after powering off active display: %s",
-                          strerror(errno));
-                }
-                if (setSchedAttr(false) != NO_ERROR) {
-                    ALOGW("Failed set uclamp.min after powering off active display: %s",
-                          strerror(errno));
-                }
+                constexpr const char* kWhence = "setPowerMode(OFF)";
+                setSchedFifo(false, kWhence);
+                setSchedAttr(false, kWhence);
 
                 if (currentModeNotDozeSuspend) {
                     if (!FlagManager::getInstance().multithreaded_present()) {
@@ -7201,7 +7199,7 @@ static status_t validateScreenshotPermissions(const CaptureArgs& captureArgs) {
     return PERMISSION_DENIED;
 }
 
-status_t SurfaceFlinger::setSchedFifo(bool enabled) {
+void SurfaceFlinger::setSchedFifo(bool enabled, const char* whence) {
     static constexpr int kFifoPriority = 2;
     static constexpr int kOtherPriority = 0;
 
@@ -7216,19 +7214,19 @@ status_t SurfaceFlinger::setSchedFifo(bool enabled) {
     }
 
     if (sched_setscheduler(0, sched_policy, &param) != 0) {
-        return -errno;
+        const char* kPolicy[] = {"SCHED_OTHER", "SCHED_FIFO"};
+        ALOGW("%s: Failed to set %s: %s", whence, kPolicy[sched_policy == SCHED_FIFO],
+              strerror(errno));
     }
-
-    return NO_ERROR;
 }
 
-status_t SurfaceFlinger::setSchedAttr(bool enabled) {
+void SurfaceFlinger::setSchedAttr(bool enabled, const char* whence) {
     static const unsigned int kUclampMin =
             base::GetUintProperty<unsigned int>("ro.surface_flinger.uclamp.min"s, 0U);
 
     if (!kUclampMin) {
         // uclamp.min set to 0 (default), skip setting
-        return NO_ERROR;
+        return;
     }
 
     sched_attr attr = {};
@@ -7239,10 +7237,9 @@ status_t SurfaceFlinger::setSchedAttr(bool enabled) {
     attr.sched_util_max = 1024;
 
     if (syscall(__NR_sched_setattr, 0, &attr, 0)) {
-        return -errno;
+        const char* kAction[] = {"disable", "enable"};
+        ALOGW("%s: Failed to %s uclamp.min: %s", whence, kAction[enabled], strerror(errno));
     }
-
-    return NO_ERROR;
 }
 
 namespace {
@@ -8362,10 +8359,6 @@ status_t SurfaceFlinger::getStalledTransactionInfo(
 
 void SurfaceFlinger::updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t connectedLevel,
                                       int32_t maxLevel) {
-    if (!FlagManager::getInstance().connected_display()) {
-        return;
-    }
-
     Mutex::Autolock lock(mStateLock);
 
     const auto idOpt = getHwComposer().toPhysicalDisplayId(hwcDisplayId);
