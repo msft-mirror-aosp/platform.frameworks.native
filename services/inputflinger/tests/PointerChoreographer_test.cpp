@@ -361,6 +361,17 @@ TEST_F(PointerChoreographerTest, CallsNotifyPointerDisplayIdChanged) {
     assertPointerDisplayIdNotified(DISPLAY_ID);
 }
 
+TEST_F(PointerChoreographerTest, NoDefaultMouseSetFallbackToDefaultDisplayId) {
+    mChoreographer.setDisplayViewports(createViewports({ui::LogicalDisplayId::DEFAULT}));
+    mChoreographer.notifyInputDevicesChanged(
+            {/*id=*/0,
+             {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_MOUSE,
+                                     ui::LogicalDisplayId::INVALID)}});
+    assertPointerControllerCreated(ControllerType::MOUSE);
+
+    assertPointerDisplayIdNotified(ui::LogicalDisplayId::DEFAULT);
+}
+
 TEST_F(PointerChoreographerTest, WhenViewportIsSetLaterCallsNotifyPointerDisplayIdChanged) {
     setDefaultMouseDisplayId(DISPLAY_ID);
     mChoreographer.notifyInputDevicesChanged(
