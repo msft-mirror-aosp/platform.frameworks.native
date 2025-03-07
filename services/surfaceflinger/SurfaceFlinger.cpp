@@ -591,6 +591,8 @@ sp<IBinder> SurfaceFlinger::createVirtualDisplay(
         return nullptr;
     }
 
+    ALOGD("Creating virtual display: %s", displayName.c_str());
+
     class DisplayToken : public BBinder {
         sp<SurfaceFlinger> flinger;
         virtual ~DisplayToken() {
@@ -615,6 +617,8 @@ sp<IBinder> SurfaceFlinger::createVirtualDisplay(
     // TODO (b/314820005): separate as a different arg when creating the display.
     state.isProtected = isSecure;
     state.optimizationPolicy = optimizationPolicy;
+    // Virtual displays start in ON mode.
+    state.initialPowerMode = hal::PowerMode::ON;
     state.displayName = displayName;
     state.uniqueId = uniqueId;
     state.requestedRefreshRate = Fps::fromValue(requestedRefreshRate);
@@ -636,6 +640,9 @@ status_t SurfaceFlinger::destroyVirtualDisplay(const sp<IBinder>& displayToken) 
         ALOGE("%s: Invalid operation on physical display", __func__);
         return INVALID_OPERATION;
     }
+
+    ALOGD("Destroying virtual display: %s", state.displayName.c_str());
+
     mCurrentState.displays.removeItemsAt(index);
     setTransactionFlags(eDisplayTransactionNeeded);
     return NO_ERROR;
@@ -3913,7 +3920,12 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
             getPhysicalDisplayOrientation(compositionDisplay->getId(), creationArgs.isPrimary);
     ALOGV("Display Orientation: %s", toCString(creationArgs.physicalOrientation));
 
-    creationArgs.initialPowerMode = state.isVirtual() ? hal::PowerMode::ON : hal::PowerMode::OFF;
+    if (FlagManager::getInstance().correct_virtual_display_power_state()) {
+        creationArgs.initialPowerMode = state.initialPowerMode;
+    } else {
+        creationArgs.initialPowerMode =
+                state.isVirtual() ? hal::PowerMode::ON : hal::PowerMode::OFF;
+    }
 
     creationArgs.requestedRefreshRate = state.requestedRefreshRate;
 
@@ -3987,6 +3999,8 @@ void SurfaceFlinger::processDisplayAdded(const wp<IBinder>& displayToken,
         // Virtual displays without a surface are dormant:
         // they have external state (layer stack, projection,
         // etc.) but no internal state (i.e. a DisplayDevice).
+        ALOGD("Not adding dormant virtual display with token %p: %s", displayToken.unsafe_get(),
+              state.displayName.c_str());
         return;
     }
 
@@ -5806,16 +5820,32 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal:
 }
 
 void SurfaceFlinger::setPowerMode(const sp<IBinder>& displayToken, int mode) {
-    auto future = mScheduler->schedule([=, this]() FTL_FAKE_GUARD(mStateLock) FTL_FAKE_GUARD(
-                                               kMainThreadContext) {
+    auto future = mScheduler->schedule([=, this]() FTL_FAKE_GUARD(kMainThreadContext) {
         mSkipPowerOnForQuiescent = false;
-        const auto display = getDisplayDeviceLocked(displayToken);
+        const auto display = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(displayToken));
         if (!display) {
-            ALOGE("Attempt to set power mode %d for invalid display token %p", mode,
-                  displayToken.get());
+            Mutex::Autolock lock(mStateLock);
+            const ssize_t index = mCurrentState.displays.indexOfKey(displayToken);
+            if (index >= 0) {
+                auto& state = mCurrentState.displays.editValueFor(displayToken);
+                if (state.isVirtual()) {
+                    ALOGD("Setting power mode %d for a dormant virtual display with token %p", mode,
+                          displayToken.get());
+                    state.initialPowerMode = static_cast<hal::PowerMode>(mode);
+                    return;
+                }
+            }
+            ALOGE("Failed to set power mode %d for display token %p", mode, displayToken.get());
         } else if (display->isVirtual()) {
-            ALOGW("Attempt to set power mode %d for virtual display", mode);
+            if (FlagManager::getInstance().correct_virtual_display_power_state()) {
+                ALOGD("Setting power mode %d on virtual display %s", mode,
+                      display->getDisplayName().c_str());
+                display->setPowerMode(static_cast<hal::PowerMode>(mode));
+            } else {
+                ALOGW("Attempt to set power mode %d for virtual display", mode);
+            }
         } else {
+            ftl::FakeGuard guard(mStateLock);
             setPowerModeInternal(display, static_cast<hal::PowerMode>(mode));
         }
     });

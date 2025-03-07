@@ -180,8 +180,7 @@ auto DisplayDevice::getFrontEndInfo() const -> frontend::DisplayInfo {
 }
 
 void DisplayDevice::setPowerMode(hal::PowerMode mode) {
-    // TODO(b/241285876): Skip this for virtual displays.
-    if (mode == hal::PowerMode::OFF || mode == hal::PowerMode::ON) {
+    if (!isVirtual() && (mode == hal::PowerMode::OFF || mode == hal::PowerMode::ON)) {
         if (mStagedBrightness && mBrightness != mStagedBrightness) {
             getCompositionDisplay()->setNextBrightness(*mStagedBrightness);
             mBrightness = *mStagedBrightness;

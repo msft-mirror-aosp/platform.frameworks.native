@@ -60,6 +60,7 @@ public:
     bool adpf_native_session_manager() const;
     bool adpf_use_fmq_channel() const;
     bool adpf_use_fmq_channel_fixed() const;
+    bool correct_virtual_display_power_state() const;
     bool graphite_renderengine_preview_rollout() const;
     bool increase_missed_frame_jank_threshold() const;
     bool refresh_rate_overlay_on_external_display() const;
