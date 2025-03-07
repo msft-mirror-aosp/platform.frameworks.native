@@ -394,6 +394,7 @@ public:
 
     static const std::string kEmpty;
     static sp<IBinder> createVirtualDisplay(const std::string& displayName, bool isSecure,
+                                            bool optimizeForPower = true,
                                             const std::string& uniqueId = kEmpty,
                                             float requestedRefreshRate = 0);
 

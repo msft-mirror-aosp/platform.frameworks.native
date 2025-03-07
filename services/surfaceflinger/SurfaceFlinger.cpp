@@ -384,6 +384,7 @@ bool SurfaceFlinger::useHwcForRgbToYuv;
 bool SurfaceFlinger::hasSyncFramework;
 int64_t SurfaceFlinger::maxFrameBufferAcquiredBuffers;
 int64_t SurfaceFlinger::minAcquiredBuffers = 1;
+std::optional<int64_t> SurfaceFlinger::maxAcquiredBuffersOpt;
 uint32_t SurfaceFlinger::maxGraphicsWidth;
 uint32_t SurfaceFlinger::maxGraphicsHeight;
 bool SurfaceFlinger::useContextPriority;
@@ -452,6 +453,7 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
     maxFrameBufferAcquiredBuffers = max_frame_buffer_acquired_buffers(2);
     minAcquiredBuffers =
             SurfaceFlingerProperties::min_acquired_buffers().value_or(minAcquiredBuffers);
+    maxAcquiredBuffersOpt = SurfaceFlingerProperties::max_acquired_buffers();
 
     maxGraphicsWidth = std::max(max_graphics_width(0), 0);
     maxGraphicsHeight = std::max(max_graphics_height(0), 0);
@@ -576,9 +578,10 @@ void SurfaceFlinger::run() {
     mScheduler->run();
 }
 
-sp<IBinder> SurfaceFlinger::createVirtualDisplay(const std::string& displayName, bool isSecure,
-                                                 const std::string& uniqueId,
-                                                 float requestedRefreshRate) {
+sp<IBinder> SurfaceFlinger::createVirtualDisplay(
+        const std::string& displayName, bool isSecure,
+        gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy, const std::string& uniqueId,
+        float requestedRefreshRate) {
     // SurfaceComposerAIDL checks for some permissions, but adding an additional check here.
     // This is to ensure that only root, system, and graphics can request to create a secure
     // display. Secure displays can show secure content so we add an additional restriction on it.
@@ -611,6 +614,7 @@ sp<IBinder> SurfaceFlinger::createVirtualDisplay(const std::string& displayName,
     // Set display as protected when marked as secure to ensure no behavior change
     // TODO (b/314820005): separate as a different arg when creating the display.
     state.isProtected = isSecure;
+    state.optimizationPolicy = optimizationPolicy;
     state.displayName = displayName;
     state.uniqueId = uniqueId;
     state.requestedRefreshRate = Fps::fromValue(requestedRefreshRate);
@@ -3937,6 +3941,7 @@ sp<DisplayDevice> SurfaceFlinger::setupNewDisplayDeviceInternal(
     display->setProjection(state.orientation, state.layerStackSpaceRect,
                            state.orientedDisplaySpaceRect);
     display->setDisplayName(state.displayName);
+    display->setOptimizationPolicy(state.optimizationPolicy);
     display->setFlags(state.flags);
 
     return display;
@@ -8237,11 +8242,13 @@ int SurfaceFlinger::getGpuContextPriority() {
 
 int SurfaceFlinger::calculateMaxAcquiredBufferCount(Fps refreshRate,
                                                     std::chrono::nanoseconds presentLatency) {
-    auto pipelineDepth = presentLatency.count() / refreshRate.getPeriodNsecs();
+    int64_t pipelineDepth = presentLatency.count() / refreshRate.getPeriodNsecs();
     if (presentLatency.count() % refreshRate.getPeriodNsecs()) {
         pipelineDepth++;
     }
-    return std::max(minAcquiredBuffers, static_cast<int64_t>(pipelineDepth - 1));
+    const int64_t maxAcquiredBuffers =
+            std::min(pipelineDepth - 1, maxAcquiredBuffersOpt.value_or(pipelineDepth - 1));
+    return std::max(minAcquiredBuffers, maxAcquiredBuffers);
 }
 
 status_t SurfaceFlinger::getMaxAcquiredBufferCount(int* buffers) const {
@@ -8742,16 +8749,16 @@ binder::Status SurfaceComposerAIDL::createConnection(sp<gui::ISurfaceComposerCli
     }
 }
 
-binder::Status SurfaceComposerAIDL::createVirtualDisplay(const std::string& displayName,
-                                                         bool isSecure, const std::string& uniqueId,
-                                                         float requestedRefreshRate,
-                                                         sp<IBinder>* outDisplay) {
+binder::Status SurfaceComposerAIDL::createVirtualDisplay(
+        const std::string& displayName, bool isSecure,
+        gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy, const std::string& uniqueId,
+        float requestedRefreshRate, sp<IBinder>* outDisplay) {
     status_t status = checkAccessPermission();
     if (status != OK) {
         return binderStatusFromStatusT(status);
     }
-    *outDisplay =
-            mFlinger->createVirtualDisplay(displayName, isSecure, uniqueId, requestedRefreshRate);
+    *outDisplay = mFlinger->createVirtualDisplay(displayName, isSecure, optimizationPolicy,
+                                                 uniqueId, requestedRefreshRate);
     return binder::Status::ok();
 }
 

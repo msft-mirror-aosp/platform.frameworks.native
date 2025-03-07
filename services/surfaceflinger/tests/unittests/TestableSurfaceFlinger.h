@@ -399,12 +399,16 @@ public:
                               float requestedRefreshRate = 0.0f) {
         static const std::string kTestId =
                 "virtual:libsurfaceflinger_unittest:TestableSurfaceFlinger";
-        return mFlinger->createVirtualDisplay(displayName, isSecure, kTestId, requestedRefreshRate);
+        return mFlinger
+                ->createVirtualDisplay(displayName, isSecure,
+                                       gui::ISurfaceComposer::OptimizationPolicy::optimizeForPower,
+                                       kTestId, requestedRefreshRate);
     }
 
     auto createVirtualDisplay(const std::string& displayName, bool isSecure,
+                              gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy,
                               const std::string& uniqueId, float requestedRefreshRate = 0.0f) {
-        return mFlinger->createVirtualDisplay(displayName, isSecure, uniqueId,
+        return mFlinger->createVirtualDisplay(displayName, isSecure, optimizationPolicy, uniqueId,
                                               requestedRefreshRate);
     }
 
@@ -716,6 +720,7 @@ public:
     }
 
     auto& mutableMinAcquiredBuffers() { return SurfaceFlinger::minAcquiredBuffers; }
+    auto& mutableMaxAcquiredBuffers() { return SurfaceFlinger::maxAcquiredBuffersOpt; }
     auto& mutableLayerSnapshotBuilder() NO_THREAD_SAFETY_ANALYSIS {
         return mFlinger->mLayerSnapshotBuilder;
     }

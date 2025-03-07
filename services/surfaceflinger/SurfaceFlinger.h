@@ -238,6 +238,11 @@ public:
     // ISurfaceComposer.getMaxAcquiredBufferCount().
     static int64_t minAcquiredBuffers;
 
+    // Controls the maximum acquired buffers SurfaceFlinger will suggest via
+    // ISurfaceComposer.getMaxAcquiredBufferCount().
+    // Value is set through ro.surface_flinger.max_acquired_buffers.
+    static std::optional<int64_t> maxAcquiredBuffersOpt;
+
     // Controls the maximum width and height in pixels that the graphics pipeline can support for
     // GPU fallback composition. For example, 8k devices with 4k GPUs, or 4k devices with 2k GPUs.
     static uint32_t maxGraphicsWidth;
@@ -529,6 +534,7 @@ private:
 
     // ISurfaceComposer implementation:
     sp<IBinder> createVirtualDisplay(const std::string& displayName, bool isSecure,
+                                     gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy,
                                      const std::string& uniqueId,
                                      float requestedRefreshRate = 0.0f);
     status_t destroyVirtualDisplay(const sp<IBinder>& displayToken);
@@ -1563,9 +1569,11 @@ public:
             const sp<IBinder>& layerHandle,
             sp<gui::IDisplayEventConnection>* outConnection) override;
     binder::Status createConnection(sp<gui::ISurfaceComposerClient>* outClient) override;
-    binder::Status createVirtualDisplay(const std::string& displayName, bool isSecure,
-                                        const std::string& uniqueId, float requestedRefreshRate,
-                                        sp<IBinder>* outDisplay) override;
+    binder::Status createVirtualDisplay(
+            const std::string& displayName, bool isSecure,
+            gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy,
+            const std::string& uniqueId, float requestedRefreshRate,
+            sp<IBinder>* outDisplay) override;
     binder::Status destroyVirtualDisplay(const sp<IBinder>& displayToken) override;
     binder::Status getPhysicalDisplayIds(std::vector<int64_t>* outDisplayIds) override;
     binder::Status getPhysicalDisplayToken(int64_t displayId, sp<IBinder>* outDisplay) override;
