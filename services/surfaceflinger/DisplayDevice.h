@@ -299,6 +299,8 @@ struct DisplayDeviceState {
     Fps requestedRefreshRate;
     int32_t maxLayerPictureProfiles = 0;
     bool hasPictureProcessing = false;
+    hardware::graphics::composer::hal::PowerMode initialPowerMode{
+            hardware::graphics::composer::hal::PowerMode::OFF};
 
 private:
     static std::atomic<int32_t> sNextSequenceId;

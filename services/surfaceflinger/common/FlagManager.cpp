@@ -26,8 +26,9 @@
 #include <server_configurable_flags/get_flags.h>
 #include <cinttypes>
 
-#include <android_os.h>
+#include <android_companion_virtualdevice_flags.h>
 #include <android_hardware_flags.h>
+#include <android_os.h>
 #include <com_android_graphics_libgui_flags.h>
 #include <com_android_graphics_surfaceflinger_flags.h>
 #include <com_android_server_display_feature_flags.h>
@@ -125,6 +126,7 @@ void FlagManager::dump(std::string& result) const {
     DUMP_ACONFIG_FLAG(adpf_gpu_sf);
     DUMP_ACONFIG_FLAG(adpf_native_session_manager);
     DUMP_ACONFIG_FLAG(adpf_use_fmq_channel);
+    DUMP_ACONFIG_FLAG(correct_virtual_display_power_state);
     DUMP_ACONFIG_FLAG(graphite_renderengine_preview_rollout);
     DUMP_ACONFIG_FLAG(increase_missed_frame_jank_threshold);
     DUMP_ACONFIG_FLAG(refresh_rate_overlay_on_external_display);
@@ -309,6 +311,8 @@ FLAG_MANAGER_ACONFIG_FLAG(vsync_predictor_recovery, "");
 
 /// Trunk stable server (R/W) flags from outside SurfaceFlinger ///
 FLAG_MANAGER_ACONFIG_FLAG_IMPORTED(adpf_use_fmq_channel, "", android::os)
+FLAG_MANAGER_ACONFIG_FLAG_IMPORTED(correct_virtual_display_power_state, "",
+                                   android::companion::virtualdevice::flags)
 
 /// Trunk stable readonly flags from outside SurfaceFlinger ///
 FLAG_MANAGER_ACONFIG_FLAG_IMPORTED(idle_screen_refresh_rate_timeout, "",
