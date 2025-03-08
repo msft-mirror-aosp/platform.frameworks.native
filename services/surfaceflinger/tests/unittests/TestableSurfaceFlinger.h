@@ -462,9 +462,9 @@ public:
     }
 
     // Allow reading display state without locking, as if called on the SF main thread.
-    auto setPowerModeInternal(const sp<DisplayDevice>& display,
-                              hal::PowerMode mode) NO_THREAD_SAFETY_ANALYSIS {
-        return mFlinger->setPowerModeInternal(display, mode);
+    auto setPhysicalDisplayPowerMode(const sp<DisplayDevice>& display,
+                                     hal::PowerMode mode) NO_THREAD_SAFETY_ANALYSIS {
+        return mFlinger->setPhysicalDisplayPowerMode(display, mode);
     }
 
     auto renderScreenImpl(const sp<DisplayDevice> display, const Rect sourceCrop,

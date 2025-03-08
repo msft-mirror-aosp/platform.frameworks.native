@@ -4164,7 +4164,7 @@ void SurfaceFlinger::processDisplayChanged(const wp<IBinder>& displayToken,
         if (currentState.physical) {
             const auto display = getDisplayDeviceLocked(displayToken);
             if (!mSkipPowerOnForQuiescent) {
-                setPowerModeInternal(display, hal::PowerMode::ON);
+                setPhysicalDisplayPowerMode(display, hal::PowerMode::ON);
             }
 
             if (display->getPhysicalId() == mActiveDisplayId) {
@@ -5655,7 +5655,7 @@ void SurfaceFlinger::initializeDisplays() {
 
         // In case of a restart, ensure all displays are off.
         for (const auto& [id, display] : mPhysicalDisplays) {
-            setPowerModeInternal(getDisplayDeviceLocked(id), hal::PowerMode::OFF);
+            setPhysicalDisplayPowerMode(getDisplayDeviceLocked(id), hal::PowerMode::OFF);
         }
 
         // Power on all displays. The primary display is first, so becomes the active display. Also,
@@ -5664,13 +5664,14 @@ void SurfaceFlinger::initializeDisplays() {
         // Additionally, do not turn on displays if the boot should be quiescent.
         if (!mSkipPowerOnForQuiescent) {
             for (const auto& [id, display] : mPhysicalDisplays) {
-                setPowerModeInternal(getDisplayDeviceLocked(id), hal::PowerMode::ON);
+                setPhysicalDisplayPowerMode(getDisplayDeviceLocked(id), hal::PowerMode::ON);
             }
         }
     }
 }
 
-void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& display, hal::PowerMode mode) {
+void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& display,
+                                                 hal::PowerMode mode) {
     if (display->isVirtual()) {
         // TODO(b/241285876): This code path should not be reachable, so enforce this at compile
         // time.
@@ -5846,7 +5847,7 @@ void SurfaceFlinger::setPowerMode(const sp<IBinder>& displayToken, int mode) {
             }
         } else {
             ftl::FakeGuard guard(mStateLock);
-            setPowerModeInternal(display, static_cast<hal::PowerMode>(mode));
+            setPhysicalDisplayPowerMode(display, static_cast<hal::PowerMode>(mode));
         }
     });
 

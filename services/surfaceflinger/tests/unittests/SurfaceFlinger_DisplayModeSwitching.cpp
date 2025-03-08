@@ -415,8 +415,8 @@ TEST_F(DisplayModeSwitchingTest, innerXorOuterDisplay) {
     EXPECT_THAT(innerDisplay, ModeSettledTo(&dmc(), kModeId60));
     EXPECT_THAT(outerDisplay, ModeSettledTo(&dmc(), kModeId120));
 
-    mFlinger.setPowerModeInternal(outerDisplay, hal::PowerMode::OFF);
-    mFlinger.setPowerModeInternal(innerDisplay, hal::PowerMode::ON);
+    mFlinger.setPhysicalDisplayPowerMode(outerDisplay, hal::PowerMode::OFF);
+    mFlinger.setPhysicalDisplayPowerMode(innerDisplay, hal::PowerMode::ON);
 
     EXPECT_THAT(innerDisplay, ModeSettledTo(&dmc(), kModeId60));
     EXPECT_THAT(outerDisplay, ModeSettledTo(&dmc(), kModeId120));
@@ -446,8 +446,8 @@ TEST_F(DisplayModeSwitchingTest, innerXorOuterDisplay) {
     EXPECT_THAT(innerDisplay, ModeSettledTo(&dmc(), kModeId90));
     EXPECT_THAT(outerDisplay, ModeSettledTo(&dmc(), kModeId60));
 
-    mFlinger.setPowerModeInternal(innerDisplay, hal::PowerMode::OFF);
-    mFlinger.setPowerModeInternal(outerDisplay, hal::PowerMode::ON);
+    mFlinger.setPhysicalDisplayPowerMode(innerDisplay, hal::PowerMode::OFF);
+    mFlinger.setPhysicalDisplayPowerMode(outerDisplay, hal::PowerMode::ON);
 
     EXPECT_THAT(innerDisplay, ModeSettledTo(&dmc(), kModeId90));
     EXPECT_THAT(outerDisplay, ModeSettledTo(&dmc(), kModeId60));
@@ -479,8 +479,8 @@ TEST_F(DisplayModeSwitchingTest, innerAndOuterDisplay) {
     EXPECT_THAT(innerDisplay, ModeSettledTo(&dmc(), kModeId60));
     EXPECT_THAT(outerDisplay, ModeSettledTo(&dmc(), kModeId120));
 
-    mFlinger.setPowerModeInternal(innerDisplay, hal::PowerMode::ON);
-    mFlinger.setPowerModeInternal(outerDisplay, hal::PowerMode::ON);
+    mFlinger.setPhysicalDisplayPowerMode(innerDisplay, hal::PowerMode::ON);
+    mFlinger.setPhysicalDisplayPowerMode(outerDisplay, hal::PowerMode::ON);
 
     EXPECT_THAT(innerDisplay, ModeSettledTo(&dmc(), kModeId60));
     EXPECT_THAT(outerDisplay, ModeSettledTo(&dmc(), kModeId120));
@@ -522,7 +522,7 @@ TEST_F(DisplayModeSwitchingTest, powerOffDuringModeSet) {
     EXPECT_THAT(mDisplay, ModeSwitchingTo(&mFlinger, kModeId90));
 
     // Power off the display before the mode has been set.
-    mFlinger.setPowerModeInternal(mDisplay, hal::PowerMode::OFF);
+    mFlinger.setPhysicalDisplayPowerMode(mDisplay, hal::PowerMode::OFF);
 
     const VsyncPeriodChangeTimeline timeline{.refreshRequired = true};
     EXPECT_SET_ACTIVE_CONFIG(kInnerDisplayHwcId, kModeId90);
@@ -547,8 +547,8 @@ TEST_F(DisplayModeSwitchingTest, powerOffDuringConcurrentModeSet) {
     EXPECT_THAT(innerDisplay, ModeSettledTo(&dmc(), kModeId60));
     EXPECT_THAT(outerDisplay, ModeSettledTo(&dmc(), kModeId120));
 
-    mFlinger.setPowerModeInternal(innerDisplay, hal::PowerMode::ON);
-    mFlinger.setPowerModeInternal(outerDisplay, hal::PowerMode::ON);
+    mFlinger.setPhysicalDisplayPowerMode(innerDisplay, hal::PowerMode::ON);
+    mFlinger.setPhysicalDisplayPowerMode(outerDisplay, hal::PowerMode::ON);
 
     EXPECT_THAT(innerDisplay, ModeSettledTo(&dmc(), kModeId60));
     EXPECT_THAT(outerDisplay, ModeSettledTo(&dmc(), kModeId120));
@@ -565,7 +565,7 @@ TEST_F(DisplayModeSwitchingTest, powerOffDuringConcurrentModeSet) {
     EXPECT_THAT(outerDisplay, ModeSwitchingTo(&mFlinger, kModeId60));
 
     // Power off the outer display before the mode has been set.
-    mFlinger.setPowerModeInternal(outerDisplay, hal::PowerMode::OFF);
+    mFlinger.setPhysicalDisplayPowerMode(outerDisplay, hal::PowerMode::OFF);
 
     const VsyncPeriodChangeTimeline timeline{.refreshRequired = true};
     EXPECT_SET_ACTIVE_CONFIG(kInnerDisplayHwcId, kModeId90);
@@ -582,8 +582,8 @@ TEST_F(DisplayModeSwitchingTest, powerOffDuringConcurrentModeSet) {
     EXPECT_THAT(innerDisplay, ModeSettledTo(&dmc(), kModeId90));
     EXPECT_THAT(outerDisplay, ModeSettledTo(&dmc(), kModeId60));
 
-    mFlinger.setPowerModeInternal(innerDisplay, hal::PowerMode::OFF);
-    mFlinger.setPowerModeInternal(outerDisplay, hal::PowerMode::ON);
+    mFlinger.setPhysicalDisplayPowerMode(innerDisplay, hal::PowerMode::OFF);
+    mFlinger.setPhysicalDisplayPowerMode(outerDisplay, hal::PowerMode::ON);
 
     EXPECT_EQ(NO_ERROR,
               mFlinger.setDesiredDisplayModeSpecs(outerDisplay->getDisplayToken().promote(),

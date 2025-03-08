@@ -143,7 +143,7 @@ TEST_F(SchedulerTest, registerDisplay) FTL_FAKE_GUARD(kMainThreadContext) {
                                                                       kDisplay1Mode60->getId()));
 
     // TODO(b/241285191): Restore once VsyncSchedule::getPendingHardwareVsyncState is called by
-    // Scheduler::setDisplayPowerMode rather than SF::setPowerModeInternal.
+    // Scheduler::setDisplayPowerMode rather than SF::setPhysicalDisplayPowerMode.
 #if 0
     // Hardware VSYNC should be disabled for newly registered displays.
     EXPECT_CALL(mSchedulerCallback, requestHardwareVsync(kDisplayId2, false)).Times(1);

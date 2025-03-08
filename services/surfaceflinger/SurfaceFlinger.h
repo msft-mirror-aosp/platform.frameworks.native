@@ -733,7 +733,7 @@ private:
     void applyActiveMode(PhysicalDisplayId) REQUIRES(kMainThreadContext);
 
     // Called on the main thread in response to setPowerMode()
-    void setPowerModeInternal(const sp<DisplayDevice>& display, hal::PowerMode mode)
+    void setPhysicalDisplayPowerMode(const sp<DisplayDevice>& display, hal::PowerMode mode)
             REQUIRES(mStateLock, kMainThreadContext);
 
     // Returns the preferred mode for PhysicalDisplayId if the Scheduler has selected one for that
