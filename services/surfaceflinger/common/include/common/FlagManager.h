@@ -99,7 +99,6 @@ public:
     bool local_tonemap_screenshots() const;
     bool luts_api() const;
     bool misc1() const;
-    bool multithreaded_present() const;
     bool no_vsyncs_on_screen_off() const;
     bool override_trusted_overlay() const;
     bool protected_if_client() const;

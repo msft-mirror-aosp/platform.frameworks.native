@@ -5731,8 +5731,7 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
         }
 
         getHwComposer().setPowerMode(displayId, mode);
-        if (mode != hal::PowerMode::DOZE_SUSPEND &&
-            (displayId == mActiveDisplayId || FlagManager::getInstance().multithreaded_present())) {
+        if (mode != hal::PowerMode::DOZE_SUSPEND) {
             const bool enable =
                     mScheduler->getVsyncSchedule(displayId)->getPendingHardwareVsyncState();
             requestHardwareVsync(displayId, enable);
@@ -5759,14 +5758,11 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
                 setSchedAttr(false, kWhence);
 
                 if (currentModeNotDozeSuspend) {
-                    if (!FlagManager::getInstance().multithreaded_present()) {
-                        mScheduler->disableHardwareVsync(displayId, true);
-                    }
                     mScheduler->enableSyntheticVsync();
                 }
             }
         }
-        if (currentModeNotDozeSuspend && FlagManager::getInstance().multithreaded_present()) {
+        if (currentModeNotDozeSuspend) {
             constexpr bool kDisallow = true;
             mScheduler->disableHardwareVsync(displayId, kDisallow);
         }
@@ -5784,8 +5780,7 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
     } else if (mode == hal::PowerMode::DOZE || mode == hal::PowerMode::ON) {
         // Update display while dozing
         getHwComposer().setPowerMode(displayId, mode);
-        if (currentMode == hal::PowerMode::DOZE_SUSPEND &&
-            (displayId == mActiveDisplayId || FlagManager::getInstance().multithreaded_present())) {
+        if (currentMode == hal::PowerMode::DOZE_SUSPEND) {
             if (displayId == mActiveDisplayId) {
                 ALOGI("Force repainting for DOZE_SUSPEND -> DOZE or ON.");
                 mVisibleRegionsDirty = true;
@@ -5797,10 +5792,9 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
         }
     } else if (mode == hal::PowerMode::DOZE_SUSPEND) {
         // Leave display going to doze
-        if (displayId == mActiveDisplayId || FlagManager::getInstance().multithreaded_present()) {
-            constexpr bool kDisallow = true;
-            mScheduler->disableHardwareVsync(displayId, kDisallow);
-        }
+        constexpr bool kDisallow = true;
+        mScheduler->disableHardwareVsync(displayId, kDisallow);
+
         if (displayId == mActiveDisplayId) {
             mScheduler->enableSyntheticVsync();
         }
