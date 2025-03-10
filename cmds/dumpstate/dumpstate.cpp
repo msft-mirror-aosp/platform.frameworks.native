@@ -208,6 +208,9 @@ static const std::string ANR_TRACE_FILE_PREFIX = "trace_";
 static const std::string SHUTDOWN_CHECKPOINTS_DIR = "/data/system/shutdown-checkpoints/";
 static const std::string SHUTDOWN_CHECKPOINTS_FILE_PREFIX = "checkpoints-";
 
+// File path to default screenshot image, that used when failed to capture the real screenshot.
+static const std::string DEFAULT_SCREENSHOT_PATH = "/system/etc/default_screenshot.png";
+
 // TODO: temporary variables and functions used during C++ refactoring
 
 #define RETURN_IF_USER_DENIED_CONSENT()                                                        \
@@ -767,10 +770,14 @@ android::binder::Status Dumpstate::ConsentCallback::onReportApproved() {
 
     bool copy_succeeded = android::os::CopyFileToFd(ds.screenshot_path_,
                                                     ds.options_->screenshot_fd.get());
-    ds.options_->is_screenshot_copied = copy_succeeded;
     if (copy_succeeded) {
         android::os::UnlinkAndLogOnError(ds.screenshot_path_);
+    } else {
+        MYLOGE("Failed to copy screenshot to a permanent file.\n");
+        copy_succeeded = android::os::CopyFileToFd(DEFAULT_SCREENSHOT_PATH,
+                                                           ds.options_->screenshot_fd.get());
     }
+    ds.options_->is_screenshot_copied = copy_succeeded;
     return android::binder::Status::ok();
 }
 
@@ -1853,6 +1860,11 @@ Dumpstate::RunStatus Dumpstate::dumpstate() {
         }
         RunCommand("DUMP VENDOR RIL LOGS", {"vril-dump"}, options.Build());
     }
+
+    /* Dump USB information */
+    RunCommand("typec_connector_class", {"typec_connector_class"},
+               CommandOptions::WithTimeout(10).AsRootIfAvailable().Build());
+    RunCommand("lsusb", {"lsusb"}, CommandOptions::WithTimeout(10).AsRootIfAvailable().Build());
 
     printf("========================================================\n");
     printf("== Android Framework Services\n");
@@ -3464,7 +3476,9 @@ Dumpstate::RunStatus Dumpstate::RunInternal(int32_t calling_uid,
             // Do an early return if there were errors. We make an exception for consent
             // timing out because it's possible the user got distracted. In this case the
             // bugreport is not shared but made available for manual retrieval.
-            MYLOGI("User denied consent. Returning\n");
+            MYLOGI("Bug report generation failed, this could have been due to"
+                   " several reasons such as BR copy failed, user consent was"
+                   " not grated etc. Returning\n");
             return status;
         }
         if (status == Dumpstate::RunStatus::USER_CONSENT_TIMED_OUT) {
@@ -3560,7 +3574,7 @@ std::future<std::string> Dumpstate::MaybeSnapshotSystemTraceAsync() {
             // the dumpstate's own activity which is irrelevant.
             RunCommand(
                 SERIALIZE_PERFETTO_TRACE_TASK, {"perfetto", "--save-for-bugreport"},
-                CommandOptions::WithTimeout(10).DropRoot().CloseAllFileDescriptorsOnExec().Build(),
+                CommandOptions::WithTimeout(30).DropRoot().CloseAllFileDescriptorsOnExec().Build(),
                 false, outFd);
             // MaybeAddSystemTraceToZip() will take care of copying the trace in the zip
             // file in the later stages.
@@ -3751,12 +3765,16 @@ Dumpstate::RunStatus Dumpstate::CopyBugreportIfUserConsented(int32_t calling_uid
             if (options_->do_screenshot &&
                 options_->screenshot_fd.get() != -1 &&
                 !options_->is_screenshot_copied) {
-                copy_succeeded = android::os::CopyFileToFd(screenshot_path_,
+                bool is_screenshot_copied = android::os::CopyFileToFd(screenshot_path_,
                                                            options_->screenshot_fd.get());
-                options_->is_screenshot_copied = copy_succeeded;
-                if (copy_succeeded) {
+                if (is_screenshot_copied) {
                     android::os::UnlinkAndLogOnError(screenshot_path_);
+                } else {
+                    MYLOGE("Failed to copy screenshot to a permanent file.\n");
+                    is_screenshot_copied = android::os::CopyFileToFd(DEFAULT_SCREENSHOT_PATH,
+                                                           options_->screenshot_fd.get());
                 }
+                options_->is_screenshot_copied = is_screenshot_copied;
             }
         }
         return copy_succeeded ? Dumpstate::RunStatus::OK : Dumpstate::RunStatus::ERROR;
@@ -3847,7 +3865,7 @@ DurationReporter::DurationReporter(const std::string& title, bool logcat_only, b
 DurationReporter::~DurationReporter() {
     if (!title_.empty()) {
         float elapsed = (float)(Nanotime() - started_) / NANOS_PER_SEC;
-        if (elapsed >= .5f || verbose_) {
+        if (elapsed >= 1.0f || verbose_) {
             MYLOGD("Duration of '%s': %.2fs\n", title_.c_str(), elapsed);
         }
         if (!logcat_only_) {
