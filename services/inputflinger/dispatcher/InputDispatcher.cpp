@@ -5222,6 +5222,8 @@ std::string InputDispatcher::DispatcherWindowInfo::dumpDisplayAndWindowInfo() co
     } else {
         dump += "Displays: <none>\n";
     }
+    dump += StringPrintf("mMaximumObscuringOpacityForTouch: %f\n",
+                         mMaximumObscuringOpacityForTouch);
     dump += "DisplayTopologyGraph:\n";
     dump += addLinePrefix(mTopology.dump(), INDENT);
     dump += "\n";
