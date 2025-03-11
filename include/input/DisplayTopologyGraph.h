@@ -55,6 +55,8 @@ struct DisplayTopologyGraph {
     ui::LogicalDisplayId primaryDisplayId = ui::LogicalDisplayId::INVALID;
     std::unordered_map<ui::LogicalDisplayId, std::vector<DisplayTopologyAdjacentDisplay>> graph;
     std::unordered_map<ui::LogicalDisplayId, int> displaysDensity;
+
+    bool isValid() const;
 };
 
 } // namespace android
