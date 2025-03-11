@@ -17,15 +17,20 @@
 #define LOG_TAG "DisplayTopologyValidator"
 
 #include <android-base/logging.h>
+#include <android-base/stringprintf.h>
 #include <ftl/enum.h>
 #include <input/DisplayTopologyGraph.h>
+#include <input/PrintTools.h>
 #include <ui/LogicalDisplayId.h>
 
 #include <algorithm>
 
+#define INDENT "  "
+
 namespace android {
 
 namespace {
+
 DisplayTopologyPosition getOppositePosition(DisplayTopologyPosition position) {
     switch (position) {
         case DisplayTopologyPosition::LEFT:
@@ -95,11 +100,45 @@ bool validateDensities(const android::DisplayTopologyGraph& displayTopologyGraph
     return true;
 }
 
+std::string logicalDisplayIdToString(const ui::LogicalDisplayId& displayId) {
+    return base::StringPrintf("displayId(%d)", displayId.val());
+}
+
+std::string adjacentDisplayToString(const DisplayTopologyAdjacentDisplay& adjacentDisplay) {
+    return adjacentDisplay.dump();
+}
+
+std::string adjacentDisplayVectorToString(
+        const std::vector<DisplayTopologyAdjacentDisplay>& adjacentDisplays) {
+    return dumpVector(adjacentDisplays, adjacentDisplayToString);
+}
+
 } // namespace
+
+std::string DisplayTopologyAdjacentDisplay::dump() const {
+    std::string dump;
+    dump += base::StringPrintf("DisplayTopologyAdjacentDisplay: {displayId: %d, position: %s, "
+                               "offsetDp: %f}",
+                               displayId.val(), ftl::enum_string(position).c_str(), offsetDp);
+    return dump;
+}
 
 bool DisplayTopologyGraph::isValid() const {
     return validatePrimaryDisplay(*this) && validateTopologyGraph(*this) &&
             validateDensities(*this);
+}
+
+std::string DisplayTopologyGraph::dump() const {
+    std::string dump;
+    dump += base::StringPrintf("PrimaryDisplayId: %d\n", primaryDisplayId.val());
+    dump += base::StringPrintf("TopologyGraph:\n");
+    dump += addLinePrefix(dumpMap(graph, logicalDisplayIdToString, adjacentDisplayVectorToString),
+                          INDENT);
+    dump += "\n";
+    dump += base::StringPrintf("DisplaysDensity:\n");
+    dump += addLinePrefix(dumpMap(displaysDensity, logicalDisplayIdToString), INDENT);
+    dump += "\n";
+    return dump;
 }
 
 } // namespace android

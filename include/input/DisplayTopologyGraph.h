@@ -46,6 +46,8 @@ struct DisplayTopologyAdjacentDisplay {
     DisplayTopologyPosition position;
     // The offset in DP of the adjacent display, relative to the source display.
     float offsetDp;
+
+    std::string dump() const;
 };
 
 /**
@@ -57,6 +59,7 @@ struct DisplayTopologyGraph {
     std::unordered_map<ui::LogicalDisplayId, int> displaysDensity;
 
     bool isValid() const;
+    std::string dump() const;
 };
 
 } // namespace android
