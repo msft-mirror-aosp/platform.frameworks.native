@@ -815,6 +815,7 @@ private:
     bool mNeedToReopenDevices;
     bool mNeedToScanDevices;
     std::vector<std::string> mExcludedDevices;
+    std::vector<int32_t> mDeviceIdsToReopen;
 
     int mEpollFd;
     int mINotifyFd;

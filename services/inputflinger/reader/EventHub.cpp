@@ -1899,58 +1899,87 @@ std::vector<RawEvent> EventHub::getEvents(int timeoutMillis) {
 
         handleSysfsNodeChangeNotificationsLocked();
 
-        // Report any devices that had last been added/removed.
-        for (auto it = mClosingDevices.begin(); it != mClosingDevices.end();) {
-            std::unique_ptr<Device> device = std::move(*it);
-            ALOGV("Reporting device closed: id=%d, name=%s\n", device->id, device->path.c_str());
-            const int32_t deviceId = (device->id == mBuiltInKeyboardId)
-                    ? ReservedInputDeviceId::BUILT_IN_KEYBOARD_ID
-                    : device->id;
-            events.push_back({
-                    .when = now,
-                    .deviceId = deviceId,
-                    .type = DEVICE_REMOVED,
-            });
-            it = mClosingDevices.erase(it);
-            if (events.size() == EVENT_BUFFER_SIZE) {
-                break;
+        // Use a do-while loop to ensure that we drain the closing and opening devices loop
+        // at least once, even if there are no devices to re-open.
+        do {
+            if (!mDeviceIdsToReopen.empty()) {
+                // If there are devices that need to be re-opened, ensure that we re-open them
+                // one at a time to send the DEVICE_REMOVED and DEVICE_ADDED notifications for
+                // each before moving on to the next. This is to avoid notifying all device
+                // removals and additions in one batch, which could cause additional unnecessary
+                // device added/removed notifications for merged InputDevices from InputReader.
+                const int32_t deviceId = mDeviceIdsToReopen.back();
+                mDeviceIdsToReopen.erase(mDeviceIdsToReopen.end() - 1);
+                if (auto it = mDevices.find(deviceId); it != mDevices.end()) {
+                    ALOGI("Reopening input device: id=%d, name=%s", it->second->id,
+                          it->second->identifier.name.c_str());
+                    const auto path = it->second->path;
+                    closeDeviceLocked(*it->second);
+                    openDeviceLocked(path);
+                }
             }
-        }
 
-        if (mNeedToScanDevices) {
-            mNeedToScanDevices = false;
-            scanDevicesLocked();
-        }
-
-        while (!mOpeningDevices.empty()) {
-            std::unique_ptr<Device> device = std::move(*mOpeningDevices.rbegin());
-            mOpeningDevices.pop_back();
-            ALOGV("Reporting device opened: id=%d, name=%s\n", device->id, device->path.c_str());
-            const int32_t deviceId = device->id == mBuiltInKeyboardId ? 0 : device->id;
-            events.push_back({
-                    .when = now,
-                    .deviceId = deviceId,
-                    .type = DEVICE_ADDED,
-            });
-
-            // Try to find a matching video device by comparing device names
-            for (auto it = mUnattachedVideoDevices.begin(); it != mUnattachedVideoDevices.end();
-                 it++) {
-                std::unique_ptr<TouchVideoDevice>& videoDevice = *it;
-                if (tryAddVideoDeviceLocked(*device, videoDevice)) {
-                    // videoDevice was transferred to 'device'
-                    it = mUnattachedVideoDevices.erase(it);
+            // Report any devices that had last been added/removed.
+            for (auto it = mClosingDevices.begin(); it != mClosingDevices.end();) {
+                std::unique_ptr<Device> device = std::move(*it);
+                ALOGV("Reporting device closed: id=%d, name=%s\n", device->id,
+                      device->path.c_str());
+                const int32_t deviceId = (device->id == mBuiltInKeyboardId)
+                        ? ReservedInputDeviceId::BUILT_IN_KEYBOARD_ID
+                        : device->id;
+                events.push_back({
+                        .when = now,
+                        .deviceId = deviceId,
+                        .type = DEVICE_REMOVED,
+                });
+                it = mClosingDevices.erase(it);
+                if (events.size() == EVENT_BUFFER_SIZE) {
                     break;
                 }
             }
 
-            auto [dev_it, inserted] = mDevices.insert_or_assign(device->id, std::move(device));
-            if (!inserted) {
-                ALOGW("Device id %d exists, replaced.", device->id);
+            if (mNeedToScanDevices) {
+                mNeedToScanDevices = false;
+                scanDevicesLocked();
             }
-            if (events.size() == EVENT_BUFFER_SIZE) {
-                break;
+
+            while (!mOpeningDevices.empty()) {
+                std::unique_ptr<Device> device = std::move(*mOpeningDevices.rbegin());
+                mOpeningDevices.pop_back();
+                ALOGV("Reporting device opened: id=%d, name=%s\n", device->id,
+                      device->path.c_str());
+                const int32_t deviceId = device->id == mBuiltInKeyboardId ? 0 : device->id;
+                events.push_back({
+                        .when = now,
+                        .deviceId = deviceId,
+                        .type = DEVICE_ADDED,
+                });
+
+                // Try to find a matching video device by comparing device names
+                for (auto it = mUnattachedVideoDevices.begin(); it != mUnattachedVideoDevices.end();
+                     it++) {
+                    std::unique_ptr<TouchVideoDevice>& videoDevice = *it;
+                    if (tryAddVideoDeviceLocked(*device, videoDevice)) {
+                        // videoDevice was transferred to 'device'
+                        it = mUnattachedVideoDevices.erase(it);
+                        break;
+                    }
+                }
+
+                auto [dev_it, inserted] = mDevices.insert_or_assign(device->id, std::move(device));
+                if (!inserted) {
+                    ALOGW("Device id %d exists, replaced.", device->id);
+                }
+                if (events.size() == EVENT_BUFFER_SIZE) {
+                    break;
+                }
             }
+
+            // Perform this loop of re-opening devices so that we re-open one device at a time.
+        } while (!mDeviceIdsToReopen.empty());
+
+        if (events.size() == EVENT_BUFFER_SIZE) {
+            break;
         }
 
         // Grab the next input event.
@@ -2700,8 +2729,10 @@ void EventHub::handleSysfsNodeChangeNotificationsLocked() {
 
     // Testing whether a sysfs node changed involves several syscalls, so use a cache to avoid
     // testing the same node multiple times.
+    // TODO(b/281822656): Notify InputReader separately when an AssociatedDevice changes,
+    //  instead of needing to re-open all of Devices that are associated with it.
     std::map<std::shared_ptr<const AssociatedDevice>, bool /*changed*/> testedDevices;
-    auto isAssociatedDeviceChanged = [&testedDevices, &changedNodes](const Device& dev) {
+    auto shouldReopenDevice = [&testedDevices, &changedNodes](const Device& dev) {
         if (!dev.associatedDevice) {
             return false;
         }
@@ -2730,26 +2761,24 @@ void EventHub::handleSysfsNodeChangeNotificationsLocked() {
         return changed;
     };
 
-    std::set<Device*> devicesToReopen;
-
-    // Check in opening devices.
+    // Check in opening devices. These can be re-opened directly because we have not yet notified
+    // the Reader about these devices.
     for (const auto& dev : mOpeningDevices) {
-        if (isAssociatedDeviceChanged(*dev)) {
-            devicesToReopen.emplace(dev.get());
+        if (shouldReopenDevice(*dev)) {
+            ALOGI("Reopening input device from mOpeningDevices: id=%d, name=%s", dev->id,
+                  dev->identifier.name.c_str());
+            const auto path = dev->path;
+            closeDeviceLocked(*dev); // The Device object is deleted by this function.
+            openDeviceLocked(path);
         }
     }
 
-    // Check in already added devices.
+    // Check in already added devices. Add them to the re-opening list so they can be
+    // re-opened serially.
     for (const auto& [id, dev] : mDevices) {
-        if (isAssociatedDeviceChanged(*dev)) {
-            devicesToReopen.emplace(dev.get());
+        if (shouldReopenDevice(*dev)) {
+            mDeviceIdsToReopen.emplace_back(dev->id);
         }
-    }
-
-    for (auto* device : devicesToReopen) {
-        const auto path = device->path;
-        closeDeviceLocked(*device); // The Device object is deleted by this function.
-        openDeviceLocked(path);
     }
 }
 
