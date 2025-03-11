@@ -5222,6 +5222,9 @@ std::string InputDispatcher::DispatcherWindowInfo::dumpDisplayAndWindowInfo() co
     } else {
         dump += "Displays: <none>\n";
     }
+    dump += "DisplayTopologyGraph:\n";
+    dump += addLinePrefix(mTopology.dump(), INDENT);
+    dump += "\n";
     return dump;
 }
 
