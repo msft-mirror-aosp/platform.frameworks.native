@@ -229,14 +229,13 @@ public:
     virtual std::vector<IComposerClient::PerFrameMetadataKey> getPerFrameMetadataKeys(
             Display display) = 0;
     virtual Error getRenderIntents(Display display, ColorMode colorMode,
-            std::vector<RenderIntent>* outRenderIntents) = 0;
+                                   std::vector<RenderIntent>* outRenderIntents) = 0;
     virtual Error getDataspaceSaturationMatrix(Dataspace dataspace, mat4* outMatrix) = 0;
 
     // Composer HAL 2.3
     virtual Error getDisplayIdentificationData(Display display, uint8_t* outPort,
                                                std::vector<uint8_t>* outData) = 0;
-    virtual Error setLayerColorTransform(Display display, Layer layer,
-                                         const float* matrix) = 0;
+    virtual Error setLayerColorTransform(Display display, Layer layer, const float* matrix) = 0;
     virtual Error getDisplayedContentSamplingAttributes(Display display, PixelFormat* outFormat,
                                                         Dataspace* outDataspace,
                                                         uint8_t* outComponentMask) = 0;

@@ -560,7 +560,7 @@ status_t HWComposer::getDeviceCompositionChanges(
         if (!hasChangesError(error)) {
             RETURN_IF_HWC_ERROR_FOR("presentOrValidate", error, displayId, UNKNOWN_ERROR);
         }
-        if (state == 1) { //Present Succeeded.
+        if (state == 1) { // Present Succeeded.
             std::unordered_map<HWC2::Layer*, sp<Fence>> releaseFences;
             error = hwcDisplay->getReleaseFences(&releaseFences);
             displayData.releaseFences = std::move(releaseFences);
@@ -824,8 +824,8 @@ mat4 HWComposer::getDataspaceSaturationMatrix(HalDisplayId displayId, ui::Datasp
     RETURN_IF_INVALID_DISPLAY(displayId, {});
 
     mat4 matrix;
-    auto error = mDisplayData[displayId].hwcDisplay->getDataspaceSaturationMatrix(dataspace,
-            &matrix);
+    auto error =
+            mDisplayData[displayId].hwcDisplay->getDataspaceSaturationMatrix(dataspace, &matrix);
     RETURN_IF_HWC_ERROR(error, displayId, {});
     return matrix;
 }
