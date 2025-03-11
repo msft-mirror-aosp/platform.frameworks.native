@@ -1345,8 +1345,6 @@ private:
         HWComposer::HotplugEvent event;
     };
 
-    bool mIsHdcpViaNegVsync = false;
-
     std::mutex mHotplugMutex;
     std::vector<HotplugEvent> mPendingHotplugEvents GUARDED_BY(mHotplugMutex);
 
