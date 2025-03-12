@@ -1230,8 +1230,8 @@ void SurfaceFlinger::getDynamicDisplayInfoInternal(ui::DynamicDisplayInfo*& info
         outMode.peakRefreshRate = peakFps.getValue();
         outMode.vsyncRate = mode->getVsyncRate().getValue();
 
-        const auto vsyncConfigSet = mScheduler->getVsyncConfiguration().getConfigsForRefreshRate(
-                Fps::fromValue(outMode.peakRefreshRate));
+        const auto vsyncConfigSet =
+                mScheduler->getVsyncConfigsForRefreshRate(Fps::fromValue(outMode.peakRefreshRate));
         outMode.appVsyncOffset = vsyncConfigSet.late.appOffset;
         outMode.sfVsyncOffset = vsyncConfigSet.late.sfOffset;
         outMode.group = mode->getGroup();
@@ -3331,8 +3331,7 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
     const auto schedule = mScheduler->getVsyncSchedule();
     const TimePoint vsyncDeadline = schedule->vsyncDeadlineAfter(presentTime);
     const Fps renderRate = pacesetterDisplay->refreshRateSelector().getActiveMode().fps;
-    const nsecs_t vsyncPhase =
-            mScheduler->getVsyncConfiguration().getCurrentConfigs().late.sfOffset;
+    const nsecs_t vsyncPhase = mScheduler->getCurrentVsyncConfigs().late.sfOffset;
 
     const CompositorTiming compositorTiming(vsyncDeadline.ns(), renderRate.getPeriodNsecs(),
                                             vsyncPhase, presentLatency.ns());
@@ -4664,7 +4663,7 @@ void SurfaceFlinger::initScheduler(const sp<const DisplayDevice>& display) {
                                   /*applyImmediately*/ true);
     }
 
-    const auto configs = mScheduler->getVsyncConfiguration().getCurrentConfigs();
+    const auto configs = mScheduler->getCurrentVsyncConfigs();
 
     mScheduler->createEventThread(scheduler::Cycle::Render, mFrameTimeline->getTokenManager(),
                                   /* workDuration */ configs.late.appWorkDuration,
@@ -6655,9 +6654,9 @@ status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
         code == IBinder::SYSPROPS_TRANSACTION) {
         return OK;
     }
-    // Numbers from 1000 to 1045 are currently used for backdoors. The code
+    // Numbers from 1000 to 1047 are currently used for backdoors. The code
     // in onTransact verifies that the user is root, and has access to use SF.
-    if (code >= 1000 && code <= 1046) {
+    if (code >= 1000 && code <= 1047) {
         ALOGV("Accessing SurfaceFlinger through backdoor code: %u", code);
         return OK;
     }
@@ -7197,6 +7196,34 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                     return BAD_VALUE;
                 }
                 mScheduler->setDebugPresentDelay(TimePoint::fromNs(ms2ns(jankDelayMs)));
+                return NO_ERROR;
+            }
+                // Update WorkDuration
+                // parameters:
+                // - (required) i64 minSfNs, used as the late.sf WorkDuration.
+                // - (required) i64 maxSfNs, used as the early.sf and earlyGl.sf WorkDuration.
+                // - (required) i64 appDurationNs, used as the late.app, early.app and earlyGl.app
+                // WorkDuration.
+                // Usage:
+                // adb shell service call SurfaceFlinger 1047 i64 12333333 i64 16666666 i64 16666666
+            case 1047: {
+                if (!property_get_bool("debug.sf.use_phase_offsets_as_durations", false)) {
+                    ALOGE("Not supported when work duration is not enabled");
+                    return INVALID_OPERATION;
+                }
+                int64_t minSfNs = 0;
+                int64_t maxSfNs = 0;
+                int64_t appDurationNs = 0;
+                if (data.readInt64(&minSfNs) != NO_ERROR || data.readInt64(&maxSfNs) != NO_ERROR ||
+                    data.readInt64(&appDurationNs) != NO_ERROR) {
+                    return BAD_VALUE;
+                }
+                mScheduler->reloadPhaseConfiguration(mDisplayModeController
+                                                             .getActiveMode(mActiveDisplayId)
+                                                             .fps,
+                                                     Duration::fromNs(minSfNs),
+                                                     Duration::fromNs(maxSfNs),
+                                                     Duration::fromNs(appDurationNs));
                 return NO_ERROR;
             }
         }
@@ -8385,8 +8412,7 @@ uint32_t SurfaceFlinger::getMaxAcquiredBufferCountForCurrentRefreshRate(uid_t ui
 }
 
 int SurfaceFlinger::getMaxAcquiredBufferCountForRefreshRate(Fps refreshRate) const {
-    const auto vsyncConfig =
-            mScheduler->getVsyncConfiguration().getConfigsForRefreshRate(refreshRate).late;
+    const auto vsyncConfig = mScheduler->getVsyncConfigsForRefreshRate(refreshRate).late;
     const auto presentLatency = vsyncConfig.appWorkDuration + vsyncConfig.sfWorkDuration;
     return calculateMaxAcquiredBufferCount(refreshRate, presentLatency);
 }
