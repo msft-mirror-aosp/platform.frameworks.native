@@ -347,6 +347,7 @@ void SkiaRenderEngine::useProtectedContext(bool useProtectedContext) {
     if (useProtectedContextImpl(
             useProtectedContext ? GrProtected::kYes : GrProtected::kNo)) {
         mInProtectedContext = useProtectedContext;
+        SFTRACE_INT("RE inProtectedContext", mInProtectedContext);
         // given that we are sharing the same thread between two contexts we need to
         // make sure that the thread state is reset when switching between the two.
         if (getActiveContext()) {
