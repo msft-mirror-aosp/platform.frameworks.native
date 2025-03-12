@@ -113,6 +113,17 @@ TEST(Parcel, DebugReadAllFds) {
     EXPECT_EQ(ret[1], STDIN_FILENO);
 }
 
+TEST(Parcel, AppendWithBadDataPos) {
+    Parcel p1;
+    p1.writeInt32(1);
+    p1.writeInt32(1);
+    Parcel p2;
+    p2.setDataCapacity(8);
+    p2.setDataPosition(10000);
+
+    EXPECT_EQ(android::BAD_VALUE, p2.appendFrom(&p1, 0, 8));
+}
+
 TEST(Parcel, AppendOverObject) {
     Parcel p1;
     p1.writeDupFileDescriptor(0);
