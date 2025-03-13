@@ -26,7 +26,6 @@
 
 #include <common/trace.h>
 #include <compositionengine/CompositionEngine.h>
-#include <compositionengine/Display.h>
 #include <compositionengine/DisplayColorProfile.h>
 #include <compositionengine/DisplayColorProfileCreationArgs.h>
 #include <compositionengine/DisplayCreationArgs.h>
@@ -306,6 +305,10 @@ bool DisplayDevice::hasRenderIntent(ui::RenderIntent intent) const {
 
 DisplayId DisplayDevice::getId() const {
     return mCompositionDisplay->getId();
+}
+
+bool DisplayDevice::isVirtual() const {
+    return mCompositionDisplay->isVirtual();
 }
 
 bool DisplayDevice::isSecure() const {

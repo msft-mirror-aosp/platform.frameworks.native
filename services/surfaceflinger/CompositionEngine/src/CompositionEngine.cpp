@@ -97,7 +97,7 @@ void offloadOutputs(Outputs& outputs) {
 
     ui::PhysicalDisplayVector<compositionengine::Output*> outputsToOffload;
     for (const auto& output : outputs) {
-        if (!ftl::Optional(output->getDisplayId()).and_then(HalDisplayId::tryCast)) {
+        if (!output->getDisplayIdVariant().and_then(asHalDisplayId<DisplayIdVariant>)) {
             // Not HWC-enabled, so it is always client-composited. No need to offload.
             continue;
         }

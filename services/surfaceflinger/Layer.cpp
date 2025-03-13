@@ -1433,8 +1433,8 @@ void Layer::onCompositionPresented(const DisplayDevice* display,
                                                presentFence,
                                                FrameTracer::FrameEvent::PRESENT_FENCE);
             mDeprecatedFrameTracker.setActualPresentFence(std::shared_ptr<FenceTime>(presentFence));
-        } else if (const auto displayId = PhysicalDisplayId::tryCast(display->getId());
-                   displayId && mFlinger->getHwComposer().isConnected(*displayId)) {
+        } else if (const auto displayId = asPhysicalDisplayId(display->getDisplayIdVariant());
+                   displayId.has_value() && mFlinger->getHwComposer().isConnected(*displayId)) {
             // The HWC doesn't support present fences, so use the present timestamp instead.
             const nsecs_t presentTimestamp =
                     mFlinger->getHwComposer().getPresentTimestamp(*displayId);
