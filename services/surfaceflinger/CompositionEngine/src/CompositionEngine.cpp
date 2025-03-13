@@ -91,7 +91,7 @@ nsecs_t CompositionEngine::getLastFrameRefreshTimestamp() const {
 
 namespace {
 void offloadOutputs(Outputs& outputs) {
-    if (!FlagManager::getInstance().multithreaded_present() || outputs.size() < 2) {
+    if (outputs.size() < 2) {
         return;
     }
 

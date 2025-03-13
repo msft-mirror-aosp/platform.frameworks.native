@@ -457,7 +457,6 @@ TEST_F(SetPhysicalDisplayPowerModeTest, transitionsDisplayFromOnToUnknownPrimary
 }
 
 TEST_F(SetPhysicalDisplayPowerModeTest, transitionsDisplayFromOffToOnExternalDisplay) {
-    SET_FLAG_FOR_TEST(flags::multithreaded_present, true);
     transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOffToOnVariant>>();
 }
 
@@ -466,7 +465,6 @@ TEST_F(SetPhysicalDisplayPowerModeTest, transitionsDisplayFromOffToDozeSuspendEx
 }
 
 TEST_F(SetPhysicalDisplayPowerModeTest, transitionsDisplayFromOnToOffExternalDisplay) {
-    SET_FLAG_FOR_TEST(flags::multithreaded_present, true);
     transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOnToOffVariant>>();
 }
 
@@ -479,7 +477,6 @@ TEST_F(SetPhysicalDisplayPowerModeTest, transitionsDisplayFromOnToDozeExternalDi
 }
 
 TEST_F(SetPhysicalDisplayPowerModeTest, transitionsDisplayFromDozeSuspendToDozeExternalDisplay) {
-    SET_FLAG_FOR_TEST(flags::multithreaded_present, true);
     transitionDisplayCommon<ExternalDisplayPowerCase<TransitionDozeSuspendToDozeVariant>>();
 }
 
@@ -488,12 +485,10 @@ TEST_F(SetPhysicalDisplayPowerModeTest, transitionsDisplayFromDozeToOnExternalDi
 }
 
 TEST_F(SetPhysicalDisplayPowerModeTest, transitionsDisplayFromDozeSuspendToOnExternalDisplay) {
-    SET_FLAG_FOR_TEST(flags::multithreaded_present, true);
     transitionDisplayCommon<ExternalDisplayPowerCase<TransitionDozeSuspendToOnVariant>>();
 }
 
 TEST_F(SetPhysicalDisplayPowerModeTest, transitionsDisplayFromOnToDozeSuspendExternalDisplay) {
-    SET_FLAG_FOR_TEST(flags::multithreaded_present, true);
     transitionDisplayCommon<ExternalDisplayPowerCase<TransitionOnToDozeSuspendVariant>>();
 }
 
