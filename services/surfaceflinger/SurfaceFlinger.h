@@ -544,13 +544,7 @@ private:
     }
 
     sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId displayId) const;
-    status_t setTransactionState(
-            const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& state,
-            Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
-            InputWindowCommands inputWindowCommands, int64_t desiredPresentTime,
-            bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffers,
-            bool hasListenerCallbacks, const std::vector<ListenerCallbacks>& listenerCallbacks,
-            uint64_t transactionId, const std::vector<uint64_t>& mergedTransactionIds) override;
+    status_t setTransactionState(TransactionState&&) override;
     void bootFinished();
     status_t getSupportedFrameTimestamps(std::vector<FrameEvent>* outSupported) const;
     sp<IDisplayEventConnection> createDisplayEventConnection(
@@ -797,7 +791,7 @@ private:
      */
     bool applyTransactionState(const FrameTimelineInfo& info,
                                std::vector<ResolvedComposerState>& state,
-                               Vector<DisplayState>& displays, uint32_t flags,
+                               std::span<DisplayState> displays, uint32_t flags,
                                const InputWindowCommands& inputWindowCommands,
                                const int64_t desiredPresentTime, bool isAutoTimestamp,
                                const std::vector<uint64_t>& uncacheBufferIds,

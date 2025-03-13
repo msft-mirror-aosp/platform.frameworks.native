@@ -519,18 +519,8 @@ public:
         return mFlinger->mTransactionHandler.mPendingTransactionCount.load();
     }
 
-    auto setTransactionState(
-            const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& states,
-            Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
-            const InputWindowCommands& inputWindowCommands, int64_t desiredPresentTime,
-            bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffers,
-            bool hasListenerCallbacks, std::vector<ListenerCallbacks>& listenerCallbacks,
-            uint64_t transactionId, const std::vector<uint64_t>& mergedTransactionIds) {
-        return mFlinger->setTransactionState(frameTimelineInfo, states, displays, flags, applyToken,
-                                             inputWindowCommands, desiredPresentTime,
-                                             isAutoTimestamp, uncacheBuffers, hasListenerCallbacks,
-                                             listenerCallbacks, transactionId,
-                                             mergedTransactionIds);
+    auto setTransactionState(TransactionState&& state) {
+        return mFlinger->setTransactionState(std::move(state));
     }
 
     auto setTransactionStateInternal(QueuedTransactionState& transaction) {
