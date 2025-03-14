@@ -62,10 +62,15 @@ struct CompositionEngineTest : public testing::Test {
     void SetUp() override {
         EXPECT_CALL(*mOutput1, getDisplayId)
                 .WillRepeatedly(Return(std::make_optional<DisplayId>(kDisplayId1)));
+        EXPECT_CALL(*mOutput1, getDisplayIdVariant).WillRepeatedly(Return(kDisplayId1));
+
         EXPECT_CALL(*mOutput2, getDisplayId)
                 .WillRepeatedly(Return(std::make_optional<DisplayId>(kDisplayId2)));
+        EXPECT_CALL(*mOutput2, getDisplayIdVariant).WillRepeatedly(Return(kDisplayId2));
+
         EXPECT_CALL(*mOutput3, getDisplayId)
                 .WillRepeatedly(Return(std::make_optional<DisplayId>(kDisplayId3)));
+        EXPECT_CALL(*mOutput3, getDisplayIdVariant).WillRepeatedly(Return(kDisplayId3));
 
         // Most tests will depend on the outputs being enabled.
         for (auto& state : mOutputStates) {
