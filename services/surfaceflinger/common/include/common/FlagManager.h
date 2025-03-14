@@ -63,6 +63,7 @@ public:
     bool correct_virtual_display_power_state() const;
     bool graphite_renderengine_preview_rollout() const;
     bool increase_missed_frame_jank_threshold() const;
+    bool monitor_buffer_fences() const;
     bool refresh_rate_overlay_on_external_display() const;
     bool vsync_predictor_recovery() const;
 

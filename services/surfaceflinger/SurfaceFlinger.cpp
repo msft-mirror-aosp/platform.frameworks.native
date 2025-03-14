@@ -5098,6 +5098,12 @@ status_t SurfaceFlinger::setTransactionState(TransactionState&& transactionState
                                                      layerName.c_str(), transactionState.getId());
             if (resolvedState.externalTexture) {
                 resolvedState.state.bufferData->buffer = resolvedState.externalTexture->getBuffer();
+                if (FlagManager::getInstance().monitor_buffer_fences()) {
+                    resolvedState.state.bufferData->buffer->getDependencyMonitor()
+                            .addIngress(FenceTime::makeValid(
+                                                resolvedState.state.bufferData->acquireFence),
+                                        "Incoming txn");
+                }
             }
             mBufferCountTracker.increment(resolvedState.layerId);
         }

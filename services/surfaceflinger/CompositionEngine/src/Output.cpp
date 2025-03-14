@@ -1676,6 +1676,7 @@ void Output::presentFrameAndReleaseLayers(bool flushEvenWhenDisabled) {
                     Fence::merge("LayerRelease", releaseFence, frame.clientTargetAcquireFence);
         }
         layer->getLayerFE().setReleaseFence(releaseFence);
+        layer->getLayerFE().setReleasedBuffer(layer->getLayerFE().getCompositionState()->buffer);
     }
 
     // We've got a list of layers needing fences, that are disjoint with
