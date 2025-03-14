@@ -134,7 +134,7 @@ protected:
     }
 
     virtual void SetUp() {
-        mComposerClient = new SurfaceComposerClient;
+        mComposerClient = sp<SurfaceComposerClient>::make();
         ASSERT_EQ(NO_ERROR, mComposerClient->initCheck());
 
         // TODO(brianderson): The following sometimes fails and is a source of
