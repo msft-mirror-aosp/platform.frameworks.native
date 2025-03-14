@@ -7534,7 +7534,7 @@ TEST_F(MultiTouchInputMapperTest, Process_Pointer_ShouldHandleDisplayId) {
 
     ASSERT_NO_FATAL_FAILURE(mFakeListener->assertNotifyMotionWasCalled(&motionArgs));
     ASSERT_EQ(AMOTION_EVENT_ACTION_HOVER_MOVE, motionArgs.action);
-    ASSERT_EQ(ui::LogicalDisplayId::INVALID, motionArgs.displayId);
+    ASSERT_EQ(DISPLAY_ID, motionArgs.displayId);
 }
 
 /**
