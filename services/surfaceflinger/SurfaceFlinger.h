@@ -160,6 +160,7 @@ class DisplaySurface;
 class OutputLayer;
 
 struct CompositionRefreshArgs;
+class DisplayCreationArgsBuilder;
 } // namespace compositionengine
 
 namespace renderengine {
@@ -885,7 +886,7 @@ private:
         std::variant<int32_t, wp<const DisplayDevice>> captureTypeVariant;
 
         // Display ID of the display the result will be on
-        std::optional<DisplayId> displayId{std::nullopt};
+        ftl::Optional<DisplayIdVariant> displayIdVariant{std::nullopt};
 
         // If true, transform is inverted from the parent layer snapshot
         bool childrenOnly{false};
@@ -1039,10 +1040,10 @@ private:
     // region of all screens presenting this layer stack.
     void invalidateLayerStack(const ui::LayerFilter& layerFilter, const Region& dirty);
 
-    ui::LayerFilter makeLayerFilterForDisplay(DisplayId displayId, ui::LayerStack layerStack)
+    ui::LayerFilter makeLayerFilterForDisplay(DisplayIdVariant displayId, ui::LayerStack layerStack)
             REQUIRES(mStateLock) {
         return {layerStack,
-                PhysicalDisplayId::tryCast(displayId)
+                asPhysicalDisplayId(displayId)
                         .and_then(display::getPhysicalDisplay(mPhysicalDisplays))
                         .transform(&display::PhysicalDisplay::isInternal)
                         .value_or(false)};
@@ -1135,8 +1136,10 @@ private:
     void enableHalVirtualDisplays(bool);
 
     // Virtual display lifecycle for ID generation and HAL allocation.
-    VirtualDisplayId acquireVirtualDisplay(ui::Size, ui::PixelFormat, const std::string& uniqueId)
-            REQUIRES(mStateLock);
+    std::optional<VirtualDisplayIdVariant> acquireVirtualDisplay(
+            ui::Size, ui::PixelFormat, const std::string& uniqueId,
+            compositionengine::DisplayCreationArgsBuilder&) REQUIRES(mStateLock);
+
     template <typename ID>
     void acquireVirtualDisplaySnapshot(ID displayId, const std::string& uniqueId) {
         std::lock_guard lock(mVirtualDisplaysMutex);
@@ -1147,7 +1150,7 @@ private:
         }
     }
 
-    void releaseVirtualDisplay(VirtualDisplayId);
+    void releaseVirtualDisplay(VirtualDisplayIdVariant displayId);
     void releaseVirtualDisplaySnapshot(VirtualDisplayId displayId);
 
     // Returns a display other than `mActiveDisplayId` that can be activated, if any.
@@ -1232,7 +1235,7 @@ private:
 
     bool isHdrLayer(const frontend::LayerSnapshot& snapshot) const;
 
-    ui::Rotation getPhysicalDisplayOrientation(DisplayId, bool isPrimary) const
+    ui::Rotation getPhysicalDisplayOrientation(PhysicalDisplayId, bool isPrimary) const
             REQUIRES(mStateLock);
     void traverseLegacyLayers(const LayerVector::Visitor& visitor) const
             REQUIRES(kMainThreadContext);

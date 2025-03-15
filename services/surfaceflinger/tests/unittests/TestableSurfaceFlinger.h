@@ -481,7 +481,7 @@ public:
 
         SurfaceFlinger::ScreenshotArgs screenshotArgs;
         screenshotArgs.captureTypeVariant = display;
-        screenshotArgs.displayId = std::nullopt;
+        screenshotArgs.displayIdVariant = std::nullopt;
         screenshotArgs.sourceCrop = sourceCrop;
         screenshotArgs.reqSize = sourceCrop.getSize();
         screenshotArgs.dataspace = dataspace;
@@ -573,7 +573,7 @@ public:
     }
 
     sp<DisplayDevice> createVirtualDisplayDevice(const sp<IBinder> displayToken,
-                                                 VirtualDisplayId displayId,
+                                                 GpuVirtualDisplayId displayId,
                                                  float requestedRefreshRate) {
         constexpr ui::Size kResolution = {1080, 1920};
         auto compositionDisplay = compositionengine::impl::
@@ -817,9 +817,11 @@ public:
         static constexpr int32_t DEFAULT_DPI = 320;
         static constexpr hal::HWConfigId DEFAULT_ACTIVE_CONFIG = 0;
 
-        FakeHwcDisplayInjector(HalDisplayId displayId, hal::DisplayType hwcDisplayType,
+        FakeHwcDisplayInjector(DisplayIdVariant displayIdVariant, hal::DisplayType hwcDisplayType,
                                bool isPrimary)
-              : mDisplayId(displayId), mHwcDisplayType(hwcDisplayType), mIsPrimary(isPrimary) {}
+              : mDisplayIdVariant(displayIdVariant),
+                mHwcDisplayType(hwcDisplayType),
+                mIsPrimary(isPrimary) {}
 
         auto& setHwcDisplayId(hal::HWDisplayId displayId) {
             mHwcDisplayId = displayId;
@@ -884,7 +886,9 @@ public:
 
             display->setPowerMode(mPowerMode);
 
-            flinger->mutableHwcDisplayData()[mDisplayId].hwcDisplay = std::move(display);
+            const auto halDisplayId = asHalDisplayId(mDisplayIdVariant);
+            ASSERT_TRUE(halDisplayId);
+            flinger->mutableHwcDisplayData()[*halDisplayId].hwcDisplay = std::move(display);
 
             EXPECT_CALL(*composer, getDisplayConfigs(mHwcDisplayId, _))
                     .WillRepeatedly(
@@ -922,9 +926,10 @@ public:
                             DoAll(SetArgPointee<3>(mConfigGroup), Return(hal::Error::NONE)));
 
             if (mHwcDisplayType == hal::DisplayType::PHYSICAL) {
-                const auto physicalId = PhysicalDisplayId::tryCast(mDisplayId);
-                LOG_ALWAYS_FATAL_IF(!physicalId);
-                flinger->mutableHwcPhysicalDisplayIdMap().emplace(mHwcDisplayId, *physicalId);
+                const auto physicalDisplayId = asPhysicalDisplayId(mDisplayIdVariant);
+                ASSERT_TRUE(physicalDisplayId);
+                flinger->mutableHwcPhysicalDisplayIdMap().emplace(mHwcDisplayId,
+                                                                  *physicalDisplayId);
                 if (mIsPrimary) {
                     flinger->mutablePrimaryHwcDisplayId() = mHwcDisplayId;
                 } else {
@@ -937,7 +942,7 @@ public:
         }
 
     private:
-        const HalDisplayId mDisplayId;
+        const DisplayIdVariant mDisplayIdVariant;
         const hal::DisplayType mHwcDisplayType;
         const bool mIsPrimary;
 
@@ -973,8 +978,8 @@ public:
         sp<IBinder> token() const { return mDisplayToken; }
 
         auto physicalDisplay() const {
-            return ftl::Optional(mCreationArgs.compositionDisplay->getDisplayId())
-                    .and_then(&PhysicalDisplayId::tryCast)
+            return mCreationArgs.compositionDisplay->getDisplayIdVariant()
+                    .and_then(asPhysicalDisplayId)
                     .and_then(display::getPhysicalDisplay(mFlinger.physicalDisplays()));
         }
 
@@ -1072,7 +1077,9 @@ public:
             DisplayDeviceState state;
             state.isSecure = mCreationArgs.isSecure;
 
-            if (const auto physicalId = PhysicalDisplayId::tryCast(*displayId)) {
+            if (const auto physicalId =
+                        mCreationArgs.compositionDisplay->getDisplayIdVariant().and_then(
+                                asPhysicalDisplayId)) {
                 LOG_ALWAYS_FATAL_IF(!mConnectionType);
                 LOG_ALWAYS_FATAL_IF(!mHwcDisplayId);
 
