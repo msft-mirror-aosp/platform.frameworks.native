@@ -6123,9 +6123,8 @@ void SurfaceFlinger::dumpDisplays(std::string& result) const {
             display->dump(dumper);
 
             std::lock_guard lock(mVirtualDisplaysMutex);
-            const auto virtualSnapshotIt = mVirtualDisplays.find(virtualId);
-            if (virtualSnapshotIt != mVirtualDisplays.end()) {
-                virtualSnapshotIt->second.dump(dumper);
+            if (const auto snapshotOpt = mVirtualDisplays.get(virtualId)) {
+                snapshotOpt->get().dump(dumper);
             }
         }
     }
@@ -6137,6 +6136,7 @@ void SurfaceFlinger::dumpDisplayIdentificationData(std::string& result) const {
         if (!displayId) {
             continue;
         }
+
         const auto hwcDisplayId = getHwComposer().fromPhysicalDisplayId(*displayId);
         if (!hwcDisplayId) {
             continue;
@@ -6145,6 +6145,7 @@ void SurfaceFlinger::dumpDisplayIdentificationData(std::string& result) const {
         StringAppendF(&result,
                       "Display %s (HWC display %" PRIu64 "): ", to_string(*displayId).c_str(),
                       *hwcDisplayId);
+
         uint8_t port;
         DisplayIdentificationData data;
         if (!getHwComposer().getDisplayIdentificationData(*hwcDisplayId, &port, &data)) {
@@ -6171,6 +6172,19 @@ void SurfaceFlinger::dumpDisplayIdentificationData(std::string& result) const {
         StringAppendF(&result, "port=%u pnpId=%s displayName=\"", port, edid->pnpId.data());
         result.append(edid->displayName.data(), edid->displayName.length());
         result.append("\"\n");
+    }
+
+    for (const auto& [token, display] : mDisplays) {
+        const auto virtualDisplayId = asVirtualDisplayId(display->getDisplayIdVariant());
+        if (virtualDisplayId) {
+            StringAppendF(&result, "Display %s (Virtual display): displayName=\"%s\"",
+                          to_string(*virtualDisplayId).c_str(), display->getDisplayName().c_str());
+            std::lock_guard lock(mVirtualDisplaysMutex);
+            if (const auto snapshotOpt = mVirtualDisplays.get(*virtualDisplayId)) {
+                StringAppendF(&result, " uniqueId=\"%s\"", snapshotOpt->get().uniqueId().c_str());
+            }
+            result.append("\n");
+        }
     }
 }
 
