@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 The Android Open Source Project
+ * Copyright 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
-//! API for RPC Binder services.
+#include <vulkan/vulkan.h>
 
-mod server;
-mod session;
+namespace vulkan {
+namespace driver {
 
-pub use server::RpcServer;
-#[cfg(target_os = "trusty")]
-pub use server::RpcServerConnection;
-#[cfg(not(target_os = "trusty"))]
-pub use server::RpcServerRef;
-pub use session::{FileDescriptorTransportMode, RpcSession, RpcSessionRef};
+const VkAllocationCallbacks& GetDefaultAllocator();
+
+}  // namespace driver
+}  // namespace vulkan
