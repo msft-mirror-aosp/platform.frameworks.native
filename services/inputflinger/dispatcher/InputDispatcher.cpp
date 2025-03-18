@@ -952,7 +952,7 @@ InputDispatcher::InputDispatcher(InputDispatcherPolicyInterface& policy,
                                   new LatencyAggregatorWithHistograms()))
                         : std::move(std::unique_ptr<InputEventTimelineProcessor>(
                                   new LatencyAggregator()))),
-        mLatencyTracker(*mInputEventTimelineProcessor) {
+        mLatencyTracker(*mInputEventTimelineProcessor, mInputDevices) {
     mReporter = createInputReporter();
 
     mWindowInfoListener = sp<DispatcherWindowListener>::make(*this);
@@ -1961,9 +1961,72 @@ bool InputDispatcher::dispatchKeyLocked(nsecs_t currentTime, std::shared_ptr<con
         }
     }
 
+    if (entry->interceptKeyResult == KeyEntry::InterceptKeyResult::FALLBACK) {
+        findAndDispatchFallbackEvent(currentTime, entry, inputTargets);
+        // Drop the key.
+        return true;
+    }
+
     // Dispatch the key.
     dispatchEventLocked(currentTime, entry, inputTargets);
     return true;
+}
+
+void InputDispatcher::findAndDispatchFallbackEvent(nsecs_t currentTime,
+                                                   std::shared_ptr<const KeyEntry> entry,
+                                                   std::vector<InputTarget>& inputTargets) {
+    // Find the fallback associated with the incoming key event and dispatch it.
+    KeyEvent event = createKeyEvent(*entry);
+    const int32_t originalKeyCode = entry->keyCode;
+
+    // Fetch the fallback event.
+    KeyCharacterMap::FallbackAction fallback;
+    for (const InputDeviceInfo& deviceInfo : mInputDevices) {
+        if (deviceInfo.getId() == entry->deviceId) {
+            const KeyCharacterMap* map = deviceInfo.getKeyCharacterMap();
+
+            LOG_ALWAYS_FATAL_IF(map == nullptr, "No KeyCharacterMap for device %d",
+                                entry->deviceId);
+            map->getFallbackAction(entry->keyCode, entry->metaState, &fallback);
+            break;
+        }
+    }
+
+    if (fallback.keyCode == AKEYCODE_UNKNOWN) {
+        // No fallback detected.
+        return;
+    }
+
+    std::unique_ptr<KeyEntry> fallbackKeyEntry =
+            std::make_unique<KeyEntry>(mIdGenerator.nextId(), entry->injectionState,
+                                       event.getEventTime(), event.getDeviceId(), event.getSource(),
+                                       event.getDisplayId(), entry->policyFlags, entry->action,
+                                       event.getFlags() | AKEY_EVENT_FLAG_FALLBACK,
+                                       fallback.keyCode, event.getScanCode(), /*metaState=*/0,
+                                       event.getRepeatCount(), event.getDownTime());
+
+    if (mTracer) {
+        fallbackKeyEntry->traceTracker =
+                mTracer->traceDerivedEvent(*fallbackKeyEntry, *entry->traceTracker);
+    }
+
+    for (const InputTarget& inputTarget : inputTargets) {
+        std::shared_ptr<Connection> connection = inputTarget.connection;
+        if (!connection->responsive || (connection->status != Connection::Status::NORMAL)) {
+            return;
+        }
+
+        connection->inputState.setFallbackKey(originalKeyCode, fallback.keyCode);
+        if (entry->action == AKEY_EVENT_ACTION_UP) {
+            connection->inputState.removeFallbackKey(originalKeyCode);
+        }
+
+        if (mTracer) {
+            mTracer->dispatchToTargetHint(*fallbackKeyEntry->traceTracker, inputTarget);
+        }
+        enqueueDispatchEntryAndStartDispatchCycleLocked(currentTime, connection,
+                                                        std::move(fallbackKeyEntry), inputTarget);
+    }
 }
 
 void InputDispatcher::logOutboundKeyDetails(const char* prefix, const KeyEntry& entry) {
@@ -4346,7 +4409,7 @@ void InputDispatcher::notifyInputDevicesChanged(const NotifyInputDevicesChangedA
     std::scoped_lock _l(mLock);
     // Reset key repeating in case a keyboard device was added or removed or something.
     resetKeyRepeatLocked();
-    mLatencyTracker.setInputDevices(args.inputDeviceInfos);
+    mInputDevices = args.inputDeviceInfos;
 }
 
 void InputDispatcher::notifyKey(const NotifyKeyArgs& args) {
