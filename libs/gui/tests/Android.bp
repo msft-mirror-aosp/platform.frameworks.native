@@ -95,6 +95,7 @@ cc_test {
         "android.hardware.configstore-utils",
         "libSurfaceFlingerProp",
         "libGLESv1_CM",
+        "libgui",
         "libgui_test_server_aidl-cpp",
         "libinput",
         "libnativedisplay",

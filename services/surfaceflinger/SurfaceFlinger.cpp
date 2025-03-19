@@ -66,13 +66,11 @@
 #include <ftl/concat.h>
 #include <ftl/fake_guard.h>
 #include <ftl/future.h>
-#include <ftl/small_map.h>
 #include <ftl/unit.h>
 #include <gui/AidlUtil.h>
 #include <gui/BufferQueue.h>
 #include <gui/DebugEGLImageTracker.h>
 #include <gui/IProducerListener.h>
-#include <gui/JankInfo.h>
 #include <gui/LayerMetadata.h>
 #include <gui/LayerState.h>
 #include <gui/Surface.h>
@@ -3315,39 +3313,11 @@ void SurfaceFlinger::onCompositionPresented(PhysicalDisplayId pacesetterId,
 
     const TimePoint presentTime = TimePoint::now();
 
-    // The Uids of layer owners that are in buffer stuffing mode, and their elevated
-    // buffer counts. Messages to start recovery are sent exclusively to these Uids.
-    BufferStuffingMap bufferStuffedUids;
-
     // Set presentation information before calling Layer::releasePendingBuffer, such that jank
     // information from previous' frame classification is already available when sending jank info
     // to clients, so they get jank classification as early as possible.
     mFrameTimeline->setSfPresent(presentTime.ns(), pacesetterPresentFenceTime,
                                  pacesetterGpuCompositionDoneFenceTime);
-
-    // Find and register any layers that are in buffer stuffing mode
-    const auto& presentFrames = mFrameTimeline->getPresentFrames();
-
-    for (const auto& frame : presentFrames) {
-        const auto& layer = mLayerLifecycleManager.getLayerFromId(frame->getLayerId());
-        if (!layer) continue;
-        uint32_t numberQueuedBuffers = layer->pendingBuffers ? layer->pendingBuffers->load() : 0;
-        int32_t jankType = frame->getJankType().value_or(JankType::None);
-        if (jankType & JankType::BufferStuffing &&
-            layer->flags & layer_state_t::eRecoverableFromBufferStuffing) {
-            auto [it, wasEmplaced] =
-                    bufferStuffedUids.try_emplace(layer->ownerUid.val(), numberQueuedBuffers);
-            // Update with maximum number of queued buffers, allows clients drawing
-            // multiple windows to account for the most severely stuffed window
-            if (!wasEmplaced && it->second < numberQueuedBuffers) {
-                it->second = numberQueuedBuffers;
-            }
-        }
-    }
-
-    if (!bufferStuffedUids.empty()) {
-        mScheduler->addBufferStuffedUids(std::move(bufferStuffedUids));
-    }
 
     // We use the CompositionEngine::getLastFrameRefreshTimestamp() which might
     // be sampled a little later than when we started doing work for this frame,
@@ -5028,7 +4998,13 @@ bool SurfaceFlinger::shouldLatchUnsignaled(const layer_state_t& state, size_t nu
     return true;
 }
 
-status_t SurfaceFlinger::setTransactionState(TransactionState&& transactionState) {
+status_t SurfaceFlinger::setTransactionState(
+        const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& states,
+        Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
+        InputWindowCommands inputWindowCommands, int64_t desiredPresentTime, bool isAutoTimestamp,
+        const std::vector<client_cache_t>& uncacheBuffers, bool hasListenerCallbacks,
+        const std::vector<ListenerCallbacks>& listenerCallbacks, uint64_t transactionId,
+        const std::vector<uint64_t>& mergedTransactionIds) {
     SFTRACE_CALL();
 
     IPCThreadState* ipc = IPCThreadState::self();
@@ -5036,7 +5012,7 @@ status_t SurfaceFlinger::setTransactionState(TransactionState&& transactionState
     const int originUid = ipc->getCallingUid();
     uint32_t permissions = LayerStatePermissions::getTransactionPermissions(originPid, originUid);
     ftl::Flags<adpf::Workload> queuedWorkload;
-    for (auto& composerState : transactionState.mComposerStates) {
+    for (auto& composerState : states) {
         composerState.state.sanitize(permissions);
         if (composerState.state.what & layer_state_t::COMPOSITION_EFFECTS) {
             queuedWorkload |= adpf::Workload::EFFECTS;
@@ -5046,27 +5022,27 @@ status_t SurfaceFlinger::setTransactionState(TransactionState&& transactionState
         }
     }
 
-    for (DisplayState& display : transactionState.mDisplayStates) {
+    for (DisplayState& display : displays) {
         display.sanitize(permissions);
     }
 
-    if (!transactionState.mInputWindowCommands.empty() &&
+    if (!inputWindowCommands.empty() &&
         (permissions & layer_state_t::Permission::ACCESS_SURFACE_FLINGER) == 0) {
         ALOGE("Only privileged callers are allowed to send input commands.");
-        transactionState.mInputWindowCommands.clear();
+        inputWindowCommands.clear();
     }
 
-    if (transactionState.mFlags & (eEarlyWakeupStart | eEarlyWakeupEnd)) {
+    if (flags & (eEarlyWakeupStart | eEarlyWakeupEnd)) {
         const bool hasPermission =
                 (permissions & layer_state_t::Permission::ACCESS_SURFACE_FLINGER) ||
                 callingThreadHasPermission(sWakeupSurfaceFlinger);
         if (!hasPermission) {
             ALOGE("Caller needs permission android.permission.WAKEUP_SURFACE_FLINGER to use "
                   "eEarlyWakeup[Start|End] flags");
-            transactionState.mFlags &= ~(eEarlyWakeupStart | eEarlyWakeupEnd);
+            flags &= ~(eEarlyWakeupStart | eEarlyWakeupEnd);
         }
     }
-    if (transactionState.mFlags & eEarlyWakeupStart) {
+    if (flags & eEarlyWakeupStart) {
         queuedWorkload |= adpf::Workload::WAKEUP;
     }
     mPowerAdvisor->setQueuedWorkload(queuedWorkload);
@@ -5074,8 +5050,8 @@ status_t SurfaceFlinger::setTransactionState(TransactionState&& transactionState
     const int64_t postTime = systemTime();
 
     std::vector<uint64_t> uncacheBufferIds;
-    uncacheBufferIds.reserve(transactionState.mUncacheBuffers.size());
-    for (const auto& uncacheBuffer : transactionState.mUncacheBuffers) {
+    uncacheBufferIds.reserve(uncacheBuffers.size());
+    for (const auto& uncacheBuffer : uncacheBuffers) {
         sp<GraphicBuffer> buffer = ClientCache::getInstance().erase(uncacheBuffer);
         if (buffer != nullptr) {
             uncacheBufferIds.push_back(buffer->getId());
@@ -5083,8 +5059,8 @@ status_t SurfaceFlinger::setTransactionState(TransactionState&& transactionState
     }
 
     std::vector<ResolvedComposerState> resolvedStates;
-    resolvedStates.reserve(transactionState.mComposerStates.size());
-    for (auto& state : transactionState.mComposerStates) {
+    resolvedStates.reserve(states.size());
+    for (auto& state : states) {
         resolvedStates.emplace_back(std::move(state));
         auto& resolvedState = resolvedStates.back();
         resolvedState.layerId = LayerHandle::getLayerId(resolvedState.state.surface);
@@ -5095,7 +5071,7 @@ status_t SurfaceFlinger::setTransactionState(TransactionState&& transactionState
                     layer->getDebugName() : std::to_string(resolvedState.state.layerId);
             resolvedState.externalTexture =
                     getExternalTextureFromBufferData(*resolvedState.state.bufferData,
-                                                     layerName.c_str(), transactionState.getId());
+                                                     layerName.c_str(), transactionId);
             if (resolvedState.externalTexture) {
                 resolvedState.state.bufferData->buffer = resolvedState.externalTexture->getBuffer();
                 if (FlagManager::getInstance().monitor_buffer_fences()) {
@@ -5123,12 +5099,22 @@ status_t SurfaceFlinger::setTransactionState(TransactionState&& transactionState
         }
     }
 
-    QueuedTransactionState state{std::move(transactionState),
-                                 std::move(resolvedStates),
+    QueuedTransactionState state{frameTimelineInfo,
+                                 resolvedStates,
+                                 displays,
+                                 flags,
+                                 applyToken,
+                                 std::move(inputWindowCommands),
+                                 desiredPresentTime,
+                                 isAutoTimestamp,
                                  std::move(uncacheBufferIds),
                                  postTime,
+                                 hasListenerCallbacks,
+                                 listenerCallbacks,
                                  originPid,
-                                 originUid};
+                                 originUid,
+                                 transactionId,
+                                 mergedTransactionIds};
     state.workloadHint = queuedWorkload;
 
     if (mTransactionTracing) {
@@ -5151,16 +5137,16 @@ status_t SurfaceFlinger::setTransactionState(TransactionState&& transactionState
 
     for (const auto& [displayId, data] : mNotifyExpectedPresentMap) {
         if (data.hintStatus.load() == NotifyExpectedPresentHintStatus::ScheduleOnTx) {
-            scheduleNotifyExpectedPresentHint(displayId, VsyncId{state.frameTimelineInfo.vsyncId});
+            scheduleNotifyExpectedPresentHint(displayId, VsyncId{frameTimelineInfo.vsyncId});
         }
     }
-    setTransactionFlags(eTransactionFlushNeeded, schedule, state.applyToken, frameHint);
+    setTransactionFlags(eTransactionFlushNeeded, schedule, applyToken, frameHint);
     return NO_ERROR;
 }
 
 bool SurfaceFlinger::applyTransactionState(
         const FrameTimelineInfo& frameTimelineInfo, std::vector<ResolvedComposerState>& states,
-        std::span<DisplayState> displays, uint32_t flags,
+        Vector<DisplayState>& displays, uint32_t flags,
         const InputWindowCommands& inputWindowCommands, const int64_t desiredPresentTime,
         bool isAutoTimestamp, const std::vector<uint64_t>& uncacheBufferIds, const int64_t postTime,
         bool hasListenerCallbacks, const std::vector<ListenerCallbacks>& listenerCallbacks,
@@ -5650,8 +5636,7 @@ void SurfaceFlinger::initializeDisplays() {
 
     auto layerStack = ui::DEFAULT_LAYER_STACK.id;
     for (const auto& [id, display] : FTL_FAKE_GUARD(mStateLock, mPhysicalDisplays)) {
-        state.displays.emplace_back(
-                DisplayState(display.token(), ui::LayerStack::fromValue(layerStack++)));
+        state.displays.push(DisplayState(display.token(), ui::LayerStack::fromValue(layerStack++)));
     }
 
     std::vector<QueuedTransactionState> transactions;
@@ -6123,9 +6108,8 @@ void SurfaceFlinger::dumpDisplays(std::string& result) const {
             display->dump(dumper);
 
             std::lock_guard lock(mVirtualDisplaysMutex);
-            const auto virtualSnapshotIt = mVirtualDisplays.find(virtualId);
-            if (virtualSnapshotIt != mVirtualDisplays.end()) {
-                virtualSnapshotIt->second.dump(dumper);
+            if (const auto snapshotOpt = mVirtualDisplays.get(virtualId)) {
+                snapshotOpt->get().dump(dumper);
             }
         }
     }
@@ -6137,6 +6121,7 @@ void SurfaceFlinger::dumpDisplayIdentificationData(std::string& result) const {
         if (!displayId) {
             continue;
         }
+
         const auto hwcDisplayId = getHwComposer().fromPhysicalDisplayId(*displayId);
         if (!hwcDisplayId) {
             continue;
@@ -6145,6 +6130,7 @@ void SurfaceFlinger::dumpDisplayIdentificationData(std::string& result) const {
         StringAppendF(&result,
                       "Display %s (HWC display %" PRIu64 "): ", to_string(*displayId).c_str(),
                       *hwcDisplayId);
+
         uint8_t port;
         DisplayIdentificationData data;
         if (!getHwComposer().getDisplayIdentificationData(*hwcDisplayId, &port, &data)) {
@@ -6171,6 +6157,19 @@ void SurfaceFlinger::dumpDisplayIdentificationData(std::string& result) const {
         StringAppendF(&result, "port=%u pnpId=%s displayName=\"", port, edid->pnpId.data());
         result.append(edid->displayName.data(), edid->displayName.length());
         result.append("\"\n");
+    }
+
+    for (const auto& [token, display] : mDisplays) {
+        const auto virtualDisplayId = asVirtualDisplayId(display->getDisplayIdVariant());
+        if (virtualDisplayId) {
+            StringAppendF(&result, "Display %s (Virtual display): displayName=\"%s\"",
+                          to_string(*virtualDisplayId).c_str(), display->getDisplayName().c_str());
+            std::lock_guard lock(mVirtualDisplaysMutex);
+            if (const auto snapshotOpt = mVirtualDisplays.get(*virtualDisplayId)) {
+                StringAppendF(&result, " uniqueId=\"%s\"", snapshotOpt->get().uniqueId().c_str());
+            }
+            result.append("\n");
+        }
     }
 }
 

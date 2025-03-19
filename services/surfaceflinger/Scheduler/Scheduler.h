@@ -337,10 +337,6 @@ public:
         mPacesetterFrameDurationFractionToSkip = frameDurationFraction;
     }
 
-    // Propagates a flag to the EventThread indicating that buffer stuffing
-    // recovery should begin.
-    void addBufferStuffedUids(BufferStuffingMap bufferStuffedUids);
-
     void setDebugPresentDelay(TimePoint delay) { mDebugPresentDelay = delay; }
 
 private:

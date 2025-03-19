@@ -37,6 +37,7 @@
 #include <input/BlockingQueue.h>
 #include <input/Input.h>
 #include <input/InputConsumer.h>
+#include <input/KeyCharacterMap.h>
 #include <input/PrintTools.h>
 #include <linux/input.h>
 #include <sys/epoll.h>
@@ -137,6 +138,30 @@ static KeyEvent getTestKeyEvent() {
                      ui::LogicalDisplayId::INVALID, INVALID_HMAC, AKEY_EVENT_ACTION_DOWN, 0,
                      AKEYCODE_A, KEY_A, AMETA_NONE, 0, ARBITRARY_TIME, ARBITRARY_TIME);
     return event;
+}
+
+InputDeviceInfo generateTestDeviceInfo(uint16_t vendorId, uint16_t productId, DeviceId deviceId) {
+    InputDeviceIdentifier identifier;
+    identifier.vendor = vendorId;
+    identifier.product = productId;
+    auto info = InputDeviceInfo();
+    info.initialize(deviceId, /*generation=*/1, /*controllerNumber=*/1, identifier, "Test Device",
+                    /*isExternal=*/false, /*hasMic=*/false, ui::LogicalDisplayId::INVALID);
+    return info;
+}
+
+std::unique_ptr<KeyCharacterMap> loadKeyCharacterMap(const char* name) {
+    InputDeviceIdentifier identifier;
+    identifier.name = name;
+    std::string path = getInputDeviceConfigurationFilePathByName(identifier.getCanonicalName(),
+                                                                 InputDeviceConfigurationFileType::
+                                                                         KEY_CHARACTER_MAP);
+
+    if (path.empty()) {
+        return nullptr;
+    }
+
+    return *KeyCharacterMap::load(path, KeyCharacterMap::Format::BASE);
 }
 
 } // namespace
@@ -7478,6 +7503,50 @@ TEST_F(InputDispatcherTest, FocusedWindow_PolicyConsumedKeyIgnoresDisableUserAct
 
     // Should have poked user activity
     mFakePolicy->assertUserActivityPoked();
+}
+
+TEST_F(InputDispatcherTest, FocusedWindow_DoesNotReceivePolicyFallbackKey) {
+#if !defined(__ANDROID__)
+    GTEST_SKIP() << "b/253299089 Generic files are currently read directly from device.";
+#endif
+    InputDeviceInfo testDevice = generateTestDeviceInfo(/*vendorId=*/0,
+                                                        /*productId=*/0, /*deviceId=*/1);
+    std::unique_ptr<KeyCharacterMap> kcm = loadKeyCharacterMap("Generic");
+    ASSERT_NE(nullptr, kcm);
+
+    testDevice.setKeyCharacterMap(std::move(kcm));
+    mDispatcher->notifyInputDevicesChanged(NotifyInputDevicesChangedArgs(/*id=*/1, {testDevice}));
+
+    std::shared_ptr<FakeApplicationHandle> application = std::make_shared<FakeApplicationHandle>();
+    sp<FakeWindowHandle> window =
+            sp<FakeWindowHandle>::make(application, mDispatcher, "Fake Window",
+                                       ui::LogicalDisplayId::DEFAULT);
+
+    window->setFocusable(true);
+    mDispatcher->onWindowInfosChanged({{*window->getInfo()}, {}, 0, 0});
+    setFocusedWindow(window);
+
+    window->consumeFocusEvent(true);
+
+    mFakePolicy->setInterceptKeyBeforeDispatchingResult(
+            inputdispatcher::KeyEntry::InterceptKeyResult::FALLBACK);
+
+    // In the Generic KCM fallbacks, Meta + Space => SEARCH.
+    mDispatcher->notifyKey(KeyArgsBuilder(ACTION_DOWN, AINPUT_SOURCE_KEYBOARD)
+                                   .keyCode(AKEYCODE_SPACE)
+                                   .metaState(AMETA_META_ON)
+                                   .build());
+    mDispatcher->waitForIdle();
+
+    // Should have poked user activity
+    mFakePolicy->assertUserActivityPoked();
+
+    // Fallback is generated and sent instead.
+    std::unique_ptr<KeyEvent> consumedEvent = window->consumeKey(/*handled=*/false);
+    ASSERT_NE(nullptr, consumedEvent);
+    ASSERT_THAT(*consumedEvent,
+                AllOf(WithKeyAction(ACTION_DOWN), WithKeyCode(AKEYCODE_SEARCH),
+                      WithFlags(AKEY_EVENT_FLAG_FALLBACK)));
 }
 
 class DisableUserActivityInputDispatcherTest : public InputDispatcherTest,
