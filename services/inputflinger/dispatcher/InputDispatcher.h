@@ -127,7 +127,7 @@ public:
     void setMaximumObscuringOpacityForTouch(float opacity) override;
 
     bool transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
-                              bool isDragDrop = false) override;
+                              bool isDragDrop, bool transferEntireGesture) override;
     bool transferTouchOnDisplay(const sp<IBinder>& destChannelToken,
                                 ui::LogicalDisplayId displayId) override;
 
@@ -440,7 +440,8 @@ private:
         std::optional<
                 std::tuple<sp<gui::WindowInfoHandle>, DeviceId, std::vector<PointerProperties>,
                            std::list<CancellationArgs>, std::list<PointerDownArgs>>>
-        transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken);
+        transferTouchGesture(const sp<IBinder>& fromToken, const sp<IBinder>& toToken,
+                             bool transferEntireGesture);
 
         base::Result<std::list<CancellationArgs>, status_t> pilferPointers(
                 const sp<IBinder>& token, const Connection& requestingConnection);
