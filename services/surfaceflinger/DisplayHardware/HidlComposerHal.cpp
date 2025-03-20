@@ -1230,15 +1230,16 @@ Error HidlComposer::getDisplayCapabilities(Display display,
                                                             translate<DisplayCapability>(tmpCaps);
                                                 });
     } else {
-        mClient_2_3
-                ->getDisplayCapabilities(display, [&](const auto& tmpError, const auto& tmpCaps) {
-                    error = static_cast<V2_4::Error>(tmpError);
-                    if (error != V2_4::Error::NONE) {
-                        return;
-                    }
+        mClient_2_3->getDisplayCapabilities(display,
+                                            [&](const auto& tmpError, const auto& tmpCaps) {
+                                                error = static_cast<V2_4::Error>(tmpError);
+                                                if (error != V2_4::Error::NONE) {
+                                                    return;
+                                                }
 
-                    *outCapabilities = translate<DisplayCapability>(tmpCaps);
-                });
+                                                *outCapabilities =
+                                                        translate<DisplayCapability>(tmpCaps);
+                                            });
     }
 
     return static_cast<Error>(error);
