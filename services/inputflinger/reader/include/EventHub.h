@@ -399,6 +399,9 @@ public:
     /* Disable an input device. Closes file descriptor to that device. */
     virtual status_t disableDevice(int32_t deviceId) = 0;
 
+    /* Gets the sysfs root path for this device. Returns an empty path if there is none. */
+    virtual std::filesystem::path getSysfsRootPath(int32_t deviceId) const = 0;
+
     /* Sysfs node changed. Reopen the Eventhub device if any new Peripheral like Light, Battery,
      * etc. is detected. */
     virtual void sysfsNodeChanged(const std::string& sysfsNodePath) = 0;
@@ -614,6 +617,8 @@ public:
 
     status_t disableDevice(int32_t deviceId) override final;
 
+    std::filesystem::path getSysfsRootPath(int32_t deviceId) const override final;
+
     void sysfsNodeChanged(const std::string& sysfsNodePath) override final;
 
     bool setKernelWakeEnabled(int32_t deviceId, bool enabled) override final;
@@ -810,6 +815,7 @@ private:
     bool mNeedToReopenDevices;
     bool mNeedToScanDevices;
     std::vector<std::string> mExcludedDevices;
+    std::vector<int32_t> mDeviceIdsToReopen;
 
     int mEpollFd;
     int mINotifyFd;
