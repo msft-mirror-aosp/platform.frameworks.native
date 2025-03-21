@@ -1897,6 +1897,8 @@ std::vector<RawEvent> EventHub::getEvents(int timeoutMillis) {
             break; // return to the caller before we actually rescan
         }
 
+        handleSysfsNodeChangeNotificationsLocked();
+
         // Report any devices that had last been added/removed.
         for (auto it = mClosingDevices.begin(); it != mClosingDevices.end();) {
             std::unique_ptr<Device> device = std::move(*it);
@@ -2669,12 +2671,25 @@ status_t EventHub::disableDevice(int32_t deviceId) {
 // NETLINK socket to observe UEvents. We can create similar infrastructure on Eventhub side to
 // directly observe UEvents instead of triggering from Java side.
 void EventHub::sysfsNodeChanged(const std::string& sysfsNodePath) {
-    std::scoped_lock _l(mLock);
+    mChangedSysfsNodeNotifications.emplace(sysfsNodePath);
+}
+
+void EventHub::handleSysfsNodeChangeNotificationsLocked() {
+    // Use a set to de-dup any repeated notifications.
+    std::set<std::string> changedNodes;
+    while (true) {
+        auto node = mChangedSysfsNodeNotifications.popWithTimeout(std::chrono::nanoseconds(0));
+        if (!node.has_value()) break;
+        changedNodes.emplace(*node);
+    }
+    if (changedNodes.empty()) {
+        return;
+    }
 
     // Testing whether a sysfs node changed involves several syscalls, so use a cache to avoid
     // testing the same node multiple times.
     std::map<std::shared_ptr<const AssociatedDevice>, bool /*changed*/> testedDevices;
-    auto isAssociatedDeviceChanged = [&testedDevices, &sysfsNodePath](const Device& dev) {
+    auto isAssociatedDeviceChanged = [&testedDevices, &changedNodes](const Device& dev) {
         if (!dev.associatedDevice) {
             return false;
         }
@@ -2683,7 +2698,12 @@ void EventHub::sysfsNodeChanged(const std::string& sysfsNodePath) {
             return testedIt->second;
         }
         // Cache miss
-        if (sysfsNodePath.find(dev.associatedDevice->sysfsRootPath.string()) == std::string::npos) {
+        const bool anyNodesChanged =
+                std::any_of(changedNodes.begin(), changedNodes.end(), [&](const std::string& node) {
+                    return node.find(dev.associatedDevice->sysfsRootPath.string()) !=
+                            std::string::npos;
+                });
+        if (!anyNodesChanged) {
             testedDevices.emplace(dev.associatedDevice, false);
             return false;
         }

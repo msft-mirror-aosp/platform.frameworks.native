@@ -31,6 +31,7 @@
 
 #include <batteryservice/BatteryService.h>
 #include <ftl/flags.h>
+#include <input/BlockingQueue.h>
 #include <input/Input.h>
 #include <input/InputDevice.h>
 #include <input/KeyCharacterMap.h>
@@ -775,6 +776,8 @@ private:
     void addDeviceInputInotify();
     void addDeviceInotify();
 
+    void handleSysfsNodeChangeNotificationsLocked() REQUIRES(mLock);
+
     // Protect all internal state.
     mutable std::mutex mLock;
 
@@ -824,6 +827,10 @@ private:
     size_t mPendingEventCount;
     size_t mPendingEventIndex;
     bool mPendingINotify;
+
+    // The sysfs node change notifications that have been sent to EventHub.
+    // Enqueuing notifications does not require the lock to be held.
+    BlockingQueue<std::string> mChangedSysfsNodeNotifications;
 };
 
 } // namespace android

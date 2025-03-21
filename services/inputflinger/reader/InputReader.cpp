@@ -919,6 +919,7 @@ bool InputReader::canDispatchToDisplay(int32_t deviceId, ui::LogicalDisplayId di
 
 void InputReader::sysfsNodeChanged(const std::string& sysfsNodePath) {
     mEventHub->sysfsNodeChanged(sysfsNodePath);
+    mEventHub->wake();
 }
 
 DeviceId InputReader::getLastUsedInputDeviceId() {
