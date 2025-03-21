@@ -5696,13 +5696,7 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
         incRefreshableDisplays();
     }
 
-    if (displayId == mActiveDisplayId &&
-        FlagManager::getInstance().correct_virtual_display_power_state()) {
-        applyOptimizationPolicy(__func__);
-    }
-
     const auto activeMode = display->refreshRateSelector().getActiveMode().modePtr;
-    using OptimizationPolicy = gui::ISurfaceComposer::OptimizationPolicy;
     if (currentMode == hal::PowerMode::OFF) {
         // Turn on the display
 
@@ -5717,10 +5711,12 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
             onActiveDisplayChangedLocked(activeDisplay.get(), *display);
         }
 
-        if (displayId == mActiveDisplayId &&
-            !FlagManager::getInstance().correct_virtual_display_power_state()) {
-            optimizeThreadScheduling("setPhysicalDisplayPowerMode(ON/DOZE)",
-                                     OptimizationPolicy::optimizeForPerformance);
+        if (displayId == mActiveDisplayId) {
+            if (FlagManager::getInstance().correct_virtual_display_power_state()) {
+                applyOptimizationPolicy("setPhysicalDisplayPowerMode(ON)");
+            } else {
+                disablePowerOptimizations("setPhysicalDisplayPowerMode(ON)");
+            }
         }
 
         getHwComposer().setPowerMode(displayId, mode);
@@ -5729,8 +5725,7 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
                     mScheduler->getVsyncSchedule(displayId)->getPendingHardwareVsyncState();
             requestHardwareVsync(displayId, enable);
 
-            if (displayId == mActiveDisplayId &&
-                !FlagManager::getInstance().correct_virtual_display_power_state()) {
+            if (displayId == mActiveDisplayId) {
                 mScheduler->enableSyntheticVsync(false);
             }
 
@@ -5747,13 +5742,13 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
             if (const auto display = getActivatableDisplay()) {
                 onActiveDisplayChangedLocked(activeDisplay.get(), *display);
             } else {
-                if (!FlagManager::getInstance().correct_virtual_display_power_state()) {
-                    optimizeThreadScheduling("setPhysicalDisplayPowerMode(OFF)",
-                                             OptimizationPolicy::optimizeForPower);
+                if (FlagManager::getInstance().correct_virtual_display_power_state()) {
+                    applyOptimizationPolicy("setPhysicalDisplayPowerMode(OFF)");
+                } else {
+                    enablePowerOptimizations("setPhysicalDisplayPowerMode(OFF)");
                 }
 
-                if (currentModeNotDozeSuspend &&
-                    !FlagManager::getInstance().correct_virtual_display_power_state()) {
+                if (currentModeNotDozeSuspend) {
                     mScheduler->enableSyntheticVsync();
                 }
             }
@@ -5781,9 +5776,7 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
                 ALOGI("Force repainting for DOZE_SUSPEND -> DOZE or ON.");
                 mVisibleRegionsDirty = true;
                 scheduleRepaint();
-                if (!FlagManager::getInstance().correct_virtual_display_power_state()) {
-                    mScheduler->enableSyntheticVsync(false);
-                }
+                mScheduler->enableSyntheticVsync(false);
             }
             constexpr bool kAllowToEnable = true;
             mScheduler->resyncToHardwareVsync(displayId, kAllowToEnable, activeMode.get());
@@ -5793,8 +5786,7 @@ void SurfaceFlinger::setPhysicalDisplayPowerMode(const sp<DisplayDevice>& displa
         constexpr bool kDisallow = true;
         mScheduler->disableHardwareVsync(displayId, kDisallow);
 
-        if (displayId == mActiveDisplayId &&
-            !FlagManager::getInstance().correct_virtual_display_power_state()) {
+        if (displayId == mActiveDisplayId) {
             mScheduler->enableSyntheticVsync();
         }
         getHwComposer().setPowerMode(displayId, mode);
@@ -5833,44 +5825,43 @@ void SurfaceFlinger::setVirtualDisplayPowerMode(const sp<DisplayDevice>& display
           to_string(displayId).c_str());
 }
 
-void SurfaceFlinger::optimizeThreadScheduling(
-        const char* whence, gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy) {
-    ALOGD("%s: Optimizing thread scheduling: %s", whence, to_string(optimizationPolicy));
+bool SurfaceFlinger::shouldOptimizeForPerformance() {
+    for (const auto& [_, display] : mDisplays) {
+        // Displays that are optimized for power are always powered on and should not influence
+        // whether there is an active display for the purpose of power optimization, etc. If these
+        // displays are being shown somewhere, a different (physical or virtual) display that is
+        // optimized for performance will be powered on in addition. Displays optimized for
+        // performance will change power mode, so if they are off then they are not active.
+        if (display->isPoweredOn() &&
+            display->getOptimizationPolicy() ==
+                    gui::ISurfaceComposer::OptimizationPolicy::optimizeForPerformance) {
+            return true;
+        }
+    }
+    return false;
+}
 
-    const bool optimizeForPerformance =
-            optimizationPolicy == gui::ISurfaceComposer::OptimizationPolicy::optimizeForPerformance;
+void SurfaceFlinger::enablePowerOptimizations(const char* whence) {
+    ALOGD("%s: Enabling power optimizations", whence);
+
+    setSchedAttr(false, whence);
+    setSchedFifo(false, whence);
+}
+
+void SurfaceFlinger::disablePowerOptimizations(const char* whence) {
+    ALOGD("%s: Disabling power optimizations", whence);
+
     // TODO: b/281692563 - Merge the syscalls. For now, keep uclamp in a separate syscall
     // and set it before SCHED_FIFO due to b/190237315.
-    setSchedAttr(optimizeForPerformance, whence);
-    setSchedFifo(optimizeForPerformance, whence);
+    setSchedAttr(true, whence);
+    setSchedFifo(true, whence);
 }
 
 void SurfaceFlinger::applyOptimizationPolicy(const char* whence) {
-    using OptimizationPolicy = gui::ISurfaceComposer::OptimizationPolicy;
-
-    const bool optimizeForPerformance =
-            std::any_of(mDisplays.begin(), mDisplays.end(), [](const auto& pair) {
-                const auto& display = pair.second;
-                return display->isPoweredOn() &&
-                        display->getOptimizationPolicy() ==
-                        OptimizationPolicy::optimizeForPerformance;
-            });
-
-    optimizeThreadScheduling(whence,
-                             optimizeForPerformance ? OptimizationPolicy::optimizeForPerformance
-                                                    : OptimizationPolicy::optimizeForPower);
-
-    if (mScheduler) {
-        const bool disableSyntheticVsync =
-                std::any_of(mDisplays.begin(), mDisplays.end(), [](const auto& pair) {
-                    const auto& display = pair.second;
-                    const hal::PowerMode powerMode = display->getPowerMode();
-                    return powerMode != hal::PowerMode::OFF &&
-                            powerMode != hal::PowerMode::DOZE_SUSPEND &&
-                            display->getOptimizationPolicy() ==
-                            OptimizationPolicy::optimizeForPerformance;
-                });
-        mScheduler->enableSyntheticVsync(!disableSyntheticVsync);
+    if (shouldOptimizeForPerformance()) {
+        disablePowerOptimizations(whence);
+    } else {
+        enablePowerOptimizations(whence);
     }
 }
 
