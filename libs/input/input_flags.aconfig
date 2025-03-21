@@ -224,13 +224,6 @@ flag {
 }
 
 flag {
-  name: "deprecate_uiautomation_input_injection"
-  namespace: "input"
-  description: "Deprecate UiAutomation#injectInputEvent and UiAutomation#injectInputEventToInputFilter test/hidden APIs"
-  bug: "277261245"
-}
-
-flag {
   name: "prevent_merging_input_pointer_devices"
   namespace: "desktop_input"
   description: "Prevent merging input sub-devices that provide pointer input streams"
