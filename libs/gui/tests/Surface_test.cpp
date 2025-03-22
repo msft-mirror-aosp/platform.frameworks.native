@@ -648,16 +648,7 @@ public:
         mSupportsPresent = supportsPresent;
     }
 
-    status_t setTransactionState(
-            const FrameTimelineInfo& /*frameTimelineInfo*/, Vector<ComposerState>& /*state*/,
-            Vector<DisplayState>& /*displays*/, uint32_t /*flags*/,
-            const sp<IBinder>& /*applyToken*/, InputWindowCommands /*inputWindowCommands*/,
-            int64_t /*desiredPresentTime*/, bool /*isAutoTimestamp*/,
-            const std::vector<client_cache_t>& /*cachedBuffer*/, bool /*hasListenerCallbacks*/,
-            const std::vector<ListenerCallbacks>& /*listenerCallbacks*/, uint64_t /*transactionId*/,
-            const std::vector<uint64_t>& /*mergedTransactionIds*/) override {
-        return NO_ERROR;
-    }
+    status_t setTransactionState(TransactionState&&) override { return NO_ERROR; }
 
 protected:
     IBinder* onAsBinder() override { return nullptr; }
@@ -2699,4 +2690,57 @@ TEST_F(SurfaceTest, UnlimitedSlots_BatchOperations) {
     EXPECT_EQ(128u, outputs.size());
 }
 #endif // COM_ANDROID_GRAPHICS_LIBGUI_FLAGS(WB_UNLIMITED_SLOTS)
+
+TEST_F(SurfaceTest, isBufferOwned) {
+    const int TEST_USAGE_FLAGS = GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_HW_RENDER;
+    auto [bufferItemConsumer, surface] = BufferItemConsumer::create(TEST_USAGE_FLAGS);
+
+    sp<SurfaceListener> listener = sp<StubSurfaceListener>::make();
+    ASSERT_EQ(OK, surface->connect(NATIVE_WINDOW_API_CPU, listener));
+
+    sp<GraphicBuffer> surfaceAttachableBuffer =
+            sp<GraphicBuffer>::make(10, 10, PIXEL_FORMAT_RGBA_8888, 1, TEST_USAGE_FLAGS);
+
+    //
+    // Attaching a buffer makes it owned.
+    //
+
+    bool isOwned;
+    EXPECT_EQ(OK, surface->isBufferOwned(surfaceAttachableBuffer, &isOwned));
+    EXPECT_FALSE(isOwned);
+
+    EXPECT_EQ(OK, surface->attachBuffer(surfaceAttachableBuffer.get()));
+    EXPECT_EQ(OK, surface->isBufferOwned(surfaceAttachableBuffer, &isOwned));
+    EXPECT_TRUE(isOwned);
+
+    //
+    // A dequeued buffer is always owned.
+    //
+
+    sp<GraphicBuffer> buffer;
+    sp<Fence> fence;
+    EXPECT_EQ(OK, surface->dequeueBuffer(&buffer, &fence));
+    EXPECT_EQ(OK, surface->isBufferOwned(buffer, &isOwned));
+    EXPECT_TRUE(isOwned);
+
+    //
+    // A detached buffer is no longer owned.
+    //
+
+    EXPECT_EQ(OK, surface->detachBuffer(buffer));
+    EXPECT_EQ(OK, surface->isBufferOwned(buffer, &isOwned));
+    EXPECT_FALSE(isOwned);
+
+    //
+    // It's not currently possible to verify whether or not a consumer has attached a buffer until
+    // it shows up on the Surface.
+    //
+
+    sp<GraphicBuffer> consumerAttachableBuffer =
+            sp<GraphicBuffer>::make(10, 10, PIXEL_FORMAT_RGBA_8888, 1, TEST_USAGE_FLAGS);
+
+    ASSERT_EQ(OK, bufferItemConsumer->attachBuffer(consumerAttachableBuffer));
+    EXPECT_EQ(OK, surface->isBufferOwned(consumerAttachableBuffer, &isOwned));
+    EXPECT_FALSE(isOwned);
+}
 } // namespace android

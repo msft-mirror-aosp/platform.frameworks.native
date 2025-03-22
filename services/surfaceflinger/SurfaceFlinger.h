@@ -545,13 +545,7 @@ private:
     }
 
     sp<IBinder> getPhysicalDisplayToken(PhysicalDisplayId displayId) const;
-    status_t setTransactionState(
-            const FrameTimelineInfo& frameTimelineInfo, Vector<ComposerState>& state,
-            Vector<DisplayState>& displays, uint32_t flags, const sp<IBinder>& applyToken,
-            InputWindowCommands inputWindowCommands, int64_t desiredPresentTime,
-            bool isAutoTimestamp, const std::vector<client_cache_t>& uncacheBuffers,
-            bool hasListenerCallbacks, const std::vector<ListenerCallbacks>& listenerCallbacks,
-            uint64_t transactionId, const std::vector<uint64_t>& mergedTransactionIds) override;
+    status_t setTransactionState(TransactionState&&) override;
     void bootFinished();
     status_t getSupportedFrameTimestamps(std::vector<FrameEvent>* outSupported) const;
     sp<IDisplayEventConnection> createDisplayEventConnection(
@@ -739,14 +733,19 @@ private:
     void setVirtualDisplayPowerMode(const sp<DisplayDevice>& display, hal::PowerMode mode)
             REQUIRES(mStateLock, kMainThreadContext);
 
-    // Adjusts thread scheduling according to the optimization policy
-    static void optimizeThreadScheduling(
-            const char* whence, gui::ISurfaceComposer::OptimizationPolicy optimizationPolicy);
+    // Returns whether to optimize globally for performance instead of power.
+    bool shouldOptimizeForPerformance() REQUIRES(mStateLock);
+
+    // Turns on power optimizations, for example when there are no displays to be optimized for
+    // performance.
+    static void enablePowerOptimizations(const char* whence);
+
+    // Turns off power optimizations.
+    static void disablePowerOptimizations(const char* whence);
 
     // Enables or disables power optimizations depending on whether there are displays that should
     // be optimized for performance.
-    void applyOptimizationPolicy(const char* whence) REQUIRES(kMainThreadContext)
-            REQUIRES(mStateLock);
+    void applyOptimizationPolicy(const char* whence) REQUIRES(mStateLock);
 
     // Returns the preferred mode for PhysicalDisplayId if the Scheduler has selected one for that
     // display. Falls back to the display's defaultModeId otherwise.
@@ -793,7 +792,7 @@ private:
      */
     bool applyTransactionState(const FrameTimelineInfo& info,
                                std::vector<ResolvedComposerState>& state,
-                               Vector<DisplayState>& displays, uint32_t flags,
+                               std::span<DisplayState> displays, uint32_t flags,
                                const InputWindowCommands& inputWindowCommands,
                                const int64_t desiredPresentTime, bool isAutoTimestamp,
                                const std::vector<uint64_t>& uncacheBufferIds,
