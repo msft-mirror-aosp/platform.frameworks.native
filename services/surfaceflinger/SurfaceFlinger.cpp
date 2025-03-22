@@ -2958,7 +2958,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         for (const auto& [token, display] : FTL_FAKE_GUARD(mStateLock, mDisplays)) {
             auto compositionDisplay = display->getCompositionDisplay();
             if (!compositionDisplay->getState().isEnabled) continue;
-            for (auto outputLayer : compositionDisplay->getOutputLayersOrderedByZ()) {
+            for (const auto* outputLayer : compositionDisplay->getOutputLayersOrderedByZ()) {
                 if (outputLayer->getLayerFE().getCompositionState() == nullptr) {
                     // This is unexpected but instead of crashing, capture traces to disk
                     // and recover gracefully by forcing CE to rebuild layer stack.
@@ -3084,11 +3084,23 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
                                       .c_str());
 
     mPowerAdvisor->setCompositedWorkload(compositedWorkload);
-    moveSnapshotsFromCompositionArgs(refreshArgs, layers);
     SFTRACE_ASYNC_FOR_TRACK_END(WorkloadTracer::TRACK_NAME,
                                 WorkloadTracer::COMPOSITION_TRACE_COOKIE);
     SFTRACE_NAME_FOR_TRACK(WorkloadTracer::TRACK_NAME, "Post Composition");
     SFTRACE_NAME("postComposition");
+
+    if (mDisplayModeController.supportsHdcp()) {
+        for (const auto& [id, _] : frameTargeters) {
+            ftl::FakeGuard guard(mStateLock);
+            if (const auto display = getCompositionDisplayLocked(id)) {
+                if (!display->isSecure() && display->hasSecureLayers()) {
+                    mDisplayModeController.startHdcpNegotiation(id);
+                }
+            }
+        }
+    }
+
+    moveSnapshotsFromCompositionArgs(refreshArgs, layers);
     mTimeStats->recordFrameDuration(pacesetterTarget.frameBeginTime().ns(), systemTime());
 
     // Send a power hint after presentation is finished.
@@ -3793,9 +3805,9 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
                       .hwcDisplayId = hwcDisplayId,
                       .port = info.port,
                       .activeMode = std::move(activeMode)};
-
-    // TODO: b/349703362 - Remove this when HDCP aidl APIs are enforced
-    state.isSecure = true; // All physical displays are currently considered secure.
+    // TODO: b/349703362 - Remove first condition when HDCP aidl APIs are enforced
+    state.isSecure = !mDisplayModeController.supportsHdcp() ||
+            connectionType == ui::DisplayConnectionType::Internal;
     state.isProtected = true;
     state.displayName = std::move(info.name);
     state.maxLayerPictureProfiles = getHwComposer().getMaxLayerPictureProfiles(displayId);
@@ -8469,10 +8481,12 @@ void SurfaceFlinger::updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t con
     }
 
     static_cast<void>(mScheduler->schedule([this, displayId = *idOpt, connectedLevel, maxLevel]() {
+        const bool secure = connectedLevel >= 2 /* HDCP_V1 */;
         if (const auto display = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(displayId))) {
             Mutex::Autolock lock(mStateLock);
-            display->setSecure(connectedLevel >= 2 /* HDCP_V1 */);
+            display->setSecure(secure);
         }
+        FTL_FAKE_GUARD(kMainThreadContext, mDisplayModeController.setSecure(displayId, secure));
         mScheduler->onHdcpLevelsChanged(scheduler::Cycle::Render, displayId, connectedLevel,
                                         maxLevel);
     }));
