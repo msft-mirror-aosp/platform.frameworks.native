@@ -538,9 +538,6 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
     }
 
     mIgnoreHdrCameraLayers = ignore_hdr_camera_layers(false);
-
-    // These are set by the HWC implementation to indicate that they will use the workarounds.
-    mIsHdcpViaNegVsync = base::GetBoolProperty("debug.sf.hwc_hdcp_via_neg_vsync"s, false);
 }
 
 LatchUnsignaledConfig SurfaceFlinger::getLatchUnsignaledConfig() {
@@ -2301,19 +2298,6 @@ void SurfaceFlinger::scheduleSample() {
 
 void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t timestamp,
                                         std::optional<hal::VsyncPeriodNanos> vsyncPeriod) {
-    if (timestamp < 0 && vsyncPeriod.has_value()) {
-        if (mIsHdcpViaNegVsync && vsyncPeriod.value() == ~1) {
-            const int32_t value = static_cast<int32_t>(-timestamp);
-            // one byte is good enough to encode android.hardware.drm.HdcpLevel
-            const int32_t maxLevel = (value >> 8) & 0xFF;
-            const int32_t connectedLevel = value & 0xFF;
-            ALOGD("%s: HDCP levels changed (connected=%d, max=%d) for hwcDisplayId %" PRIu64,
-                  __func__, connectedLevel, maxLevel, hwcDisplayId);
-            updateHdcpLevels(hwcDisplayId, connectedLevel, maxLevel);
-            return;
-        }
-    }
-
     SFTRACE_NAME(vsyncPeriod
                          ? ftl::Concat(__func__, ' ', hwcDisplayId, ' ', *vsyncPeriod, "ns").c_str()
                          : ftl::Concat(__func__, ' ', hwcDisplayId).c_str());
@@ -3809,12 +3793,9 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
                       .hwcDisplayId = hwcDisplayId,
                       .port = info.port,
                       .activeMode = std::move(activeMode)};
-    if (mIsHdcpViaNegVsync) {
-        state.isSecure = connectionType == ui::DisplayConnectionType::Internal;
-    } else {
-        // TODO(b/349703362): Remove this when HDCP aidl API becomes ready
-        state.isSecure = true; // All physical displays are currently considered secure.
-    }
+
+    // TODO: b/349703362 - Remove this when HDCP aidl APIs are enforced
+    state.isSecure = true; // All physical displays are currently considered secure.
     state.isProtected = true;
     state.displayName = std::move(info.name);
     state.maxLayerPictureProfiles = getHwComposer().getMaxLayerPictureProfiles(displayId);
