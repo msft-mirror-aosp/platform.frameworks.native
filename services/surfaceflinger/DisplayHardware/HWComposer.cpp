@@ -1054,6 +1054,15 @@ status_t HWComposer::setDisplayPictureProfileHandle(PhysicalDisplayId displayId,
     return NO_ERROR;
 }
 
+status_t HWComposer::startHdcpNegotiation(PhysicalDisplayId displayId,
+                                          const aidl::android::hardware::drm::HdcpLevels& levels) {
+    RETURN_IF_INVALID_DISPLAY(displayId, BAD_INDEX);
+    auto& hwcDisplay = mDisplayData[displayId].hwcDisplay;
+    auto error = hwcDisplay->startHdcpNegotiation(levels);
+    RETURN_IF_HWC_ERROR(error, displayId, UNKNOWN_ERROR);
+    return NO_ERROR;
+}
+
 status_t HWComposer::getLuts(
         PhysicalDisplayId displayId, const std::vector<sp<GraphicBuffer>>& buffers,
         std::vector<aidl::android::hardware::graphics::composer3::Luts>* luts) {

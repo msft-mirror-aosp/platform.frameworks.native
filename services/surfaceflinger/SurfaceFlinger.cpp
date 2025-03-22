@@ -538,9 +538,6 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory) : SurfaceFlinger(factory, SkipI
     }
 
     mIgnoreHdrCameraLayers = ignore_hdr_camera_layers(false);
-
-    // These are set by the HWC implementation to indicate that they will use the workarounds.
-    mIsHdcpViaNegVsync = base::GetBoolProperty("debug.sf.hwc_hdcp_via_neg_vsync"s, false);
 }
 
 LatchUnsignaledConfig SurfaceFlinger::getLatchUnsignaledConfig() {
@@ -2301,19 +2298,6 @@ void SurfaceFlinger::scheduleSample() {
 
 void SurfaceFlinger::onComposerHalVsync(hal::HWDisplayId hwcDisplayId, int64_t timestamp,
                                         std::optional<hal::VsyncPeriodNanos> vsyncPeriod) {
-    if (timestamp < 0 && vsyncPeriod.has_value()) {
-        if (mIsHdcpViaNegVsync && vsyncPeriod.value() == ~1) {
-            const int32_t value = static_cast<int32_t>(-timestamp);
-            // one byte is good enough to encode android.hardware.drm.HdcpLevel
-            const int32_t maxLevel = (value >> 8) & 0xFF;
-            const int32_t connectedLevel = value & 0xFF;
-            ALOGD("%s: HDCP levels changed (connected=%d, max=%d) for hwcDisplayId %" PRIu64,
-                  __func__, connectedLevel, maxLevel, hwcDisplayId);
-            updateHdcpLevels(hwcDisplayId, connectedLevel, maxLevel);
-            return;
-        }
-    }
-
     SFTRACE_NAME(vsyncPeriod
                          ? ftl::Concat(__func__, ' ', hwcDisplayId, ' ', *vsyncPeriod, "ns").c_str()
                          : ftl::Concat(__func__, ' ', hwcDisplayId).c_str());
@@ -2974,7 +2958,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         for (const auto& [token, display] : FTL_FAKE_GUARD(mStateLock, mDisplays)) {
             auto compositionDisplay = display->getCompositionDisplay();
             if (!compositionDisplay->getState().isEnabled) continue;
-            for (auto outputLayer : compositionDisplay->getOutputLayersOrderedByZ()) {
+            for (const auto* outputLayer : compositionDisplay->getOutputLayersOrderedByZ()) {
                 if (outputLayer->getLayerFE().getCompositionState() == nullptr) {
                     // This is unexpected but instead of crashing, capture traces to disk
                     // and recover gracefully by forcing CE to rebuild layer stack.
@@ -3100,11 +3084,23 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
                                       .c_str());
 
     mPowerAdvisor->setCompositedWorkload(compositedWorkload);
-    moveSnapshotsFromCompositionArgs(refreshArgs, layers);
     SFTRACE_ASYNC_FOR_TRACK_END(WorkloadTracer::TRACK_NAME,
                                 WorkloadTracer::COMPOSITION_TRACE_COOKIE);
     SFTRACE_NAME_FOR_TRACK(WorkloadTracer::TRACK_NAME, "Post Composition");
     SFTRACE_NAME("postComposition");
+
+    if (mDisplayModeController.supportsHdcp()) {
+        for (const auto& [id, _] : frameTargeters) {
+            ftl::FakeGuard guard(mStateLock);
+            if (const auto display = getCompositionDisplayLocked(id)) {
+                if (!display->isSecure() && display->hasSecureLayers()) {
+                    mDisplayModeController.startHdcpNegotiation(id);
+                }
+            }
+        }
+    }
+
+    moveSnapshotsFromCompositionArgs(refreshArgs, layers);
     mTimeStats->recordFrameDuration(pacesetterTarget.frameBeginTime().ns(), systemTime());
 
     // Send a power hint after presentation is finished.
@@ -3809,12 +3805,9 @@ std::optional<DisplayModeId> SurfaceFlinger::processHotplugConnect(PhysicalDispl
                       .hwcDisplayId = hwcDisplayId,
                       .port = info.port,
                       .activeMode = std::move(activeMode)};
-    if (mIsHdcpViaNegVsync) {
-        state.isSecure = connectionType == ui::DisplayConnectionType::Internal;
-    } else {
-        // TODO(b/349703362): Remove this when HDCP aidl API becomes ready
-        state.isSecure = true; // All physical displays are currently considered secure.
-    }
+    // TODO: b/349703362 - Remove first condition when HDCP aidl APIs are enforced
+    state.isSecure = !mDisplayModeController.supportsHdcp() ||
+            connectionType == ui::DisplayConnectionType::Internal;
     state.isProtected = true;
     state.displayName = std::move(info.name);
     state.maxLayerPictureProfiles = getHwComposer().getMaxLayerPictureProfiles(displayId);
@@ -8488,10 +8481,12 @@ void SurfaceFlinger::updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t con
     }
 
     static_cast<void>(mScheduler->schedule([this, displayId = *idOpt, connectedLevel, maxLevel]() {
+        const bool secure = connectedLevel >= 2 /* HDCP_V1 */;
         if (const auto display = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(displayId))) {
             Mutex::Autolock lock(mStateLock);
-            display->setSecure(connectedLevel >= 2 /* HDCP_V1 */);
+            display->setSecure(secure);
         }
+        FTL_FAKE_GUARD(kMainThreadContext, mDisplayModeController.setSecure(displayId, secure));
         mScheduler->onHdcpLevelsChanged(scheduler::Cycle::Render, displayId, connectedLevel,
                                         maxLevel);
     }));

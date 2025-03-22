@@ -317,6 +317,8 @@ public:
     virtual Error getMaxLayerPictureProfiles(Display display, int32_t* outMaxProfiles) = 0;
     virtual Error setDisplayPictureProfileId(Display display, PictureProfileId id) = 0;
     virtual Error setLayerPictureProfileId(Display display, Layer layer, PictureProfileId id) = 0;
+    virtual Error startHdcpNegotiation(Display display,
+                                       const aidl::android::hardware::drm::HdcpLevels& levels) = 0;
     virtual Error getLuts(Display display, const std::vector<sp<GraphicBuffer>>&,
                           std::vector<V3_0::Luts>*) = 0;
 };

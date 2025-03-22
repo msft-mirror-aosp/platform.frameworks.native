@@ -1718,6 +1718,18 @@ Error AidlComposer::setLayerPictureProfileId(Display display, Layer layer, Pictu
     return error;
 }
 
+Error AidlComposer::startHdcpNegotiation(Display display,
+                                         const aidl::android::hardware::drm::HdcpLevels& levels) {
+    const auto status =
+            mAidlComposerClient->startHdcpNegotiation(translate<int64_t>(display), levels);
+    if (!status.isOk()) {
+        ALOGE("startHdcpNegotiation failed %s", status.getDescription().c_str());
+        return static_cast<Error>(status.getServiceSpecificError());
+    }
+
+    return Error::NONE;
+}
+
 Error AidlComposer::getLuts(Display display, const std::vector<sp<GraphicBuffer>>& buffers,
                             std::vector<aidl::android::hardware::graphics::composer3::Luts>* luts) {
     std::vector<aidl::android::hardware::graphics::composer3::Buffer> aidlBuffers;
