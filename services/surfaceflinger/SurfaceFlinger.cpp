@@ -4323,7 +4323,7 @@ void SurfaceFlinger::updateInputFlinger(VsyncId vsyncId, TimePoint frameTime) {
                                                                         std::move(displayInfos),
                                                                         ftl::to_underlying(vsyncId),
                                                                         frameTime.ns()},
-                                                 std::move(inputWindowCommands.releaseListeners()),
+                                                 inputWindowCommands.releaseListeners(),
                                                  /* forceImmediateCall= */ visibleWindowsChanged ||
                                                          !inputWindowCommands.getFocusRequests()
                                                                   .empty());
