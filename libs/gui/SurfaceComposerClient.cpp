@@ -2025,6 +2025,19 @@ SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setShado
     return *this;
 }
 
+SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setBorderSettings(
+        const sp<SurfaceControl>& sc, gui::BorderSettings settings) {
+    layer_state_t* s = getLayerState(sc);
+    if (!s) {
+        mStatus = BAD_INDEX;
+        return *this;
+    }
+
+    s->what |= layer_state_t::eBorderSettingsChanged;
+    s->borderSettings = settings;
+    return *this;
+}
+
 SurfaceComposerClient::Transaction& SurfaceComposerClient::Transaction::setFrameRate(
         const sp<SurfaceControl>& sc, float frameRate, int8_t compatibility,
         int8_t changeFrameRateStrategy) {

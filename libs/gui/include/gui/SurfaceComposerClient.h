@@ -679,6 +679,8 @@ public:
                 const Rect& source, const Rect& dst, int transform);
         Transaction& setShadowRadius(const sp<SurfaceControl>& sc, float cornerRadius);
 
+        Transaction& setBorderSettings(const sp<SurfaceControl>& sc, gui::BorderSettings settings);
+
         Transaction& setFrameRate(const sp<SurfaceControl>& sc, float frameRate,
                                   int8_t compatibility, int8_t changeFrameRateStrategy);
 

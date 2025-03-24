@@ -986,6 +986,30 @@ void SkiaRenderEngine::drawLayersInternal(
             drawShadow(canvas, rrect, layer.shadow);
         }
 
+        // Similar to shadows, do the rendering before the clip is applied because even when the
+        // layer is occluded it should have an outline.
+        if (layer.borderSettings.strokeWidth > 0) {
+            // TODO(b/367464660): Move this code to the parent scope and
+            // update shadow rendering above to use these bounds since they should be
+            // identical.
+            SkRRect originalBounds, originalClip;
+            std::tie(originalBounds, originalClip) =
+                    getBoundsAndClip(layer.geometry.boundaries, layer.geometry.roundedCornersCrop,
+                                     layer.geometry.roundedCornersRadius);
+            const SkRRect& preferredOriginalBounds =
+                    originalBounds.isRect() && !originalClip.isEmpty() ? originalClip
+                                                                       : originalBounds;
+
+            SkRRect outlineRect = preferredOriginalBounds;
+            outlineRect.outset(layer.borderSettings.strokeWidth, layer.borderSettings.strokeWidth);
+
+            SkPaint paint;
+            paint.setAntiAlias(true);
+            paint.setColor(layer.borderSettings.color);
+            paint.setStyle(SkPaint::kFill_Style);
+            canvas->drawDRRect(outlineRect, preferredOriginalBounds, paint);
+        }
+
         const float layerDimmingRatio = layer.whitePointNits <= 0.f
                 ? displayDimmingRatio
                 : (layer.whitePointNits / maxLayerWhitePoint) * displayDimmingRatio;
