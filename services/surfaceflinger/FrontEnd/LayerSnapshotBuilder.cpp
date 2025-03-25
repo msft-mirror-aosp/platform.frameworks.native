@@ -936,6 +936,18 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
     }
 
     if (forceUpdate ||
+        snapshot.clientChanges &
+                (layer_state_t::eBorderSettingsChanged | layer_state_t::eAlphaChanged)) {
+        snapshot.borderSettings = requested.borderSettings;
+
+        // Multiply outline alpha by snapshot alpha.
+        uint32_t c = static_cast<uint32_t>(snapshot.borderSettings.color);
+        float alpha = snapshot.alpha * (c >> 24) / 255.0f;
+        uint32_t a = static_cast<uint32_t>(alpha * 255 + 0.5f);
+        snapshot.borderSettings.color = static_cast<int32_t>((c & ~0xff000000) | (a << 24));
+    }
+
+    if (forceUpdate ||
         snapshot.changes.any(RequestedLayerState::Changes::Geometry |
                              RequestedLayerState::Changes::Input)) {
         updateInput(snapshot, requested, parentSnapshot, path, args);
@@ -943,7 +955,9 @@ void LayerSnapshotBuilder::updateSnapshot(LayerSnapshot& snapshot, const Args& a
 
     // computed snapshot properties
     snapshot.forceClientComposition = snapshot.shadowSettings.length > 0 ||
-            snapshot.stretchEffect.hasEffect() || snapshot.edgeExtensionEffect.hasEffect();
+            snapshot.stretchEffect.hasEffect() || snapshot.edgeExtensionEffect.hasEffect() ||
+            snapshot.borderSettings.strokeWidth > 0;
+
     snapshot.contentOpaque = snapshot.isContentOpaque();
     snapshot.isOpaque = snapshot.contentOpaque && !snapshot.roundedCorner.hasRoundedCorners() &&
             snapshot.color.a == 1.f;
