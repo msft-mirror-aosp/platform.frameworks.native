@@ -87,9 +87,6 @@ struct RequestedLayerState : layer_state_t {
     aidl::android::hardware::graphics::composer3::Composition getCompositionType() const;
     bool hasValidRelativeParent() const;
     bool hasInputInfo() const;
-    bool needsInputInfo() const;
-    bool hasBufferOrSidebandStream() const;
-    bool fillsColor() const;
     bool hasBlur() const;
     bool hasFrameUpdate() const;
     bool hasReadyFrame() const;
