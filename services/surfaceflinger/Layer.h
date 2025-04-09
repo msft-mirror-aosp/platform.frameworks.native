@@ -520,7 +520,7 @@ public:
      * the InputDispatcher to do PID based occlusion detection.
      */
     bool needsInputInfo() const {
-        return (hasInputInfo() || hasBufferOrSidebandStream() || fillsColor()) && !mPotentialCursor;
+        return (hasInputInfo() || hasBufferOrSidebandStream()) && !mPotentialCursor;
     }
 
     // Implements RefBase.
