@@ -62,8 +62,6 @@ RequestedLayerState::RequestedLayerState(const LayerCreationArgs& args)
     metadata.merge(args.metadata);
     changes |= RequestedLayerState::Changes::Metadata;
     handleAlive = true;
-    // TODO: b/305254099 remove once we don't pass invisible windows to input
-    windowInfoHandle = nullptr;
     if (parentId != UNASSIGNED_LAYER_ID) {
         canBeRoot = false;
     }
